@@ -1,7 +1,6 @@
 /** Attachment localization (remote attachment → userData/files) — moved verbatim from index.js (content unchanged) */
 const path = require('path')
 const fs = require('fs')
-const fixUtil = require('./fix-util')
 const { app } = require('electron')
 
 function attachDir () {
@@ -75,6 +74,9 @@ function dirUsage (dir) {
   return { bytes, count }
 }
 const ALLOWED_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'zip', 'mp3', 'wav', 'ogg', 'mp4', 'webm', 'json'])
+// F3 (2026-10-19): filename control-char sanitizer (0x00-0x1F). Built from char codes because a
+// literal control-char class is an eslint no-control-regex error.
+const CTRL_RE = new RegExp('[' + String.fromCharCode(0) + '-' + String.fromCharCode(31) + ']', 'g')
 // main-ipc-4 quota fix (2026-09-22): the wave-C aggregate quota is also exposed as a pure,
 // unit-testable decision (withinStorageQuota) plus a byte-size scanner — same flood guard,
 // testable without 64MB fixtures.
@@ -98,9 +100,33 @@ function dirTotalBytes (dir) {
   return n
 }
 /** Upload: offline implementation = copy into userData/files and return a file:// style URL (signature mirrors re-assembling the key after the get7nyUpToken flow) */
+// P3 F3 TOCTOU (2026-10-19): claim a free filename with an exclusive 0-byte placeholder. Unlike
+// the old existsSync probe, openSync('wx') is atomic at the OS level — two concurrent uploads
+// aiming at the same name cannot both claim it; the loser gets EEXIST and bumps to name-1, -2…
+// fsMod injectable for unit tests. Exported so the claim contract stays directly testable.
+function claimSlot (dir, fileName, fsMod = fs) {
+  const p = require('path')
+  const ext = p.extname(fileName)
+  const stem = fileName.slice(0, fileName.length - ext.length)
+  let candidate = p.join(dir, fileName)
+  for (let i = 0; i < 1000; i++) {
+    try { fsMod.closeSync(fsMod.openSync(candidate, 'wx')); return candidate } catch (e) {
+      if (e.code !== 'EEXIST') throw e
+      candidate = p.join(dir, stem + '-' + (i + 1) + ext)
+    }
+  }
+  candidate = p.join(dir, stem + '-' + Date.now() + ext)
+  fsMod.closeSync(fsMod.openSync(candidate, 'wx'))
+  return candidate
+}
 async function saveAttachment ({ taskId, name, dataBase64 }) {
   // Strip Windows trailing dots/spaces before extracting the extension (the filesystem strips them at creation; validation and persistence must see the same name)
-  const cleanName = String(name || '').replace(/[. ]+$/, '')
+  // P3 F3 (2026-10-19): control chars 0x00-0x1F in the name make CreateFile fail outright on
+  // Windows (a name like 'a\u0007b.png' lands as a NUL/bell-bearing path → the whole upload 500s
+  // instead of one bad attachment). Sanitized FIRST, same style as the reserved-name prefix above:
+  // replaced with '_', so extension extraction and every downstream join see the same name.
+  // (CTRL_RE is built from char codes — a literal control-char class trips eslint no-control-regex.)
+  const cleanName = String(name || '').replace(CTRL_RE, '_').replace(/[. ]+$/, '')
   const ext = path.extname(cleanName).slice(1).toLowerCase()
   if (!ext || !ALLOWED_EXT.has(ext)) throw new Error('attachment: extension not allowed')
   // P3 (2026-10-09): Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) fail
@@ -135,15 +161,25 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // guards.assertWriteAllowed enforces the SAME caps). Lazy require: guards itself requires
   // this module for the exported pure gates, so the cycle must stay call-time only.
   require('./attachments-guards').assertWriteAllowed({ incomingBytes: raw.length, dir: attachDir() })
-  const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${displayName.replace(/[\\/:*?"<>|]/g, '_')}`
+  // F3 control-char hardening mirrors the cleanName fix: taskId comes from IPC and the cleanName
+  // sanitize above does not reach it — a control char in either part would kill CreateFile again.
+  const safe = `${String(taskId).replace(CTRL_RE, '_').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${displayName.replace(CTRL_RE, '_').replace(/[\\/:*?"<>|]/g, '_')}`
   // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
   // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…
   // (pure helper in fix-util, testable) so every upload lands on its own file.
-  const dest = fixUtil.nextFreePath(attachDir(), safe, p => fs.existsSync(p))
+  // P3 F3 TOCTOU (2026-10-19): nextFreePath's existsSync probe raced concurrent uploads — both
+  // picked the same free name, the later rename overwrote the first upload's bytes and -1/-2
+  // dedup was dead in the gap. claimSlot below closes it: each candidate is CLAIMED with an
+  // exclusive fs.openSync('wx') 0-byte placeholder (a losing racer's 'wx' throws EEXIST and it
+  // bumps to the next suffix), then the durable spool renames over OUR OWN placeholder. The
+  // writeFileDurable tmp -> fsync -> rename order is untouched (D22 durability contract holds);
+  // a failed write cleans up the placeholder in the finally below.
+  const dest = claimSlot(attachDir(), safe)
   // D20-B11: atomic write (spool to .att-tmp-* + rename, mirroring att-transfer.js writeAtomic).
   // The bare writeFileSync left a TORN file looking healthy forever (existence-only guards);
   // a crash mid-write now leaves only .att-tmp residue, which the D19 startup sweep ages out.
   const tmp = `${dest}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+  let published = false
   try {
     // D22 (P2 2026-10-02): the upload twin of the LAN-receive writeAtomic (att-transfer.js D21)
     // — route the spool through writeFileDurable (tmp -> fsync -> rename) so the final rename
@@ -152,8 +188,10 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
     // residue sweep still matches crash trash from either door.
     require('./durable-fs').writeFileDurable(tmp, raw, fs)
     fs.renameSync(tmp, dest)
+    published = true
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }
+    if (!published) { try { fs.unlinkSync(dest) } catch { /* placeholder cleanup best-effort */ } }
   }
   const finalName = path.basename(dest)
   const url = `local://${encodeURIComponent(finalName)}`
@@ -260,6 +298,8 @@ function pruneMissingAliases (exists = p => fs.existsSync(p)) {
 }
 
 module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota,
+  // F3: exclusive-claim slot allocator (TOCTOU fix) — exported for its own regression tests.
+  claimSlot,
   // Alias map (LAN same-name conflict resolution): read/set/delete + list for tests/consumers.
   readAliases, setAlias, deleteAlias, aliasesPath, pruneMissingAliases,
   // F2: shared-reference counting for single-key deletes (App delete-file + CLI attachment rm).

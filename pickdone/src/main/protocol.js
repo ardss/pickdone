@@ -5,6 +5,10 @@ const path = require('path')
 const fs = require('fs')
 const { attachDir, attachmentPath } = require('./attachments')
 
+// F3 (2026-10-19): cached realpath of the attachment dir for the local:// symlink-escape check
+// (see the handler comment). Null until first resolved; recomputed on transient failure.
+let realRoot = null
+
 /* Media elements (audio/video) in newer Chromium (confirmed on Electron 39) require Range support from custom protocols:
    replying with a whole-file 200 makes <audio> fail outright with MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) — white noise/confirm sounds all mute.
    Everything goes through this responder: no Range = 200 full body + Accept-Ranges; with Range = 206 slice. */
@@ -101,9 +105,21 @@ function handleAppProtocol () {
   protocol.handle('local', async (req) => {
     try {
       const key = decodeURIComponent(req.url.slice('local://'.length))
-      const resolved = path.resolve(attachmentPath(key))
+      let resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
+      // P3 F3 (2026-10-19): the lexical check above does not follow symlinks — a symlink inside
+      // attachDir pointing at e.g. the user's homedir made the containment test pass while
+      // readFile served the target bytes (arbitrary read). Resolve BOTH sides with realpath and
+      // compare real paths: an escaped resolution is 403; an unresolvable key (missing file /
+      // dangling link) keeps the existing 404 contract. attachRoot's realpath is cached — the
+      // attachment dir never moves mid-process; one fs syscall per request for the file itself.
+      let real = null
+      try { real = await fs.promises.realpath(resolved) } catch { return new Response('nf', { status: 404 }) }
+      try { realRoot = realRoot || await fs.promises.realpath(attachRoot) } catch { realRoot = null }
+      if (!realRoot || !(real === realRoot || real.startsWith(realRoot + path.sep))) return new Response('forbidden', { status: 403 })
+      // Serve the REAL path so a symlink swap between check and read cannot race the decision.
+      resolved = real
       // sec-local-protocol (2026-10-02): bookkeeping/tmp files are never served. aliases.json is the
       // LAN conflict alias map (internal state), .att-tmp-* are atomic-write temp files from
       // writeAtomic / att-transfer — neither is user content. Attachment keys minted by
