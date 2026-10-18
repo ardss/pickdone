@@ -162,7 +162,10 @@ test('F9: QuickAdd bulk-paste toast names the target date (reuses onEnter idiom)
   assert.ok(m, 'createLines found')
   assert.match(m[0], /scheduledAt/, 'date suffix reused from the single-line toast')
   assert.match(m[0], /movedToInbox/, 'undated (todo box) case named honestly')
-  assert.match(m[0], /let d = this\.effDate/, 'effective date read before reset')
+  // F4 2026-10-19: the effective date is snapshotted before the loop (a mid-loop chip change
+  // used to land later lines on a different day) — the toast reports the same snapshot
+  assert.match(m[0], /const effDate = this\.effDate/, 'effective date snapshotted before the loop')
+  assert.match(m[0], /let d = effDate/, 'toast reports the pre-loop snapshot, not the post-reset computed')
   assert.match(m[0], /createdBulk', \{ n \}[\s\S]*?\+ when/, 'bulk copy carries the date suffix')
 })
 

@@ -147,7 +147,9 @@ test('F4-10 QuickAdd createLines snapshots effDate before the loop', () => {
 })
 
 test('F4-11a DayRail wraps the data() LS read in try', () => {
-  assert.match(DAYRAIL, /try \{ return localStorage\.getItem\('dayRailCollapsed'\) === '1' \} catch \(e\) \{ return false \}/)
+  // method-form data() with a try-wrapped LS read (the IIFE arrow shape broke the structure
+  // gate's declared-identifier parser — focusInputMax read as an undeclared template binding)
+  assert.match(DAYRAIL, /let rc = false; try \{ rc = localStorage\.getItem\('dayRailCollapsed'\) === '1' \} catch \(e\)/)
 })
 
 test('F4-11b store/index.js parses the tours LS with its own try + corrupt reset', () => {
