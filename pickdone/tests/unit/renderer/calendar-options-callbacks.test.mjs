@@ -86,7 +86,6 @@ test('moreLinkClick: routes to openDayPeek and cancels the native popover', () =
 })
 
 test('dayCellDidMount/eventDidMount/eventClick: a11y attributes + enter-to-edit wiring', () => {
-  const dayjs = globalThis.window.dayjs
   const commits = []
   const self = mkSelf({ $store: { dispatch: async () => null, commit: (a, b) => commits.push([a, b]) } })
   const cfg = buildCalendarOptions(self, null)

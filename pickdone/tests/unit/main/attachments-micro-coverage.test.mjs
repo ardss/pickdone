@@ -14,11 +14,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { createRequire } from 'node:module'
+
 import { Module } from 'node:module'
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'att-micro-'))
 const ATT_DIR = path.join(TMP, 'files')
 fs.mkdirSync(ATT_DIR, { recursive: true })

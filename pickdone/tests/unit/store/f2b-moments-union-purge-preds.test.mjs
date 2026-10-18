@@ -69,24 +69,26 @@ test('habits [1d] stale rounds still rejected outright (unchanged guard)', () =>
 
 const calls = []
 let dbHandler = null
-globalThis.window = Object.assign(globalThis.window || {}, {
-  location: { hash: '' },
-  commands: {
-    commit: (entity, verb, payload) => {
-      calls.push([entity, verb, payload])
-      if (entity === 'todo' && verb === 'hardDeleteMany') return Promise.resolve(payload)
-      return Promise.resolve(null)
-    }
-  },
-  todoAPI: {
-    dbCall: (op, params) => { calls.push([op, params]); return dbHandler ? dbHandler(op, params) : Promise.resolve(null) },
-    writeCriticalStateBackup: () => Promise.resolve(),
-    deleteTodoFilesMany: () => Promise.resolve(0),
-    purgeRecycleBin: () => Promise.resolve(true)
+// Merge-style stubs (maint-d7 pattern): mutate the shared window instead of replacing it, and
+// import todo.js with a cache-busting query so this file gets a FRESH instance bound to OUR
+// stubs — the plain-import instance may have been hydrated by setup.mjs's import graph with a
+// different window shape, which under full-suite load showed up as a never-settling purge await.
+if (!globalThis.window.location) globalThis.window.location = { hash: '' }
+globalThis.window.commands = {
+  commit: (entity, verb, payload) => {
+    calls.push([entity, verb, payload])
+    if (entity === 'todo' && verb === 'hardDeleteMany') return Promise.resolve(payload)
+    return Promise.resolve(null)
   }
+}
+globalThis.window.todoAPI = Object.assign(globalThis.window.todoAPI || {}, {
+  dbCall: (op, params) => { calls.push([op, params]); return dbHandler ? dbHandler(op, params) : Promise.resolve(null) },
+  writeCriticalStateBackup: () => Promise.resolve(),
+  deleteTodoFilesMany: () => Promise.resolve(0),
+  purgeRecycleBin: () => Promise.resolve(true)
 })
 
-const todoMod = await import('../../../renderer/js/store/todo.js')
+const todoMod = await import('../../../renderer/js/store/todo.js?f2b')
 const todoActions = todoMod.default.actions
 const { pendingUpserts } = todoMod._testInternals
 
