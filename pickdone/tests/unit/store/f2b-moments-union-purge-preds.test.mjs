@@ -113,6 +113,24 @@ beforeEach(() => {
 
 const dispatchedEdits = dispatchCalls => dispatchCalls.filter(d => d.action === 'updateTodoFields').map(d => d.payload)
 
+// Diagnostic harness: the purge action historically showed a never-settling await ONLY inside the
+// full-corpus run (2ms 'pending promise' runner artifact). The watchdog converts that silent pend
+// into a named failure with the command log, and keeps the loop alive so the runner reports THIS
+// error instead of a teardown artifact.
+const withWatchdog = async (label, actionCall) => {
+  let timer = null
+  const r = await Promise.race([
+    actionCall,
+    new Promise(res => { timer = setTimeout(() => res({ __f2bTimeout: true }), 5000) })
+  ])
+  clearTimeout(timer)
+  if (r && r.__f2bTimeout) {
+    console.error('[f2b-diag]', label, 'did not settle; command log:', JSON.stringify(calls))
+    throw new Error('[f2b-diag] ' + label + ' never settled — see command log above')
+  }
+  return r
+}
+
 test('purgeIds: live AND bin survivors referencing a purged id get their predecessors stripped', async () => {
   const dispatchCalls = []
   const dispatch = async (action, payload) => { dispatchCalls.push({ action, payload }); return null }
@@ -123,7 +141,7 @@ test('purgeIds: live AND bin survivors referencing a purged id get their predece
     ],
     recycleList: [row('b1', { delete: true, predecessors: JSON.stringify(['purged']) })]
   }
-  const r = await todoActions.purgeIds.call({}, mkCtx(state, { dispatch }), ['purged'])
+  const r = await withWatchdog('purgeIds#strip', todoActions.purgeIds.call({}, mkCtx(state, { dispatch }), ['purged']))
   assert.deepEqual(r.done, ['purged'])
   const edits = dispatchedEdits(dispatchCalls)
   assert.equal(edits.length, 2, 'exactly s1 (live) and b1 (bin) are patched')
@@ -142,7 +160,7 @@ test('purgeAllRecycle: live survivors referencing a binned-purged id are strippe
     todoList: [row('s1', { predecessors: JSON.stringify(['bin-x']) })],
     recycleList: [row('bin-x', { delete: true }), row('bin-y', { delete: true })]
   }
-  const ok = await todoActions.purgeAllRecycle.call({}, mkCtx(state, { dispatch }))
+  const ok = await withWatchdog('purgeAllRecycle#strip', todoActions.purgeAllRecycle.call({}, mkCtx(state, { dispatch })))
   assert.equal(ok, true)
   const edits = dispatchedEdits(dispatchCalls)
   assert.equal(edits.length, 1)
@@ -154,7 +172,7 @@ test('purgeIds: a stripping edit dispatch never happens when nothing references 
   const dispatchCalls = []
   const dispatch = async (action, payload) => { dispatchCalls.push({ action, payload }); return null }
   const state = { todoList: [row('s1')], recycleList: [row('gone', { delete: true })] }
-  await todoActions.purgeIds.call({}, mkCtx(state, { dispatch }), ['gone'])
+  await withWatchdog('purgeIds#noop', todoActions.purgeIds.call({}, mkCtx(state, { dispatch }), ['gone']))
   assert.equal(dispatchedEdits(dispatchCalls).length, 0)
 })
 
@@ -170,7 +188,7 @@ test('purgeExpiredRecycle: legacy rows without deletedAt opt OUT; deletedAt rows
       row('fresh', { delete: true, deletedAt: now - 86400000 }) // inside the 7-day window
     ]
   }
-  await todoActions.purgeExpiredRecycle.call({}, mkCtx(state, { dispatch }), { force: true })
+  await withWatchdog('purgeExpiredRecycle#cutoff', todoActions.purgeExpiredRecycle.call({}, mkCtx(state, { dispatch }), { force: true }))
   const purgeCall = dispatchCalls.find(d => d.action === 'purgeIds')
   assert.ok(purgeCall, 'auto-purge dispatched')
   assert.deepEqual(purgeCall.payload, ['stamped'], 'only the deletedAt-stamped row past cutoff purges; legacy and fresh rows survive')
