@@ -25,7 +25,6 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
-import { buildExportRows } from '../../../renderer/js/views/statistics/csv.js'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => readFileSync(path.join(ROOT, p), 'utf8')
@@ -35,8 +34,6 @@ const TODOBOX = read('renderer/js/views/TodoBoxView.vue')
 const HABIT = read('renderer/js/views/HabitView.vue')
 const MATRIX = read('renderer/js/components/MatrixGrid.vue')
 const REPEAT = read('renderer/js/components/RepeatModal.vue')
-const STATS = read('renderer/js/views/StatisticsView.vue')
-read('renderer/js/views/statistics/csv.js')
 const EN_C = read('renderer/js/i18n/locales/en-US-C.js')
 const ZH_C = read('renderer/js/i18n/locales/zh-CN-C.js')
 

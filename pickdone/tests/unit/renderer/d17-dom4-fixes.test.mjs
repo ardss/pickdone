@@ -107,7 +107,7 @@ const spaceSites = [
   ['renderer/js/views/CompletedView.vue', /onHeadKey \(key, e\) \{ roleButtonActivate\(\(\) => \{ this\.toggleCol\(key\) \}\)\.call\(this, e\) \}/, 'CompletedView header helper'],
   ['renderer/js/components/DayDateStrip.vue', /@click\.stop="showCal=!showCal" @keydown="onLabelKey"/, 'ds-label date trigger'],
   ['renderer/js/components/DayDateStrip.vue', /onLabelKey: roleButtonActivate\(function \(\) \{ this\.showCal = !this\.showCal \}\)/, 'DayDateStrip label helper'],
-  ['renderer/js/components/MatrixGrid.vue', /@click="openEdit\(t\)" @keydown="onRowKey\(t, \$event\)"/, 'matrix task row'],
+  ['renderer/js/components/MatrixGrid.vue', /@click="openEdit\(t\)" @keydown(\.exact)?="onRowKey\(t, \$event\)"/, 'matrix task row'], // 2026-10-21: .exact added (vue/use-v-on-exact) — Enter/Space routing unchanged
   ['renderer/js/components/MatrixGrid.vue', /roleButtonActivate\(function \(\) \{ this\.openEdit\(t\) \}\)\.call\(this, e\)/, 'MatrixGrid row helper']
 ]
 for (const [file, re, what] of spaceSites) {

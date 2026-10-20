@@ -14,16 +14,6 @@ import * as crossDayMove from '../../../renderer/js/utils/crossDayMove.js'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
-function pureFns (file, names) {
-  const src = read(file)
-  const re = /\[d5-ui-fixes\] pure-start[^\n]*\n([\s\S]*?)\n[^\n]*\[d5-ui-fixes\] pure-end/
-  const m = src.match(re)
-  assert.ok(m, `${file}: pure block markers missing`)
-  const js = m[1].replace(/: \{[^}]*\} = /g, ' = ') // strip TS annotations so new Function can eval
-  const fn = new Function(js + `\nreturn { ${names.join(', ')} }`)
-  return fn()
-}
-
 // Fake day-boundary helper: deterministic days as N * 86400000 (no real calendar needed)
 const startOfDay = ts => Math.floor(ts / 86400000) * 86400000
 const DAY = 86400000

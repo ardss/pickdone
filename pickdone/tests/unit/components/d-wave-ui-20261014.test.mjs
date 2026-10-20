@@ -115,7 +115,7 @@ async function mountRecycleBin (storeStub) {
     toggleCompleteWithUndo: () => {},
     EmptyState: { name: 'EmptyState', template: '<div/>' },
     roleCheckboxActivate: rbk.roleCheckboxActivate,
-    roleButtonActivate: rbk.roleButtonActivate
+    roleButtonActivate: rbk.roleButtonActivate,
   })
   return makeMounter()(Comp, storeStub)
 }
@@ -198,7 +198,8 @@ async function mountQuickAdd (dispatchStub, props = {}) {
     splitPasteLines: qap.splitPasteLines,
     ensureTagSuffix: qap.ensureTagSuffix,
     $elOf: elUtil.$elOf,
-    roleButtonActivate: rbk.roleButtonActivate
+    roleButtonActivate: rbk.roleButtonActivate,
+    TITLE_MAX: (await import('../../../shared/sanitize-text.mjs')).TEXT_MAX_LEN // [F7 P3] deps bag: loadScript strips QuickAdd imports
   })
   return makeMounter()(Comp, { state: {}, dispatch: dispatchStub, commit () {} }, props)
 }
