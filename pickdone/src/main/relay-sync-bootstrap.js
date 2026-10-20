@@ -92,8 +92,16 @@ function registerOps (adapter) {
   require('./db-sync-ops').register({
     relayGetSettings: () => adapter.status(),
     relayGetStatus: () => adapter.status(),
-    relaySetEnabled: p => {
+    relaySetEnabled: async p => {
       if (p && p.enabled) {
+        // F4 #8 (2026-10-21): adapter.enable() VALIDATES first and fails BEFORE any settings
+        // write, so a rejected enable can no longer leave the revisionsFlag flipped + a
+        // full-table backfill behind as side effects of an op the UI reported as failed.
+        // deferStart runs validation + config persist ONLY — the flag flip and the v1 backfill
+        // must still land BEFORE the first round (a head-less pull before the backfill is the
+        // untracked-local-loss hazard syncv2-untracked-local-backfill pins), they just must not
+        // run for an enable that never validated.
+        const r = await adapter.enable({ account: p.account, baseUrl: p.baseUrl, rootKey: p.rootKey, enrollment: p.enrollment }, { deferStart: true })
         // the relay transport's payload IS the v2 revision DAG — with the recorder flag off
         // there is nothing to push. Flip it on here (machine-local op, revisionsFlag doctrine);
         // disable() leaves it on deliberately: recording without a transport is inert, and
@@ -108,7 +116,11 @@ function registerOps (adapter) {
           const bf = require('./db').call('revisionsBackfillUnrecorded', { entity: 'todo' })
           if (bf && bf.backfilled) log.info(`[RelaySync] backfilled ${bf.backfilled} v1-era todo row(s) into the revision DAG`)
         } catch (e) { log.warn('[RelaySync] v1 revision backfill failed:', e && e.message) }
-        return adapter.enable({ account: p.account, baseUrl: p.baseUrl, rootKey: p.rootKey, enrollment: p.enrollment })
+        // Original enable semantics restored AFTER the flag/backfill: one immediate round
+        // (fail-open on connectivity, round never throws into the op) + the poller.
+        const firstRound = await adapter.round()
+        adapter.start()
+        return { ...r, ...adapter.status(), firstRound }
       }
       return adapter.disable()
     },

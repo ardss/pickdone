@@ -5,7 +5,10 @@
  *   2. window.addEventListener('unhandledrejection') (unhandled Promise rejections)
  *   3. app.config.errorHandler (Vue render/watcher errors)
  * On the main-process side, the 'log:write' handler writes to userData/logs/renderer.log.
- * Settings → Data Management → "Export diagnostic logs" bundles main.log + renderer.log + environment info.
+ * [F4 2026-10-21 doc fix] There is NO "export diagnostic logs" bundle feature — the header below
+ * used to advertise one that does not exist. What actually exists: Settings opens the raw log
+ * directory via the 'log:open-dir' IPC channel (userData/logs, main.log + renderer.log), and the
+ * FeedbackModal's "attach diagnostic logs" checkbox is currently DISABLED (feature not wired).
  */
 const BUFFER = []
 let flushTimer = null

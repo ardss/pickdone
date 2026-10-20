@@ -101,6 +101,11 @@ function init (mainWin) {
   if (_inited) return module.exports // idempotent: the main-window-close → tray → reopen path calls createMainWindow again; repeated init would stack listeners and multiply broadcasts N-fold
   _inited = true
   autoUpdater.logger = log // stdout is invisible after packaging; update failures must be diagnosable from the log
+  // F4 (2026-10-21): autoInstallOnAppQuit fires only on the NATIVE quit event, i.e. AFTER a
+  // user-confirmed quit — the running-pomodoro confirmation lives upstream at the quit entry
+  // points (tray quit in index.js, X-close quit chain, and the "restart to update" IPC in
+  // handlers/system.js which now asks the same confirm). No second gate here: this path cannot
+  // run without the user having already confirmed the quit.
   autoUpdater.autoInstallOnAppQuit = true // after download, a normal user quit silently upgrades
   // P1-4 (2026-09-19 release-chain round): electron-updater derives the feed FILE from the app
   // version — a `0.4.0-beta.x` version implies a `beta` channel and fetches `beta.yml`, which
@@ -130,14 +135,43 @@ function init (mainWin) {
     state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast()
   })
   autoUpdater.on('update-not-available', i => { state.status = 'uptodate'; state.info = i; broadcast() })
+  // F4 (2026-10-21): download stall watchdog. A hung transfer (proxy drop, dead mirror, firewall)
+  // used to keep status='downloading' FOREVER — no progress event, no error event, so the settings
+  // page spun and autoInstallOnAppQuit never armed. Every download-progress refreshes
+  // _lastProgressAt and re-arms a 90s timer; when it fires with no newer progress and the download
+  // is still in flight, we fail through the SAME honest-status + single-backoff-retry path as the
+  // 'error' event. Cleared on success/error so a settled state is never re-marked.
+  // Test-budget overrides (unit tests only; production uses the defaults — same pattern as the
+  // adapter's roundIntervalMs overrides). READ ONCE per init so tests can shorten the windows.
+  const STALL_WATCHDOG_MS = Number(process.env.PICKDONE_UPDATER_STALL_MS) || 90 * 1000
+  const RETRY_BACKOFF_MS = Number(process.env.PICKDONE_UPDATER_RETRY_MS) || 30 * 1000
+  let _stallTimer = null
+  let _lastProgressAt = 0
+  const clearStallWatchdog = () => { if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null } }
   // d-wave fix (2026-10-14): same 'ready' guard — a stray progress event after download completed
   // must not flip the settled 'ready' state back to 'downloading'.
-  autoUpdater.on('download-progress', p => { if (state.status === 'ready') return; state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast() })
-  autoUpdater.on('update-downloaded', i => { state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
+  autoUpdater.on('download-progress', p => {
+    if (state.status === 'ready') return
+    state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast()
+    _lastProgressAt = Date.now()
+    clearStallWatchdog()
+    _stallTimer = setTimeout(() => {
+      _stallTimer = null
+      if (state.status !== 'downloading' || Date.now() - _lastProgressAt < STALL_WATCHDOG_MS) return
+      log.warn('[Updater] download stalled: no progress for ' + (STALL_WATCHDOG_MS / 1000) + 's — failing into the retry path')
+      markUpdateError(new Error('update download stalled (no progress for ' + (STALL_WATCHDOG_MS / 1000) + 's)'))
+    }, STALL_WATCHDOG_MS)
+    if (_stallTimer.unref) _stallTimer.unref()
+  })
+  autoUpdater.on('update-downloaded', i => { clearStallWatchdog(); state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
   // Error handling: besides broadcasting, schedule a single backoff retry (checkForUpdates after 30s).
   // Only one retry: transient network/proxy jitter self-heals; persistent failures (e.g. 404, certificate issues) are not retried, avoiding a request storm every 30s. During the retry window, a new error overwrites the state directly without queuing.
   let _retryTimer = null
-  autoUpdater.on('error', e => {
+  // F4: the error bookkeeping (status + broadcast + one 30s backoff retry) is shared by the
+  // autoUpdater 'error' event AND the stall watchdog so a stalled download gets the identical
+  // retry path instead of hanging in 'downloading' forever.
+  function markUpdateError (e) {
+    clearStallWatchdog()
     state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
     if (_retryTimer || !isActive()) return
     _retryTimer = setTimeout(() => {
@@ -145,8 +179,11 @@ function init (mainWin) {
       if (!isActive() || state.status === 'ready') return
       log.warn('[Updater] 自动重试检查更新（仅一次）')
       check().catch(() => {})
-    }, 30 * 1000)
+    }, RETRY_BACKOFF_MS)
     _retryTimer.unref?.()
+  }
+  autoUpdater.on('error', e => {
+    markUpdateError(e)
   })
   return module.exports
 }

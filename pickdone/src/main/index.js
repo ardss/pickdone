@@ -129,11 +129,11 @@ function broadcastWhiteNoiseUpdated () {
 
 /* ---------------- Tiered recovery from DB corruption (P0 data-loss prevention) — implementation extracted to dbRecovery.cjs (independently testable) ---------------- */
 function attemptDbRecovery (ud, retryInit) { return dbRecovery.attemptDbRecovery(ud, retryInit) }
-// Phase-2 command bus: the critical-backup restore pipeline commits through the bus // (todo.putMany / category.put / tomato.appendMany) like every other write path. preserveStamp: // restore replays the backup's own row ages verbatim — re-stamping here would skew LWW against
-// peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the // startup recovery path commits with no fanout, exactly as before.
+// Phase-2 command bus: the critical-backup restore pipeline commits through the bus (todo.putMany / category.put / tomato.appendMany) like every other write path, preserveStamp: restore replays the backup's own row ages verbatim — re-stamping would skew LWW against peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the startup recovery path commits with no fanout, exactly as before.
 const busCommit = (entity, verb, payload) => require('./command-bus').commit(entity, verb, payload, { preserveStamp: true })
-// F11 (dw wave6): startup recovery now re-imports the SAME segment set the UI restore accepts — // filter.putMany / plan.putMany / meta.put ride the same command-bus doors as the renderer, all // idempotent by id (dbRecovery skips rows without id; the db ops upsert ON CONFLICT).
-// Sync-3 (D12): the wrapper returns the per-segment REPORT (tasks / imported / failedSegments / // unconsumedSegments / proved) — the plain-bak cleanup gate must know whether EVERY segment of // the snapshot was consumed, not just whether todoState imported rows.
+// F11 (dw wave6) + Sync-3 (D12): startup recovery re-imports the SAME segment set the UI restore accepts (filter/plan/meta/habits ride the same command-bus doors, idempotent by id) and the wrapper returns the per-segment REPORT (tasks / imported / failedSegments / unconsumedSegments / proved) — the plain-bak cleanup gate needs to know whether EVERY segment was consumed, not just that todoState imported rows.
+// [F4 #9] recovery-dialog disclosure of a degraded dump (mirrors renderer todoBackup.describeDegradedSegments; the main process cannot require the ESM renderer module, so the segment→surface map is duplicated here on purpose)
+const describeRecoveryDegraded = segs => (Array.isArray(segs) ? segs.filter(s => s === 'planState' || s === 'metaState').map(s => s === 'planState' ? 'planState (schedule chips)' : 'metaState (repeat rules/estimates/project meta)').join(', ') : '')
 function restoreFromCriticalBackup (ud) {
   const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud,
     list => busCommit('todo', 'putMany', list),
@@ -151,7 +151,7 @@ function restoreFromCriticalBackup (ud) {
       // and a JSON restore would mint a fresh deviceId while every peer paired the dead one.
       settingsPut: pair => busCommit('setting', 'put', { key: pair[0], value: pair[1] })
     })
-  // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the only main-process caller // logs the marker: a degraded dump's missing segments must be visible in the recovery trail.
+  // [Sync-13 reader + F4 #9] a degraded dump's missing segments must be visible: logged here and surfaced in the recovery dialog below (describeRecoveryDegraded).
   if (r && Array.isArray(r.degradedSegments) && r.degradedSegments.length) {
     log.warn('[Init] critical backup was collected degraded — segments missing from this dump:', r.degradedSegments.join(', '))
   }
@@ -242,7 +242,8 @@ async function quitFromTrayInner () {
   // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and // kills the whole quit chain. Route through the live-window guard.
   const qw = getMainWindow()
   // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight // out of the tray-menu click handler. The tray was already destroyed below, so the quit died // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
-  if (qw) { try { writeConfig({ winBounds: qw.getBounds() }) } catch (err) { log.warn('[Tray] winBounds 写入失败(退出路径)', err) } }
+  // F4 #5 (2026-10-21): windows.js persistBoundsState — getBounds() on a MAXIMIZED window returns the full-screen rect, which used to be stamped as the next launch's restore size (giant non-maximized window + lost maximized state). Same normalized shape as close.
+  if (qw) { windowManager.persistBoundsState(qw) }
   // Destroy the tray icon first: the icon only disappears on Windows when the process exits, // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
   if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
   app.quit()
@@ -374,17 +375,17 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       }
       let reinitErr = null
       try { dbm.init(ud) } catch (e2) { reinitErr = e2 }
-      let restoredN = 0
-      // Sync-3 (D12): per-segment success report — the plain-bak cleanup gate needs to know that
-      // EVERY segment of the snapshot was consumed, not just that todoState imported rows.
+      let restoredN = 0; let degradedNote = '' // F4 #9: degraded dump segments, disclosed in the dialog detail below
+      // Sync-3 (D12): per-segment success report — the plain-bak cleanup gate needs to know EVERY snapshot segment was consumed.
       let restoreFullyConsumed = false
-      // source is a structured branch flag; display copy must never drive logic (dbRecovery.cjs contract)
-      // jsonRestoreAllowed gates on the re-init having succeeded: with a dead DB (e.g. the vendor
-      // driver itself cannot load) every busCommit in the restore path throws and the "restore"
+      // source is a structured branch flag; display copy must never drive logic (dbRecovery.cjs contract).
+      // jsonRestoreAllowed gates on the re-init having succeeded: with a dead DB every busCommit in the
+      // restore path throws and the "restore"
       // rebuilds nothing (2026-09-26 lubancat live catch; gate = dbRecovery.jsonRestoreAllowed).
       if (dbRecovery.jsonRestoreAllowed(recoveredFrom, reinitErr)) {
         const restored = restoreFromCriticalBackup(ud)
         restoredN = restored.tasks
+        degradedNote = describeRecoveryDegraded(restored.degradedSegments) // F4 #9: surface what the dump was missing
         restoreFullyConsumed = !!restored.proved
         // GAP-D fix (2026-09-19): recovery writes go through dbm.call directly with no sync kick —
         // restored rows waited for the periodic round. Boot-time kick is safe: kickSyncRound no-ops
@@ -420,7 +421,10 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
         ? ' ' + recoveredFrom.label
         : recoveredFrom
           ? i18nM.mt('dbFailRecovered', { n: restoredN })
-          : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '')
+          : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '') +
+        // F4 #9: the dialog used to claim a clean recovery while the dump itself had been written
+        // degraded — disclose exactly which segments the last snapshot was missing.
+        (degradedNote ? '\n\n[degraded snapshot] segments missing from the recovered backup: ' + degradedNote : '')
       const buttons = recovered
         ? [i18nM.mt('btnRecoverRelaunch'), i18nM.mt('btnOpenDataDir'), i18nM.mt('btnQuit')]
         : [i18nM.mt('btnOpenDataDirBackup'), i18nM.mt('btnResetRelaunch'), i18nM.mt('btnQuit')]

@@ -99,16 +99,28 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // absent (first pairing on a fresh install); later pairings keep it (rotation stays the
     // unpair flow's job — syncUnpairPeerOp below — which is the documented revoke point).
     if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, String(r.secret))
-    // Round-1 P0: persist the paired peer from the address the pair ACTUALLY succeeded on (the
-    // dialed host:port), so the record survives restart and re-pairing overwrites any stale one.
+    log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
+    state.pairingCode = null // consumed; issue a fresh code on next click
+    // F4 #6 (2026-10-21): persist AFTER the restart succeeds. The old order persisted the paired
+    // peer BEFORE restartSync, so a failed bind left a half-success the UI reported as a failure:
+    // pairing rejected on screen, but the peer record was already on disk (and the OTHER side was
+    // fully paired) — a "ghost" pairing invisible in the settings UI. Fail-closed now: a restart
+    // failure persists NOTHING and rejects with a structured code carrying the true cross-side
+    // state (the peer may already show us as paired) so the user can re-pair knowingly.
+    // (The legacy global-secret adoption above stays before the restart on purpose: it is a
+    // fallback secret for pre-F1 peers, inert without a persisted peer record.)
+    try {
+      // S5: awaited + fail-closed — a bind failure after pairing surfaces to the renderer as a
+      // rejected pairing op with sync OFF, not as a silent dead toggle.
+      await restartSync({ preserveEnabled: true })
+    } catch (e) {
+      const err = new Error('syncPairWithCode: pairing accepted by the peer but the node restart failed — NOT persisted locally (the peer may already show this device as paired): ' + ((e && e.message) || e))
+      err.code = 'PAIR_RESTART_FAILED_NOT_PERSISTED'
+      throw err
+    }
     if (r.peer && r.peer.deviceId) {
       persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret })
     }
-    log.info('[LanSync] paired with peer', r.peer && r.peer.deviceId, '- shared secret adopted, restarting node')
-    state.pairingCode = null // consumed; issue a fresh code on next click
-    // S5: awaited + fail-closed — a bind failure after pairing surfaces to the renderer as a
-    // rejected pairing op with sync OFF, not as a silent dead toggle.
-    await restartSync({ preserveEnabled: true })
     runRound().then(persistPeerWatermarks)
     return { ...getSettingsPayload(), peer: r.peer }
   }
@@ -141,10 +153,19 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // D19-DOM1: mint-once contract (see syncPairWithCode above) — an existing global secret is
     // PRESERVED so legacy global-secret peers keep authenticating across new pairings.
     if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, String(r.secret))
-    if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
     log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
-    // S5: awaited + fail-closed (same contract as syncPairWithCode above).
-    await restartSync({ preserveEnabled: true })
+    // F4 #6: same fail-closed contract as syncPairWithCode — the peer record persists ONLY after
+    // the restart succeeds, so a failed bind can never leave a persisted pairing the UI reported
+    // as failed. Structured code carries the true cross-side state (the peer accepted).
+    try {
+      // S5: awaited + fail-closed (same contract as syncPairWithCode above).
+      await restartSync({ preserveEnabled: true })
+    } catch (e) {
+      const err = new Error('syncPairRequest: pairing accepted by ' + host + ' but the node restart failed — NOT persisted locally (the peer may already show this device as paired): ' + ((e && e.message) || e))
+      err.code = 'PAIR_RESTART_FAILED_NOT_PERSISTED'
+      throw err
+    }
+    if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
     runRound().then(persistPeerWatermarks)
     return { ...getSettingsPayload(), host: r.host, port: r.port }
   }

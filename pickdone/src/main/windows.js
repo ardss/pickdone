@@ -26,6 +26,22 @@ function writeCrashRelaunchCount (n) {
   try { require('./durable-fs').writeFileDurable(crashMarkerPath(), JSON.stringify({ count: n, at: Date.now() }), fs) } catch { /* best-effort: a failed persist degrades to the old in-memory-only behavior */ }
 }
 
+/** [F4 #4 2026-10-21] Pure visibility test: a window counts as on-screen when its CENTER or ANY
+ *  CORNER lies inside some display's workArea. The old center-only test let a half-off-screen
+ *  window (common after a monitor is unplugged) pass as "visible" and never clamp back. Pure so
+ *  it is unit-testable without Electron; windows.js keeps only the Electron glue. */
+function windowBoundsVisible (b, displays) {
+  if (!b || !Array.isArray(displays) || !displays.length) return false
+  const pts = [
+    [b.x + b.width / 2, b.y + b.height / 2],
+    [b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]
+  ]
+  return pts.some(([x, y]) => displays.some(d => {
+    const wa = d && d.workArea
+    return !!wa && x >= wa.x && x <= wa.x + wa.width && y >= wa.y && y <= wa.y + wa.height
+  }))
+}
+
 function createWindowManager (ctx) {  const {
     readConfig, writeConfig, i18n, log, windowRef, closeBehavior,
     tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
@@ -38,6 +54,19 @@ function createWindowManager (ctx) {  const {
   let win = null // main window
 
   const getMainWindow = () => (win && !win.isDestroyed() ? win : null)
+
+  // [F4 #5 2026-10-21] Bounds-state snapshot for persistence. A maximized window's getBounds()
+  // returns the full-screen rect — persisting that made the next launch open a giant
+  // non-maximized window covering the whole monitor, and the maximized state itself was lost.
+  // Keep the NORMAL (non-maximized) bounds + an explicit winIsMaximized flag instead.
+  function persistBoundsState (w) {
+    try {
+      if (!w || w.isDestroyed()) return
+      const maximized = !!w.isMaximized()
+      const bounds = (maximized && typeof w.getNormalBounds === 'function') ? w.getNormalBounds() : w.getBounds()
+      writeConfig({ winBounds: bounds, winIsMaximized: maximized })
+    } catch (err) { log.warn('[Window] winBounds 写入失败', err) }
+  }
 
   function createMainWindow () {
     const conf = readConfig()
@@ -65,6 +94,9 @@ function createWindowManager (ctx) {  const {
       }
     })
     windowRef.setMainWindow(win)
+    // [F4 #5]: restore the persisted maximized state (winBounds now always stores the NORMAL
+    // bounds — see persistBoundsState — so maximizing on top of them is safe).
+    if (conf.winIsMaximized) { try { win.maximize() } catch (e) { log.warn('[Window] maximize restore failed', e) } }
     // Re-inject the live window into modules that captured it at startup: the main window can be
     // destroyed and recreated (close-then-tray path via showMainOrLock), and stale refs would make
     // updater events / taskbar progress silently stop reaching the new window.
@@ -254,21 +286,32 @@ function createWindowManager (ctx) {  const {
           try { if (tray && process.platform === 'win32') tray.displayBalloon({ iconType: 'info', title: i18n.mt('appName'), content: i18n.mt('closeTrayNotice') }) } catch (err) { /* balloon is best-effort */ }
         }
       } else {
-        // Same guard as above: resize path already wraps writeConfig in try (debounced), close must not be able to break the quit chain either
-        try { writeConfig({ winBounds: win.getBounds() }) } catch (err) { log.warn('[Window] winBounds 写入失败(close)', err) }
+        // [F4 #5]: close saves the same normalized shape as the move/resize debouncer (normal
+        // bounds + maximized flag), so quit-time persistence can no longer stamp a maximized
+        // full-screen rect as the restore size. persistBoundsState carries its own try/catch.
+        persistBoundsState(win)
       }
     })
     let _resizeTimer = null
-    win.on('resize', () => { // high-frequency synchronous writes while dragging cause jank; debounce 400ms (close/quit already save as backstop)
+    // [F4 #5]: MOVE also persists now — previously only resize/close/quit wrote winBounds, so a
+    // window that was only dragged (no resize) came back at its old position after a kill/power
+    // loss. Move and resize share ONE debounced persist (400ms; high-frequency synchronous writes
+    // while dragging cause jank) and maximize/unmaximize route through the same timer too — the
+    // maximize transition itself fires resize on most platforms, but do not rely on it.
+    const scheduleBoundsPersist = () => {
       clearTimeout(_resizeTimer)
       // P2 2026-09-17: a timer firing after the window closed used to call getBounds on a destroyed
       // window (throw inside the timer) and the timer itself leaked across window re-creation
       _resizeTimer = setTimeout(() => {
         if (win.isDestroyed()) { _resizeTimer = null; return }
-        try { writeConfig({ winBounds: win.getBounds() }) } catch {}
+        persistBoundsState(win)
         _resizeTimer = null
       }, 400)
-    })
+    }
+    win.on('resize', scheduleBoundsPersist)
+    win.on('move', scheduleBoundsPersist)
+    win.on('maximize', scheduleBoundsPersist)
+    win.on('unmaximize', scheduleBoundsPersist)
     // D20-C12: the crash-relaunch health timer must die with the window — an armed 60s
     // writeCrashRelaunchCount(0) surviving a close-then-tray recreation would clear the
     // persisted relaunch counter before the crash streak was actually confirmed stable.
@@ -276,34 +319,35 @@ function createWindowManager (ctx) {  const {
     // QC 2026-10-09: and the render-process-gone crash-reload timer (crashReloadTimer).
     win.on('closed', () => { clearTimeout(_resizeTimer); _resizeTimer = null; if (crashHealthTimer) { clearTimeout(crashHealthTimer); crashHealthTimer = null } if (loadRetryTimer) { clearTimeout(loadRetryTimer); loadRetryTimer = null } if (crashReloadTimer) { clearTimeout(crashReloadTimer); crashReloadTimer = null } })
     // Clamp the window back onto a visible screen on restore/show (fixes the "disappeared" window after multi-monitor changes/power loss)
+    // [F4 #4]: the on-screen test is the pure windowBoundsVisible above — center OR any corner on
+    // some workArea — so a half-off-screen window (monitor unplugged) clamps back too.
     const clampIntoView = () => {
       try {
         const { screen } = require('electron')
-        const displays = screen.getAllDisplays()
         const b = win.getBounds()
-        const cx = b.x + b.width / 2
-        const cy = b.y + b.height / 2
-        const onScreen = displays.some(d =>
-          cx >= d.workArea.x && cx <= d.workArea.x + d.workArea.width &&
-          cy >= d.workArea.y && cy <= d.workArea.y + d.workArea.height)
-        if (!onScreen) {
-          const wa = screen.getPrimaryDisplay().workArea
-          const w = Math.min(b.width, wa.width - 40)
-          const h = Math.min(b.height, wa.height - 40)
-          win.setBounds({ x: wa.x + (wa.width - w) / 2, y: wa.y + (wa.height - h) / 3, width: w, height: h })
-          log.info('[Window] window position out of bounds, clamped back to primary screen')
-        }
+        if (windowBoundsVisible(b, screen.getAllDisplays())) return
+        const wa = screen.getPrimaryDisplay().workArea
+        const w = Math.min(b.width, wa.width - 40)
+        const h = Math.min(b.height, wa.height - 40)
+        win.setBounds({ x: wa.x + (wa.width - w) / 2, y: wa.y + (wa.height - h) / 3, width: w, height: h })
+        log.info('[Window] window position out of bounds, clamped back to primary screen')
       } catch (e) { /* ignore */ }
     }
     win.on('restore', clampIntoView)
     win.on('show', clampIntoView)
   }
 
-  return { createMainWindow, getMainWindow }
+  return { createMainWindow, getMainWindow,
+    /** [F4 #5]: shared bounds persistence for the tray-quit path (index.js) — same normalized
+     *  winBounds/winIsMaximized shape as the close path, so quit-time writes can't stamp a
+     *  maximized full-screen rect as the restore size. */
+    persistBoundsState }
 }
 
 module.exports = {
   createWindowManager,
+  /** [F4 #4] pure geometry seam for unit tests (no Electron needed). */
+  __windowGeom: { windowBoundsVisible },
   // D10 test seam: crash-counter marker round-trip (plain-node tests stub electron's app.getPath)
   __crashCounter: { read: readCrashRelaunchCount, write: writeCrashRelaunchCount },
   CRASH_RELAUNCH_CAP, CRASH_HEALTH_WINDOW_MS,

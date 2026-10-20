@@ -163,7 +163,34 @@ module.exports = function systemHandlers (ctx) {
     // (status stays readable — it leaks nothing and the settings page polls it from the main window only anyway).
     'updater:check': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.check() },
     'updater:download': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.downloadUpdate() },
-    'updater:quit-and-install': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.quitAndInstall() },
+    // F4 (2026-10-21): the install-quit path used to bypass the tray-quit confirmation — a running
+    // pomodoro died silently when the user clicked "restart to update" (quitAndInstall skips the
+    // whole quit chain's confirm gates). Reuse the tray confirm (index.js quitFromTrayInner):
+    // ask via the SAME durable-session gate + i18n copy; cancel returns false so the settings UI
+    // sees "not installed" instead of a silent success.
+    'updater:quit-and-install': async (e) => {
+      assertMainWindow(e); if (isLocked()) throw new Error('locked')
+      try {
+        const sessionLive = ctx.tomatoSession ? ctx.tomatoSession.hasRunningSession() : false
+        if (sessionLive) {
+          const { response } = await require('electron').dialog.showMessageBox({
+            type: 'question',
+            title: i18n.mt('quitFocusActiveTitle'),
+            message: i18n.mt('quitFocusActiveTitle'),
+            detail: i18n.mt('quitFocusActiveMsg'),
+            buttons: [i18n.mt('quitFocusQuit'), i18n.mt('quitFocusCancel')],
+            cancelId: 1, defaultId: 1, noLink: true,
+          })
+          if (response !== 0) return false // user kept the pomodoro: no install
+        }
+      } catch (err) {
+        // Symmetric with index.js quitFromTrayInner: a failed confirm dialog must carry cancel
+        // semantics — never tear down a live pomodoro because the dialog could not open.
+        log.warn('[IPC] quit-and-install confirm dialog failed, aborting install-quit', err)
+        return false
+      }
+      return updater.quitAndInstall()
+    },
     'updater:status': () => updater.getStatus()
   }
 }

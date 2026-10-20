@@ -370,8 +370,15 @@ function createRelayAdapter ({
    * open registration). Fail-open on first-round connectivity (a relay that is
    * temporarily down must not block configuration) but strict on configuration
    * validity — bad input never persists.
+   *
+   * F4 #8 (2026-10-21): opts.deferStart runs ONLY validation + config persistence and skips the
+   * built-in first round + poller start. The bootstrap uses it to run the revisionsFlag flip and
+   * the v1 backfill BETWEEN the validated config writes and the first round — the backfill MUST
+   * precede the first pull, or a head-less untracked local row can lose its causal race against
+   * the first pulled envelope (the exact hazard syncv2-untracked-local-backfill pins). Callers
+   * that defer must round()+start() themselves.
    */
-  async function enable ({ account, baseUrl, rootKey, enrollment } = {}) {
+  async function enable ({ account, baseUrl, rootKey, enrollment } = {}, { deferStart = false } = {}) {
     account = String(account || '').trim()
     baseUrl = String(baseUrl || '').trim()
     if (!ACCOUNT_RE.test(account)) throw new Error('relay-adapter: account must match ' + ACCOUNT_RE.source)
@@ -407,13 +414,26 @@ function createRelayAdapter ({
     // revision DAG — with the flag off there is nothing to push (inert locally, so it is
     // left on after disable; recording without a transport is harmless).
     if (log.info) log.info(`[RelaySync] enabled for account=${account} baseUrl=${baseUrl} (${remoteAllowed && !isLoopbackBaseUrl(baseUrl) ? 'REMOTE via env gate' : 'loopback'})`)
+    if (deferStart) return { ...status() } // validation + persist only; the caller owns flag/backfill/round/start ordering
     const r = await round()
     start()
     return { ...status(), firstRound: r }
   }
 
+  // F4 #7: hoisted to a real closure binding (it used to exist only as a property of the
+  // returned facade — a bare `whenIdle()` inside disable/forget would be a ReferenceError
+  // silently swallowed by the catch below). disable/forget and the quit path share this.
+  const whenIdle = () => (inFlight || Promise.resolve()).then(() => {})
+
+  // F4 #7 (2026-10-21): disable/forget now await the in-flight round BEFORE mutating durable
+  // state — the same `stop(); await whenIdle()` contract stopForQuit already uses. The old
+  // fire-and-forget stop() let a round that was mid-flight keep running while we flipped
+  // ENABLED/cleared keys: its final persistState could land AFTER (or clobber) the disable/forget
+  // writes, resurrecting config the user just turned off, and its pull-apply could commit remote
+  // rows a moment after the identity was wiped. When idle the await resolves immediately.
   async function disable () {
     stop()
+    try { await whenIdle() } catch { /* round already failed into lastError */ }
     put('ENABLED', '0')
     if (log.info) log.info('[RelaySync] disabled (config + secrets retained for re-enable)')
     return status()
@@ -423,14 +443,13 @@ function createRelayAdapter ({
    *  device identity against the relay (new register). */
   async function forget () {
     stop()
+    try { await whenIdle() } catch { /* round already failed into lastError */ }
     for (const k of Object.keys(K)) del(k)
     if (log.info) log.info('[RelaySync] forgot relay identity (secrets + durable state cleared)')
     return status()
   }
 
-  return { nodeId, status, enable, disable, forget, round, start, stop, kick,
-    /** Resolves when no round is in flight (quit path: persist must beat the db close). */
-    whenIdle: () => (inFlight || Promise.resolve()).then(() => {}),
+  return { nodeId, status, enable, disable, forget, round, start, stop, kick, whenIdle,
     // test/introspection surface
     __test: { K, loadPersistedState, persistState, metrics, MAX_PERSISTED_PUSHED,
       // M2 2026-10-09: bounded-timer-registry regression seam — live pending timers only.
