@@ -357,7 +357,7 @@ async function bootstrap () {
   // Quit-flush ack handshake (main waits for this before closing the DB, ≤2s cap): dbMirror/store flush
   // handlers registered this channel EARLIER (their modules load before main.js), so by the time our
   // listener runs their flush invokes are already dispatched — a short floor lets the queued IPC
-  // messages actually leave before we ack. [D13 #11] the ack now also waits (bounded at 1s) for the
+  // messages actually leave before we ack. [D13 #11] the ack now also waits (bounded at 1.8s) for the
   // retained critical-backup write to settle — the old fixed 60ms ack could fire mid-write and let
   // the main process cut off the last critical snapshot. Payload echoes the token so the main
   // process can drop stale acks.
