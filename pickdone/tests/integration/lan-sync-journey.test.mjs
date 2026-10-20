@@ -203,7 +203,7 @@ class Instance {
     // shared between the original boot and the successor, so a slow relaunch could red
     // purely on spent wall-clock. One renewal per spawned process (exitCode is set once).
     let deadline = Date.now() + bootTimeoutMs
-    let renewed = false
+    let renewals = 0
     for (;;) {
       try {
         this.cdp = await Cdp.connect(this.cdpPort, { targetTimeoutMs: Math.min(15000, deadline - Date.now()) })
@@ -215,7 +215,10 @@ class Instance {
           // relaunches the app with a pre-lock delay; the successor INHERITS this CDP
           // port). Keep polling — the successor's endpoint lands on the same port. A
           // non-zero exit stays a real crash and throws below.
-          if (!renewed) { renewed = true; deadline = Date.now() + bootTimeoutMs }
+          // 2026-10-20: under the full gate the successor's pre-lock delay + electron boot
+          // routinely exceeded one renewal window (observed 82s+ on a busy box) — allow a
+          // second renewal before declaring the successor missing.
+          if (renewals < 2) { renewals++; deadline = Date.now() + bootTimeoutMs }
           if (Date.now() > deadline) {
             throw new Error(`[${this.name}] electron exited code=0 (lock-loss relaunch) and no successor CDP came up on port ${this.cdpPort}`)
           }
