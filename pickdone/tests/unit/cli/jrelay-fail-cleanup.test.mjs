@@ -59,5 +59,6 @@ test('boot poll gates the first local CLI call on the app-owned todos.db', () =>
   const firstCli = boot.indexOf('cliLocalEnv(')
   assert.ok(gateIdx > -1, 'local boot poll must gate on todos.db existence')
   assert.ok(firstCli > gateIdx, `the todos.db gate (at ${gateIdx}) must precede the first CLI poll (at ${firstCli})`)
+  // eslint-disable-next-line no-template-curly-in-string -- 断言的就是脚本源码原文,必须保留 ${ 字面量
   assert.ok(boot.includes("test -f '${B_UD_POSIX()}/todos.db'"), 'remote boot poll must gate on the remote todos.db too')
 })

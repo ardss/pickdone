@@ -1,5 +1,6 @@
 <template>
   <transition name="fade">
+    <!-- eslint-disable-next-line vue/require-toggle-inside-transition -->
     <div class="modal-container" @click.self="close">
       <div class="modal-tablecloth" @click.self="close">
         <div class="modal" role="dialog" aria-modal="true" :aria-label="title" style="width:420px;max-width:min(420px,92vw)" @keydown.esc="close">

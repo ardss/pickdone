@@ -39,6 +39,7 @@ test('CI workflow: runs on windows and ubuntu via the build matrix (release arti
   // 锚定真实的 matrix 行而非全文子串:os 数组必须精确声明这两个 runner,runs-on 必须消费 matrix
   assert.ok(ciLines().some(l => /^\s*os: \[windows-latest, ubuntu-latest\]\s*$/.test(l)),
     'matrix must declare exactly os: [windows-latest, ubuntu-latest]')
+  // eslint-disable-next-line no-template-curly-in-string -- 断言的就是 workflow YAML 原文,${{ }} 是 GitHub Actions 语法
   assert.ok(ciLines().some(l => l.includes('runs-on: ${{ matrix.os }}')), 'job must run on the matrix os')
   assert.ok(!ciLines().some(l => l.includes('macos-latest')), 'macos has no artifact and must stay out of the matrix')
 })

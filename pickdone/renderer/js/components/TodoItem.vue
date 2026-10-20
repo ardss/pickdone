@@ -1,5 +1,7 @@
 <template>
 
+  <!-- eslint-disable vue/use-v-on-exact -- @keydown.up 与 @keydown.ctrl.up 并存是刻意设计(Ctrl+Up 双路由),
+       加 .exact 会改变现有键位行为,且锚点测试锁定 @keydown.up.prevent 原文 -->
   <div class="td-item" :class="{'is-complete':todo.complete, selected, dragging, 'td-item--enter': entering, 'pd-hoverlink': $store.state.ui.hoverTaskId === todo.taskId, ['prio-'+(todo.priority||0)]: (todo.priority||0)>0}"
        draggable="true"
        tabindex="0"
