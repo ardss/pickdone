@@ -254,13 +254,9 @@ import { buildAchievements } from './statistics/achievements.js'
 import { periodBounds, buildHeatmap, countGiveUps7, buildWeekdayModel, buildTrendModel, buildFocusTrendModel, buildTimelineRows } from './statistics/chartModels.js'
 import { buildKpis, buildPeriodBests, buildAttentionRows, buildTaskFocusRows } from './statistics/reviewRows.js'
 import { clampTipPos, clampHmTipPos } from './statistics/tooltipClamp.js'
-import { getLocale } from '../i18n/index.js' // [F5 2026-10-21] thousands separator follows the UI language
 
 const T = 'statsA.StatisticsView.'
 
-/* [d5-ui-fixes] pure-start — CSV count formatting: integer counts print plainly (12, not "12.0"); fractions keep one decimal; [F5 2026-10-21] 4+ digit integers get an Intl thousands separator (UI locale; the CSV export layer statistics/csv.js stays plain digits — data-exchange format, not display) */
-function fmtCount (v) { if (!Number.isInteger(v)) return v.toFixed(1); const loc = typeof getLocale === 'function' ? getLocale().replace('_', '-') : 'en-US'; return new Intl.NumberFormat(loc).format(v) }
-/* [d5-ui-fixes] pure-end */
 export default {
   errorCaptured (err, vm, info) {
     console.error('[Stats-ErrorBoundary]', info, err && (err as any).stack || err)

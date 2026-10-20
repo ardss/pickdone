@@ -12,7 +12,7 @@
         <div v-for="t in q.tasks" :key="t.taskId" class="matrix-task" draggable="true"
              :class="{ dragging: dragId===t.taskId }"
              @dragstart="dragStart(t,$event)" @dragend="endDrag"
-             @click="openEdit(t)" @keydown="onRowKey(t, $event)"
+             @click="openEdit(t)" @keydown.exact="onRowKey(t, $event)"
              @keydown.ctrl.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.2.prevent="kbdQuadrant(t, 1)"
              @keydown.ctrl.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.4.prevent="kbdQuadrant(t, 3)"
              @contextmenu="taskContextMenu(t, $event)"

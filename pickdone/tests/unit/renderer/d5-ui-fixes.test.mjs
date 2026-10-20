@@ -181,14 +181,6 @@ test('TodoGroups: tg-week color uses text-2 token', () => {
   assert.match(src, /\.tg-week \{ color: var\(--text-2, #5f6368\)/, 'week label uses text-2 token (dark-theme safe)')
 })
 
-test('StatisticsView fmtCount: integers print plainly, fractions keep one decimal', () => {
-  const { fmtCount } = pureFns('renderer/js/views/StatisticsView.vue', ['fmtCount'])
-  assert.equal(fmtCount(12), '12')
-  assert.equal(fmtCount(0), '0')
-  assert.equal(fmtCount(12.5), '12.5')
-  assert.equal(fmtCount(7.25), '7.3')
-})
-
 test('SearchView: sort applies regardless of keyword presence', () => {
   const src = read('renderer/js/views/SearchView.vue')
   assert.ok(!src.includes("if (this.q.trim()) list.sort"), 'keyword-gated sort removed')

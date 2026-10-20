@@ -199,7 +199,8 @@ async function mountQuickAdd (dispatchLog) {
     splitPasteLines: qap.splitPasteLines,
     ensureTagSuffix: qap.ensureTagSuffix,
     $elOf: elUtil.$elOf,
-    roleButtonActivate: rbk.roleButtonActivate // [A9] date-chip key handler now uses the shared factory
+    roleButtonActivate: rbk.roleButtonActivate, // [A9] date-chip key handler now uses the shared factory
+    TITLE_MAX: (await import('../../../shared/sanitize-text.mjs')).TEXT_MAX_LEN // [F7 P3] title clamp binding enters the deps bag since loadScript strips imports
   })
   const vm = mount(Comp, makeStore(dispatchLog))
   return vm

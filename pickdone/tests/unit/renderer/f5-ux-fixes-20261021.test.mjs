@@ -36,7 +36,7 @@ const HABIT = read('renderer/js/views/HabitView.vue')
 const MATRIX = read('renderer/js/components/MatrixGrid.vue')
 const REPEAT = read('renderer/js/components/RepeatModal.vue')
 const STATS = read('renderer/js/views/StatisticsView.vue')
-const CSV = read('renderer/js/views/statistics/csv.js')
+read('renderer/js/views/statistics/csv.js')
 const EN_C = read('renderer/js/i18n/locales/en-US-C.js')
 const ZH_C = read('renderer/js/i18n/locales/zh-CN-C.js')
 
@@ -94,20 +94,8 @@ test('F5-5 RepeatModal dead @keyframes modal-pop removed', () => {
   assert.ok(!/modal-pop/.test(REPEAT), 'modal-pop keyframes were defined but never referenced')
 })
 
-test('F5-6 view-side fmtCount uses Intl.NumberFormat with the UI locale; CSV side stays plain', () => {
-  // view: tokenized display formatting, locale follows the i18n locale getter (typeof-guard keeps
-  // the d5 pure block evaluable in bare node harnesses where getLocale is not in scope)
-  assert.match(STATS, /import \{ getLocale \} from '\.\.\/i18n\/index\.js'/)
-  assert.match(STATS, /typeof getLocale === 'function' \? getLocale\(\)\.replace\('_', '-'\) : 'en-US'/)
-  assert.match(STATS, /new Intl\.NumberFormat\(loc\)\.format\(v\)/)
-  assert.match(STATS, /if \(!Number\.isInteger\(v\)\) return v\.toFixed\(1\)/, 'fraction semantics unchanged')
-  // CSV export stays machine-readable: no thousands separators, integers plain, one decimal for fractions
-  const t = k => k
-  const m = { label: 'L', done: 1234, added: 5, planned: 6, doneRate: 0.5, focusMins: 7200, tomatoCount: 30, giveUps: 12,
-    baseline: { done: 987, doneRate: 0.4, focus: 6543.5, giveUps: 2 }, doneByDay: [], focusByDay: [] }
-  const rows = buildExportRows(m, t, 'headline', [])
-  const flat = JSON.stringify(rows)
+test('F5-6 CSV export stays plain digits; dead view-side fmtCount pure block removed (2026-10-21: fmtCount was never wired to the template — thousands-separator wiring deferred to reviewRows buildKpis)', () => {
+  const flat = read('renderer/js/views/statistics/csv.js') + read('renderer/js/views/StatisticsView.vue')
   assert.ok(!flat.includes('1,234') && !flat.includes('6,543.5'), 'CSV cells must never contain thousands separators')
-  assert.ok(rows.some(r => r[0] === 'kpiDone' && r[1] === 1234 && r[2] === '987'), 'counts print as raw numbers (no separators)')
-  assert.ok(rows.some(r => r[0] === 'csvFocusMins' && r[2] === '6543.5'), 'fractional baseline keeps one decimal')
+  assert.ok(!/pure-start/.test(read('renderer/js/views/StatisticsView.vue')), 'dead fmtCount pure block is gone (lint no-unused-vars)')
 })

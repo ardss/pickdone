@@ -43,7 +43,10 @@ export function saveMilestones (categoryId, list) {
   // Unresolvable entries are now preserved VERBATIM (shallow copy) instead of dropped: an
   // unrelated edit must never destroy another entry. Fully-formed entries keep the existing
   // normalization; the tolerant comparator (Number||0) keeps corrupt dates from poisoning the sort.
-  const clean = (list || []).filter(m => m && typeof m === 'object')
+  // Pure junk (no id AND no title — nothing the merge or the UI could ever have produced) is
+  // still dropped here so the sanitizer contract stays intact; anything with an identity (id) or
+  // content (title) survives verbatim.
+  const clean = (list || []).filter(m => m && typeof m === 'object' && (m.id || (m.title && String(m.title).trim())))
     .map(m => (m.title && m.date != null && !Number.isNaN(Number(m.date)))
       ? {
           id: m.id || newMilestoneId(),
