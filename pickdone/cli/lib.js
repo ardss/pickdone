@@ -33,7 +33,7 @@ const { ownsAttachmentFile } = require('../src/main/attachment-ownership.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
-const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm))
+const { nextSort, moveWithin, reorderScale } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm)); F2: reorderScale for the sortTask gap-exhaustion rewrite
 
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
@@ -697,8 +697,32 @@ function sortTask (input, pos, refInput) {
     if (pos === 'up' || pos === 'down') throw new CliError('task is already at the ' + (pos === 'up' ? 'top' : 'bottom') + ' of its list', 'ALREADY_AT_EDGE')
     throw new CliError('position must be top|up|down|bottom, or before|after <task>', 'USAGE')
   }
-  const newSort = mv.sort
+  // F2 fix: moveWithin's midpoint insertion HALVES the adjacent gap on every up/down/before/after
+  // move, so a dozen consecutive `sort up` calls degraded the landing gap below precision and the
+  // move silently stopped changing the order (the App never hits this — TodoItem._writeSort
+  // rewrites the whole 9999→-9999 scale on every move). Same recovery here: when the landing gap
+  // would drop below the threshold, rewrite the whole pool onto reorderScale's linear scale first
+  // (shared single source) and land the mover on that scale instead.
+  const sorts = pool.map(x => x.taskSort)
+  let newSort = mv.sort
+  let rescale = null
+  if (sorts.some(s => s != null && Math.abs((s || 0) - newSort) < 2)) {
+    const targetIdx = pos === 'top' ? 0
+      : pos === 'bottom' ? pool.length - 1
+        : pos === 'up' ? idx - 1
+          : pos === 'down' ? idx + 1
+            : pos === 'before' ? refIdx : refIdx + 1
+    const scores = reorderScale(pool.length)
+    rescale = pool.map((x, i) => ({ taskId: x.taskId, taskSort: scores[i] }))
+    newSort = scores[targetIdx]
+  }
   patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
+  if (rescale) {
+    for (const u of rescale) {
+      if (u.taskId === t.taskId) continue // the mover already landed on the new scale above
+      patchTodo(u.taskId, { taskSort: u.taskSort }, { action: 'sort' })
+    }
+  }
   // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position).
   // Reported in App display order (taskSort descending) — B2: the old ascending readout was the
   // App's list printed upside-down.

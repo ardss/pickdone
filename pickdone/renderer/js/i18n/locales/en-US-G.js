@@ -10,6 +10,8 @@ export default {
       tagExists: 'Tag "{name}" already exists',
       tagRenamed: 'Tag renamed to "{name}"',
       delTagConfirm: 'Delete tag "{name}"? It will be removed from {count} task(s)',
+      tagDeleteConfirmBtn: 'Delete tag',
+      tagNameInvalid: 'Invalid tag name "{name}": no spaces, #, commas, periods or other separators allowed',
       tagDeleted: 'Tag "{name}" deleted',
       delCatConfirm: 'Delete "{name}"? Its tasks will become uncategorized',
       delCatPartialFail: 'Some task moves failed ({ok}/{total} succeeded) — retry the delete or handle manually',

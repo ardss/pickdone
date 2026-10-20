@@ -10,6 +10,8 @@ export default {
       tagExists: '标签「{name}」已存在',
       tagRenamed: '标签已重命名为「{name}」',
       delTagConfirm: '删除标签「{name}」？将从 {count} 条任务中移除该标签',
+      tagDeleteConfirmBtn: '删除标签',
+      tagNameInvalid: '标签名「{name}」无效：不能包含空格、#、逗号、句号等分隔符',
       tagDeleted: '标签「{name}」已删除',
       delCatConfirm: '删除「{name}」？其下任务将变为未分类',
       delCatPartialFail: '部分任务移动失败（成功 {ok}/{total}），可重试删除或手动处理',

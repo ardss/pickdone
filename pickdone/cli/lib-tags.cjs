@@ -2,6 +2,7 @@
  * Factory-injected deps keep it decoupled from lib.js (no circular require), same pattern as lib-settings.cjs.
  * Tags (derived from #tag in content/description; rename/remove rewrite text across tasks — same regex semantics as SideNav)
  * + explicit-id batch operations. */
+const { isValidTagName, normalizeTagName } = require('../shared/tag-name.mjs') // F2 fix: rename-target legality, single source with the renderer modal (require(esm), same pattern as sort-core.mjs)
 module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory }) => {
   // Character-for-character identical to renderer/js/utils/search.js TAG_RE (tags are derived from body text, no separate storage)
   const TAG_RE = /#([^\s#,，。.!?！？]+)/g
@@ -26,6 +27,12 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
     return Object.entries(count).map(([name, tasks]) => ({ name, tasks })).sort((a, b) => b.tasks - a.tasks || a.name.localeCompare(b.name))
   }
   function rewriteTag (name, next, { remove } = {}) {
+    const target = normalizeTagName(next)
+    // F2 fix: an illegal rename target (contains a TAG terminator char like `.`/`,`/`，`) could
+    // never be extracted by TAG_RE again — a ghost tag. Same-source guard with the App modal.
+    if (!remove) {
+      if (!isValidTagName(target)) throw new CliError(`invalid tag name "${target}": a tag name must not contain spaces, #, , ， . 。 ! ！ ？ or similar separators (it would never be extractable again)`, 'TAG_NAME_INVALID')
+    }
     const esc = tagEsc(name)
     // rename: #old(?=[\s#,，。.!?！？]|$) → #new ; remove: leading whitespace swallowed too (\s*#old(…) → '')
     // Same terminator class as the App's SnManageTagsModal.tagRewriteRe — `buy #milk.` renames to
@@ -39,11 +46,13 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
     for (const todo of rows) {
       const patch = {}
       if (todo.taskContent) {
-        const v = remove ? todo.taskContent.replace(re, '').trim() : todo.taskContent.replace(re, '#' + next)
+        // F2 fix: FUNCTIONAL replacement — a string replacement would treat `$&` etc. in the
+        // new name as special patterns (renaming to `$&b` mangled every rewritten task).
+        const v = remove ? todo.taskContent.replace(re, '').trim() : todo.taskContent.replace(re, () => '#' + target)
         if (v !== todo.taskContent) patch.taskContent = v
       }
       if (todo.taskDescribe) {
-        const v = remove ? todo.taskDescribe.replace(re, '').trim() : todo.taskDescribe.replace(re, '#' + next)
+        const v = remove ? todo.taskDescribe.replace(re, '').trim() : todo.taskDescribe.replace(re, () => '#' + target)
         if (v !== todo.taskDescribe) patch.taskDescribe = v
       }
       if (Object.keys(patch).length) { patchTodo(todo.taskId, patch, { action: 'tag.' + (remove ? 'remove' : 'rename') }); touched++ }
