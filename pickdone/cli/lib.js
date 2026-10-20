@@ -86,9 +86,7 @@ class CliError extends Error {
   constructor (message, code = 'CLI_ERROR') { super(message); this.code = code }
 }
 
-/* ---------------- Split sub-modules (2026-09-23, #132 skipped P3-11 continuation; 2026-09-27 size-ratchet continuation) ----------------
-   Read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs /
-   lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
+/* ---------------- Split sub-modules: read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs / lib-projects.cjs; deps injected so db/bus/audit seams stay single-sourced here. ---------------- */
 const { parseDate, dayStartOf, lunarOf, lunarAnnotate, dateChangeReminderPatch } = require('./lib-date.cjs')({ CliError, dayjs, nlDate })
 // D18-DOM2 size-ratchet: dateChangeReminderPatch moved verbatim into lib-date.cjs (dayjs-only helper).
 
@@ -183,9 +181,7 @@ function compareVersions (a, b) {
 
 const genTaskId = core.genTaskId
 
-/* ---------------- Split sub-modules (2026-09-23, #132 skipped P3-11 continuation) ----------------
-   Read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs /
-   lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
+/* ---------------- Split sub-modules: read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs / lib-projects.cjs; deps injected so db/bus/audit seams stay single-sourced here. ---------------- */
 const {
   listTodos, getCategories, resolveCategory, stats, overview,
 } = require('./lib-tasks.cjs')({ open, CliError, parseDate, dayjs, normKey }) // F-B5: normKey injected (resolveCategory's copy removed)
@@ -229,8 +225,7 @@ function normalizePreds (db, taskId, preds) {
   if (wouldCycle(db, taskId, next)) throw new CliError('dependency-cycle: this predecessor set closes a loop', 'DEP_CYCLE')
   return next.length ? JSON.stringify(next) : null
 }
-/** F3 (2026-09-21): sort convention — baseline 1024 for the first row, ±512 step (addToTop → max+512, else min-512).
- *  P3-7: the CLI's verbatim nextSortCli copy is gone; shared/sort-core.mjs is imported as nextSort above. */
+/** F3 (2026-09-21): sort convention — baseline 1024 for the first row, ±512 step (addToTop → max+512, else min-512); P3-7: the CLI's verbatim nextSortCli copy is gone, shared/sort-core.mjs is imported as nextSort above. */
 function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null, after = null }) {
   if (!content || !String(content).trim()) throw new CliError('task content required', 'EMPTY_CONTENT')
   // B10-P3 (App parity EditPanel): the App bounds priority/difficulty to 0-3 — an unbounded CLI value
@@ -245,9 +240,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     const targetDay = +dayjs(todoTime).startOf('day')
     const existing = db.call('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(existing) && existing.length) return existing[0]
-    // [F2 2026-10-17 renewal dedupe includes the recycle bin, renderer parity: store/todo.js addTodo
-    // pre-check] a twin the user soft-deleted on the SAME rid+day blocks the generation — the
-    // deleted:0 pre-check alone re-minted a deliberately removed day.
+    // [F2 2026-10-17 renewal dedupe includes the recycle bin, renderer parity: store/todo.js addTodo pre-check] a twin the user soft-deleted on the SAME rid+day blocks the generation — the deleted:0 pre-check alone re-minted a deliberately removed day.
     const binned = db.call('queryTodos', { deleted: 1, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(binned) && binned.length) return null
   }
@@ -264,17 +257,13 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     complete: false, createTime: createdTs, delete: false,
     reminderTime: reminder ? parseDate(reminder) : 0,
     estimate: 0, difficulty: difficulty != null ? Number(difficulty) : 0,
-    // App addTodo parity: NO priority⇔important derivation at create time — the quadrant coupling
-    // belongs to EDIT only (EditPanel fieldPatch); the App's addTodo defaults both to 0
+    // App addTodo parity: NO priority⇔important derivation at create time — the quadrant coupling belongs to EDIT only (EditPanel fieldPatch); the App's addTodo defaults both to 0
     priority: priority != null ? Number(priority) : 0,
     important: important != null ? Number(important) : 0,
     urgent: urgent != null ? Number(urgent) : 0,
     repeatId, subtasks: null, image: null, files: null,
     predecessors: (after && after.length) ? JSON.stringify(after) : null,
-    // D18-DOM2 (#5, App parity store/todo.js addTodo `categoryId = settings.newTodoCategoryId || 0`):
-    // with no explicit --category, the App defaults to the user's settings.newTodoCategoryId; the CLI
-    // used to hard-default to 0 and silently ignored the setting. A 0/absent setting stays "unset"
-    // (0) — resolveCategory(0) would otherwise throw NO_CATEGORIES on a category-less DB.
+    // D18-DOM2 (#5, App parity store/todo.js addTodo `categoryId = settings.newTodoCategoryId || 0`): with no explicit --category the App defaults to the user's settings.newTodoCategoryId; the CLI used to hard-default to 0. A 0/absent setting stays "unset" (0) — resolveCategory(0) would otherwise throw NO_CATEGORIES on a category-less DB.
     categoryId: resolveCategory(category != null && String(category).trim() !== ''
       ? category
       : ((Number(settingsDoc().newTodoCategoryId) || 0) || null)) || 0,
@@ -289,10 +278,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
   commit('todo', 'put', t)
   const rowAfter = db.call('getById', t.taskId)
   audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
-  // D18-DOM2 (#7, App parity): NO schedule chip is minted at add time — the App's addTodo writes no
-  // planAdd (the old comment here claiming a timeline chip was "user-finalized 2026-09-03" was wrong;
-  // chips are set explicitly via `plan <task> <HH:mm>` / the App's day-plan UI). D17 already removed
-  // the mint from `edit`; this removes it from `add` so both CLI verbs match the App.
+  // D18-DOM2 (#7, App parity): NO schedule chip is minted at add time — the App's addTodo writes no planAdd (chips are set explicitly via `plan <task> <HH:mm>` / the App's day-plan UI). D17 already removed the mint from `edit`; this removes it from `add` so both CLI verbs match the App.
   return rowAfter
 }
 
@@ -322,16 +308,12 @@ function patchTodo (input, patch, { action, note } = {}) {
 /** Clear a task's date → back to the todo box (`edit --date none|clear`). Field shape mirrors the App's
  *  date-removed path exactly (EditPanel.setDate('none') → applyDate(0) → queueSave → store/todo.js
  *  updateTodoFields): todoTime=0 with derived dayStart=0, and the main reminder drops to 0 along with the
- *  date (the App's applyDate(0) zeroes remindTs; reminders are date-anchored — scheduleReminder gates on
- *  dayStart). B3/B13: reminderOffsets are dropped along with the main reminder (offsets are anchored to it
- *  — keeping them revives stale early-warning chips when a reminder is re-added; the reminder-clear
- *  lifecycle rule in EditPanel.onRemindersClear). Schedule chips cannot survive without a
- *  day to live on: same snapshot→clear cascade as the App's rowChipSync date-removed branch
- *  (snapshotForDelete + clearTaskChips = snapshot to meta, then planDeleteTask) — the snapshot stays in
- *  meta so a later `restore` can still backfill. B13 exact shape (EditPanel.applyDate(0), offsetsCleared):
- *  reminderTime drops to 0 and BOTH reminder arrays empty — offsets AND extras are anchored to the main
- *  reminder and die with it (the old "extras kept as-is" sentence here contradicted the code below).
- *  Already-undated task → no-op ({changed:false}, nothing written, no audit entry). */
+ *  date (the App's applyDate(0) zeroes remindTs; reminders are date-anchored). B3/B13: reminderOffsets are
+ *  dropped along with the main reminder (offsets are anchored to it); B13 exact shape (EditPanel.applyDate(0),
+ *  offsetsCleared): reminderTime drops to 0 and BOTH reminder arrays empty — offsets AND extras are anchored
+ *  to the main reminder and die with it. Schedule chips cannot survive without a day to live on: same
+ *  snapshot→clear cascade as the App's rowChipSync date-removed branch — the snapshot stays in meta so a
+ *  later `restore` can still backfill. Already-undated task → no-op ({changed:false}, nothing written, no audit entry). */
 function clearTodoDate (input) {
   const t = resolveTask(input, liveTasks())
   if (!t.todoTime && !t.dayStart) return { task: t, changed: false }
@@ -422,14 +404,7 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
 
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
 function deleteTodo (input) {
-  // [F2 2026-10-17 focus detach, renderer parity: store/todo.js deleteTodo] the App detaches a
-  // focus-bound task BEFORE the delete so the completion record never books to a taskId now in the
-  // recycle bin (renderer twin: dispatch('tomato/attach', null)). The CLI has no in-process store:
-  // the equivalent door is the tomato command channel — writeTomatoCmd({action:'attach', taskId:null})
-  // makes the running App dispatch the SAME tomato/attach(null) action (renderer main.js consume
-  // branch). Fire-and-forget (deleteTodo stays synchronous for the dispatch table); the durable
-  // running-session row (tomatoRunningSession, TQ-1) plus the last cliTomatoState receipt detect
-  // the binding, so a quit/dead App's stale row never triggers a phantom detach write.
+  // [F2 2026-10-17 focus detach, renderer parity: store/todo.js deleteTodo] the App detaches a focus-bound task BEFORE the delete so the completion record never books to a taskId now in the recycle bin (renderer twin: dispatch('tomato/attach', null)). The CLI equivalent door is the tomato command channel — writeTomatoCmd({action:'attach', taskId:null}) makes the running App dispatch the SAME tomato/attach(null) action. Fire-and-forget; the durable running-session row (tomatoRunningSession, TQ-1) plus the last cliTomatoState receipt detect the binding, so a quit/dead App's stale row never triggers a phantom detach write.
   detachFocusedTomato(resolveTask(input).taskId)
   // version reset to 0 (renderer parity: store/todo.js deleteTodo, P3 2026-09-12): syncTodos excludes
   // delete rows already acked with version > 0, so keeping the old version meant a re-delete after
@@ -439,11 +414,7 @@ function deleteTodo (input) {
   return after
 }
 
-/** [F2 2026-10-17] Is a RUNNING focus currently bound to this taskId (durable session row first,
- *  last command receipt as fallback)? Only a FRESH receipt counts — cliTomatoState is a single
- *  slot that survives App death, so without the freshness bound a long-gone session would still
- *  trigger the detach write. 15s mirrors the renderer's receipt write cadence (150ms post-command)
- *  with generous slack for a throttled/background window. */
+/** [F2 2026-10-17] Is a RUNNING focus currently bound to this taskId (durable session row first, last command receipt as fallback)? Only a FRESH receipt counts — cliTomatoState is a single slot that survives App death, so without the freshness bound a long-gone session would still trigger the detach write. 15s mirrors the renderer's receipt write cadence with generous slack. */
 function focusBoundTo (taskId) {
   try {
     const sess = JSON.parse(open().call('getMeta', 'tomatoRunningSession') || 'null')
@@ -471,9 +442,7 @@ function detachFocusedTomato (taskId) {
 }
 
 /** Snapshot all of a task's chips into meta (planChipsSnapshot:<taskId>) before clearing its rows.
- *  D18-DOM2 (#11): a cascade failure used to be a SILENT bare catch — orphan chips with zero
- *  signal. It now warns to stderr with the task id and the deletion still proceeds (App parity:
- *  warn + continue). */
+ *  D18-DOM2 (#11): a cascade failure is not a SILENT bare catch — it warns to stderr with the task id and the deletion still proceeds (App parity: warn + continue). */
 function chipsSnapshotForDelete (taskId) {
   try {
     const rows = open().call('planAll', []).filter(r => r.taskId === taskId)

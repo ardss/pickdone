@@ -4,8 +4,7 @@
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
         <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span class="ep-save-retry" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.saveRetry')" @click="retrySave" @keydown="onSaveRetryKey">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
-        <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits —
-             never auto-overwrite user input; offer an explicit re-hydrate instead -->
+        <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits — never auto-overwrite user input; offer an explicit re-hydrate instead -->
         <div v-if="remoteStale" class="ep-remote-updated" role="status">
           <span>{{ $t('statsJ.EditPanel.remoteUpdated') }}</span>
           <span class="ep-remote-refresh" role="button" tabindex="0"
@@ -24,8 +23,7 @@
         </span>
       </div>
 
-      <!-- [F7 P3] maxlength clamps at the shared DB ceiling: overflow pastes truncate up front,
-           so what the user sees always matches what sanitizeText persists (same-source constant) -->
+      <!-- [F7 P3] maxlength clamps at the shared DB ceiling: overflow pastes truncate up front, so what the user sees always matches what sanitizeText persists (same-source constant) -->
       <el-input type="textarea" :autosize="{minRows:3,maxRows:8}" :placeholder="$t('statsJ.EditPanel.descPlaceholder')"
                 :model-value="e.desc" @input="v=>fieldPatch('desc',v)" class="ep-desc"
                 :maxlength="DESC_MAX"
@@ -282,9 +280,7 @@ export default {
           this.hydrate()
           this.$nextTick(() => {
             const t = this.$el && this.$el.querySelector('.ep-title textarea')
-            // F-D5 (2026-09-23): keyboard open leaves activeElement on the row — the BODY-only guard
-            // skipped focusing, so keyboard/SR users got no "panel is open" feedback. Also focus on
-            // activation from inside a todo row; plain mouse focus elsewhere is left untouched.
+            // F-D5 (2026-09-23): keyboard open leaves activeElement on the row — the BODY-only guard skipped focusing, so keyboard/SR users got no "panel is open" feedback. Also focus on activation from inside a todo row; plain mouse focus elsewhere is left untouched.
             const ae = document.activeElement
             const fromRow = !!ae && !!ae.closest && !!ae.closest('.td-item')
             if (t && (!ae || ae.tagName === 'BODY' || fromRow)) t.focus()
@@ -328,8 +324,7 @@ export default {
   },
   mounted () {
 
-    // Review P2 (2026-09-22): expose the save queue's flush to the ui store — closeEditCleanup's
-    // inline-create orphan cleanup awaits it instead of racing the 350ms debounce with a fixed sleep
+    // Review P2 (2026-09-22): expose the save queue's flush to the ui store — closeEditCleanup's inline-create orphan cleanup awaits it instead of racing the 350ms debounce with a fixed sleep
     this._flushHook = () => this.flushSave()
     window.__editPanelFlushSave = this._flushHook
     // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching)
@@ -384,15 +379,12 @@ export default {
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
-    // Locale-aware month/day label (same convention as CalendarView's fmtDate): the fixed 'M/D'
-    // once showed numeric-only dates under the English UI, off-contract with the FMT format system
+    // Locale-aware month/day label (same convention as CalendarView's fmtDate): the fixed 'M/D' once showed numeric-only dates under the English UI, off-contract with the FMT format system
     fmtMd (ts) { return getLocale() === 'en-US' ? dayjs(ts).format('MMM D') : dayjs(ts).format(FMT.cnDate) },
     /* ===== Save pipeline wrappers (impl: utils/editSave.js) ===== */
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B).
-     *  Review P1 (2026-09-22): the flush PROMISE is returned — ui/closeEditCleanup registers this method
-     *  as window.__editPanelFlushSave and awaits it before the inline-created emptiness check; resolving
-     *  undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
+     *  Review P1 (2026-09-22): the flush PROMISE is returned — ui/closeEditCleanup registers this method as window.__editPanelFlushSave and awaits it before the inline-created emptiness check; resolving undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
     flushSave () { return this._save ? this._save.flushSave() : undefined },
     retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
     /* [maint/d23 FIX-3b a11y sweep] role="button" rows/chips join Space with Enter (ARIA patterns,
@@ -407,8 +399,7 @@ export default {
     onDeadlineRowKey: roleButtonActivate(function () { this.openDeadlinePick() }),
     onDelTaskKey: roleButtonActivate(function () { this.delTask() }),
     markDirty (k) { if (this._save) this._save.markDirty(k) },
-    /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback).
-        The panel body is under v-if="e", so the nodes do not exist at mounted time -- called after hydrate; old instances become invalid when nodes are replaced, destroy before rebuilding */
+    /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback). The panel body is under v-if="e", so the nodes do not exist at mounted time -- called after hydrate; old instances become invalid when nodes are replaced, destroy before rebuilding */
     initSubSortable () {
       if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed with the node */ } this._sortable = null }
       this.$nextTick(() => {
@@ -502,8 +493,7 @@ export default {
       // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>)
       this.refocusRow(this.e && this.e.taskId)
     },
-    /** [maint-0924 A7] focus-return shared by collapse() and the Esc-close path: focus the edited
-     * task row, falling back to the scroll container (focusable via tabindex=-1) */
+    /** [maint-0924 A7] focus-return shared by collapse() and the Esc-close path: focus the edited task row, falling back to the scroll container (focusable via tabindex=-1) */
     refocusRow (id) {
       this.$nextTick(() => {
         // P1 fix (2026-09-25): the row locator moved to utils/todoRowEl.js — the old fallback only
@@ -680,8 +670,7 @@ export default {
       // [maint-0925 A8] screen-reader feedback, same sentence as the row-level reorder (TodoItem.keyboardMove)
       this.$announce && this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: (this.subList[j] && this.subList[j].text) || '' }))
     },
-    // [R2] subtask inline rename (EpSubtasks 'rename' emit): rewrite the row text and run it through
-    // the same unified save pipeline as add/toggle/move
+    // [R2] subtask inline rename (EpSubtasks 'rename' emit): rewrite the row text and run it through the same unified save pipeline as add/toggle/move
     renameSub (i, text) {
       const sub = this.subList[i]
       const t = (text || '').trim()
@@ -782,8 +771,7 @@ export default {
       const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const tokenRe = new RegExp('\\s*#' + esc + '(?=[\\s#,，。.!?！？]|$)')
       const m = (this.e.title || '').match(new RegExp('#' + esc + '(?=[\\s#,，。.!?！？]|$)'))
-      // [A8 fix] capture the index per call: the shared component-level _removedTagAt slot was
-      // clobbered by stacked undo toasts, so the last removal's index won for every toast
+      // [A8 fix] capture the index per call: the shared component-level _removedTagAt slot was clobbered by stacked undo toasts, so the last removal's index won for every toast
       const removedAt = m ? m.index : null
       removeWithUndo(this,
         () => this.fieldPatch('title', (this.e.title || '').replace(tokenRe, '')),

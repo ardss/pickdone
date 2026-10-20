@@ -87,10 +87,7 @@ export default {
       if (j >= 0) other.splice(j, 1)
     },
     removeLocal (s, taskId) {
-      // [F7 P3] list membership changed, so views are stale: mark dirty, same contract as
-      // upsertLocal/hardRemove. Without this, the addTodo UNIQUE-loser fall-through (remove a
-      // ghost optimistic row, adopt failed, queued-retry) left a stale rendered row until the
-      // 60s viewsDirty day-rollover sweep recomputed.
+      // [F7 P3] list membership changed, so views are stale: mark dirty, same contract as upsertLocal/hardRemove. Without this, the addTodo UNIQUE-loser fall-through (remove a ghost optimistic row, adopt failed, queued-retry) left a stale rendered row until the 60s viewsDirty day-rollover sweep recomputed.
       s.viewsDirty = true
       const i = s.todoList.findIndex(t => t.taskId === taskId)
       if (i >= 0) s.todoList.splice(i, 1)
@@ -116,10 +113,7 @@ export default {
     historyRedoPop (s) { historyRedoPop(s) },
     historyRedoPush (s, snap) { historyRedoPush(s, snap) },
     viewsClean (s) { s.viewsDirty = false },
-    /* Echo-suppression stamp: the single writer of _lastLocalWriteAt (previously two direct
-       cross-module writes: index.js subscribeAction-after and tomato.js bumpSnow). Consumers:
-       main.js todosChanged echo gate (1500ms window, protects the undo stack from our own
-       broadcast echo's todo/init historyClear). */
+    /* Echo-suppression stamp: the single writer of _lastLocalWriteAt (previously two direct cross-module writes: index.js subscribeAction-after and tomato.js bumpSnow). Consumers: main.js todosChanged echo gate (1500ms window, protects the undo stack from our own broadcast echo's todo/init historyClear). */
     stampLocalWrite (s) { s._lastLocalWriteAt = Date.now() },
     setSyncing (s, v) { s.isSyncing = v },
     setViews (s, views) { s.views = views },
