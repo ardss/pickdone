@@ -21,21 +21,38 @@ export async function loadMilestones (categoryId) {
   try {
     const raw = await window.todoAPI.dbCall('getMeta', keyOf(categoryId))
     const list = JSON.parse(raw || '[]')
-    // Number(m.date) parseable only — aligns with the CLI side's tolerance so a corrupt/legacy
-    // non-numeric date can never poison the sort (`NaN` comparisons) downstream
-    return Array.isArray(list) ? list.filter(m => m && m.title && m.date && !Number.isNaN(Number(m.date))) : []
+    // F1 (2026-10-21) tolerant date parse: a date stored as a NUMERIC STRING (legacy writer /
+    // hand edit) now coerces to a number in place of the old silent drop — `Number(m.date)`
+    // parsed it fine in the filter, but the raw string leaking through made milestoneState's
+    // `ms.date === today0` comparisons mis-state the entry (string !== number). Truly
+    // unparseable dates are still dropped (CLI parity: `Number(m.date)` filter) so a corrupt
+    // entry can never poison the downstream `NaN` sort.
+    return Array.isArray(list)
+      ? list.filter(m => m && m.title && m.date && !Number.isNaN(Number(m.date))).map(m => {
+          const n = Number(m.date)
+          return typeof m.date === 'string' ? { ...m, date: n } : m
+        })
+      : []
   } catch { return [] }
 }
 
 export function saveMilestones (categoryId, list) {
-  const clean = (list || []).filter(m => m && m.title && m.date)
-    .map(m => ({
-      id: m.id || newMilestoneId(),
-      title: String(m.title),
-      date: Number(m.date),
-      taskIds: Array.isArray(m.taskIds) ? m.taskIds.filter(Boolean) : []
-    }))
-    .sort((a, b) => a.date - b.date)
+  // F1 (2026-10-21): the save filter used to be a DESTRUCTION path — one corrupt sibling
+  // (missing title/date, e.g. a partially-landed cross-device merge) was silently dropped from
+  // the write and vanished permanently even though the user only edited a DIFFERENT entry.
+  // Unresolvable entries are now preserved VERBATIM (shallow copy) instead of dropped: an
+  // unrelated edit must never destroy another entry. Fully-formed entries keep the existing
+  // normalization; the tolerant comparator (Number||0) keeps corrupt dates from poisoning the sort.
+  const clean = (list || []).filter(m => m && typeof m === 'object')
+    .map(m => (m.title && m.date != null && !Number.isNaN(Number(m.date)))
+      ? {
+          id: m.id || newMilestoneId(),
+          title: String(m.title),
+          date: Number(m.date),
+          taskIds: Array.isArray(m.taskIds) ? m.taskIds.filter(Boolean) : []
+        }
+      : { ...m })
+    .sort((a, b) => (Number(a.date) || 0) - (Number(b.date) || 0))
   // Write failure is now observable: the resolved boolean lands on clean.savePromise (existing callers keep
   // receiving the plain sorted array; JSON.stringify of an array ignores the extra property).
   // 2026-09-12: the old `.catch(() => {})` swallowed setMeta failures, so a failed save silently lost edits.

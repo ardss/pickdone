@@ -63,6 +63,11 @@ const META_CONFLICT_BACKUP_CAP = adjudicate.META_CONFLICT_BACKUP_CAP
 let backupSeq = 0
 // rowContentDiffers lives in sync-apply-content.js (structure-size ratchet, verbatim move):
 const { rowContentDiffers } = require('./sync-apply-content')
+// F1 (2026-10-21): array-shaped user-data meta blobs (projectMilestones:<catId>,
+// projectDocs:<catId>) used to sync whole-key LWW — concurrent adds meant the writer's blob
+// silently swallowed the loser's entries. Entry-level union merge below (shared core:
+// shared/blob-union-merge.mjs, same mechanism as the renderer's mergeMilestoneBlobs).
+const { isUnionMergeMetaKey, mergeBlobMetaValue } = require('../../shared/blob-union-merge.mjs')
 
 /**
  * Local account id (round-3 review, item: userId passthrough). Inbound rows carry the PEER's
@@ -303,6 +308,21 @@ function applyRowInner (state, incoming) {
   // SNAPSHOT rows carry it in the payload (allRows data = the full todo payload). Missing = ''.
   if (entity === 'todo' && incoming.author == null) incoming.author = (incoming.data && incoming.data.syncAuthor) || ''
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
+  // F1 union-merge seam (BEFORE the generic whole-key LWW): the array-shaped user-data blobs
+  // merge BY ENTRY ID on a live-vs-live collision instead of one blob swallowing the other.
+  // Only both-sides-live engages; absent-local / inbound delete stay whole-key (no per-entry
+  // tombstones). Unparsable shapes fall through to LWW + the metaConflictBackup net.
+  if (entity === 'meta' && !incoming.deleted && localRow && localRow.data && localRow.data.value != null &&
+      incoming.data && incoming.data.value != null && isUnionMergeMetaKey(incoming.id)) {
+    const merged = mergeBlobMetaValue(incoming.id, localRow.data.value, incoming.data.value)
+    if (merged != null) {
+      if (merged === localRow.data.value) return false // local is already the union superset — identical-content no-op, no echo
+      log.warn('[LanSync] union-merge on meta', incoming.id, '(entry-level: local-only entries preserved, no whole-blob loss)')
+      busWrite(state, 'setMeta', [incoming.id, merged])
+      return true
+    }
+    log.warn('[LanSync] union-merge skipped on meta', incoming.id, '— non-array/unaddressable blob shape, falling back to whole-key LWW')
+  }
   // Merge rules come from sync-core only (adapter boundary). Todos/chips/ledger have dedicated
   // rules; the remaining entities use the generic LWW shape.
   let winner
@@ -764,6 +784,8 @@ module.exports = {
   hydrateRow,
   metaSnapshotRows,
   rowContentDiffers,
+  isUnionMergeMetaKey, // F1: exported for unit tests (union-merge key classifier, single source)
+  mergeBlobMetaValue, // F1: exported for unit tests (pure union merge)
   localUserId,
   clampSkew,
   applyRowSafe,
