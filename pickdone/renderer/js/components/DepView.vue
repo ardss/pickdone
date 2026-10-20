@@ -155,11 +155,11 @@ export default {
   computed: {
     projects () { return this.$store.getters['category/projects'] || [] },
     wireColor () {
-      var s = getComputedStyle(document.documentElement).getPropertyValue('--brand')
+      const s = getComputedStyle(document.documentElement).getPropertyValue('--brand')
       return (s || '#0f9d8f').trim() || '#0f9d8f'
     },
     inScope () {
-      var list = this.$store.getters['todo/activeList']
+      const list = this.$store.getters['todo/activeList']
       if (this.projectId == null) return list
       return list.filter(function (t) { return t.categoryId === this.projectId }.bind(this))
     },
@@ -167,46 +167,46 @@ export default {
      *  No longer rendered as hard "stage" columns - it is the auto-layout for new/orphan cards
      *  and for the tidy-up action (user-finalized 2026-09-06: free canvas, not fixed lanes). */
     depthSeq () {
-      var list = this.inScope
-      var byId = {}
-      for (var i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
-      var memo = {}
-      var visiting = {}
-      var depthOf = (t) => {
+      const list = this.inScope
+      const byId = {}
+      for (let i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
+      const memo = {}
+      const visiting = {}
+      const depthOf = (t) => {
         if (memo[t.taskId] != null) return memo[t.taskId]
         if (visiting[t.taskId]) return 0 // cycle: rejected at store write; here just avoid infinite loop
         visiting[t.taskId] = true
-        var preds = parsePredecessors(t.predecessors).filter(pid => byId[pid])
-        var l = 0
-        for (var k = 0; k < preds.length; k++) l = Math.max(l, depthOf(byId[preds[k]]) + 1)
+        const preds = parsePredecessors(t.predecessors).filter(pid => byId[pid])
+        let l = 0
+        for (let k = 0; k < preds.length; k++) l = Math.max(l, depthOf(byId[preds[k]]) + 1)
         visiting[t.taskId] = false
         memo[t.taskId] = l
         return l
       }
-      var buckets = []
-      for (var j = 0; j < list.length; j++) {
-        var t = list[j]
-        var l = depthOf(t)
+      const buckets = []
+      for (let j = 0; j < list.length; j++) {
+        const t = list[j]
+        const l = depthOf(t)
         ;(buckets[l] = buckets[l] || []).push(t)
       }
       // In-lane order: unfinished first, ready before blocked, then by date
-      var rank = (t) => (t.complete ? 2 : (this.missingOf(t).length ? 1 : 0))
+      const rank = (t) => (t.complete ? 2 : (this.missingOf(t).length ? 1 : 0))
       return buckets.map(b => b.sort((a, c) =>
         rank(a) - rank(c) || (a.dayStart || 0) - (c.dayStart || 0) || (a.createTime || 0) - (c.createTime || 0)))
     },
     /** 项目头聚合:里程碑/截止/进度一次算好给模板 */
     projectInfo () {
       if (this.projectId == null) return null
-      var cat = this.projects.find(p => p.categoryId === this.projectId)
-      var meta = (this.$store.getters['category/projectMeta'] || {})[this.projectId] || {}
-      var list = this.inScope
-      var done = list.filter(t => t.complete).length
-      var total = list.length
-      var today0 = +dayjs().startOf('day')
-      var future = this.msList.filter(m => m.date >= today0)
-      var next = future[0] || null
-      var idx = next ? this.msList.indexOf(next) : this.msList.length - 1
-      var dl = meta.deadline || 0
+      const cat = this.projects.find(p => p.categoryId === this.projectId)
+      const meta = (this.$store.getters['category/projectMeta'] || {})[this.projectId] || {}
+      const list = this.inScope
+      const done = list.filter(t => t.complete).length
+      const total = list.length
+      const today0 = +dayjs().startOf('day')
+      const future = this.msList.filter(m => m.date >= today0)
+      const next = future[0] || null
+      const idx = next ? this.msList.indexOf(next) : this.msList.length - 1
+      const dl = meta.deadline || 0
       return {
         name: cat ? cat.categoryName : '',
         color: cat ? cat.categoryColor : 'var(--brand)',
@@ -218,7 +218,7 @@ export default {
         dlLabel: dl ? dayjs(dl).format(FMT.cnDate) : '',
         dlOver: !!dl && dl < today0,
         pct: total ? Math.round(done / total * 100) : 0,
-        progressLabel: this.$t('statsA.DepView.progress', { done: done, total: total })
+        progressLabel: this.$t('statsA.DepView.progress', { done, total })
       }
     },
     /** Connect mode: candidate target cards (every in-scope card except the source) */
@@ -228,13 +228,13 @@ export default {
     },
     /** Currently highlighted target card id (wraps around; '' when not in connect mode) */
     connectTargetId () {
-      var tg = this.connectTargets()
+      const tg = this.connectTargets()
       if (!tg.length) return ''
-      var i = ((this.connectTargetIdx % tg.length) + tg.length) % tg.length
+      const i = ((this.connectTargetIdx % tg.length) + tg.length) % tg.length
       return tg[i].taskId
     },
     connectSrcName () {
-      var s = this.inScope.find(x => x.taskId === this.connectSrc)
+      const s = this.inScope.find(x => x.taskId === this.connectSrc)
       return (s && (s.taskContent || s.taskId)) || ''
     }
   },
@@ -285,10 +285,10 @@ export default {
   methods: {
     /** 右键菜单 = 共享任务菜单 + 每条前置一个"移除前置"入口(带 5s 撤销),删除依赖不再只能靠拖拽逆向操作 */
     taskContextMenu (t, e) {
-      var extra = []
-      var preds = parsePredecessors(t.predecessors)
-      var all = this.allLiveById()
-      for (var i = 0; i < preds.length; i++) {
+      const extra = []
+      const preds = parsePredecessors(t.predecessors)
+      const all = this.allLiveById()
+      for (let i = 0; i < preds.length; i++) {
         const pid = preds[i]
         const p = all[pid]
         const name = (p && p.taskContent) || pid
@@ -303,9 +303,9 @@ export default {
     },
     /** target.predecessors -= prereqId(带 5s 撤销 toast,与 addDependency 同一撤销出口) */
     removeDependency (target, prereqId, name) {
-      var cur = parsePredecessors(target.predecessors)
+      const cur = parsePredecessors(target.predecessors)
       if (cur.indexOf(prereqId) < 0) return
-      var prevDeps = cur.slice()
+      const prevDeps = cur.slice()
       moveWithUndo(this, {
         label: this.$t('statsA.DepView.depRemoved', { a: name || prereqId, b: target.taskContent || '' }),
         apply: () => { this.$store.dispatch('todo/updateTodoFields', { taskId: target.taskId, patch: { predecessors: cur.filter(x => x !== prereqId), status: 'update' } }) },
@@ -354,44 +354,44 @@ export default {
      *  3) y stacks by the card's REAL measured height + gap; 4) each lane is vertically centered
      *  against the tallest lane, keeping predecessors roughly level with their dependents. */
     computeAutoLayout () {
-      var lanes = this.depthSeq
-      var byLane = {}
+      const lanes = this.depthSeq
+      const byLane = {}
       lanes.forEach((lane, li) => lane.forEach(t => { byLane[t.taskId] = li }))
-      var order = lanes.map(lane => lane.map(t => t.taskId))
-      var predsOf = {}
-      var list = this.inScope
-      for (var i = 0; i < list.length; i++) predsOf[list[i].taskId] = parsePredecessors(list[i].predecessors).filter(id => byLane[id] != null)
-      var succsOf = {}
-      for (var id0 in predsOf) {
+      const order = lanes.map(lane => lane.map(t => t.taskId))
+      const predsOf = {}
+      const list = this.inScope
+      for (let i = 0; i < list.length; i++) predsOf[list[i].taskId] = parsePredecessors(list[i].predecessors).filter(id => byLane[id] != null)
+      const succsOf = {}
+      for (const id0 in predsOf) {
         if (!succsOf[id0]) succsOf[id0] = []
-        for (var p0 = 0; p0 < predsOf[id0].length; p0++) {
-          var up = predsOf[id0][p0]
+        for (let p0 = 0; p0 < predsOf[id0].length; p0++) {
+          const up = predsOf[id0][p0]
           if (!succsOf[up]) succsOf[up] = []
           succsOf[up].push(id0)
         }
       }
       // 重心排序两轮:前向按前置的平均行位升序,后向按依赖的平均行位降序
       // (后向必须用后继,否则会把前向排好的顺序整个翻回去)
-      for (var pass = 0; pass < 2; pass++) {
-        var seq = pass === 0 ? order : order.slice().reverse()
-        for (var s = 0; s < seq.length; s++) {
-          var laneArr = seq[s]
+      for (let pass = 0; pass < 2; pass++) {
+        const seq = pass === 0 ? order : order.slice().reverse()
+        for (let s = 0; s < seq.length; s++) {
+          const laneArr = seq[s]
           if (!laneArr || !laneArr.length) continue
-          var li = order.indexOf(laneArr) // backward pass walks a reversed copy; write back via real index
+          const li = order.indexOf(laneArr) // backward pass walks a reversed copy; write back via real index
           if (li < 0) continue
-          var nbsOf = pass === 0 ? predsOf : succsOf
-          var avgOf = function (id) {
-            var nbs = nbsOf[id] || []
-            var ys = []
-            for (var k = 0; k < nbs.length; k++) {
-              var at = order[byLane[nbs[k]]].indexOf(nbs[k])
+          const nbsOf = pass === 0 ? predsOf : succsOf
+          const avgOf = function (id) {
+            const nbs = nbsOf[id] || []
+            const ys = []
+            for (let k = 0; k < nbs.length; k++) {
+              const at = order[byLane[nbs[k]]].indexOf(nbs[k])
               if (at >= 0) ys.push(at)
             }
             return ys.length ? ys.reduce(function (a, b) { return a + b }, 0) / ys.length : null
           }
           // 无已布邻居的卡保持原相对顺序(稳定),不掺进数值比较;两轮都按平均行位升序
           order[li] = laneArr
-            .map(function (id, idx) { return { id: id, idx: idx, avg: avgOf(id) } })
+            .map(function (id, idx) { return { id, idx, avg: avgOf(id) } })
             .sort(function (a, b) {
               if (a.avg == null && b.avg == null) return a.idx - b.idx
               if (a.avg == null) return 1
@@ -402,44 +402,44 @@ export default {
         }
       }
       // 实测卡高(拿不到就回退 84)
-      var heights = {}
-      var cards = this.$refs.track ? this.$refs.track.querySelectorAll('.depv-task') : []
-      for (var c = 0; c < cards.length; c++) heights[cards[c].getAttribute('data-tid')] = cards[c].getBoundingClientRect().height
-      var CARD_W = 236, GAP_X = 24, GAP_Y = 20, TOP = 20, LEFT = 24
-      var map = {}
-      var laneHeight = []
-      for (var li2 = 0; li2 < order.length; li2++) {
-        var y = TOP
-        for (var j = 0; j < order[li2].length; j++) {
-          var h = heights[order[li2][j]] || 84
-          map[order[li2][j]] = { x: LEFT + li2 * (CARD_W + GAP_X), y: Math.round(y), h: h }
+      const heights = {}
+      const cards = this.$refs.track ? this.$refs.track.querySelectorAll('.depv-task') : []
+      for (let c = 0; c < cards.length; c++) heights[cards[c].getAttribute('data-tid')] = cards[c].getBoundingClientRect().height
+      const CARD_W = 236, GAP_X = 24, GAP_Y = 20, TOP = 20, LEFT = 24
+      const map = {}
+      const laneHeight = []
+      for (let li2 = 0; li2 < order.length; li2++) {
+        let y = TOP
+        for (let j = 0; j < order[li2].length; j++) {
+          const h = heights[order[li2][j]] || 84
+          map[order[li2][j]] = { x: LEFT + li2 * (CARD_W + GAP_X), y: Math.round(y), h }
           y += h + GAP_Y
         }
         laneHeight[li2] = y - TOP - GAP_Y
       }
-      var maxLane = Math.max.apply(null, laneHeight.concat([0]))
+      const maxLane = Math.max.apply(null, laneHeight.concat([0]))
       // 各层垂直居中:前置与依赖大致等高,连线更短更平
-      for (var li3 = 0; li3 < order.length; li3++) {
-        var offset = Math.round((maxLane - laneHeight[li3]) / 2)
-        if (offset > 0) for (var j2 = 0; j2 < order[li3].length; j2++) {
-          var id2 = order[li3][j2]
+      for (let li3 = 0; li3 < order.length; li3++) {
+        const offset = Math.round((maxLane - laneHeight[li3]) / 2)
+        if (offset > 0) for (let j2 = 0; j2 < order[li3].length; j2++) {
+          const id2 = order[li3][j2]
           map[id2].y += offset
         }
       }
-      for (var k2 in map) delete map[k2].h
+      for (const k2 in map) delete map[k2].h
       return map
     },
     ensurePositions () {
-      var layout = this.computeAutoLayout()
+      const layout = this.computeAutoLayout()
       // 死键清理:posMap 只保留当前 scope 内还存在的任务,否则删除/移走的卡片位置永远留在 meta 里
-      var live = {}
-      var list = this.inScope
-      for (var n = 0; n < list.length; n++) live[list[n].taskId] = true
-      var changed = false
-      for (var dead in this.posMap) {
+      const live = {}
+      const list = this.inScope
+      for (let n = 0; n < list.length; n++) live[list[n].taskId] = true
+      let changed = false
+      for (const dead in this.posMap) {
         if (!live[dead]) { delete this.posMap[dead]; changed = true }
       }
-      for (var id in layout) {
+      for (const id in layout) {
         if (!this.posMap[id]) { this.posMap[id] = layout[id]; changed = true }
       }
       if (changed) this.savePos()
@@ -453,19 +453,19 @@ export default {
      *  card body, so the two gestures never compete. preventDefault on pointerdown suppresses the
      *  native drag from the handle. */
     onGripDown (t, e) {
-      var p = this.posMap[t.taskId]
+      let p = this.posMap[t.taskId]
       if (!p) { p = { x: 0, y: 0 }; this.posMap[t.taskId] = p }
-      var track = this.$refs.track
-      var tr = track ? track.getBoundingClientRect() : { left: 0, top: 0 }
+      const track = this.$refs.track
+      const tr = track ? track.getBoundingClientRect() : { left: 0, top: 0 }
       this._mv = { tid: t.taskId, ox: e.clientX - tr.left - p.x, oy: e.clientY - tr.top - p.y, tr }
       this.movingTid = t.taskId
       window.addEventListener('pointermove', this.onGripMove)
       window.addEventListener('pointerup', this.onGripUp)
     },
     onGripMove (e) {
-      var mv = this._mv
+      const mv = this._mv
       if (!mv) return
-      var p = this.posMap[mv.tid]
+      const p = this.posMap[mv.tid]
       if (!p) return
       p.x = Math.max(0, Math.round(e.clientX - mv.tr.left - mv.ox))
       p.y = Math.max(0, Math.round(e.clientY - mv.tr.top - mv.oy))
@@ -502,14 +502,14 @@ export default {
       this.connectTargetIdx = 0
     },
     moveConnectTarget (delta) {
-      var n = this.connectTargets().length
+      const n = this.connectTargets().length
       if (!n) return
       this.connectTargetIdx = ((this.connectTargetIdx + delta) % n + n) % n
     },
     confirmConnect () {
-      var id = this.connectTargetId
-      var src = this.inScope.find(x => x.taskId === this.connectSrc)
-      var tg = id && this.inScope.find(x => x.taskId === id)
+      const id = this.connectTargetId
+      const src = this.inScope.find(x => x.taskId === this.connectSrc)
+      const tg = id && this.inScope.find(x => x.taskId === id)
       this.cancelConnect()
       if (!src || !tg) return
       // Same semantics as dropping onto the target's LEFT half: source becomes the target's prerequisite
@@ -517,7 +517,7 @@ export default {
     },
     onCardKeydown (t, e) {
       if (this.connectSrc) {
-        var k = e.key
+        const k = e.key
         if (k === 'Escape') { e.preventDefault(); this.cancelConnect(); return }
         if (k === 'Tab') { e.preventDefault(); this.moveConnectTarget(e.shiftKey ? -1 : 1); return }
         if (k === 'ArrowRight' || k === 'ArrowDown') { e.preventDefault(); this.moveConnectTarget(1); return }
@@ -544,7 +544,7 @@ export default {
       }
     },
     jumpTo (id) {
-      var p = this.$store.state.todo.todoList.find(function (x) { return x.taskId === id })
+      const p = this.$store.state.todo.todoList.find(function (x) { return x.taskId === id })
       if (p) this.$store.commit('ui/openEdit', p)
     },
     loadMs () {
@@ -553,30 +553,30 @@ export default {
       // 加载中与空态区分:避免异步里程碑未返回时闪"未设里程碑"假态
       this.msLoaded = this.projectId == null
       if (this.projectId == null) return
-      var pid = this.projectId
+      const pid = this.projectId
             loadMilestones(pid).then(ms => { if (this.projectId === pid) { this.msList = ms || []; this.msLoaded = true } }).catch(() => { if (this.projectId === pid) { this.msLoaded = true; this.msError = true } })
     },
     /** 阻塞/ready 判定的任务表:必须用全量未删任务(含 scope 外/跨项目前置),
      *  否则前置在别的项目时 byId 查不到,依赖卡会被误判为 ready */
     allLiveById () {
-      var byId = {}
-      var list = this.$store.getters['todo/activeList']
-      for (var i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
+      const byId = {}
+      const list = this.$store.getters['todo/activeList']
+      for (let i = 0; i < list.length; i++) byId[list[i].taskId] = list[i]
       return byId
     },
     missingOf (t) {
-      var byId = this.allLiveById()
+      const byId = this.allLiveById()
       return parsePredecessors(t.predecessors)
-        .map(function (id) { return { id: id, p: byId[id] } })
+        .map(function (id) { return { id, p: byId[id] } })
         .filter(function (x) { return x.p && !x.p.complete })
         .slice(0, 3)
         .map(function (x) { return { id: x.id, name: x.p.taskContent || x.id } })
     },
     /** D14-A5: full uncapped count of unfinished predecessors (drives the "+N more" chip) */
     missingTotalOf (t) {
-      var byId = this.allLiveById()
+      const byId = this.allLiveById()
       return parsePredecessors(t.predecessors)
-        .filter(function (id) { var p = byId[id]; return p && !p.complete }).length
+        .filter(function (id) { const p = byId[id]; return p && !p.complete }).length
     },
     /* [D18-DOM3] ARIA checkbox pattern: Space joins Enter on the complete toggle (stopped so the
        card's own activation doesn't double-fire) */
@@ -605,7 +605,7 @@ export default {
     // —— 拖拽建依赖:落到目标卡左半 = 拖的卡成为前置(指向右);落到右半 = 目标卡成为拖卡的前置。
     // 左/右缘分别高亮,方向一目了然(用户定稿 2026-09-06:整卡高亮分不清谁依赖谁) ——
     sideOf (t, e) {
-      var rect = e.currentTarget ? e.currentTarget.getBoundingClientRect() : { left: 0, width: 0 }
+      const rect = e.currentTarget ? e.currentTarget.getBoundingClientRect() : { left: 0, width: 0 }
       return (e.clientX - rect.left) < rect.width / 2 ? 'left' : 'right'
     },
     onDragStart (t, e) {
@@ -621,8 +621,8 @@ export default {
     },
     onDragLeave (t) { if (this.dropTid === t.taskId) { this.dropTid = ''; this.dropSide = '' } },
     onDrop (t, e) {
-      var srcId = this.dragTid
-      var side = this.dropSide || this.sideOf(t, e)
+      const srcId = this.dragTid
+      const side = this.dropSide || this.sideOf(t, e)
       this.dropTid = ''
       this.dropSide = ''
       this.dragTid = ''
@@ -631,33 +631,33 @@ export default {
       // D15: resolve the dragged card ONCE and hand the OBJECT to addDependency on both branches —
       // the right branch used to pass the raw id string as dependentTask, so the undo toast lost
       // the dragged task's name (a string has no .taskContent).
-      var srcTask = this.inScope.find(x => x.taskId === srcId)
+      const srcTask = this.inScope.find(x => x.taskId === srcId)
       if (side === 'right') this.addDependency(srcTask, t.taskId, t, srcTask)
       else this.addDependency(t, srcId, srcTask, t)
     },
     /** target.prerequisites += prereqId(成环拒绝 + 撤销出口);srcNames 仅用于 toast 文案 */
     addDependency (target, prereqId, prereqTask, dependentTask) {
       if (!target || !prereqTask) return
-      var cur = parsePredecessors(target.predecessors)
+      const cur = parsePredecessors(target.predecessors)
       if (cur.indexOf(prereqId) >= 0) return
       // 成环检测:prereq 的前置链里若已(直接或间接)依赖 target,再加边就闭环
       // [A14 fix] traverse the FULL live list (allLiveById), not inScope: a cross-project
       // predecessor chain bypassed the byId lookups, silently skipping a real cycle
-      var byId = this.allLiveById()
-      var seen = {}
-      var stack = [prereqId]
+      const byId = this.allLiveById()
+      const seen = {}
+      const stack = [prereqId]
       while (stack.length) {
-        var id = stack.pop()
+        const id = stack.pop()
         if (id === target.taskId) {
           this.$message.error(this.$t('statsA.DepView.cycleErr', { b: target.taskContent || '' }))
           return
         }
         if (seen[id]) continue
         seen[id] = true
-        var p = byId[id]
+        const p = byId[id]
         if (p) parsePredecessors(p.predecessors).forEach(x => stack.push(x))
       }
-      var prevDeps = cur.slice()
+      const prevDeps = cur.slice()
       moveWithUndo(this, {
         label: this.$t('statsA.DepView.depAdded', { a: prereqTask.taskContent || '', b: dependentTask.taskContent || '' }),
         apply: () => { this.$store.dispatch('todo/updateTodoFields', { taskId: target.taskId, patch: { predecessors: cur.concat(prereqId), status: 'update' } }) },
@@ -670,50 +670,50 @@ export default {
     },
     /** 依赖连线:前置卡右缘 → 依赖卡左缘(画布上随卡片实时位置走) */
     drawWires () {
-      var track = this.$refs.track
+      const track = this.$refs.track
       if (!track) return
-      var wrect = track.getBoundingClientRect()
+      const wrect = track.getBoundingClientRect()
       // 画布尺寸 = 卡片位置包围盒 ∪ 视口,绝对定位下 scrollWidth 不再反映内容,必须自算
-      var maxX = wrect.width, maxY = wrect.height
+      let maxX = wrect.width, maxY = wrect.height
       // 包围盒只统计现存卡片的位置(posMap 里的死键不应把画布越撑越大)
-      var cards0 = track.querySelectorAll('.depv-task')
-      var liveIds = {}
-      for (var b0 = 0; b0 < cards0.length; b0++) liveIds[cards0[b0].getAttribute('data-tid')] = true
-      for (var b in this.posMap) {
+      const cards0 = track.querySelectorAll('.depv-task')
+      const liveIds = {}
+      for (let b0 = 0; b0 < cards0.length; b0++) liveIds[cards0[b0].getAttribute('data-tid')] = true
+      for (const b in this.posMap) {
         if (!liveIds[b]) continue
-        var pb = this.posMap[b]
+        const pb = this.posMap[b]
         maxX = Math.max(maxX, pb.x + 300)
         maxY = Math.max(maxY, pb.y + 160)
       }
       this.trackW = Math.round(maxX)
       this.trackH = Math.round(maxY)
-      var wires = []
-      var cards = track.querySelectorAll('.depv-task')
-      var pos = {}
-      for (var i = 0; i < cards.length; i++) {
-        var r = cards[i].getBoundingClientRect()
+      const wires = []
+      const cards = track.querySelectorAll('.depv-task')
+      const pos = {}
+      for (let i = 0; i < cards.length; i++) {
+        const r = cards[i].getBoundingClientRect()
         pos[cards[i].getAttribute('data-tid')] = r
       }
-      var byId = {}
-      var list = this.inScope
-      for (var k = 0; k < list.length; k++) byId[list[k].taskId] = list[k]
-      for (var j = 0; j < cards.length; j++) {
-        var el = cards[j]
-        var tid = el.getAttribute('data-tid')
-        var t = byId[tid]
+      const byId = {}
+      const list = this.inScope
+      for (let k = 0; k < list.length; k++) byId[list[k].taskId] = list[k]
+      for (let j = 0; j < cards.length; j++) {
+        const el = cards[j]
+        const tid = el.getAttribute('data-tid')
+        const t = byId[tid]
         if (!t) continue
-        var preds = parsePredecessors(t.predecessors)
-        var to = pos[tid]
+        const preds = parsePredecessors(t.predecessors)
+        const to = pos[tid]
         if (!to) continue
-        for (var m = 0; m < preds.length; m++) {
-          var pid = preds[m]
-          var from = pos[pid]
+        for (let m = 0; m < preds.length; m++) {
+          const pid = preds[m]
+          const from = pos[pid]
           if (!from) continue
-          var x1 = from.right - wrect.left
-          var y1 = from.top - wrect.top + from.height / 2
-          var x2 = to.left - wrect.left
-          var y2 = to.top - wrect.top + to.height / 2
-          var dx = Math.max(24, Math.abs(x2 - x1) / 2)
+          const x1 = from.right - wrect.left
+          const y1 = from.top - wrect.top + from.height / 2
+          const x2 = to.left - wrect.left
+          const y2 = to.top - wrect.top + to.height / 2
+          const dx = Math.max(24, Math.abs(x2 - x1) / 2)
           wires.push({ d: 'M' + x1 + ',' + y1 + ' C' + (x1 + dx) + ',' + y1 + ' ' + (x2 - dx) + ',' + y2 + ' ' + x2 + ',' + y2 })
         }
       }

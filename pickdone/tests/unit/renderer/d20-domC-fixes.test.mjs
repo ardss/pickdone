@@ -258,7 +258,7 @@ test('[A14] addDependency builds the cycle-traversal pool from the full live lis
   const src = read('renderer/js/components/DepView.vue')
   const m = src.match(/addDependency \(target, prereqId, prereqTask, dependentTask\) \{[\s\S]*?\n {4}\},/)
   assert.ok(m, 'addDependency found')
-  assert.match(m[0], /var byId = this\.allLiveById\(\)/)
+  assert.match(m[0], /const byId = this\.allLiveById\(\)/)
   assert.ok(!/this\.inScope\.forEach\(x => \{ byId\[x\.taskId\] = x \}\)/.test(m[0]),
     'the inScope-only pool must be gone')
 })

@@ -101,7 +101,7 @@ test('T3 DepView onDrop right branch passes the dragged card object (not the raw
   const i = src.indexOf("if (side === 'right')")
   assert.ok(i > 0, 'onDrop right-branch block found')
   const block = src.slice(Math.max(0, i - 200), i + 300)
-  assert.match(block, /var srcTask = this\.inScope\.find\(x => x\.taskId === srcId\)/,
+  assert.match(block, /const srcTask = this\.inScope\.find\(x => x\.taskId === srcId\)/,
     'the dragged card is resolved to its task object once, before the branch')
   assert.match(block, /addDependency\(srcTask, t\.taskId, t, srcTask\)/,
     'right-half drop: dependentTask is the dragged CARD object — a string has no .taskContent, so the undo toast lost the dragged task name')
