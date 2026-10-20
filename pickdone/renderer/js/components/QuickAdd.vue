@@ -2,8 +2,10 @@
 
   <div class="qa-bar">
       <div class="qa-inputwrap" :class="{ 'qa-failed': failed }">
+      <!-- [F7 P3] maxlength clamps at the shared DB title ceiling: overflow pastes truncate up front -->
       <input ref="inp" v-model="text" class="qa-input" :placeholder="$t('statsD.QuickAdd.placeholder')"
              :aria-label="$t('statsD.QuickAdd.ariaLabel')"
+             :maxlength="TITLE_MAX"
              @input="failed = false"
              @paste="onPaste"
              @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"
@@ -48,6 +50,7 @@ import { resolveQuickAddDate } from '../utils/quickAddDate.js'
 import { splitPasteLines, ensureTagSuffix } from '../utils/quickAddPaste.js'
 import { $elOf } from '../utils/el.js'
 import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9/A16] Space+Enter button activation
+import { TEXT_MAX_LEN as TITLE_MAX } from '../../../shared/sanitize-text.mjs' // [F7 P3] same-source clamp as the DB title column
 
 export default {
   name: 'QuickAdd',
@@ -58,6 +61,7 @@ export default {
   data () {
     return {
       text: '',
+      TITLE_MAX, // [F7 P3] template access to the shared title clamp
       // Set by a failed submit in quiet mode (standalone window) — the toast path is unavailable
       // there; cleared by the next input so the field stays retryable
       failed: false,
@@ -110,6 +114,14 @@ export default {
     window.removeEventListener('todo:focus-quickadd', this.focusInput)
   },
   methods: {
+    /* [F7 P3] replay the failure feedback: toggling failed true→false→true (across a tick)
+       restarts the qa-failed-shake CSS animation on a back-to-back failed submit — a plain
+       `failed = true` on an already-failed field never re-triggers it */
+    markFailed () {
+      if (!this.quiet) return
+      this.failed = false
+      this.$nextTick(() => { this.failed = true })
+    },
     /* [A9/A16] date-chip clear button: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
     onClearDateKey: roleButtonActivate(function () { this.clearDate() }),
     /* [uiux-2026-10-01 J1 P3] Esc is the universal cancel key: clear the draft (and the failure
@@ -209,7 +221,7 @@ export default {
           this._pendingLines = rest.concat(this._pendingLines || [])
           this.text = rest[0]
         }
-        if (this.quiet) this.failed = true
+        if (this.quiet) this.markFailed()
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }
     },
@@ -256,7 +268,7 @@ export default {
         // [d-wave 2026-10-14] quiet mode used to return with ZERO feedback: no toast, no
         // qa-error — the standalone-window user thought the shortcut was broken. Quiet mode
         // surfaces failures inline (failed + qa-error), same as the dispatch-failure paths.
-        if (this.quiet) this.failed = true
+        if (this.quiet) this.markFailed()
         else this.$message.warning(this.$t('statsD.QuickAdd.dateOnlyRefused'))
         return
       }
@@ -298,7 +310,7 @@ export default {
         // toast is clipped by the tiny viewport (overflow:hidden), so surface the failure inline
         // on the card instead — the input is kept and the window stays open for the retry.
         console.error('[quick-add] addTodo failed:', err)
-        if (this.quiet) this.failed = true
+        if (this.quiet) this.markFailed()
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }
     }

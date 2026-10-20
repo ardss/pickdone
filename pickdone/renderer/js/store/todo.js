@@ -87,6 +87,11 @@ export default {
       if (j >= 0) other.splice(j, 1)
     },
     removeLocal (s, taskId) {
+      // [F7 P3] list membership changed, so views are stale: mark dirty, same contract as
+      // upsertLocal/hardRemove. Without this, the addTodo UNIQUE-loser fall-through (remove a
+      // ghost optimistic row, adopt failed, queued-retry) left a stale rendered row until the
+      // 60s viewsDirty day-rollover sweep recomputed.
+      s.viewsDirty = true
       const i = s.todoList.findIndex(t => t.taskId === taskId)
       if (i >= 0) s.todoList.splice(i, 1)
       else {

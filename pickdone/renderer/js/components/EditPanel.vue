@@ -24,8 +24,11 @@
         </span>
       </div>
 
+      <!-- [F7 P3] maxlength clamps at the shared DB ceiling: overflow pastes truncate up front,
+           so what the user sees always matches what sanitizeText persists (same-source constant) -->
       <el-input type="textarea" :autosize="{minRows:3,maxRows:8}" :placeholder="$t('statsJ.EditPanel.descPlaceholder')"
                 :model-value="e.desc" @input="v=>fieldPatch('desc',v)" class="ep-desc"
+                :maxlength="DESC_MAX"
                 @paste="onDescPaste" @dragover.prevent @drop.prevent="onDescDrop"/>
       <ep-attachments section="bar" :img-list="imgList" :file-list="fileList"
                       @pick="pickFiles" @preview="previewImg=$event" @remove="removeFile"/>
@@ -177,6 +180,7 @@ import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
 import { $elOf } from '../utils/el.js'
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button/checkbox activation
+import { TEXT_MAX_LEN as DESC_MAX } from '../../../shared/sanitize-text.mjs' // [F7 P3] same-source clamp as the DB describe column
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -199,6 +203,7 @@ export default {
   data () {
     return {
       e: null as any,
+      DESC_MAX, // [F7 P3] template access to the shared describe clamp
       saving: false,
       saveFailed: false,
       catOpen: false,

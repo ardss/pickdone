@@ -273,7 +273,7 @@ export default {
   height: 100%;
   padding: 0 25px;
   background-color: var(--tomato-bg);
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
 }
 .tomato-timer--work { background-color: var(--tomato-bg); }
 .tomato-timer--rest { background-color: #f6e8d1; }
@@ -285,7 +285,7 @@ export default {
   font-weight: 400;
   font-size: var(--fs-sm);
   line-height: 18px;
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
 }
 .tomato-timer__status > div { display: flex; align-items: center; }
 .tomato-timer__status > div:first-of-type { margin-bottom: var(--space-1); }
@@ -330,7 +330,7 @@ export default {
   background-color: #0c8172;
   border: none;
   border-radius: var(--radius-sm);
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
 }
 .tomato-timer__play:focus { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
 .tomato-timer__play:hover { background-color: #008284; }
@@ -380,7 +380,7 @@ export default {
   font-weight: 600;
   font-size: 26px;
   line-height: 42px;
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
   pointer-events: none;
@@ -396,7 +396,7 @@ export default {
   flex-shrink: 0;
   padding: 0 25px;
   background-color: var(--tomato-bg);
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
   overflow: visible;
 }
 .tomato-timer--rest { background-color: #f6e8d1; }
@@ -423,7 +423,7 @@ export default {
   position: absolute; right: 25px; top: 0; bottom: 0; margin: auto;
   width: 138px; height: 48px; padding: 0;
   color: #fff; font-weight: 400; font-size: var(--fs-lg); line-height: 21px;
-  border: none; border-radius: var(--radius-sm); transition: all .2s;
+  border: none; border-radius: var(--radius-sm); transition: all var(--dur-fast, .2s);
   display: flex; align-items: center; justify-content: center; gap: 8px;
 }
 /* —— 窄条变体：非今日视图专注/休息进行中的兜底形态（相位+倒计时+放弃，收成/白噪音/小窗已 v-if 收起） —— */

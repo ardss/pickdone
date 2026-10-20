@@ -126,7 +126,9 @@
  *  Header "Pomodoro Focus Record" + top-right "Add record manually"; body lists .tomato-record entries (date/time range/duration/linked task/right-click delete).
  *  Manual add follows the common tomatoRecordAdd pattern: start time + focus/rest duration sliders, limited to 3 per day (settings.tomatoRecordAddDate/Count). */
 import { dayjs, FMT } from '../utils/core.js'
-import { genTomatoId } from '../utils/core.js'
+// [F7 P3] salted id mint (device-salt mixed in): the unsalted genTomatoId collided across
+// devices within the same millisecond and the merge swallowed one manual record whole
+import { mintTomatoId } from '../store/tomato.js'
 import { loadRuntime, saveRuntime } from '../store/helpers/runtimeState.js'
 import dialogA11y from '../utils/dialogA11y.js'
 import { secToHHmmss } from '../utils/tomatoShared.js'
@@ -309,7 +311,7 @@ export default {
         const end = f.startTs + f.focusTime * 60000
         const task = f.focusTaskId ? this.$store.state.todo.todoList.find(x => x.taskId === f.focusTaskId) : null
         this.$store.commit('tomato/addRecord', {
-          tomatoId: genTomatoId(), endTime: end, startTime: f.startTs,
+          tomatoId: mintTomatoId('tmt_f_', f.startTs), endTime: end, startTime: f.startTs,
           dateKey: dayjs(end).format(FMT.date),
           focus: task ? task.taskContent : (f.focusText || '').trim(),
           focusTaskId: task ? task.taskId : null,

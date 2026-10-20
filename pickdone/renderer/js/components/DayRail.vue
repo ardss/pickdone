@@ -126,6 +126,16 @@ const DAY_END_H = 23
 /* Stable per-instance id: selection/drag-move/delete all anchor to that specific chip, not the taskId */
 function planUid () { return 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
 
+/* [F7 P3] same-ms drops could mint a duplicate planUid and the db-plan-ops upsert would then
+   rewrite an unrelated chip; dedup against loaded chip ids, extend randomness after 5 rolls */
+function uniquePlanUid (usedIds) {
+  for (let i = 0; i < 5; i++) {
+    const id = planUid()
+    if (!usedIds.has(id)) return id
+  }
+  return planUid() + Math.random().toString(36).slice(2, 9)
+}
+
 /* mm validity: a time string starting with a two-digit 00-23 hour (e.g. "15:00"/"09:30"); invalid entries are dropped outright to keep ghost data from persisting forever */
 function validPlanMm (mm) { return typeof mm === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(mm) }
 
@@ -157,7 +167,7 @@ const V1_CSS = `
 .today-v1 .today-main { flex: 1; min-width: 0; align-self: stretch; display: flex; flex-direction: column; }
 .today-v1 .today-body .day-rail { width: 236px; flex-shrink: 0; position: sticky; top: 0; height: calc(100vh - 120px); display: flex; flex-direction: column; overflow-y: auto; transition: width .2s cubic-bezier(.2,.8,.2,1); }
 /* Collapsed state = the whole rail is the expand button: no separate expand button; hover uses an outer edge line + a slight background tint to hint clickability */
-.today-v1 .today-body .day-rail.collapsed { cursor: pointer; transition: border-color .15s, background .15s; }
+.today-v1 .today-body .day-rail.collapsed { cursor: pointer; transition: border-color .15s, background .15s, width .2s cubic-bezier(.2,.8,.2,1); }
 .today-v1 .today-body .day-rail.collapsed:hover { border-color: var(--brand, #0f9d8f); background: var(--hover-bg, #fbfbfb); }
 .day-rail.collapsed .dr-head, .day-rail.collapsed .dr-plan, .day-rail.collapsed .dr-blk, .day-rail.collapsed .dr-rail { display: none; }
 .day-rail.collapsed .dr-track { flex: 0 0 auto; }
@@ -573,15 +583,22 @@ export default {
       this._dragPlan = null
       // On write failure (lock screen/library busy), read back with the library as source of truth, eliminating drift between optimistic UI and the library (async errors can't be caught by sync try/catch)
       const resync = () => { this.reportPlanFail(); this._onPlansChanged() }
+      /* [F7 P3] a fresh chip must not reuse a loaded chip id (the upsert would rewrite it) */
+      const usedIds = new Set()
+      for (const dayPlansMap of Object.values(this.plans)) {
+        for (const chips of Object.values(dayPlansMap || {})) {
+          if (Array.isArray(chips)) chips.forEach(c => { if (c && c.id) usedIds.add(c.id) })
+        }
+      }
       if (move && move.taskId === taskId && Array.isArray(day[taskId])) {
         day[taskId].splice(move.idx, 1, { mm, id: move.planId }) /* In-rail chip drag = move that instance (id unchanged) */
         dayPlans.updateChip(move.planId, this.today, mm).catch(resync)
       } else if (Array.isArray(day[taskId])) {
-        const id = planUid()
+        const id = uniquePlanUid(usedIds)
         day[taskId].push({ mm, id }) /* Second drop = append */
         dayPlans.addChips([{ taskId, day: this.today, mm, id }]).catch(resync)
       } else {
-        const id = planUid()
+        const id = uniquePlanUid(usedIds)
         day[taskId] = [{ mm, id }]
         dayPlans.addChips([{ taskId, day: this.today, mm, id }]).catch(resync)
       }
