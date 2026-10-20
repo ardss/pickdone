@@ -217,8 +217,10 @@ class Instance {
           // non-zero exit stays a real crash and throws below.
           // 2026-10-20: under the full gate the successor's pre-lock delay + electron boot
           // routinely exceeded one renewal window (observed 82s+ on a busy box) — allow a
-          // second renewal before declaring the successor missing.
-          if (renewals < 2) { renewals++; deadline = Date.now() + bootTimeoutMs }
+          // second renewal before declaring the successor missing. 2026-10-21: a third
+          // renewal — the full-corpus unit gate still hit 1 miss/run on a saturated box
+          // (solo the suite is 4/4 green, so this is pure wall-clock, not logic).
+          if (renewals < 3) { renewals++; deadline = Date.now() + bootTimeoutMs }
           if (Date.now() > deadline) {
             throw new Error(`[${this.name}] electron exited code=0 (lock-loss relaunch) and no successor CDP came up on port ${this.cdpPort}`)
           }
