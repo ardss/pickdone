@@ -201,7 +201,9 @@ export default {
     },
     purge (t) {
       // [P2 fix] raw t.taskContent interpolated an empty title as an empty string; sibling toasts in this file fall back to the untitled label — same guard here
-      this.$confirm(this.$t('statsC.RecycleBin.purgeConfirm', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }), this.$t('statsC.RecycleBin.dangerAction'), { type: 'error' }).then(async () => {
+      // [F5 2026-10-21] named confirm button (btnPurge, existing key): the single-item permanent
+      // delete must not show a generic "OK" while clear-all's dialogs are already action-named
+      this.$confirm(this.$t('statsC.RecycleBin.purgeConfirm', { name: t.taskContent || this.$t('statsJ.TodoItem.untitled') }), this.$t('statsC.RecycleBin.dangerAction'), { type: 'error', confirmButtonText: this.$t('statsC.RecycleBin.btnPurge') }).then(async () => {
         // Await the dispatch and converge only on success: purgeIds swallows per-id failures
         // (reportError is console-only), so a silent IPC failure used to leave the row in the
         // bin with no user-visible feedback at all.
@@ -270,7 +272,7 @@ export default {
 html[data-theme="dark"] .datetime--alert{color:var(--danger, #f56c6c)}
 .datetime--gray{color:var(--text-dim)}
 /* 完成/标签/清单等页在条目右侧的悬停操作（恢复为未完成等），颜色取自设计稿 .btn-group .btn */
-.row-btn{flex-shrink:0;align-self:center;margin-right:14px;padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all .2s;opacity:0}
+.row-btn{flex-shrink:0;align-self:center;margin-right:14px;padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all var(--dur-fast);opacity:0}
 .row-btn:focus-visible{opacity:1}
 /* 待办箱：分类圆点使用圆形图标（原为 font-awesome far/fas circle），此处由内联 SVG 承担 */
 .todo-box-list-item__category-dot svg{width:12px;height:12px;display:block}

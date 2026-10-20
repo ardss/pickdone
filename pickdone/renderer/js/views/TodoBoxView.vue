@@ -330,7 +330,8 @@ export default {
     },
     async _batchDeleteInner () {
       const n = this.checkedIds.length
-      try { await this.$confirm(this.$t('statsC.TodoBox.confirmDelete', { n }), this.$t('statsC.TodoBox.confirmTitle'), { type: 'warning' }) } catch { return }
+      // [F5 2026-10-21] confirm button named with the existing btnDelete key (no new i18n key)
+      try { await this.$confirm(this.$t('statsC.TodoBox.confirmDelete', { n }), this.$t('statsC.TodoBox.confirmTitle'), { type: 'warning', confirmButtonText: this.$t('statsC.TodoBox.btnDelete') }) } catch { return }
       // Resolve against the live list first (dead ids deleted elsewhere during batching are excluded),
       // then split: recurring instances divert to ui/askRepeatDelete (RepeatDeleteModal owns their
       // deletion), plain tasks are deleted in bulk below
@@ -398,7 +399,7 @@ html[data-theme="dark"] .dropdown-select__label:hover,
 html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { background: var(--hover-bg); color: var(--text-1); }
 .icon-append{display:block;color:var(--text-4);font-size:16px;line-height:20px}
 /* ---- F1. 待办箱条目（原 TodoBoxListItem scoped，限定于 .todo-box-list 下）---- */
-.todo-box-list .todo-box-list-item{position:relative;border-bottom:1px solid var(--line);background-color:var(--panel, #fff);padding:10px 26px;transition:all .3s cubic-bezier(.23,1,.32,1);box-sizing:border-box;display:flex}
+.todo-box-list .todo-box-list-item{position:relative;border-bottom:1px solid var(--line);background-color:var(--panel, #fff);padding:10px 26px;transition:all var(--dur-slow) cubic-bezier(.23,1,.32,1);box-sizing:border-box;display:flex}
 .todo-box-list .todo-box-list-item__append,.todo-box-list .todo-box-list-item__prepend{flex-shrink:0}
 .todo-box-list .todo-box-list-item__category-dot{display:flex;flex-shrink:0;align-items:center;justify-content:center;width:20px;height:20px;margin-right:8px;font-size: var(--fs-sm)}
 .todo-box-list .todo-box-list-item__category-dot>svg{display:block}
@@ -417,7 +418,7 @@ html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { backg
 .todo-box-list .todo-box-list-item--is-drag{background-color:var(--active-bg)}
 .todo-box-list .todo-box-list-item--selected,.todo-box-list .todo-box-list-item--selected:hover{background-color:var(--brand-light)}
 /* 裸文字按钮仅限待办箱条目（旧 scoped id）；回收站条目用原版药丸组（见 F2 补充） */
-.todo-box-list .todo-box-list-item__tools .btn{padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all .2s}
+.todo-box-list .todo-box-list-item__tools .btn{padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all var(--dur-fast)}
 .todo-box-list .todo-box-list-item__tools .btn:focus{outline:0}
 .todo-box-list .todo-box-list-item__tools .btn:hover{color:var(--brand-hover)}
 .todo-box-list .todo-box-list-item__tools .btn:active{color:var(--brand-active)}

@@ -295,11 +295,12 @@ export default {
       ])
     },
     async delHabitConfirm (h) {
-      try { await this.$confirm(this.$t('statsB.HabitView.delConfirm', { name: h.name }), this.$t('statsB.HabitView.delTitle'), { type: 'warning' }) } catch { return }
+      // [F5 2026-10-21] named confirm buttons reusing the existing statsC.TodoBox.btnDelete key
+      try { await this.$confirm(this.$t('statsB.HabitView.delConfirm', { name: h.name }), this.$t('statsB.HabitView.delTitle'), { type: 'warning', confirmButtonText: this.$t('statsC.TodoBox.btnDelete') }) } catch { return }
       this.delHabitWithUndo(h)
     },
     async delMomentConfirm (m) {
-      try { await this.$confirm(this.$t('statsB.HabitView.delMomentConfirm', { name: m.name }), this.$t('statsB.HabitView.delMomentTitle'), { type: 'warning' }) } catch { return }
+      try { await this.$confirm(this.$t('statsB.HabitView.delMomentConfirm', { name: m.name }), this.$t('statsB.HabitView.delMomentTitle'), { type: 'warning', confirmButtonText: this.$t('statsC.TodoBox.btnDelete') }) } catch { return }
       this.delMomentWithUndo(m)
     },
     addMoment () {
@@ -346,7 +347,7 @@ export default {
   width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: var(--fs-xs); color: var(--text-3); cursor: pointer;
-  transition: all .12s; appearance: none; padding: 0; background: transparent; font-family: inherit;
+  transition: all var(--dur-fast); appearance: none; padding: 0; background: transparent; font-family: inherit;
 }
 .habit-wd:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 
@@ -481,7 +482,7 @@ export default {
   width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line-strong); background: var(--panel, #fff);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: var(--fs-md); color: transparent; cursor: pointer; flex-shrink: 0;
-  transition: all .15s, transform .1s;
+  transition: all var(--dur-fast), transform var(--dur-fast);
 }
 
 

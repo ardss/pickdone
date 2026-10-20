@@ -317,5 +317,4 @@ export default {
 .hint-q:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-radius: var(--radius-sm); }
 /* [D15-A6] undated-base explanation beside the disabled 生成 button */
 .rm-base-warn { flex: 1; min-width: 0; font-size: var(--fs-xs, 12px); color: var(--warn, #e6a33c); text-align: left; overflow: hidden; text-overflow: ellipsis; }
-@keyframes modal-pop { from { opacity: 0; transform: translateY(8px) scale(.96); } }
 </style>

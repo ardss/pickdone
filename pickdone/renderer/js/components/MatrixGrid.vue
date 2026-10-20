@@ -208,7 +208,8 @@ export default {
 
 
 
-.matrix-task:hover { box-shadow: 0 1px 4px rgba(0, 0, 0, .08); }
+/* [F5 2026-10-21] the hover box-shadow rule moved to the single .matrix-task:hover below
+   (line ~277): the box-shadow is now in the transition list so it fades with the background */
 
 /* 四象限视图 */
 .matrix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -268,13 +269,13 @@ export default {
 
 .matrix-task {
   position: relative; padding: 8px 10px; background: var(--gray-bg); border-radius: var(--radius-md); font-size: var(--fs-md);
-  display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background .15s, transform .1s;
+  display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast);
 }
 
 
 
 
-.matrix-task:hover { background: var(--hover-bg); }
+.matrix-task:hover { background: var(--hover-bg); box-shadow: 0 1px 4px rgba(0, 0, 0, .08); }
 
 
 
