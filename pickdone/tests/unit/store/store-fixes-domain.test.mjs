@@ -233,7 +233,8 @@ function backfillCommit (promptValue) {
     $prompt: () => Promise.resolve({ value: promptValue })
   }
   const menu = buildTaskMenu(vm, task, {}, [])
-  const item = menu.find(i => i.icon === 'timer')
+  // D6 (2026-10-22): the pomodoro item now owns the 'timer' glyph; backfill moved to 'plus'
+  const item = menu.find(i => i.icon === 'plus')
   assert.ok(item, 'backfill menu item present')
   return Promise.resolve(item.fn()).then(() => commits)
 }
@@ -276,7 +277,7 @@ test('#8b backfill input above FOCUS_MAX_MINUTES is rejected with a hint, no rec
     $prompt: () => Promise.resolve({ value: '9999' })
   }
   const menu = buildTaskMenu(vm, task, {}, [])
-  const item = menu.find(i => i.icon === 'timer')
+  const item = menu.find(i => i.icon === 'plus')
   await item.fn()
   assert.deepEqual(commits, [], 'no record for over-limit input')
   assert.equal(warns.length, 1, 'explicit hint instead of a silent clamp')
@@ -296,7 +297,7 @@ test('#8 backfill without a task uses the free-slot id suffix', async () => {
     $prompt: () => Promise.resolve({ value: '25' })
   }
   const menu = buildTaskMenu(vm, task, {}, [])
-  const item = menu.find(i => i.icon === 'timer')
+  const item = menu.find(i => i.icon === 'plus')
   await item.fn()
   const rec = commits.find(c => c[0] === 'tomato/addRecord')[1]
   assert.match(rec.tomatoId, /^tmt_m_\d+_25_free$/)

@@ -61,7 +61,9 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
   }
   if (c.tomato && !t.complete) {
     items.push({
-      icon: 'clock',
+      // D6 (P3 2026-10-22): 'timer' — it shared 'clock' with postpone-to-tomorrow above, two
+      // different actions under one glyph in the same menu
+      icon: 'timer',
       label: vm.$t('statsE.TodoItem.togglePomodoroFocus'),
       fn: () => {
         const st = vm.$store.state.tomato
@@ -95,7 +97,9 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       vm.$message.success(vm.$t('statsJ.TodoItem.backfilled', { n: min2, name: cur.taskContent || vm.$t('statsJ.TodoItem.untitled') }))
     }
     items.push({
-      icon: 'timer',
+      // D6 (P3 2026-10-22): was 'timer' — the pomodoro item above now owns that glyph, the
+      // manual-backfill entry moves to 'plus' (in the AppIcon set)
+      icon: 'plus',
       label: vm.$t('statsG.DayRail.manualAdd'),
       fn: () => {
         vm.$prompt(vm.$t('statsG.DayRail.manualPrompt'), vm.$t('statsG.DayRail.manualAdd'), {

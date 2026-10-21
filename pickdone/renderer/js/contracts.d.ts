@@ -86,6 +86,7 @@ interface TodoAPI {
   onExternalSettingsChanged: (...args: any[]) => any
   onPlaySound: (...args: any[]) => any
   onQuickAddFocus: (...args: any[]) => any
+  onReminderOpenTask: (...args: any[]) => any
   onSecurityLock: (...args: any[]) => any
   onSecurityUnlock: (...args: any[]) => any
   onShortcutAction: (...args: any[]) => any

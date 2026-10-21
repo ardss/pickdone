@@ -158,6 +158,14 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('shortcut-conflict', h)
     return () => ipcRenderer.removeListener('shortcut-conflict', h)
   },
+  // D6 (P2 2026-10-22): reminder-notification click locate — the main process pushes {taskId}
+  // after the lock-aware focus; the renderer routes to the task's view and opens the edit panel
+  // (same wrapper/disposer contract as onShortcutConflict above)
+  onReminderOpenTask: fn => {
+    const h = (_e, p) => fn(p)
+    ipcRenderer.on('reminder-open-task', h)
+    return () => ipcRenderer.removeListener('reminder-open-task', h)
+  },
   onShortcutAction: fn => {
     const h = (_e, action) => fn(action)
     ipcRenderer.on('shortcut-action', h)

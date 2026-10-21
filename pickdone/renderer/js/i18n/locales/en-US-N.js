@@ -24,7 +24,8 @@ export default {
     prev: 'Back',
     next: 'Next',
     done: 'Get Started',
-    skip: 'Skip Setup'
+    skip: 'Skip Setup',
+    escSkipConfirm: 'Skip initial setup? Unfinished choices keep their defaults'
   },
   update: {
     label: 'Software Update',

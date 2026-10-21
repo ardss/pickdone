@@ -6,7 +6,8 @@
       <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
             tabindex="0" @click.stop="toggleSub(s)" @keydown="onCheckKey(s, $event)">{{ s.checked ? '✓' : '' }}</span>
       <span v-if="renameIndex !== i" class="ep-sub-text" :class="{strike:s.checked}" role="button" tabindex="0"
-            :aria-label="s.text" @click="toggleSub(s)" @dblclick="startRename(i)"
+            :aria-label="s.text" :title="$t('statsJ.EditPanel.dblclickRenameTip')"
+            @click="toggleSub(s)" @dblclick="startRename(i)"
             @keydown="onTextKey(i, $event)">{{s.text}}</span>
       <!-- [R2] Inline rename: double-click (or Enter/Space on the focused text) opens the editor; Enter/blur
            commits via the 'rename' emit, Esc cancels. commitRename is re-entrant-safe (blur after the

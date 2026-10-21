@@ -52,6 +52,9 @@
       <empty-state v-if="!list.length">
         <template #text>{{ initError ? $t('statsC.TodoBox.initFailed') : $t('statsC.TodoBox.empty') }}</template>
         <template v-if="initError" #action><button type="button" class="mini primary" @click="retryInit">{{ $t('statsC.TodoBox.retryInit') }}</button></template>
+        <!-- D6 (P3 2026-10-22): a genuinely empty box (not the error state) offers the create entry
+             instead of dead space — same QuickAdd summon channel as main.js focusQuickAdd -->
+        <template v-else #action><button type="button" class="mini primary" @click="openQuickAdd">{{ $t('statsC.TodoBox.emptyCreate') }}</button></template>
       </empty-state>
       <div v-else class="todo-box-list">
         <!-- [A7] role=button demoted from the row to the content (same TodoItem pattern): a button
@@ -173,6 +176,14 @@ export default {
   methods: {
     // [F3 2026-10-18] retry after a failed todo/init — reruns the full load (getAll + computeViews)
     retryInit () { this.$store.dispatch('todo/init', {}) },
+    // D6 (P3 2026-10-22): empty-box create entry — focus the QuickAdd bar when mounted; on views
+    // where it is not mounted, route to Today first (which always mounts it), then focus
+    openQuickAdd () {
+      if (document.querySelector('.qa-wrap')) { window.dispatchEvent(new CustomEvent('todo:focus-quickadd')); return }
+      this.$router.push({ name: 'todo-list-today' }).then(() => {
+        setTimeout(() => window.dispatchEvent(new CustomEvent('todo:focus-quickadd')), 120)
+      }).catch(() => {})
+    },
     // keyboard activation for the sort/filter dropdown triggers; the cast lives here because the
     // structure guard rejects TS `as` expressions inside templates (silent-undefined identifier scan)
     tbTriggerKey (e) { (e.currentTarget as HTMLElement).click() },

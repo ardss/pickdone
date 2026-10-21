@@ -135,6 +135,7 @@ export default {
   'statsJ.EditPanel.moveSubtaskUp': 'Move subtask up',
   'statsJ.EditPanel.moveSubtaskDown': 'Move subtask down',
   'statsJ.EditPanel.addSubtask': 'Add subtask',
+  'statsJ.EditPanel.dblclickRenameTip': 'Double-click to rename',
   'statsJ.EditPanel.effortHint': 'Mark task effort; click selected option again to clear',
   'statsJ.EditPanel.urgencyHint': 'High/Medium/Low marks urgency',
   'statsJ.EditPanel.clearDueDate': 'Clear due date',

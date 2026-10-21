@@ -128,6 +128,10 @@ import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
 let dragActive = false
+// D6 (P3 2026-10-22): set at dragstart when the current sort is non-custom (reorder writes are
+// ignored there) — suppresses the drop-time duplicate of the sortIgnored toast in _writeSort;
+// reset in onDragEnd, which always fires after a drag (drop included)
+let dragSortBlocked = false
 
 // [maint-0924 A1] Cross-day move patch builder moved to utils/crossDayMove.js (single source now
 // shared with DayDeck.onDrop and TodoBoxView.batchToday — same time-of-day preservation rules,
@@ -225,6 +229,14 @@ export default {
     onTomatoKey: roleButtonActivate(function (e) { this.setTomatoTimer(e) }, { stop: true }),
     /* ===== Drag sorting (midpoint insertion into taskSort, aligned with the task_sort reference semantics) ===== */
     onDragStart (e) {
+      // D6 (P3 2026-10-22): taskSort only matters in the 'custom' sort (see _writeSort) — announce
+      // the ignore at drag START (none drop effect + one toast) instead of only after the row
+      // snaps back on drop. The flag suppresses the drop-time duplicate in _writeSort.
+      if (normalizeSortMode(this.$store.state.settings.sortMode) !== 'custom') {
+        e.dataTransfer.dropEffect = 'none'
+        dragSortBlocked = true
+        if (this.$message) this.$message.info(this.$t('statsH.main.sortIgnored'))
+      }
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', this.todo.taskId)
       this.dragging = true
@@ -233,6 +245,7 @@ export default {
     onDragOver (e) {
       if (!dragActive) return
       e.preventDefault()
+      if (dragSortBlocked) { e.dataTransfer.dropEffect = 'none'; return } // D6: no reorder affordance in non-custom sorts
       e.dataTransfer.dropEffect = 'move'
       const rect = this.$el.getBoundingClientRect()
       this.dropAfter = (e.clientY - rect.top) > rect.height / 2
@@ -241,7 +254,7 @@ export default {
       this.$el.classList.toggle('drag-above', !this.dropAfter)
     },
     onDragLeave () { this.$el.classList.remove('drag-above', 'drag-below') },
-    onDragEnd () { this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false; dragActive = false },
+    onDragEnd () { this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false; dragActive = false; dragSortBlocked = false },
     async onDrop (e) {
       e.preventDefault()
       dragActive = false
@@ -296,7 +309,9 @@ export default {
     _writeSort (list) {
       if (normalizeSortMode(this.$store.state.settings.sortMode) !== 'custom') {
         // [maint-0924 A4] dedicated copy: this guard also fires for drag/keyboard REORDERING, which has nothing to do with pinning
-        if (this.$message) this.$message.info(this.$t('statsH.main.sortIgnored'))
+        // D6 (P3 2026-10-22): a drag that STARTED in a non-custom sort already announced the ignore
+        // (dragstart toast) — suppress the drop-time duplicate; the keyboard path still announces here
+        if (!dragSortBlocked && this.$message) this.$message.info(this.$t('statsH.main.sortIgnored'))
         return false
       }
       // F-B2 (dw wave 3): the 9999→-9999 linear scale moved to shared/sort-core.mjs reorderScale —

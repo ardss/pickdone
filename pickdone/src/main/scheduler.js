@@ -153,12 +153,31 @@ function setSoundFile (f) { dingFile = f }
 // other entry point (tray click / second-instance / quick-add) honors.
 let showMainEntry = null
 function setShowMainEntry (fn) { showMainEntry = typeof fn === 'function' ? fn : null }
+/** D6 (P2 2026-10-22): notification-click locate. Focusing alone left the user staring at
+ *  whatever view was last open — the clicked task was nowhere in sight. After the focus path
+ *  runs, push the taskId to the renderer over the same fire-and-forget webContents.send shape
+ *  as 'shortcut-conflict' (preload wraps it with a disposer, onReminderOpenTask); the renderer
+ *  routes to the task's view and opens the edit panel. The renderer additionally ignores the
+ *  push while ui.isLocked (the lock-aware gate may have shown the lock screen, never the data). */
+function pushOpenTask (taskId) {
+  if (!taskId) return
+  try {
+    const win = require('./window-ref').getMainWindow()
+    if (win && !win.isDestroyed()) win.webContents.send('reminder-open-task', { taskId: String(taskId) })
+  } catch (e) { log.warn('[Reminder] open-task push failed:', e && e.message) }
+}
+
 /** Notification-click focus path (exported for unit tests): routes through the lock-aware
- *  showMainOrLock when wired; bare-window fallback only when index.js never wired it. */
-function focusMainFromNotification () {
-  if (showMainEntry) { try { showMainEntry(); return } catch (e) { log.warn('[Reminder] showMainOrLock failed', e) } }
-  const win = require('./window-ref').getMainWindow()
-  if (win) { win.show(); win.focus() }
+ *  showMainOrLock when wired; bare-window fallback only when index.js never wired it.
+ *  D6 (P2 2026-10-22): optional taskId — after focusing, pushOpenTask hands it to the renderer. */
+function focusMainFromNotification (taskId) {
+  let shown = false
+  if (showMainEntry) { try { showMainEntry(); shown = true } catch (e) { log.warn('[Reminder] showMainOrLock failed', e) } }
+  if (!shown) {
+    const win = require('./window-ref').getMainWindow()
+    if (win) { win.show(); win.focus() }
+  }
+  pushOpenTask(taskId)
 }
 
 /** Truncate by code points, not UTF-16 code units: slicing at a fixed index could split a
@@ -217,7 +236,8 @@ function fire (todo, offset) {
     n.on('click', () => {
       // D10 (2026-09-27): route through the lock-aware gate — a locked app must not be revealed
       // by clicking a reminder notification (see focusMainFromNotification above).
-      focusMainFromNotification()
+      // D6 (P2 2026-10-22): the click now also carries the taskId so the renderer locates the task.
+      focusMainFromNotification(todo.taskId)
     })
     // D22 symmetry (c-wave 2026-10-13, mirrors handlers/system.js:64-69): an OS-level delivery
     // failure surfaces as an UNHANDLED 'failed' event on the Notification object — under

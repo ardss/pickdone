@@ -80,7 +80,8 @@ export default {
       notFound: '{q} 没有找到相关日程',
       undatedHidden: '{n} 条无日期任务被日期筛选隐藏',
       clearDateRange: '清除日期范围',
-      empty: '暂无日程'
+      empty: '暂无日程',
+      clearAndRescan: '清除筛选并重搜'
     },
     TodoBox: {
       title: '待办箱',
@@ -96,6 +97,7 @@ export default {
       empty: '暂无日程',
       initFailed: '数据加载失败',
       retryInit: '重试加载',
+      emptyCreate: '去新建任务',
       ariaCheck: '选中任务',
       ariaComplete: '标记完成',
       titleComplete: '标记完成：{name}',

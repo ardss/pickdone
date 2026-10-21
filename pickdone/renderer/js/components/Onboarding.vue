@@ -1,6 +1,8 @@
 <template>
 
-  <div v-if="visible" class="ob-mask" role="dialog" aria-modal="true" :aria-label="$t('onboarding.welcomeTitle')" @keydown.esc="finish">
+  <div v-if="visible" class="ob-mask" role="dialog" aria-modal="true" :aria-label="$t('onboarding.welcomeTitle')" @keydown.esc="onEsc">
+    <!-- D6 (P3 2026-10-22): Esc no longer silently skips the WHOLE wizard — mid-wizard it steps
+         back; on step 0 it confirms before finishing (see onEsc) -->
     <div class="ob-card">
       <h1 class="ob-title">{{ $t('onboarding.welcomeTitle') }}</h1>
       <p class="ob-sub">{{ $t('onboarding.welcomeSub') }}</p>
@@ -80,6 +82,13 @@ export default {
   mixins: [dialogA11y],
   data: () => ({ visible: false, step: 0, locale: 'zh-CN', colorMode: 'light', seedCats: true, closeAction: 'tray', langs: SUPPORTED }),
   async mounted () {
+    // D6 (P2 2026-10-22): reminder-notification click locate. This component mounts with the main
+    // shell layout (and survives the ONBOARDING_ENABLED early return below), so it hosts the
+    // 'reminder-open-task' subscription: route to the task's view (today for dated tasks, the
+    // todo box for undated ones) and open the edit panel. Locked screens never reveal data.
+    if (typeof window.todoAPI.onReminderOpenTask === 'function') {
+      window.todoAPI.onReminderOpenTask(p => this.locateFromNotification(p))
+    }
     if (!ONBOARDING_ENABLED) { try { localStorage.setItem(LS_ONBOARD, '1') } catch (e) { /* ignore */ } return }
     // When partitioned storage/privacy mode disables LS, getItem throws: same try wrapper as SettingsModal so wizard mounting never crashes
     let onboarded = false
@@ -107,6 +116,29 @@ export default {
     this.visible = true
   },
   methods: {
+    // D6 (P2 2026-10-22): notification-click locate (see mounted). Minimal locate = switch to the
+    // task's view and open the edit panel via the existing ui/openEdit channel.
+    locateFromNotification (p) {
+      const taskId = p && p.taskId
+      if (!taskId || !this.$store) return
+      const st = this.$store.state
+      if (st.ui.isLocked) return // a locked app must not be revealed by a reminder click (D10 twin)
+      const t = st.todo.todoList.find(x => x.taskId === taskId)
+      if (!t) return
+      const route = t.dayStart ? 'todo-list-today' : 'todo-list-todo-box'
+      const open = () => this.$store.commit('ui/openEdit', t)
+      if (this.$route && this.$route.name === route) open()
+      else this.$router.push({ name: route }).then(open).catch(open)
+    },
+    // D6 (P3 2026-10-22): Esc = step back mid-wizard; on step 0 confirm before skipping
+    onEsc () {
+      if (this.step > 0) { this.prev(); return }
+      this.$confirm(this.$t('onboarding.escSkipConfirm'), this.$t('onboarding.welcomeTitle'), {
+        confirmButtonText: this.$t('onboarding.skip'),
+        cancelButtonText: this.$t('onboarding.prev'),
+        type: 'warning'
+      }).then(() => this.finish()).catch(() => {})
+    },
     pickLocale (l) { this.locale = l; setLocale(l) },
     pickTheme (m) { this.colorMode = m; this.$store.dispatch('settings/update', { colorMode: m }) },
     pickClose (v) { this.closeAction = v; this.$store.dispatch('settings/update', { closeActionMinimize: v === 'tray' }) },

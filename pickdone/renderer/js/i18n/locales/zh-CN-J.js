@@ -134,6 +134,7 @@ export default {
   'statsJ.EditPanel.moveSubtaskUp': '上移子任务',
   'statsJ.EditPanel.moveSubtaskDown': '下移子任务',
   'statsJ.EditPanel.addSubtask': '添加子任务',
+  'statsJ.EditPanel.dblclickRenameTip': '双击可重命名',
   'statsJ.EditPanel.effortHint': '为任务标注难度等级，再点一次已选项可取消',
   'statsJ.EditPanel.urgencyHint': '高/中/低用于标记紧急程度',
   'statsJ.EditPanel.clearDueDate': '清除截止日期',
