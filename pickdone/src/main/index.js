@@ -1,6 +1,5 @@
 /**
- * Main process entry — PickDone offline implementation * IPC channel names stay aligned with the project baseline, easing a later swap to a real cloud backend * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the
- * assembly point (wiring + unified handler error-wrap loop + tray + quit chain). */
+ * Main process entry — PickDone offline implementation * IPC channel names stay aligned with the project baseline, easing a later swap to a real cloud backend * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the assembly point (wiring + unified handler error-wrap loop + tray + quit chain). */
 const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron')
 // globalShortcut is required by quick-add/pomodoro-float and other modules (avoid duplicates)
 const path = require('path')
@@ -30,8 +29,7 @@ app.setName('pickdone') // standalone userData directory, does not affect the pr
 // Windows toast notifications resolve the app name/icon via the AppUserModelID; without this they show "electron.app". // Must match package.json build.appId — the electron-builder Start Menu shortcut carries the same AUMID.
 app.setAppUserModelId('com.pickdone.app')
 
-// EPIPE tolerance: in dev, when the parent shell exits it takes the inherited stdout/stderr pipes with it; after that, any write from console.log / // electron-log's console transport raises an uncaught EPIPE exception → the main process pops an error dialog (verified P0 on 2026-08-30).
-// Node's default behavior for failed pipe writes is to throw; swallow it here: failing to write logs must not drag down the whole app.
+// EPIPE tolerance: in dev, when the parent shell exits it takes the inherited stdout/stderr pipes with it; after that, any write from console.log / // electron-log's console transport raises an uncaught EPIPE exception → the main process pops an error dialog (verified P0 on 2026-08-30). Node's default behavior for failed pipe writes is to throw; swallow it here: failing to write logs must not drag down the whole app.
 for (const stream of [process.stdout, process.stderr]) {
   if (stream && typeof stream.on === 'function') stream.on('error', () => {})
 }
@@ -50,7 +48,10 @@ process.on('unhandledRejection', (reason) => {
 // Disable HTTP disk cache for renderer ESM modules (app:// already sends no-cache but Chromium still caches, // which once made revised JS ineffective — the root cause of both blank-screen and stale-logic incidents); reading local resources directly has no performance cost
 app.commandLine.appendSwitch('disable-http-cache')
 // Test isolation: TODO_USER_DATA_DIR gives test instances a separate data directory coexisting with the dev instance (SQLite WAL multi-process safety is backstopped by external-write detection)
+// Data-location priority: TODO_USER_DATA_DIR env (test isolation, unchanged) > boot redirect file (data-location.cjs) > electron default userData.
+const bootRedirect = require('./data-location.cjs').readBootRedirect()
 if (process.env.TODO_USER_DATA_DIR) app.setPath('userData', process.env.TODO_USER_DATA_DIR)
+else if (bootRedirect) app.setPath('userData', bootRedirect)
 // Hardware acceleration switch (aligned with the reference enableHardwareAcceleration; must be called before ready)
 try {
   const c = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
@@ -211,7 +212,7 @@ async function quitFromTray () {
 }
 async function quitFromTrayInner () {
   state.quitByUser = true
-  // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no // record. Ask before tearing everything down (the tray stays alive until confirmed).
+  // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no record. Ask before tearing everything down (the tray stays alive until confirmed).
   // TQ-1 (2026-10-03): the confirm gate now consults the DURABLE 'tomatoRunningSession' meta row // (written by every renderer FSM transition, main or float window), not the tray-text lease. // The lease (tomatoLiveText) was a display artifact: a throttled/crashed renderer let a live
   // focus quit with no confirm, and a float-originated focus never refreshed the lease at all // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text // only; isLiveTextFresh stays exported for its lease-semantics unit tests.
   const sessionLive = tomatoSession ? tomatoSession.hasRunningSession() : false
@@ -697,11 +698,8 @@ app.on('before-quit', () => {
       if (w && !w.isDestroyed()) {
         w.webContents.send('app-quitting-flush', { token: roundToken })
         liveWindows.push(w.webContents.id)
-        // P2 2026-09-12: a window destroyed between this send and its ack can never ack, so the
-        // flush window previously waited out the full 2s cap every time a window died mid-handshake.
-        // When the webContents is destroyed (window closed) or its renderer process is gone (crash —
-        // it can never ack either), abandon the sender so allAcked() can go true early. Idempotent
-        // via the tracker's abandoned set; acks from still-live windows are unaffected.
+        // P2 2026-09-12: a window destroyed between this send and its ack can never ack, so the flush window previously waited out the full 2s cap every time a window died mid-handshake.
+        // When the webContents is destroyed (window closed) or its renderer process is gone (crash — it can never ack either), abandon the sender so allAcked() can go true early. Idempotent via the tracker's abandoned set; acks from still-live windows are unaffected.
         const senderId = w.webContents.id
         // P3 2026-09-12: before-quit can fire more than once (aborted round → re-issued quit), and
         // blind once() attaches then accumulated one dead closure pair per round on long-lived

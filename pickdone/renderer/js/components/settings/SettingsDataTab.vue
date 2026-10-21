@@ -38,6 +38,14 @@
         </div></div>
     </div>
     <div class="form">
+      <div class="form-label">{{ $t('statsE.SettingsModal.dataLocationSection') }}</div>
+      <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dataLocationCurrent') }}</span>
+        <div class="form-item__control">
+          <span class="tip">{{ dataDirShown || $t('statsE.SettingsModal.loadingPlaceholder') }}<template v-if="dataDirRedirected"> · {{ $t('statsE.SettingsModal.dataLocationRedirected') }}</template></span>
+          <button class="mini" :disabled="relocating" @click="relocateData">{{ $t('statsE.SettingsModal.dataLocationChangeBtn') }}</button>
+        </div></div>
+    </div>
+    <div class="form">
       <div class="form-label">{{ $t('statsE.SettingsModal.dataManagementSection') }}</div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.exportExcelLabel') }}</span>
         <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button>
@@ -159,7 +167,11 @@ export default {
       eventBackupLastError: '',
       backupDirShown: '',
       autoBackupFiles: [] as any,
-      autoBackupPick: ''
+      autoBackupPick: '',
+      // F-RELOC: data storage location display + migration busy flag
+      dataDirShown: '',
+      dataDirRedirected: false,
+      relocating: false
     }
   },
   computed: {
@@ -183,9 +195,41 @@ export default {
   },
   mounted () {
     this.loadBackupDirDisplay()
+    this.loadDataDir()
   },
   methods: {
     dfmt (ts) { return dayjs(ts).format(FMT.dateTime) },
+    // F-RELOC: read-only data-location info (current dir + boot-redirect state); a lookup
+    // failure degrades to the loading placeholder, never a crash.
+    async loadDataDir () {
+      try {
+        const info = await window.todoAPI.getDataLocationInfo()
+        this.dataDirShown = (info && info.currentDir) || ''
+        this.dataDirRedirected = !!(info && info.bootRedirect)
+      } catch (e) {
+        console.error('[settings] getDataLocationInfo failed:', e)
+        this.dataDirShown = ''
+      }
+    },
+    // F-RELOC: relocate data storage. The main process pops the directory picker (targetDir
+    // omitted), validates, confirms via a native dialog disclosing what moves + source-kept
+    // rollback, closes the DB, copies, writes the boot file and relaunches. Failures come back
+    // as { ok:false, error } with the app re-inited on the untouched source dir.
+    async relocateData () {
+      if (this.relocating) return
+      this.relocating = true
+      try {
+        const r = await window.todoAPI.relocateDataDir()
+        if (r && r.ok === false) {
+          if (r.canceled) return // user cancelled picker or confirm dialog — not an error
+          this.$message.error(this.$t('statsE.SettingsModal.dataLocationFailPrefix') + (r.error || ''))
+        } else if (r && r.ok) {
+          this.$message.success(this.$t('statsE.SettingsModal.dataLocationDoneToast'))
+        }
+      } catch (e) {
+        this.$message.error(this.$t('statsE.SettingsModal.dataLocationFailPrefix') + ((e && e.message) || String(e)))
+      } finally { this.relocating = false }
+    },
     set (patch) {
       this.$store.dispatch('settings/update', patch).then(r => { if (r && r.ok === false) this.$message.error(this.$t('statsE.SettingsModal.settingsSaveFailed')) }) // goes through the action to sync to config.json (same ledger as the parent's set()); ok:false = config write failed — honest error toast
     },

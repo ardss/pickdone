@@ -191,6 +191,78 @@ module.exports = function systemHandlers (ctx) {
       }
       return updater.quitAndInstall()
     },
-    'updater:status': () => updater.getStatus()
+    'updater:status': () => updater.getStatus(),
+
+    // --- Data storage location (F-RELOC: configurable userData + safe migration) ---
+    // Read-only info for the settings page: current dir, boot-redirect state, free bytes.
+    'data:location-info': (e) => {
+      assertMainWindow(e)
+      const dl = require('../data-location.cjs')
+      const ud = app.getPath('userData')
+      return { currentDir: ud, bootRedirect: dl.readBootRedirect(), freeBytes: dl.volumeFreeBytes(ud) }
+    },
+    // Migration: {targetDir} optional — when absent the main process pops the native directory
+    // picker (same pattern as pick-backup-dir). Pipeline: validate → i18n confirm dialog →
+    // close the DB (better-sqlite3 close checkpoints TRUNCATEs the WAL, so the source files are
+    // static for the copy) → data-location.migrateData → relaunch. On ANY failure the DB is
+    // re-inited against the UNTOUCHED source dir so the app keeps running on the old location.
+    'data:relocate': async (e, payload) => {
+      assertMainWindow(e); if (isLocked()) throw new Error('locked')
+      const dl = require('../data-location.cjs')
+      const { dialog } = require('electron')
+      const ud = app.getPath('userData')
+      const o = (payload && typeof payload === 'object') ? payload : {}
+      let targetDir = typeof o.targetDir === 'string' ? o.targetDir : ''
+      if (!targetDir) {
+        const r = await dialog.showOpenDialog(getMainWindow() || undefined, { title: i18n.mt('dataLocPickTitle'), properties: ['openDirectory', 'createDirectory'] })
+        if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true }
+        targetDir = r.filePaths[0]
+      }
+      const v = dl.validateTarget(targetDir, ud)
+      if (!v.ok) return { ok: false, error: v.reason }
+      // Confirm AFTER validation so the dialog only ever describes a feasible migration; the
+      // copy discloses the moved surfaces + the source-is-preserved rollback guarantee.
+      try {
+        const { response } = await dialog.showMessageBox({
+          type: 'question',
+          title: i18n.mt('dataLocConfirmTitle'),
+          message: i18n.mt('dataLocConfirmTitle'),
+          detail: i18n.mt('dataLocConfirmMsg', { d: targetDir }),
+          buttons: [i18n.mt('dataLocConfirmBtn'), i18n.mt('quitFocusCancel')],
+          cancelId: 1, defaultId: 0, noLink: true,
+        })
+        if (response !== 0) return { ok: false, canceled: true }
+      } catch (err) {
+        // A failed confirm dialog must carry cancel semantics (same rule as updater:quit-and-install):
+        // never tear down a live DB handle because the dialog could not open.
+        log.warn('[IPC] data:relocate confirm dialog failed, aborting migration', err)
+        return { ok: false, canceled: true }
+      }
+      // Close the DB before the copy. Best-effort scheduler flush first (reminder dedupe ledger),
+      // then close; a close failure aborts BEFORE any file was touched — nothing to roll back.
+      try {
+        try { if (ctx.scheduler && ctx.scheduler.flushFiredNow) ctx.scheduler.flushFiredNow() } catch { /* best-effort */ }
+        if (ctx.dbm && ctx.dbm.close) ctx.dbm.close()
+      } catch (err) {
+        const msg = String((err && err.message) || err)
+        try { if (ctx.dbm && ctx.dbm.init) ctx.dbm.init(ud) } catch { /* re-init is best-effort; close() already swallowed real errors */ }
+        return { ok: false, error: i18n.mt('dataLocCloseFailed', { msg }) }
+      }
+      const r = dl.migrateData(ud, targetDir)
+      if (!r.ok) {
+        // Source untouched by contract (data-location.cjs never deletes/modifies the source) —
+        // re-init on the old dir restores the running state and the user gets an honest error.
+        try { if (ctx.dbm && ctx.dbm.init) ctx.dbm.init(ud) } catch (e2) { log.error('[IPC] data:relocate re-init after failed migration also failed', e2) }
+        log.error('[IPC] data:relocate migration failed:', r.error)
+        return { ok: false, error: r.error }
+      }
+      log.info('[IPC] data:relocate migrated to', r.target, '— relaunching')
+      // Success: inform (best-effort — the process is about to exit), then relaunch into the
+      // new location via the boot file written by migrateData. exit() skips the quit-flush chain,
+      // which is correct here: the DB handle is already closed and the source dir is intact.
+      try { dialog.showMessageBox({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg') }).catch(() => {}) } catch { /* best-effort */ }
+      setTimeout(() => { try { app.relaunch(); app.exit(0) } catch { /* dying anyway */ } }, 400)
+      return { ok: true, target: r.target }
+    }
   }
 }

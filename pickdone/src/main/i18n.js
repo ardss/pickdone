@@ -96,7 +96,14 @@ const MESSAGES = {
     lockPlaceholder: '输入密码解锁',
     lockUnlock: '解锁',
     lockWrongPassword: '密码错误',
-    quarantineBody: '配置文件（config.json）已损坏且无法读取，原文件已保留为 config.json.bad。本次会话的设置已重置，应用锁也已停用，如需要请重新开启。'
+    quarantineBody: '配置文件（config.json）已损坏且无法读取，原文件已保留为 config.json.bad。本次会话的设置已重置，应用锁也已停用，如需要请重新开启。',
+    dataLocPickTitle: '选择新的数据存储位置',
+    dataLocConfirmTitle: '确认迁移数据存储位置',
+    dataLocConfirmMsg: '将把以下内容搬移到新位置：\n{d}\n\n· 数据库 todos.db（含密钥 db.key）\n· 自动备份目录 backups/\n· 应用配置 config.json 与审计日志\n\n· 源目录中的文件将完整保留、不会被删除，可作为回退；\n· 迁移完成后应用将自动重启并启用新位置。',
+    dataLocConfirmBtn: '开始迁移并重启',
+    dataLocDoneTitle: '迁移完成',
+    dataLocDoneMsg: '数据已迁移到新位置，应用即将重启。',
+    dataLocCloseFailed: '关闭数据库失败，已恢复运行：{msg}'
   },
   'en-US': {
     appName: 'PickDone',
@@ -148,7 +155,14 @@ const MESSAGES = {
     lockPlaceholder: 'Enter password to unlock',
     lockUnlock: 'Unlock',
     lockWrongPassword: 'Wrong password',
-    quarantineBody: 'Your config file (config.json) was corrupted and could not be read. The previous file was preserved as config.json.bad. Settings are reset for this session and the security lock is disabled until you re-enable it.'
+    quarantineBody: 'Your config file (config.json) was corrupted and could not be read. The previous file was preserved as config.json.bad. Settings are reset for this session and the security lock is disabled until you re-enable it.',
+    dataLocPickTitle: 'Choose a new data storage location',
+    dataLocConfirmTitle: 'Confirm data location migration',
+    dataLocConfirmMsg: 'The following will be moved to the new location:\n{d}\n\n· Database todos.db (with its key db.key)\n· Auto-backup folder backups/\n· App config config.json and the audit log\n\n· Files in the SOURCE directory are fully preserved, never deleted - they remain the fallback;\n· After migrating, the app restarts automatically and uses the new location.',
+    dataLocConfirmBtn: 'Migrate and restart',
+    dataLocDoneTitle: 'Migration complete',
+    dataLocDoneMsg: 'Data has been migrated to the new location. The app will restart now.',
+    dataLocCloseFailed: 'Failed to close the database; the app keeps running on the current location: {msg}'
   }
 }
 

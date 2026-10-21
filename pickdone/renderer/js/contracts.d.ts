@@ -63,6 +63,10 @@ interface TodoAPI {
   exportXlsx: (...args: any[]) => any
   flushTomatoFloat: (...args: any[]) => any
   getDefaultBackupDir: (...args: any[]) => any
+  /** F-RELOC: data storage location info + safe migration (see src/main/data-location.cjs) */
+  getDataLocationInfo: (...args: any[]) => any
+  /** F-RELOC: relocate userData; targetDir omitted = main process pops the directory picker */
+  relocateDataDir: (...args: any[]) => any
   getSettings: (...args: any[]) => any
   /** Batch meta read (CONTRACT 2026-09-20, F-UI): replaces per-key getMeta loops */
   getMetaMany: (...args: any[]) => any

@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld('todoAPI', {
   readAutoBackup: (backupDir, fileName) => invoke('read-auto-backup', backupDir, fileName),
   pickBackupDir: () => invoke('pick-backup-dir'),
   getDefaultBackupDir: () => invoke('get-default-backup-dir'),
+  // F-RELOC data storage location: read-only info + relocate (main pops the dir picker when
+  // targetDir is omitted; migration closes the DB, copies, writes the boot file and relaunches)
+  getDataLocationInfo: () => invoke('data:location-info'),
+  relocateDataDir: targetDir => invoke('data:relocate', { targetDir }),
   encryptSecret: plain => invoke('encrypt-secret', plain),
   // r3 dead-channel removal (2026-09-28): decryptSecret had zero renderer callers while keeping
   // a reachable main-window IPC door to the lock-screen plaintext — deleted on both ends.
