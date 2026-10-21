@@ -1,4 +1,5 @@
-# Changelog
+# Changel- Boot diagnosis honesty (user-reported recurring dialog): when the system drive is nearly full, opening the database surfaced a raw "disk I/O error" wrapped in a scary "todos.db does not match db.key" message that offered reset-data for a HEALTHY database. The init now checks free disk space first and fails with an explicit low-disk message (needs >=256MB), and a disk-I/O failure at the decrypt probe is reported as an I/O problem - naming low disk space or a held file as the cause - instead of a key mismatch.
+og
 
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),

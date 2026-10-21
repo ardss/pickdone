@@ -279,6 +279,14 @@ function init (userDataPath) {
 function initInner (userDataPath) {
   const file = path.join(userDataPath, 'todos.db')
   fs.mkdirSync(userDataPath, { recursive: true })
+  // [UX 2026-10-21] low-disk guard: near-full volumes make SQLite's first page read surface SQLITE_IOERR, which the boot dialog mislabeled "db.key mismatch" for a HEALTHY db. statfs best-effort (unsupported fs skips the guard).
+  try {
+    const st = fs.statfsSync(userDataPath)
+    if (st.bavail * st.bsize < 256 * 1024 * 1024) {
+      const err = new Error(i18nM.mt('dbDiskFull', { free: Math.floor(st.bavail * st.bsize / 1024 / 1024) }))
+      err.code = 'DB_DISK_FULL'; throw err
+    }
+  } catch (e) { if (e && e.code === 'DB_DISK_FULL') throw e }
   // Open in plaintext first to complete schema migration, then switch to encryption at the end (see "encryption finalization" at the end of init)
   const keyFile = path.join(userDataPath, 'db.key')
   // D18 (2026-10-02): the bare fs.readFileSync here threw on a transient Windows file lock // (EPERM/EBUSY from AV/indexer) — init failed, recovery saw an intact header and answered // 'transient' with NO backoff, and the immediate re-init failure surfaced the reset-data
@@ -320,6 +328,8 @@ function initInner (userDataPath) {
     try { db.close() } catch {}
     db = null
     if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
+    // [UX 2026-10-21] SQLITE_IOERR at the probe is NOT a key mismatch - the old copy offered reset-data for a healthy db. Name the I/O cause instead.
+    if (/disk i\/o|sqlite_ioerr|i\/o error/i.test(String(e.message))) throw new Error(i18nM.mt('dbDiskIoError', { msg: e.message }))
     throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
   }
   // Connection pragmas (ES1): synchronous/busy_timeout are per-connection state and journal_mode
