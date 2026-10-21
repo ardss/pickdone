@@ -130,14 +130,14 @@ test('F3-5: the todo tool button rule no longer zeroes the focus ring and adds a
 
 /* F3-6/F3-7: FMT contract for date labels */
 test('F3-6: ProjectView trend labels use FMT.cnDate, not a hardcoded MM-DD', () => {
-  const trend = PROJECT.match(/trend7 \(\) \{[\s\S]*?\n    \},/)
+  const trend = PROJECT.match(/trend7 \(\) \{[\s\S]*?\n\s{4}\},/)
   assert.ok(trend, 'trend7 present')
   assert.match(trend[0], /FMT\.cnDate/)
   assert.doesNotMatch(trend[0], /format\('MM-DD'\)/)
 })
 
 test('F3-7: TaskAccountModal record-row abbreviation uses FMT.cnDate for the current year', () => {
-  const f = ACCOUNT.match(/fmtDate \(r\) \{[\s\S]*?\n    \},/)
+  const f = ACCOUNT.match(/fmtDate \(r\) \{[\s\S]*?\n\s{4}\},/)
   assert.ok(f, 'fmtDate present')
   assert.match(f[0], /FMT\.cnDate/)
   assert.doesNotMatch(f[0], /d\.format\('MM-DD'\)/)

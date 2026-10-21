@@ -289,6 +289,7 @@ test('#10 renderer addTodo: a constraint-rejected renewal write adopts the winne
   globalThis.window.todoAPI = {
     dbCall (op, params) {
       if (op === 'queryTodos') {
+        if (params.deleted === 1) return Promise.resolve([]) // [2026-10-17 realign] new binned-twin pre-check queries deleted:1 — the live winner must not leak into it
         emptyQueries++
         if (emptyQueries === 1) return Promise.resolve([]) // pre-write guard: no existing instance yet
         return Promise.resolve([{ taskId: 'winner', repeatId: 'grp9', dayStart: today, taskContent: 'renewal', delete: false, complete: false }])

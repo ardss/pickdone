@@ -21,13 +21,9 @@ const dbCall = (op, p) => {
 if (!globalThis.window) globalThis.window = {}
 globalThis.window = Object.assign(globalThis.window, { location: { hash: '' }, todoAPI: { dbCall } })
 
-const LS = globalThis.localStorage
 const Vuex = (await import('vuex')).default
 const category = (await import('../../../renderer/js/store/category.js')).default
 const makeStore = () => new Vuex.createStore({ modules: { category } })
-
-const mkRow = over => Object.assign(
-  { categoryId: 0, userId: 840001, categoryName: 'Cat', categoryColor: '#0f9d8f', createTime: 1, listSort: 1, folderIs: false, folderId: 0, delete: false }, over)
 
 test('addCategory under a live folder lands; under a non-folder/deleted parent throws and adds nothing', () => {
   const store = makeStore()
