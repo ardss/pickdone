@@ -39,9 +39,16 @@ test('r6-2: listTodos invalid --limit falls back to the 200 default', async () =
       lib.addTodo({ content: 'r6-2 seed ' + i, createTime: new Date(now).toISOString() })
     }
     const invalid = lib.listTodos({ limit: 'abc' })
-    assert.equal(invalid.length, 200, "limit:'abc' falls back to the 200 default, got " + invalid.length)
-    assert.equal(lib.listTodos({ limit: '1' }).length, 1, 'limit:1 returns exactly 1 row')
-    assert.equal(lib.listTodos({}).length, 200, 'absent limit defaults to 200')
+    // 2026-10-21 CLI wave: a truncated cap now appends one {truncated:true} sentinel tail row
+    assert.equal(invalid.length, 201, "limit:'abc' falls back to the 200 default + sentinel, got " + invalid.length)
+    assert.equal(invalid.filter(r => !r.truncated).length, 200, 'exactly 200 real rows at the default cap')
+    assert.equal(invalid[200].truncated, true, 'sentinel tail row flagged truncated')
+    const one = lib.listTodos({ limit: '1' })
+    assert.equal(one.length, 2, 'limit:1 returns 1 real row + sentinel (more matched)')
+    assert.equal(one.filter(r => !r.truncated).length, 1, 'exactly 1 real row')
+    const absent = lib.listTodos({})
+    assert.equal(absent.length, 201, 'absent limit defaults to 200 + sentinel')
+    assert.equal(absent.filter(r => !r.truncated).length, 200, 'absent limit yields exactly 200 real rows')
   } finally {
     delete process.env.TODO_DB_DIR
     // The cached sqlite handle keeps todos.db locked on Windows — leave the tmpdir for OS cleanup.

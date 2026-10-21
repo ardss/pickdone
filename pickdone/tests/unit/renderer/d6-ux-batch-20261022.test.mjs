@@ -102,7 +102,7 @@ test("D6-2 taskMenu pomodoro item uses 'timer' (no longer shares 'clock' with po
   // postpone keeps its clock icon
   assert.match(TASKMENU, /icon: 'clock', label: vm\.\$t\('statsE\.TodoItem\.postponeToTomorrow'\)/)
   // backfill moved off 'timer' to 'plus' (pomodoro owns the glyph; old store-fixes anchors updated)
-  assert.match(TASKMENU, /icon: 'plus',\r?\n      label: vm\.\$t\('statsG\.DayRail\.manualAdd'\)/)
+  assert.match(TASKMENU, /icon: 'plus',\r?\n {6}label: vm\.\$t\('statsG\.DayRail\.manualAdd'\)/)
   assert.equal((TASKMENU.match(/icon: 'timer'/g) || []).length, 1, "exactly one 'timer' item in the menu")
 })
 
