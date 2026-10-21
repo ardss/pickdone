@@ -106,10 +106,51 @@ function msProgress (m, tasks) {
   return { done, total: linked.length, pct: Math.round(done / linked.length * 100) }
 }
 
+/** C2 P2 (2026-10-21): the old read folded a corrupt blob into `[]` — not only silently HIDING the
+ *  milestones, but every writer then PERSISTED that [] (whole-key put), permanently destroying the
+ *  blob. Fail loud with a structured code; the message points at recovery (meta conflict backup /
+ *  renderer init heal) instead of letting a read quietly zero the data. */
+function msParseRaw (categoryId) {
+  const raw = open().call('getMeta', MS_KEY(categoryId))
+  if (raw == null || raw === '') return { raw: null, list: [] }
+  let list
+  try { list = JSON.parse(raw) } catch (e) {
+    throw new CliError(`milestones blob for category ${categoryId} is corrupt (projectMilestones:${categoryId} is not valid JSON: ${e.message}) — do NOT rewrite it; restore from the meta conflict backup (sync metaConflictBackup / catProjectMetaBak) or open the App once so the renderer heals it`, 'MILESTONES_CORRUPT')
+  }
+  if (!Array.isArray(list)) {
+    throw new CliError(`milestones blob for category ${categoryId} is corrupt (projectMilestones:${categoryId} is not an array) — do NOT rewrite it; restore from the meta conflict backup or open the App once so the renderer heals it`, 'MILESTONES_CORRUPT')
+  }
+  return { raw, list }
+}
+
+/** C2 P2 (2026-10-21): the add/rm/link writers did read → mutate → whole-key PUT. A peer write
+ *  (renderer / second CLI) landing between the read and the put was silently overwritten. The
+ *  concurrent window is narrowed (not closed — no transactions across meta): re-read the raw blob
+ *  immediately before the write; when it moved since the first read, UNION by id —
+ *   - ids we dropped (removal) or rewrote stay OURS (never resurrected / never clobbered back),
+ *   - peer-NEW ids (absent from both our first read and our mutation) merge in before the write.
+ *  `mutated` must already be msNormalize()d (the write is its normalized form). */
+function msPersist (categoryId, mutated, firstRaw) {
+  const freshRaw = open().call('getMeta', MS_KEY(categoryId))
+  if (freshRaw != null && freshRaw !== (firstRaw == null ? '' : firstRaw)) {
+    try {
+      const fresh = JSON.parse(freshRaw)
+      if (Array.isArray(fresh)) {
+        const ours = new Set(mutated.map(m => m && m.id))
+        const firstIds = new Set((JSON.parse(firstRaw || '[]')).map(m => m && m.id))
+        for (const m of fresh) {
+          if (m && m.id != null && !ours.has(m.id) && !firstIds.has(m.id)) { mutated.push(m); ours.add(m.id) }
+        }
+      }
+    } catch { /* fresh read turned corrupt mid-flight: write our clean copy (the loud MILESTONES_CORRUPT read path covers the steady state) */ }
+  }
+  commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(mutated)])
+  return mutated
+}
+
 function getMilestones (categoryInput) {
   const id = resolveCategory(categoryInput)
-  let list = []
-  try { list = JSON.parse(open().call('getMeta', MS_KEY(id)) || '[]') } catch { /* treat a corrupt row as empty */ }
+  const { list } = msParseRaw(id)
   return { categoryId: id, milestones: msNormalize(list) }
 }
 
@@ -120,7 +161,7 @@ function parseMilestoneDate (input) {
 }
 
 function addMilestone (categoryInput, title, dateInput) {
-  const { categoryId } = getMilestones(categoryInput)
+  const categoryId = resolveCategory(categoryInput)
   if (!title || !String(title).trim()) throw new CliError('milestone title required', 'EMPTY_CONTENT')
   const date = parseMilestoneDate(dateInput)
   if (!date) throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / MM-DD / today / +14d)`, 'BAD_DATE')
@@ -129,27 +170,36 @@ function addMilestone (categoryInput, title, dateInput) {
   // newMilestoneId in renderer/js/utils/milestones.js — saveMilestones keeps caller ids) and
   // echo by id. The old title+date match echoed the FIRST equal row, i.e. a PRE-EXISTING
   // duplicate milestone whenever one with the same title/date was already in the list.
-  const added = { id: msMint(getMilestones(categoryId).milestones), title: String(title).trim(), date }
-  const list = msNormalize(getMilestones(categoryId).milestones.concat([added]))
-  commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(list)])
+  // C2 P2: single loud read + union re-read before the put (msPersist) instead of three
+  // independent whole-blob reads/writes.
+  const { raw, list } = msParseRaw(categoryId)
+  const milestones = msNormalize(list)
+  const added = { id: msMint(milestones), title: String(title).trim(), date }
+  const finalList = msPersist(categoryId, msNormalize(milestones.concat([added])), raw)
   audit.record({ action: 'milestone.add', targets: [{ taskId: 'cat:' + categoryId, content: cat ? cat.categoryName : String(categoryId) }], note: `milestone "${title.trim()}" → ${dayjs(date).format('YYYY-MM-DD')}` })
-  const stored = list.find(m => m.id === added.id) || added
-  return { categoryId, milestones: list, added: stored }
+  const stored = finalList.find(m => m.id === added.id) || added
+  return { categoryId, milestones: finalList, added: stored }
 }
 
 function removeMilestone (categoryInput, index) {
-  const { categoryId, milestones } = getMilestones(categoryInput)
+  const categoryId = resolveCategory(categoryInput)
+  const { raw, list } = msParseRaw(categoryId)
+  const milestones = msNormalize(list)
   const i = parseInt(index, 10) - 1
   if (!(i >= 0 && i < milestones.length)) throw new CliError(`milestone index out of range: ${index} (${milestones.length} total; use milestone list)`, 'MS_NOT_FOUND')
   const [removed] = milestones.splice(i, 1)
-  commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(milestones)])
+  // C2 P2: union re-read before the put — a peer add between our read and write survives (the
+  // removed id stays removed: it is in the first read but not in the mutated list).
+  const finalList = msPersist(categoryId, milestones, raw)
   audit.record({ action: 'milestone.rm', targets: [{ taskId: 'cat:' + categoryId, content: removed.title }], note: 'milestone removed' })
-  return { categoryId, milestones, removed }
+  return { categoryId, milestones: finalList, removed }
 }
 
 /** Link/unlink a task to a milestone (N2): progress = completion ratio of linked tasks, same source as the UI */
 function linkMilestone (categoryInput, index, taskInput, link = true) {
-  const { categoryId, milestones } = getMilestones(categoryInput)
+  const categoryId = resolveCategory(categoryInput)
+  const { raw, list } = msParseRaw(categoryId)
+  const milestones = msNormalize(list)
   const i = parseInt(index, 10) - 1
   if (!(i >= 0 && i < milestones.length)) throw new CliError(`milestone index out of range: ${index} (${milestones.length} total)`, 'MS_NOT_FOUND')
   const t = resolveTask(taskInput, liveTasks())
@@ -157,7 +207,8 @@ function linkMilestone (categoryInput, index, taskInput, link = true) {
   const ids = new Set(ms.taskIds || [])
   link ? ids.add(t.taskId) : ids.delete(t.taskId)
   ms.taskIds = [...ids]
-  commit('meta', 'put', [MS_KEY(categoryId), JSON.stringify(milestones)])
+  // C2 P2: union re-read before the put — peer-NEW milestones survive the whole-key rewrite
+  msPersist(categoryId, milestones, raw)
   audit.record({
     action: link ? 'milestone.link' : 'milestone.unlink',
     targets: [{ taskId: 'cat:' + categoryId, content: ms.title }, t],

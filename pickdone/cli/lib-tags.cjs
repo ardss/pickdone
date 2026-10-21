@@ -43,6 +43,7 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
     // CLI iterating live rows only missed the tombstones, so restore-after-rename resurrected the old
     // tag (ghost tags). Rewrite across live ∪ recycled rows; the tag LIST derivation stays live-only.
     const rows = liveTasks().concat(recycleTasks())
+    const failures = []
     for (const todo of rows) {
       const patch = {}
       if (todo.taskContent) {
@@ -55,7 +56,25 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
         const v = remove ? todo.taskDescribe.replace(re, '').trim() : todo.taskDescribe.replace(re, () => '#' + target)
         if (v !== todo.taskDescribe) patch.taskDescribe = v
       }
-      if (Object.keys(patch).length) { patchTodo(todo.taskId, patch, { action: 'tag.' + (remove ? 'remove' : 'rename') }); touched++ }
+      if (Object.keys(patch).length) {
+        // C2 P2 (2026-10-21): one mid-run patchTodo failure used to abort the loop with rows
+        // half-rewritten and NO contract — the caller saw an opaque stack and could not tell
+        // which tasks were rewritten. Per-row try/catch: keep rewriting the rest, collect
+        // failures in the batch shape { taskId, error }, then surface them as a structured
+        // CliError (e.code = TAG_REWRITE_PARTIAL, e.failures = the batch-shaped array,
+        // e.touched = rows already rewritten) so callers/agents get a machine-readable
+        // per-task report. NOTE: `tag rename`'s emit lives in cli/lib-taxonomy.cjs (outside
+        // this fix's edit scope), so the CLI process exits 1 via the CliError path rather than
+        // batch's exit-2 contract — documented tradeoff, the failures[] payload is contract-identical.
+        try { patchTodo(todo.taskId, patch, { action: 'tag.' + (remove ? 'remove' : 'rename') }); touched++ }
+        catch (e) { failures.push({ taskId: todo.taskId, error: String(e.message || e) }) }
+      }
+    }
+    if (failures.length) {
+      const err = new CliError(`tag ${remove ? 'remove' : 'rename'} partially failed: ${touched} task(s) rewritten, ${failures.length} failed — failures: ` + JSON.stringify(failures), 'TAG_REWRITE_PARTIAL')
+      err.failures = failures
+      err.touched = touched
+      throw err
     }
     return touched
   }

@@ -33,7 +33,21 @@ function listTodos (opts = {}) {
   else if (opts.range === 'next7d') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
   else if (opts.range === 'overdue') { q.dayStartTo = +now.subtract(1, 'day').endOf('day') }
   else if (opts.range === 'future') { q.dayStartFrom = +now.add(1, 'day').startOf('day') }
-  return open().call('queryTodos', q)
+  // C2 P3 (2026-10-21): a cap-truncated listing used to end SILENTLY — JSON consumers saw a plain
+  // array and could not tell "these are all the matches" from "200 of 900". Fetch cap+1 rows; when
+  // the extra row exists the result is truncated, and a sentinel tail row { truncated: true, ... }
+  // is appended: JSON payloads then literally carry `truncated: true`, and the text renderer
+  // (emitList → fmtTodoLine on taskContent) prints it as a readable hint line right above the
+  // "-- N task(s)" footer. Explicit --limit 0 keeps its fail-closed zero-row contract untouched.
+  const cap = q.limit
+  if (cap <= 0) return open().call('queryTodos', q)
+  q.limit = cap + 1
+  const rows = open().call('queryTodos', q)
+  if (rows.length <= cap) return rows
+  return rows.slice(0, cap).concat([{
+    taskId: null, truncated: true, complete: false, todoTime: 0, dayStart: 0, taskDescribe: '',
+    taskContent: `(list truncated: more tasks matched than the ${cap}-row cap — pass a higher --limit to see all)`
+  }])
 }
 
 function getCategories () { return open().call('getAllCategories') }

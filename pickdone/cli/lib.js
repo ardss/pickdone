@@ -26,7 +26,18 @@ const dbm = require('../src/main/db.js')
 // untouched, but an explicit stamp more than STAMP_CLAMP_MS into the future is still clamped to now // (shared forgery guard — see command-bus.stampPayload).
 const bus = require('../src/main/command-bus')
 // open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
-const commit = (entity, verb, payload) => { open(); ensureTomatoMigrated(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
+// C2 P2: SQLITE_BUSY/LOCKED (App connection holds the write lock; busy_timeout already waited)
+// folded into a structured retryable CliError DB_BUSY instead of an opaque CLI_ERROR (CLI-side wrap;
+// src/main/db.js is out of this fix's scope).
+const commit = (entity, verb, payload) => {
+  open(); ensureTomatoMigrated()
+  try { return bus.commit(entity, verb, payload, { preserveStamp: true }) } catch (e) {
+    if (e && (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_BUSY_SNAPSHOT' || e.code === 'SQLITE_LOCKED')) {
+      throw new CliError(`database busy (${e.code}): the desktop App is writing — wait a few seconds and retry the same command (${e.message})`, 'DB_BUSY')
+    }
+    throw e
+  }
+}
 const core = require('../src/main/core/todo-core.js')
 // Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path — // pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module // src/main/attachment-ownership.js instead of through handlers/shared.js + its electron-log require).
 const { ownsAttachmentFile } = require('../src/main/attachment-ownership.js')
@@ -591,8 +602,8 @@ function purgeRecycleBin () {
     if (purgedIds.size) {
       for (const k of open().call('listMetaKeys') || []) {
         if (!String(k).startsWith('projectMilestones:')) continue
-        let list
-        try { list = JSON.parse(open().call('getMeta', k) || '[]') } catch { continue /* corrupt blob → leave alone */ }
+        let list, firstRaw
+        try { firstRaw = open().call('getMeta', k); list = JSON.parse(firstRaw || '[]') } catch { continue /* corrupt blob → leave alone */ }
         if (!Array.isArray(list)) continue
         let changed = false
         for (const m of list) {
@@ -601,7 +612,20 @@ function purgeRecycleBin () {
             changed = true
           }
         }
-        if (changed) { commit('meta', 'put', [k, JSON.stringify(list)]); msScrubbed++ }
+        if (changed) {
+          // C2 P2: re-read before the whole-key put; a peer blob that moved since the first read
+          // is UNIONed by id (peer-NEW ids survive, ids we scrubbed are never resurrected).
+          let freshList = null
+          try { freshList = JSON.parse(open().call('getMeta', k) || '[]') } catch { /* corrupt → write our cleaned copy (loud path belongs to getMilestones) */ }
+          if (Array.isArray(freshList)) {
+            const ours = new Set(list.map(m => m && m.id))
+            const firstIds = new Set(JSON.parse(firstRaw).map(m => m && m.id))
+            for (const m of freshList) {
+              if (m && m.id != null && !ours.has(m.id) && !firstIds.has(m.id)) { list.push(m); ours.add(m.id) }
+            }
+          }
+          commit('meta', 'put', [k, JSON.stringify(list)]); msScrubbed++
+        }
       }
     }
   } catch { /* best-effort: the purge itself must not fail on meta scrubbing */ }
@@ -674,23 +698,38 @@ function sortTask (input, pos, refInput) {
   // (shared single source) and land the mover on that scale instead.
   const sorts = pool.map(x => x.taskSort)
   let newSort = mv.sort
-  let rescale = null
+  let rescaleRows = null
   if (sorts.some(s => s != null && Math.abs((s || 0) - newSort) < 2)) {
-    const targetIdx = pos === 'top' ? 0
-      : pos === 'bottom' ? pool.length - 1
-        : pos === 'up' ? idx - 1
-          : pos === 'down' ? idx + 1
-            : pos === 'before' ? refIdx : refIdx + 1
+    // C2 fix: scores now map onto the POST-move display order — the old mapping handed the mover
+    // AND the displaced neighbor the same slot (tie-break luck). Build the new order explicitly.
+    const order = pool.filter(x => x.taskId !== t.taskId)
+    let insertAt
+    if (pos === 'top') insertAt = 0
+    else if (pos === 'bottom') insertAt = order.length
+    else if (pos === 'up') insertAt = Math.max(0, idx - 1)
+    else if (pos === 'down') insertAt = Math.min(order.length, idx)
+    else if (pos === 'before') insertAt = refIdx > idx ? Math.max(0, refIdx - 1) : refIdx
+    else insertAt = refIdx > idx ? refIdx : refIdx + 1
+    insertAt = Math.max(0, Math.min(order.length, insertAt))
+    order.splice(insertAt, 0, t)
     const scores = reorderScale(pool.length)
-    rescale = pool.map((x, i) => ({ taskId: x.taskId, taskSort: scores[i] }))
-    newSort = scores[targetIdx]
+    rescaleRows = order.map((x, i) => ({ ...x, taskSort: scores[i], updateTime: Date.now(), status: 'update' }))
+    newSort = scores[insertAt]
   }
-  patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
-  if (rescale) {
-    for (const u of rescale) {
-      if (u.taskId === t.taskId) continue // the mover already landed on the new scale above
-      patchTodo(u.taskId, { taskSort: u.taskSort }, { action: 'sort' })
-    }
+  // C2 P2: the whole-pool rescale rewrite is ONE bus commit (todo.putMany → db.upsertMany single
+  // transaction, all-or-nothing) instead of N per-row patchTodo transactions (half-rescale on a
+  // mid-loop crash); one audit entry covers the batch.
+  if (rescaleRows) {
+    const byId = new Map(pool.map(x => [x.taskId, x]))
+    commit('todo', 'putMany', rescaleRows)
+    audit.record({
+      action: 'sort',
+      targets: rescaleRows.map(r => ({ taskId: r.taskId, content: r.taskContent })),
+      changes: rescaleRows.map(r => ({ before: { taskSort: byId.get(r.taskId) ? byId.get(r.taskId).taskSort : null }, after: { taskSort: r.taskSort } })),
+      note: `sort rescale: ${rescaleRows.length} row(s) rewritten onto the linear scale in one transaction`
+    })
+  } else {
+    patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
   }
   // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position).
   // Reported in App display order (taskSort descending) — B2: the old ascending readout was the
