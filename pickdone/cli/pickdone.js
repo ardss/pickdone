@@ -25,6 +25,7 @@ const RELEASES_API = 'https://api.github.com/repos/ardss/pickdone/releases/lates
 lib.audit.setContext(process.argv.slice(2))
 
 /* ================= arg parsing ================= */
+const { HELP, VALUE_KEYS, assertKnownFlags } = require('./cli-help.cjs')
 function parseArgs (argv) {
   const opts = { _: [] }
   for (let i = 0; i < argv.length; i++) {
@@ -43,16 +44,23 @@ function parseArgs (argv) {
       if (eq > 0) { opts[a.slice(2, eq)] = a.slice(eq + 1); continue }
       const key = a.slice(2)
       const next = argv[i + 1]
+      if (VALUE_KEYS.includes(key) && (next === undefined || next.startsWith('--'))) {
+        throw new lib.CliError(`--${key} requires a value (use --${key}=<value> if the value itself starts with --)`, 'USAGE')
+      }
       if (next !== undefined && !next.startsWith('--')) { opts[key] = next; i++ } else opts[key] = true
     } else opts._.push(a)
   }
   return opts
 }
 
-const HELP = require('./cli-help.cjs')
-
 const { isDateClear, isReminderClear, fmtTodoLine, summarizeChanges } = require('./cli-format.cjs')
 function fail (e, command) {
+  // C1 fix 7: an INTERNAL error used to lose its stack — the JSON envelope only carries the
+  // message, so a bare "TypeError: cannot read properties of undefined" was undebuggable.
+  // stderr is the error channel regardless of --json, so the stack goes there always.
+  if (!(e instanceof lib.CliError) && e && e.stack) {
+    try { process.stderr.write(String(e.stack) + '\n') } catch { /* stderr gone */ }
+  }
   // The error envelope mirrors the success side {ok:true,command,data}: AI parsers need one judgment path, not two
   const base = { ok: false, command: command || null }
   const envelope = e instanceof lib.CliError
@@ -108,6 +116,7 @@ async function main () {
   const cmd = argv[0]
   const opts = parseArgs(argv.slice(1))
   if (opts.help) { console.log(HELP); return }
+  assertKnownFlags(lib.CliError, cmd, opts) // C1 fix 1: unknown flags fail with USAGE instead of being ignored
 
   const WRITE_CMDS = ['add', 'edit', 'done', 'undo', 'delete', 'restore', 'subtask', 'repeat', 'events', 'deps', 'batch'] // events 入列让 --dry-run 真预览(原为死分支:永远真跑)
   // P0 isolation gate (structural root fix): without an explicit isolation dir the CLI's default
@@ -437,7 +446,8 @@ async function main () {
       const r = lib.toggleComplete(opts._[0], true, { withSubtasks: opts['no-sub-cascade'] ? false : undefined, completedAt: at })
       if (r.skipped) {
         // Already-complete skip (review P2 2026-09-10, batch parity): nothing was written, no audit entry
-        if (opts.json) return emitNext({ ok: true, command: cmd, skipped: true, taskId: r.completed.taskId, completedAt: r.completed.completedAt, renewed: null, note: 'already complete — completedAt untouched' })
+        // C1 fix 8: emitNext already stamps the top-level ok/command — nesting them inside data made this envelope's shape diverge from every other done response
+        if (opts.json) return emitNext({ skipped: true, taskId: r.completed.taskId, completedAt: r.completed.completedAt, renewed: null, note: 'already complete — completedAt untouched' })
         return console.log('= already complete: ' + r.completed.taskId + ' (nothing written, completedAt untouched)')
       }
       if (opts.json) {
@@ -449,16 +459,21 @@ async function main () {
       return okMsg(r.completed, ['undo ' + r.completed.taskId + ' to revert', 'stats --json to see today completions'])
     }
     case 'undo': {
-      if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'undo complete' }, ['remove --dry-run to actually run'])
+      // C1 fix 4: usage check BEFORE the dry-run branch — a bare `undo --dry-run` used to hit
+      // resolveTask(undefined) and surface as INTERNAL instead of the structured usage error
       if (!opts._[0]) throw new lib.CliError('usage: undo <taskId|keyword>', 'USAGE')
+      if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'undo complete' }, ['remove --dry-run to actually run'])
       // Pass the explicit override through like `done` does; absent flag defers to the setting (lib default)
       return okMsg(lib.toggleComplete(opts._[0], false, { withSubtasks: opts['no-sub-cascade'] ? false : undefined }))
 
     }
     case 'edit': {
+      // C1 fix 4: usage check BEFORE the dry-run branch (same contract as `done`) — otherwise a
+      // bare `edit --content x --dry-run` dies on resolveTask(undefined) with a raw INTERNAL
+      if (!opts._[0]) throw new lib.CliError('usage: edit <taskId|keyword> [--content ..] [--desc ..] [--date ..|none] [--reminder ..] [--category ..] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--deadline date|none] [--estimate 0-20] [--difficulty 0-3]', 'USAGE')
       if (dry) {
         const patch = {}
-        if (opts.content) patch.taskContent = opts.content
+        if (opts.content !== undefined) patch.taskContent = opts.content // C1 fix 5: presence check, not truthiness — an explicit value must show in the preview
         if (opts.date !== undefined) patch.todoTime = isDateClear(opts.date) ? 0 : lib.parseDate(opts.date)
         // B3/B13 (dry-run mirror): a reminder clear also drops the anchored rows (EditPanel onRemindersClear contract) — otherwise the dry-run patch would not show what the real write does
         if (opts.reminder !== undefined) {
@@ -477,11 +492,17 @@ async function main () {
         lib.reminderDateBackfill(lib.resolveTask(opts._[0]), patch)
         return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, patch }, ['remove --dry-run to actually run'])
       }
-      if (!opts._[0]) throw new lib.CliError('usage: edit <taskId|keyword> [--content ..] [--desc ..] [--date ..|none] [--reminder ..] [--category ..] [--important 0|1] [--urgent 0|1] [--priority 0-3] [--deadline date|none] [--estimate 0-20] [--difficulty 0-3]', 'USAGE')
       const dateClear = isDateClear(opts.date)
       const patch = {}
-      if (opts.content) patch.taskContent = opts.content
-      if (opts.desc) patch.taskDescribe = opts.desc
+      // C1 fix 5: presence checks (`!== undefined`), not truthiness — `--desc ""` used to be treated
+      // as "not given" and tripped "edit requires at least one field", so a description could never
+      // be cleared. An empty TITLE is still rejected: addTodo/patchTodo trim content into the row
+      // (String(content).trim()), so a blank title would write an invisible unmatchable task.
+      if (opts.content !== undefined) {
+        if (!String(opts.content).trim()) throw new lib.CliError('--content cannot be empty (to remove the task use delete)', 'USAGE')
+        patch.taskContent = opts.content
+      }
+      if (opts.desc !== undefined) patch.taskDescribe = opts.desc
       if (opts.date !== undefined && !dateClear) patch.todoTime = lib.parseDate(opts.date)
       // B3/B13: a reminder clear must also drop reminderOffsets/reminderExtra (EditPanel onRemindersClear
       // contract): offsets are anchored to the main reminder, so zeroing only reminderTime left stale
@@ -552,14 +573,19 @@ async function main () {
       }
       if (opts['remind-offset'] != null && opts['remind-offset'] !== true) return okMsg(lib.setReminderOffsets(tid2, opts['remind-offset']))
       if (opts['remind-extra'] != null && opts['remind-extra'] !== true) return okMsg(lib.setReminderExtra(tid2, opts['remind-extra']))
+      // C1 fix 3: a bare `--estimate` (boolean true from the parser) used to pass the `!= null`
+      // check and silently write estimate=1 (Number(true)=1). parseArgs now rejects a value-key
+      // followed by another flag, but a trailing bare flag still lands here — fail loud.
+      if (opts.estimate === true) throw new lib.CliError('--estimate requires a value (0-20)', 'USAGE')
       if (opts.estimate != null) return okMsg(lib.setEstimate(tid2, opts.estimate), ['get ' + tid2 + ' --json to read back'])
       return okMsg(updated || { taskId: tid2 }, cleared
         ? ['task is back in the todo box (list --no-date)', 'get ' + tid2 + ' --json to read back']
         : ['get ' + tid2 + ' --json to read back'])
     }
     case 'delete': {
-      if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'soft delete → recycle bin' }, ['remove --dry-run to actually run'])
+      // C1 fix 4: usage check before the dry-run branch (INTERNAL on resolveTask(undefined) otherwise)
       if (!opts._[0]) throw new lib.CliError('usage: delete <taskId|keyword>', 'USAGE')
+      if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'soft delete → recycle bin' }, ['remove --dry-run to actually run'])
       return okMsg(lib.deleteTodo(opts._[0]), ['restore ' + opts._[0] + ' to revert', 'recycle to view recycle bin'])
     }
     case 'import': {
@@ -583,8 +609,9 @@ async function main () {
       return
     }
     case 'restore': {
-      if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'restore from recycle' }, ['remove --dry-run to actually run'])
+      // C1 fix 4: usage check before the dry-run branch (INTERNAL on resolveTask(undefined) otherwise)
       if (!opts._[0]) throw new lib.CliError('usage: restore <taskId|keyword>', 'USAGE')
+      if (dry) return emitNext({ dryRun: true, taskId: lib.resolveTask(opts._[0]).taskId, would: 'restore from recycle' }, ['remove --dry-run to actually run'])
       return okMsg(lib.restoreTodo(opts._[0]), ['list --all --json to read back'])
     }
     case 'open': {

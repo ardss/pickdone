@@ -10,6 +10,12 @@ module.exports = ({ CliError, dayjs, nlDate }) => {
     // Explicitly accept only 13-digit ms timestamps (avoids a 12-digit seconds value being parsed as ms → 1970)
     if (/^[+-]?\d{13}$/.test(str)) return parseInt(str, 10) // timestamp
     const now = dayjs()
+    // [C1 #1] out-of-range HH:mm must be REJECTED, not carried over by dayjs (.hour(25) silently
+    // rolls into the next day — App-side nlDate rejects h>23, so the CLI accepting it split the
+    // two surfaces' date semantics for the same input string).
+    const hmCheck = (h, m, src) => {
+      if (h > 23 || m > 59) throw new CliError('invalid time in "' + src + '" (' + h + ':' + m + ' — hours 00-23, minutes 00-59; a bare date is accepted without the time part)')
+    }
     // Relative offsets: +3d / -1w / +2m, and offset-with-time like +2d 16:30
     const offTime = str.match(/^([+-])(\d+)([dwm])\s+(\d{1,2}):(\d{2})$/)
     const offMatch = str.match(/^([+-])(\d+)([dwm])$/)
@@ -18,7 +24,7 @@ module.exports = ({ CliError, dayjs, nlDate }) => {
       const n = parseInt((offTime || offMatch)[2]) * (sign === '+' ? 1 : -1)
       const unit = { d: 'day', w: 'week', m: 'month' }[(offTime || offMatch)[3]]
       const base = now.add(n, unit)
-      if (offTime) return +base.hour(+offTime[4]).minute(+offTime[5]).second(0).millisecond(0)
+      if (offTime) { hmCheck(+offTime[4], +offTime[5], s); return +base.hour(+offTime[4]).minute(+offTime[5]).second(0).millisecond(0) }
       // Time-less offsets normalize to local midnight — parity with the renderer's nlDate
       // (.startOf('day')): `--date +3d` must not mint a time chip or a 14:37 repeat anchor.
       return +base.startOf('day')
@@ -30,6 +36,7 @@ module.exports = ({ CliError, dayjs, nlDate }) => {
     // colloquially land on today's daytime per Chinese usage, but for the CLI's AI users tomorrow must be unambiguous (+1 day)
     const kw = str.match(/^(today|tomorrow|yesterday)\s+(\d{1,2}):(\d{2})$/)
     if (kw) {
+      hmCheck(+kw[2], +kw[3], s)
       const base = { today: now, tomorrow: now.add(1, 'day'), yesterday: now.subtract(1, 'day') }[kw[1]]
       return +base.hour(+kw[2]).minute(+kw[3]).second(0).millisecond(0)
     }
@@ -43,7 +50,7 @@ module.exports = ({ CliError, dayjs, nlDate }) => {
       const days = dayjs().month(mo - 1).daysInMonth()
       if (d2 < 1 || d2 > days) throw new CliError(`invalid date: "${s}" (${mo}-${d2} is not a valid month/day — month ${mo} has ${days} days)`)
       let base = dayjs().month(mo - 1).date(d2)
-      if (bareMd[3] != null) base = base.hour(+bareMd[3]).minute(+bareMd[4]).second(0).millisecond(0)
+      if (bareMd[3] != null) { hmCheck(+bareMd[3], +bareMd[4], s); base = base.hour(+bareMd[3]).minute(+bareMd[4]).second(0).millisecond(0) }
       else base = base.startOf('day')
       return +base
     }

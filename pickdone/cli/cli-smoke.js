@@ -20,7 +20,14 @@ function run (args) {
   const out = execFileSync(process.execPath, [CLI, ...args], {
     env: process.env, encoding: 'utf8'
   })
-  return JSON.parse(out)
+  try {
+    return JSON.parse(out)
+  } catch (e) {
+    // C1 fix 10: a raw "Unexpected token" tells nothing — dump what the CLI actually printed first
+    console.error('cli-smoke: non-JSON stdout for: pickdone ' + args.join(' '))
+    console.error('stdout: ' + out)
+    throw e
+  }
 }
 function ok (name, cond, detail = '') {
   if (cond) { passed++; console.log('  ✓ ' + name) }
