@@ -8,6 +8,8 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 
 ## [Unreleased]
 
+## [0.4.0-beta.19] - 2026-10-21
+
 ### Fixed
 - Daily maintenance wave (2026-10-21, 28 fixes, all with regression tests) — cross-device blob integrity: project milestone and project-document lists are now merged by entry id on sync apply instead of being replaced wholesale by whichever device wrote last (each device's locally added milestones/docs used to vanish silently when the other device synced its whole blob; identical-content collisions converge deterministically on both ends, and unparseable shapes fall back to the previous last-writer-wins path with the conflict backup kept). The milestone save path no longer destroys corrupt siblings on an unrelated edit (only pure junk — no id AND no title — is still dropped).
 - Tag rename safety (app + CLI): renaming a tag to a name containing `$` pattern characters (e.g. `$&x`) no longer corrupts every task's tag text through the replacement string (all four rename sites now use function replacements); invalid new names (containing `.`, `,`, `。` and other tag-boundary characters that the tag extractor can never resolve) are rejected up front with a clear error on both ends instead of creating a ghost tag; the CLI sort command now rebalances the whole pool when midpoint insertion space runs out (repeated sort up/down used to silently stop working), and the tag-delete confirmation in the tag manager names its button instead of a generic OK.
