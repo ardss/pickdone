@@ -9,7 +9,11 @@
  * meta conflict backup exists but the loss should not happen at all — entries are independently
  * addressable by id). Union merge instead: local-only entries survive, incoming-only entries are
  * added, and a same-id collision resolves per entry ("同 id 取较新"):
- *   - entries carrying a numeric `updatedAt` (docs): the larger stamp wins, incoming wins ties;
+ *   - entries carrying a numeric `updatedAt` (docs): the larger stamp wins, EQUAL stamps fall
+ *     through to the same symmetric serialized comparison as the stamp-less case (D2 fix
+ *     2026-10-21: the old "incoming wins ties" made merge(A,B) = B's entry while merge(B,A) = A's
+ *     entry for same-stamp different-content entries — argument-order dependent, so the two peers
+ *     could converge on different blobs and re-echo forever);
  *   - entries WITHOUT a per-entry stamp (milestones): no comparable age exists in this schema
  *     (no vector clocks — a full CRDT is out of scope), so the resolver is SYMMETRIC
  *     (argument-order independent): identical content collapses, otherwise the lexicographically
@@ -22,6 +26,8 @@
  * byte-identical output for the same input pair (echo of the merged blob then hits the
  * identical-content no-op and the loop dies).
  */
+
+import { isDeepStrictEqual } from 'node:util'
 
 const UNION_MERGE_META_PREFIXES = ['projectMilestones:', 'projectDocs:']
 
@@ -43,17 +49,19 @@ function parseList (raw) {
   return v
 }
 
-/** Per-entry LWW: entries carrying a numeric `updatedAt` (docs) resolve to the larger stamp,
- *  ties to the incoming side. STAMP-LESS entries (milestones) have no comparable age, so the
+/** Per-entry LWW: entries carrying a numeric `updatedAt` (docs) resolve to the larger stamp.
+ *  EQUAL stamps and STAMP-LESS entries (milestones) have no comparable age ordering, so the
  *  resolver must be SYMMETRIC (argument-order independent) or the two peers could converge on
  *  different blobs for the same input pair and re-echo forever: content-identical entries
  *  collapse trivially; otherwise the lexicographically larger serialized form wins — arbitrary,
  *  but deterministic and identical on both ends, which is what kills the loop (a full CRDT
- *  needs vector clocks — out of scope, see the module docstring). */
+ *  needs vector clocks — out of scope, see the module docstring). D2 fix 2026-10-21: equal
+ *  stamps now share that symmetric tiebreak instead of "incoming wins" (merge(A,B) must equal
+ *  merge(B,A)). */
 function preferEntry (localEntry, incomingEntry) {
   const lt = Number(localEntry && localEntry.updatedAt)
   const it = Number(incomingEntry && incomingEntry.updatedAt)
-  if (Number.isFinite(lt) && Number.isFinite(it)) return it >= lt ? incomingEntry : localEntry
+  if (Number.isFinite(lt) && Number.isFinite(it) && it !== lt) return it > lt ? incomingEntry : localEntry
   const ls = JSON.stringify(localEntry)
   const is = JSON.stringify(incomingEntry)
   return ls === is ? incomingEntry : (is > ls ? incomingEntry : localEntry)
@@ -86,4 +94,21 @@ export function mergeBlobMetaValue (key, localVal, incomingVal) {
   }
   const out = [...merged.values()].sort((a, b) => sortKeyOf(key, a) - sortKeyOf(key, b))
   return JSON.stringify(out)
+}
+
+/** D2 fix (2026-10-21): the union seam's no-op check — true when localVal already carries,
+ *  content-wise, exactly what the merged result holds (same ids, every entry deep-equal). The
+ *  old byte compare (`merged === localVal`) only caught already-canonical local blobs; a LEGACY
+ *  serialization (same entries, different JSON key order / formatting) byte-differed and wrote
+ *  a per-round echo (setMeta → oplog → push → peer → push back). Content compare
+ *  (isDeepStrictEqual, key order insensitive) recognizes it as already-applied; a genuine merge
+ *  (new entry or a different same-id winner) still differs per entry and lands normally. */
+export function isUnionMergeContentNoOp (merged, localVal) {
+  try {
+    const a = JSON.parse(merged)
+    const b = JSON.parse(localVal)
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    const byId = new Map(b.map(m => [String(m && m.id), m]))
+    return a.every(m => { const k = String(m && m.id); return byId.has(k) && isDeepStrictEqual(byId.get(k), m) })
+  } catch { return false }
 }

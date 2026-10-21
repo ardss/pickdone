@@ -121,7 +121,9 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     if (r.peer && r.peer.deviceId) {
       persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret })
     }
-    runRound().then(persistPeerWatermarks)
+    // D2 fix (2026-10-21): the fire-and-forget round used to have NO catch — a rejected round
+    // (transport dead right after pairing) surfaced as an unhandled promise rejection.
+    Promise.resolve().then(runRound).then(persistPeerWatermarks).catch(e => log.warn('[LanSync] post-pair first round failed:', e && e.message))
     return { ...getSettingsPayload(), peer: r.peer }
   }
 
@@ -166,7 +168,8 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
       throw err
     }
     if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
-    runRound().then(persistPeerWatermarks)
+    // D2 fix (2026-10-21): same catch contract as syncPairWithCode above.
+    Promise.resolve().then(runRound).then(persistPeerWatermarks).catch(e => log.warn('[LanSync] post-pair first round failed:', e && e.message))
     return { ...getSettingsPayload(), host: r.host, port: r.port }
   }
 

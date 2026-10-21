@@ -573,7 +573,7 @@ function purgeRecycleBin () {
           try { freshList = JSON.parse(open().call('getMeta', k) || '[]') } catch { /* corrupt → write our cleaned copy (loud path belongs to getMilestones) */ }
           if (Array.isArray(freshList)) {
             const ours = new Set(list.map(m => m && m.id))
-            const firstIds = new Set(JSON.parse(firstRaw).map(m => m && m.id))
+            const firstIds = new Set(JSON.parse(firstRaw || '[]').map(m => m && m.id))
             for (const m of freshList) {
               if (m && m.id != null && !ours.has(m.id) && !firstIds.has(m.id)) { list.push(m); ours.add(m.id) }
             }

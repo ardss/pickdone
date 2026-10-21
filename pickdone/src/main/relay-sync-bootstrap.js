@@ -106,7 +106,15 @@ function registerOps (adapter) {
         // there is nothing to push. Flip it on here (machine-local op, revisionsFlag doctrine);
         // disable() leaves it on deliberately: recording without a transport is inert, and
         // keeping history makes a re-enable continuity-preserving.
-        try { require('./db').call('revisionsFlag', { on: true }) } catch (e) { log.warn('[RelaySync] revisionsFlag flip failed:', e && e.message) }
+        // D2 fix (2026-10-21): a FAILED flag flip used to be warn-and-continue — enable then ran
+        // a round + started the poller on an EMPTY revision DAG (recorder off ⇒ nothing to push,
+        // nothing causally comparable). Fail closed instead: roll the enable back
+        // (adapter.disable()) and reject the op; never go live half-configured.
+        try { require('./db').call('revisionsFlag', { on: true }) } catch (e) {
+          log.warn('[RelaySync] revisionsFlag flip failed — rolling back enable:', e && e.message)
+          try { await adapter.disable() } catch (de) { log.warn('[RelaySync] enable rollback failed:', de && de.message) }
+          throw new Error('relaySetEnabled: revisionsFlag flip failed after enable — enable rolled back (nothing went live): ' + ((e && e.message) || e))
+        }
         // P1 backfill (2026-10-11 delivery audit): recording is record-only-forward, so a
         // v1-era row (predating the flag) had no revision — it never entered the push DAG AND
         // its missing head let the first pulled remote envelope claim causalCurrent over a

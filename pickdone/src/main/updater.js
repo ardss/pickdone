@@ -96,6 +96,13 @@ function flushOnceOnReady (deps = {}) {
 }
 
 let _inited = false
+// D2 (2026-10-21): set by init — the stall-watchdog arming point, so the manual downloadUpdate
+// entry into 'downloading' arms it too (module-level because downloadUpdate lives outside init).
+let _armStallWatchdog = null
+// D2 (2026-10-21): the in-flight manual download's abort handle — markUpdateError (watchdog /
+// 'error' event) resolves a hung downloadUpdate promise so the NEXT click can start a fresh
+// download instead of being handed the same dead promise forever.
+let _manualAbort = null
 function init (mainWin) {
   win = mainWin
   if (_inited) return module.exports // idempotent: the main-window-close → tray → reopen path calls createMainWindow again; repeated init would stack listeners and multiply broadcasts N-fold
@@ -133,6 +140,9 @@ function init (mainWin) {
     // stale; keep 'ready' and the stored info.
     if (_manualDownload || state.status === 'ready') return
     state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast()
+    // D2 fix (2026-10-21): the auto-download entry into 'downloading' arms the stall watchdog
+    // too — the hang-before-first-progress case is reachable from here just as much.
+    if (state.status === 'downloading' && _armStallWatchdog) { try { _armStallWatchdog() } catch { /* arming is best-effort */ } }
   })
   autoUpdater.on('update-not-available', i => { state.status = 'uptodate'; state.info = i; broadcast() })
   // F4 (2026-10-21): download stall watchdog. A hung transfer (proxy drop, dead mirror, firewall)
@@ -148,11 +158,10 @@ function init (mainWin) {
   let _stallTimer = null
   let _lastProgressAt = 0
   const clearStallWatchdog = () => { if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null } }
-  // d-wave fix (2026-10-14): same 'ready' guard — a stray progress event after download completed
-  // must not flip the settled 'ready' state back to 'downloading'.
-  autoUpdater.on('download-progress', p => {
-    if (state.status === 'ready') return
-    state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast()
+  // F4/D2 (2026-10-21): ONE arming point shared by every 'downloading' entry — a download that
+  // hangs BEFORE its first progress event (dead proxy at connect) used to never arm the watchdog
+  // (only 'download-progress' armed it) and stall in 'downloading' forever.
+  const armStallWatchdog = () => {
     _lastProgressAt = Date.now()
     clearStallWatchdog()
     _stallTimer = setTimeout(() => {
@@ -162,6 +171,14 @@ function init (mainWin) {
       markUpdateError(new Error('update download stalled (no progress for ' + (STALL_WATCHDOG_MS / 1000) + 's)'))
     }, STALL_WATCHDOG_MS)
     if (_stallTimer.unref) _stallTimer.unref()
+  }
+  _armStallWatchdog = armStallWatchdog // module-level so the manual downloadUpdate entry arms too
+  // d-wave fix (2026-10-14): same 'ready' guard — a stray progress event after download completed
+  // must not flip the settled 'ready' state back to 'downloading'.
+  autoUpdater.on('download-progress', p => {
+    if (state.status === 'ready') return
+    state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast()
+    armStallWatchdog()
   })
   autoUpdater.on('update-downloaded', i => { clearStallWatchdog(); state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
   // Error handling: besides broadcasting, schedule a single backoff retry (checkForUpdates after 30s).
@@ -173,6 +190,10 @@ function init (mainWin) {
   function markUpdateError (e) {
     clearStallWatchdog()
     state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
+    // D2 fix (2026-10-21): if a MANUAL download is hung in flight, settle its promise NOW — the
+    // old code left `_manualDownload` holding the dead promise and every later "Download now"
+    // click returned the SAME hung promise forever (idempotent-reentry guard with no exit).
+    try { if (_manualAbort) _manualAbort() } catch { /* best-effort */ }
     if (_retryTimer || !isActive()) return
     _retryTimer = setTimeout(() => {
       _retryTimer = null
@@ -213,6 +234,11 @@ let _manualDownload = null
 function downloadUpdate () {
   if (_manualDownload) return _manualDownload
   if (!isActive() || state.status !== 'available') return Promise.resolve(false)
+  // D2 fix (2026-10-21): abort handle — markUpdateError (watchdog stall or 'error' event) fires
+  // this while the underlying downloadUpdate() hangs, so this promise settles and the reentry
+  // guard clears; the next click starts a FRESH download instead of receiving the dead one.
+  let abortNow = null
+  const abortPromise = new Promise(res => { abortNow = res })
   _manualDownload = (async () => {
     // C5 (2026-10-02): the manual path set autoDownload=true and NEVER restored the user's
     // opt-out — after one "Download now" the setting behaved as auto-download-on for the rest
@@ -222,14 +248,27 @@ function downloadUpdate () {
     const priorAutoDownload = autoUpdater.autoDownload !== false
     autoUpdater.autoDownload = true
     state.status = 'downloading'; broadcast()
-    try { await autoUpdater.downloadUpdate(); return true } catch (e) {
+    try { if (_armStallWatchdog) _armStallWatchdog() } catch { /* arming is best-effort */ }
+    // The raw promise gets a noop catch so a LATE rejection after an abort cannot surface as an
+    // unhandled rejection; the derived `settled` maps both outcomes to a tag.
+    const settled = autoUpdater.downloadUpdate().then(() => 'done', () => 'failed')
+    settled.catch(() => {}) // belt and braces for the derived promise itself
+    try {
+      const outcome = await Promise.race([settled, abortPromise.then(() => 'aborted')])
+      if (outcome === 'done') return true
+      if (outcome === 'aborted') return false // status already 'error' via markUpdateError
+      // 'failed': the autoUpdater 'error' event already recorded the failure state
+      return false
+    } catch (e) {
       state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
       return false
     } finally {
       _manualDownload = null
+      _manualAbort = null
       autoUpdater.autoDownload = priorAutoDownload
     }
   })()
+  _manualAbort = abortNow
   return _manualDownload
 }
 

@@ -65,9 +65,9 @@ let backupSeq = 0
 const { rowContentDiffers } = require('./sync-apply-content')
 // F1 (2026-10-21): array-shaped user-data meta blobs (projectMilestones:<catId>,
 // projectDocs:<catId>) used to sync whole-key LWW — concurrent adds meant the writer's blob
-// silently swallowed the loser's entries. Entry-level union merge below (shared core:
-// shared/blob-union-merge.mjs, same mechanism as the renderer's mergeMilestoneBlobs).
-const { isUnionMergeMetaKey, mergeBlobMetaValue } = require('../../shared/blob-union-merge.mjs')
+// silently swallowed the loser's entries. Entry-level union merge in shared/blob-union-merge.mjs;
+// D2: isUnionMergeContentNoOp — a legacy local serialization no longer echoes a per-round write.
+const { isUnionMergeMetaKey, mergeBlobMetaValue, isUnionMergeContentNoOp } = require('../../shared/blob-union-merge.mjs')
 
 /**
  * Local account id (round-3 review, item: userId passthrough). Inbound rows carry the PEER's
@@ -310,13 +310,15 @@ function applyRowInner (state, incoming) {
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
   // F1 union-merge seam (BEFORE the generic whole-key LWW): the array-shaped user-data blobs
   // merge BY ENTRY ID on a live-vs-live collision instead of one blob swallowing the other.
-  // Only both-sides-live engages; absent-local / inbound delete stay whole-key (no per-entry
-  // tombstones). Unparsable shapes fall through to LWW + the metaConflictBackup net.
+  // Only both-sides-live engages; absent-local / inbound delete / unparsable shapes stay whole-key.
   if (entity === 'meta' && !incoming.deleted && localRow && localRow.data && localRow.data.value != null &&
       incoming.data && incoming.data.value != null && isUnionMergeMetaKey(incoming.id)) {
     const merged = mergeBlobMetaValue(incoming.id, localRow.data.value, incoming.data.value)
     if (merged != null) {
-      if (merged === localRow.data.value) return false // local is already the union superset — identical-content no-op, no echo
+      // D2 (2026-10-21): content-based idempotency no-op (see the shared
+      // isUnionMergeContentNoOp) — legacy local serializations no longer echo a write per round.
+      const isNoOp = isUnionMergeContentNoOp(merged, localRow.data.value)
+      if (isNoOp) return false // local is already the union superset — identical-content no-op, no echo
       log.warn('[LanSync] union-merge on meta', incoming.id, '(entry-level: local-only entries preserved, no whole-blob loss)')
       busWrite(state, 'setMeta', [incoming.id, merged])
       return true

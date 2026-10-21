@@ -75,3 +75,13 @@ export function isMachineLocalMetaKey (id) {
     // whole-package chip JSON would re-poison a device already migrated to plan_chips.
     k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
 }
+
+// D2 fix (2026-10-21): the settings/habits blob meta keys moved here from sync-apply-hydrate.js
+// so db-oplog.js's ring-ingress filter can classify them WITHOUT lazily requiring sync-apply.js
+// (which pulls electron-log and dies in the plain-CLI process — the machine-local oplog filter
+// then silently disabled itself on every CLI write). Same single-source doctrine as the two
+// predicates above; sync-apply-hydrate.js re-exports it.
+export function isSyncBlobMetaKey (id) {
+  const k = String(id)
+  return k === 'db.settingsState' || k === 'db.habitsState'
+}
