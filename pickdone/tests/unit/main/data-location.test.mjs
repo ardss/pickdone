@@ -181,9 +181,10 @@ test('migrateData success: copies the required set (logs/ excluded), verifies, w
     const src = makeSource(root)
     fs.mkdirSync(path.join(src, 'logs'))
     fs.writeFileSync(path.join(src, 'logs', 'main.log'), 'noise')
-    // conditional file: present here
+    // conditional file: present here. NOTE: the wal must be EMPTY — a non-empty -wal/-shm in the
+    // source is now a torn-DB abort ('in use by another process'); an empty residual file copies.
     fs.writeFileSync(path.join(src, 'cli-audit.jsonl'), '{"a":1}\n')
-    fs.writeFileSync(path.join(src, 'todos.db-wal'), 'WAL')
+    fs.writeFileSync(path.join(src, 'todos.db-wal'), '')
 
     const target = path.join(root, 'target')
     const beforeSrc = snapshotDir(src)
@@ -191,7 +192,7 @@ test('migrateData success: copies the required set (logs/ excluded), verifies, w
     assert.equal(r.ok, true, 'migration succeeds: ' + (r.error || ''))
     assert.equal(fs.readFileSync(path.join(target, 'todos.db'), 'utf8'), 'SQLITE-DATA')
     assert.equal(fs.readFileSync(path.join(target, 'db.key'), 'utf8').length, 64)
-    assert.equal(fs.readFileSync(path.join(target, 'todos.db-wal'), 'utf8'), 'WAL', 'conditional wal copied')
+    assert.equal(fs.readFileSync(path.join(target, 'todos.db-wal'), 'utf8'), '', 'empty residual wal copied')
     assert.equal(fs.readFileSync(path.join(target, 'config.json'), 'utf8'), '{}')
     assert.equal(fs.readFileSync(path.join(target, 'cli-audit.jsonl'), 'utf8'), '{"a":1}\n')
     assert.equal(fs.readFileSync(path.join(target, 'backups', 'b1.json'), 'utf8'), '{}')
@@ -289,4 +290,180 @@ test('preload exposes the two data-location channels aligned with handlers/syste
   const info = sys.slice(sys.indexOf("'data:location-info'"), sys.indexOf("'data:location-info'") + 200)
   assert.ok(relocate.includes('assertMainWindow(e)') && relocate.includes("isLocked()"), 'data:relocate gated')
   assert.ok(info.includes('assertMainWindow(e)'), 'data:location-info gated')
+})
+
+// ---------- D1 fix-wave regressions (2026-10-21) ----------
+
+test('D1#2 validateTarget rejects a target that CONTAINS the current dir (ancestor)', () => {
+  const root = sandbox('anc')
+  const src = path.join(root, 'outer', 'inner-ud')
+  fs.mkdirSync(path.join(src, 'backups'), { recursive: true })
+  fs.writeFileSync(path.join(src, 'todos.db'), 'X')
+  fs.writeFileSync(path.join(src, 'db.key'), 'k'.repeat(64))
+  const v = dl.validateTarget(path.join(root, 'outer'), src)
+  assert.equal(v.ok, false)
+  assert.match(v.reason, /contains the current data directory/)
+  assert.equal(dl.migrateData(src, path.join(root, 'outer')).ok, false)
+})
+
+test('D1#5 windows case-insensitive bypass: casing variant of the current dir is rejected', { skip: process.platform !== 'win32' }, () => {
+  const root = sandbox('case')
+  const src = makeSource(root)
+  // Same directory on NTFS, different string: resolve() does not fold case, so the old
+  // strict === comparison let this variant pass every guard and migrate onto itself.
+  const variant = src.replace(/src-ud$/, 'SRC-UD')
+  assert.notEqual(variant, src, 'test setup: the variant must differ textually')
+  const v = dl.validateTarget(variant, src)
+  assert.equal(v.ok, false)
+  assert.match(v.reason, /equals the current data directory/)
+})
+
+test('D1#4a migrateData aborts when a NON-EMPTY todos.db-wal/-shm sits in the source (external writer)', () => {
+  const home = sandbox('wal-home')
+  withHome(home, () => {
+    const root = sandbox('wal')
+    const src = makeSource(root)
+    fs.writeFileSync(path.join(src, 'todos.db-wal'), 'LIVE-WAL-FRAMES')
+    const beforeSrc = snapshotDir(src)
+    const r = dl.migrateData(src, path.join(root, 'target'))
+    assert.equal(r.ok, false)
+    assert.match(r.error, /in use by another process/)
+    assert.deepEqual(snapshotDir(src), beforeSrc, 'source untouched')
+    assert.equal(dl.readBootRedirect(), null, 'no boot file')
+    // same for -shm
+    fs.rmSync(path.join(src, 'todos.db-wal'), { force: true })
+    fs.writeFileSync(path.join(src, 'todos.db-shm'), 'S')
+    const r2 = dl.migrateData(src, path.join(root, 'target'))
+    assert.equal(r2.ok, false)
+    assert.match(r2.error, /todos\.db-shm/)
+    // an EMPTY residual wal is inert and may still migrate
+    fs.rmSync(path.join(src, 'todos.db-shm'), { force: true })
+    fs.writeFileSync(path.join(src, 'todos.db-wal'), '')
+    assert.equal(dl.migrateData(src, path.join(root, 'target')).ok, true)
+  })
+})
+
+test('D1#4b migrateData aborts when the source todos.db changes during the copy (concurrent writer)', () => {
+  const home = sandbox('mtime-home')
+  withHome(home, () => {
+    const root = sandbox('mtime')
+    const src = makeSource(root)
+    const target = path.join(root, 'target')
+    const beforeSrc = snapshotDir(src)
+    // Simulate a writer advancing the source db MID-FLIGHT: while the copy of todos.db lands in
+    // the target, bump the source file's mtime (size+stamp identity then mismatches post-copy).
+    const realCopy = fs.copyFileSync
+    const patched = (srcFile, destFile) => {
+      realCopy(srcFile, destFile)
+      if (String(destFile).endsWith(path.join('target', 'todos.db'))) {
+        const st = fs.statSync(srcFile)
+        fs.utimesSync(srcFile, st.atime, new Date(Date.now() + 5000))
+      }
+    }
+    fs.copyFileSync = patched
+    let r
+    try { r = dl.migrateData(src, target) } finally { fs.copyFileSync = realCopy }
+    assert.equal(r.ok, false)
+    assert.match(r.error, /changed during the copy/)
+    // full rollback contract: only THIS call's writes are removed, source byte-identical
+    assert.deepEqual(snapshotDir(src), beforeSrc, 'source untouched')
+    assert.equal(fs.existsSync(path.join(target, 'todos.db')), false, 'copied db rolled back')
+    assert.equal(dl.readBootRedirect(), null, 'no boot file')
+  })
+})
+
+test('D1#6 requiredFiles carries files/ and allowed-backup-dirs.json; trees verified', () => {
+  const home = sandbox('files-home')
+  withHome(home, () => {
+    const root = sandbox('files')
+    const src = makeSource(root)
+    fs.writeFileSync(path.join(src, 'allowed-backup-dirs.json'), '[]')
+    fs.mkdirSync(path.join(src, 'files'))
+    fs.mkdirSync(path.join(src, 'files', 'att-1'))
+    fs.writeFileSync(path.join(src, 'files', 'att-1', 'a.bin'), 'AA')
+    const target = path.join(root, 'target')
+    const r = dl.migrateData(src, target)
+    assert.equal(r.ok, true, 'migration succeeds: ' + (r.error || ''))
+    assert.equal(fs.readFileSync(path.join(target, 'allowed-backup-dirs.json'), 'utf8'), '[]')
+    assert.equal(fs.readFileSync(path.join(target, 'files', 'att-1', 'a.bin'), 'utf8'), 'AA')
+    // a divergent files/ tree fails verification and rolls back (same contract as backups/)
+    const root2 = sandbox('files2')
+    const src2 = makeSource(root2)
+    fs.mkdirSync(path.join(src2, 'files'))
+    fs.writeFileSync(path.join(src2, 'files', 'x.bin'), 'X')
+    const prior = path.join(root, 'prior')
+    fs.mkdirSync(prior)
+    fs.writeFileSync(path.join(prior, 'todos.db'), 'PRIOR')
+    fs.writeFileSync(path.join(prior, 'db.key'), 'd'.repeat(64))
+    fs.mkdirSync(path.join(prior, 'files'))
+    fs.writeFileSync(path.join(prior, 'files', 'old.bin'), 'O')
+    const r2 = dl.migrateData(src2, prior)
+    assert.equal(r2.ok, false)
+    assert.match(r2.error, /files tree mismatch/)
+    assert.equal(fs.readFileSync(path.join(prior, 'files', 'old.bin'), 'utf8'), 'O', 'prior files/ restored')
+    // absent on a bare source → absent in target
+    const root3 = sandbox('bare')
+    const bare = path.join(root3, 'bare-ud')
+    fs.mkdirSync(bare)
+    fs.writeFileSync(path.join(bare, 'todos.db'), 'B')
+    fs.writeFileSync(path.join(bare, 'db.key'), 'e'.repeat(64))
+    const t2 = path.join(root3, 'bare-target')
+    assert.equal(dl.migrateData(bare, t2).ok, true)
+    assert.equal(fs.existsSync(path.join(t2, 'files')), false, 'no files/ dir minted')
+    assert.equal(fs.existsSync(path.join(t2, 'allowed-backup-dirs.json')), false, 'no whitelist minted')
+  })
+})
+
+test('D1#3 boot-redirect write failure is inside the rollback contract (copy undone, stash restored)', () => {
+  const home = sandbox('bootfail-home')
+  withHome(home, () => {
+    // Sabotage the boot file path: make it an existing DIRECTORY — the atomic tmp+rename throws,
+    // which used to fall into the second catch and leave the copied content + orphaned stash.
+    fs.mkdirSync(dl.bootRedirectPath(), { recursive: true })
+    const root = sandbox('bootfail')
+    const src = makeSource(root)
+    const target = path.join(root, 'prior-ud')
+    fs.mkdirSync(target)
+    fs.writeFileSync(path.join(target, 'todos.db'), 'PRIOR-DB')
+    fs.writeFileSync(path.join(target, 'db.key'), 'f'.repeat(64))
+    const beforeSrc = snapshotDir(src)
+    const r = dl.migrateData(src, target)
+    assert.equal(r.ok, false)
+    assert.match(r.error, /boot redirect|rename|EPERM|EEXIST|EISDIR/i)
+    assert.deepEqual(snapshotDir(src), beforeSrc, 'source untouched')
+    assert.equal(fs.readFileSync(path.join(target, 'todos.db'), 'utf8'), 'PRIOR-DB', 'prior db restored, not the copy')
+    assert.equal(fs.existsSync(path.join(target, 'config.json')), false, 'this call\'s writes cleaned')
+    assert.equal(fs.existsSync(path.join(target, 'backups')), false, 'copied backups tree cleaned')
+  })
+})
+
+test('D1#8c migrateData sets the in-process relocation-pending gate on success', () => {
+  const home = sandbox('gate-home')
+  withHome(home, () => {
+    const root = sandbox('gate')
+    const src = makeSource(root)
+    // The gate is module-level and sticky-until-exit BY DESIGN: it arms at the first successful
+    // migration and stays armed for the migrate→relaunch window (the process exits right after),
+    // so this suite only asserts the arming, not a reset.
+    assert.equal(dl.migrateData(src, path.join(root, 'target')).ok, true)
+    assert.equal(dl.getRelocationPending(), true, 'gate open for the migrate→relaunch window')
+  })
+})
+
+test('D1#1 handlers/system.js data:relocate refuses isolated/test instances BEFORE any side effect', () => {
+  const sys = fs.readFileSync(path.join(process.cwd(), 'src/main/handlers/system.js'), 'utf8')
+  const h = sys.indexOf("'data:relocate'")
+  const body = sys.slice(h, sys.length)
+  const guard = body.indexOf('TODO_USER_DATA_DIR || process.env.TODO_DB_DIR')
+  const msg = body.indexOf('relocation is disabled in isolated/test instances')
+  assert.ok(guard > -1 && msg > -1, 'isolation guard present in data:relocate')
+  // the guard must precede every side effect: dialog open, db close, migrate
+  for (const later of ["showOpenDialog", 'dbm.close', 'dl.migrateData', 'stopLatestDbWatch']) {
+    const at = body.indexOf(later)
+    assert.ok(at > guard, `${later} sits after the isolation guard`)
+  }
+  // D1#8a: the external-write poll is stopped before the DB close
+  assert.ok(body.indexOf('stopLatestDbWatch') < body.indexOf('dbm.close'), 'watch stop precedes db close')
+  // D1#8b: a running pomodoro is confirmed before the close (same gate as quit-and-install)
+  assert.ok(body.includes('hasRunningSession()'), 'pomodoro gate present')
 })

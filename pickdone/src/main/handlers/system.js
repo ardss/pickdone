@@ -209,6 +209,13 @@ module.exports = function systemHandlers (ctx) {
     'data:relocate': async (e, payload) => {
       assertMainWindow(e); if (isLocked()) throw new Error('locked')
       const dl = require('../data-location.cjs')
+      // D1 #1 (P1) test-isolation guard: under TODO_USER_DATA_DIR/TODO_DB_DIR the "current dir"
+      // is the isolated env dir, but migrateData writes the boot file into the REAL home dir —
+      // a migrated test instance would redirect the user's PRODUCTION install on its next boot.
+      // Refuse structurally before anything else (no dialogs, no db close).
+      if (process.env.TODO_USER_DATA_DIR || process.env.TODO_DB_DIR) {
+        return { ok: false, error: 'relocation is disabled in isolated/test instances' }
+      }
       const { dialog } = require('electron')
       const ud = app.getPath('userData')
       const o = (payload && typeof payload === 'object') ? payload : {}
@@ -220,6 +227,27 @@ module.exports = function systemHandlers (ctx) {
       }
       const v = dl.validateTarget(targetDir, ud)
       if (!v.ok) return { ok: false, error: v.reason }
+      // D1 #8b: a running pomodoro must not die inside the migration's close→relaunch window.
+      // Reuses the exact updater:quit-and-install confirm pattern (same durable-session gate +
+      // i18n copy); cancel aborts BEFORE the DB handle is touched.
+      try {
+        const sessionLive = ctx.tomatoSession ? ctx.tomatoSession.hasRunningSession() : false
+        if (sessionLive) {
+          const { response } = await dialog.showMessageBox({
+            type: 'question',
+            title: i18n.mt('quitFocusActiveTitle'),
+            message: i18n.mt('quitFocusActiveTitle'),
+            detail: i18n.mt('quitFocusActiveMsg'),
+            buttons: [i18n.mt('quitFocusQuit'), i18n.mt('quitFocusCancel')],
+            cancelId: 1, defaultId: 1, noLink: true,
+          })
+          if (response !== 0) return { ok: false, canceled: true }
+        }
+      } catch (err) {
+        // Same cancel semantics as the updater sibling: a failed dialog never tears down state.
+        log.warn('[IPC] data:relocate pomodoro confirm dialog failed, aborting migration', err)
+        return { ok: false, canceled: true }
+      }
       // Confirm AFTER validation so the dialog only ever describes a feasible migration; the
       // copy discloses the moved surfaces + the source-is-preserved rollback guarantee.
       try {
@@ -241,6 +269,10 @@ module.exports = function systemHandlers (ctx) {
       // Close the DB before the copy. Best-effort scheduler flush first (reminder dedupe ledger),
       // then close; a close failure aborts BEFORE any file was touched — nothing to roll back.
       try {
+        // D1 #8a: stop the external-write fs.watchFile poll FIRST — a tick firing between close()
+        // and the copy would read/write through the moved tree (and a pending debounce kick would
+        // fire against the closed handle). Re-exported by external-db-watch.js (index.js untouched).
+        try { require('../external-db-watch').stopLatestDbWatch() } catch (werr) { log.warn('[IPC] data:relocate stop external db watch failed', werr) }
         try { if (ctx.scheduler && ctx.scheduler.flushFiredNow) ctx.scheduler.flushFiredNow() } catch { /* best-effort */ }
         if (ctx.dbm && ctx.dbm.close) ctx.dbm.close()
       } catch (err) {

@@ -57,13 +57,18 @@ function clearBootRedirect () {
 /** Minimal migration set: what MUST move for the app to keep its data. logs/ is deliberately
  *  excluded (rebuildable diagnostics); lockfile/wal/shm are runtime artifacts that must NOT be
  *  carried over while a handle could exist. Every entry is conditional: only files that exist
- *  in the source are copied (first launch may lack db.key/config.json/backups entirely). */
+ *  in the source are copied (first launch may lack db.key/config.json/backups entirely).
+ *  B#2/#3: backups/ is joined by files/ (attachment dir, same whole-tree semantics) and by
+ *  allowed-backup-dirs.json (external backup roots whitelist) — both were silently dropped. */
 function requiredFiles (srcDir) {
   const files = []
-  for (const name of ['todos.db', 'todos.db-wal', 'todos.db-shm', 'db.key', 'config.json', 'cli-audit.jsonl']) {
+  for (const name of ['todos.db', 'todos.db-wal', 'todos.db-shm', 'db.key', 'config.json', 'cli-audit.jsonl', 'allowed-backup-dirs.json']) {
     if (fs.existsSync(path.join(srcDir, name))) files.push(name)
   }
-  if (fs.existsSync(path.join(srcDir, 'backups')) && fs.statSync(path.join(srcDir, 'backups')).isDirectory()) files.push('backups')
+  for (const d of ['backups', 'files']) {
+    const p = path.join(srcDir, d)
+    if (fs.existsSync(p) && fs.statSync(p).isDirectory()) files.push(d)
+  }
   return files
 }
 
@@ -78,6 +83,13 @@ function isInside (child, parent) {
   return c.startsWith(p + path.sep) || c === p
 }
 
+// C#13: NTFS/Windows path comparison is case-insensitive — 'C:\Data' and 'c:\data' resolve to
+// the SAME directory, so equality/containment checks must fold case there or a casing variant
+// of the current dir slips past every guard. Folding is win32-only (POSIX paths are case-sensitive).
+function foldCase (p) {
+  return process.platform === 'win32' ? String(p).toLowerCase() : p
+}
+
 /** Target validation. Returns { ok:true } or { ok:false, reason }. opts.freeBytes lets tests
  *  inject the volume probe; opts.probeWrite skips nothing — writability is always probed live.
  *  A target that already holds a VALID data dir (todos.db + db.key) is allowed: that is the
@@ -88,8 +100,11 @@ function validateTarget (targetDir, currentDir, opts) {
   if (!path.isAbsolute(targetDir)) return { ok: false, reason: 'target must be an absolute path: ' + targetDir } // check the RAW input — resolve() would silently absolutize 'relative' against cwd
   const t = path.resolve(targetDir)
   const cur = path.resolve(currentDir)
-  if (t === cur) return { ok: false, reason: 'target equals the current data directory' }
-  if (isInside(t, cur)) return { ok: false, reason: 'target is inside the current data directory' }
+  if (foldCase(t) === foldCase(cur)) return { ok: false, reason: 'target equals the current data directory' }
+  if (isInside(foldCase(t), foldCase(cur))) return { ok: false, reason: 'target is inside the current data directory' }
+  // Ancestor rejection: a target that CONTAINS the current dir would have the copy write into
+  // the very tree being copied (source walk sees the target's partial state) — never feasible.
+  if (isInside(foldCase(cur), foldCase(t))) return { ok: false, reason: 'target contains the current data directory' }
   let st = null
   try { st = fs.statSync(t) } catch (e) { /* not existing yet — fine */ }
   if (st && !st.isDirectory()) return { ok: false, reason: 'target exists and is not a directory' }
@@ -179,6 +194,14 @@ function restoreCollisions (stash) {
   }
 }
 
+/** Stat identity of a file (size + mtimeMs) — the torn-DB probe below compares two of these. */
+function statIdentity (p) {
+  const s = fs.statSync(p)
+  return s.size + ':' + s.mtimeMs
+}
+
+let relocationPending = false // B#5: in-process gate for the migrate→relaunch window (see getRelocationPending)
+
 /**
  * Synchronous migration. PRECONDITION: the caller has closed the DB handle (better-sqlite3's
  * close checkpoints TRUNCATEs the WAL and removes -wal/-shm); this function assumes the source
@@ -187,6 +210,20 @@ function restoreCollisions (stash) {
  * is written so the NEXT launch picks the new dir up.
  */
 function migrateData (srcDir, targetDir, opts) {
+  // Torn-DB defense #1: after a clean close the WAL/SHM are GONE. A resurrected NON-EMPTY one
+  // means an external writer (CLI process) re-opened the db between close() and here — the
+  // copy would capture a torn snapshot. (An empty residual file is inert and may copy.)
+  for (const side of ['-wal', '-shm']) {
+    const p = path.join(srcDir, 'todos.db' + side)
+    if (fs.existsSync(p) && fs.statSync(p).size > 0) {
+      return { ok: false, error: 'source database appears to be in use by another process (non-empty todos.db' + side + ')' }
+    }
+  }
+  const dbSrc = path.join(srcDir, 'todos.db')
+  let dbIdentityBefore
+  try { dbIdentityBefore = statIdentity(dbSrc) } catch (e) {
+    return { ok: false, error: 'source todos.db is missing' }
+  }
   const v = validateTarget(targetDir, srcDir, opts)
   if (!v.ok) return { ok: false, error: v.reason }
   const t = v.target
@@ -199,17 +236,28 @@ function migrateData (srcDir, targetDir, opts) {
     for (const name of names) {
       const s = path.join(srcDir, name)
       const d = path.join(t, name)
-      if (name === 'backups') { copyDirRecursive(s, d); written.push(d) }
+      if (name === 'backups' || name === 'files') { copyDirRecursive(s, d); written.push(d) }
       else { fs.copyFileSync(s, d); written.push(d) }
     }
-    // Post-copy verification: db non-empty, key present, backups tree shape identical.
+    // Torn-DB defense #2: the source db's stat identity must be IDENTICAL before/after the copy —
+    // a change mid-flight means a concurrent writer advanced it while we snapshotted it.
+    if (statIdentity(dbSrc) !== dbIdentityBefore) throw new Error('source database changed during the copy (concurrent writer)')
+    // Post-copy verification: db non-empty, key present, dir trees shape-identical.
     const dbSt = fs.existsSync(path.join(t, 'todos.db')) ? fs.statSync(path.join(t, 'todos.db')) : null
     if (!dbSt || dbSt.size <= 0) throw new Error('verification failed: target todos.db missing or empty')
     if (!fs.existsSync(path.join(t, 'db.key'))) throw new Error('verification failed: target db.key missing')
-    if (fs.existsSync(path.join(srcDir, 'backups')) &&
-        countFsObjects(path.join(srcDir, 'backups')) !== countFsObjects(path.join(t, 'backups'))) {
-      throw new Error('verification failed: backups tree mismatch')
+    for (const d of ['backups', 'files']) {
+      const sp = path.join(srcDir, d)
+      if (fs.existsSync(sp) &&
+          countFsObjects(sp) !== countFsObjects(path.join(t, d))) {
+        throw new Error('verification failed: ' + d + ' tree mismatch')
+      }
     }
+    // Boot write lives INSIDE the same rollback contract: a failure here must also undo the
+    // copy (otherwise the target holds a full data dir with NO redirect — and cleanup would
+    // previously have skipped it, orphaning content next to the user's prior data).
+    writeBootRedirect(t)
+    relocationPending = true // B#5: the window until relaunch — backup writers consult getRelocationPending()
   } catch (e) {
     for (const p of written) {
       try { fs.rmSync(p, { recursive: true, force: true }) } catch (e2) { /* best-effort cleanup */ }
@@ -217,14 +265,19 @@ function migrateData (srcDir, targetDir, opts) {
     restoreCollisions(stash) // put back any pre-existing target content the copy overwrote
     return { ok: false, error: String((e && e.message) || e) }
   }
-  try { writeBootRedirect(t) } catch (e) {
-    return { ok: false, error: 'copied but failed to write the boot redirect file: ' + String((e && e.message) || e) }
-  }
   return { ok: true, target: t }
+}
+
+/** B#5: true from a successful migrateData until process exit (relaunch). In-process backup
+ *  writers (auto-backup, backup-dir mutation) must refuse while this is set: their write would
+ *  land in the OLD dir after the boot file already points at the new one. */
+function getRelocationPending () {
+  return relocationPending
 }
 
 module.exports = {
   bootRedirectPath, readBootRedirect, writeBootRedirect, clearBootRedirect,
   requiredFiles, validateTarget, migrateData, volumeFreeBytes,
+  getRelocationPending,
   MIN_FREE_BYTES
 }

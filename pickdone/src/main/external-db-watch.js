@@ -14,6 +14,17 @@ const fs = require('fs')
 // compare-and-delete of the slot stays a caller-side callback (see seedSlotWatermark).
 const { CLI_SLOT_ABANDON_TTL_MS, seedSlotWatermark } = require('./cli-slot-policy')
 
+// D1 #8a (F-RELOC migration window): module-level registry of the LATEST live watcher's stop
+// hook. index.js holds the instance, but the data:relocate handler must stop the fs.watchFile
+// poll BEFORE closing the DB (a tick firing mid-migration would read a half-moved tree);
+// index.js is not touched, so handlers reach the hook through this module export instead.
+let latestStopDbWatch = null
+
+/** Stop the most recently created watcher's poll (no-op when none ever started). */
+function stopLatestDbWatch () {
+  try { if (latestStopDbWatch) latestStopDbWatch() } catch { /* best-effort, same as stopForQuit */ }
+}
+
 /** Seed the tomato command watermark at startup. Returns the initial lastTomatoSeq.
  *  Pure/injected so the seed policy (including the abandonment TTL) is unit-testable without
  *  Electron. getMeta/deleteMeta talk to the machine-local meta table; deleteMeta is optional
@@ -317,7 +328,7 @@ function createExternalDbWatch (deps) {
       resyncDbWatch = null
     }
   }
-  return {
+  const api = {
     watchDbForExternalWrites,
     // hctx shape parity: handlers previously got `() => resyncDbWatch` (null before the watcher starts)
     currentResyncDbWatch: () => resyncDbWatch,
@@ -328,6 +339,8 @@ function createExternalDbWatch (deps) {
     // unit-test seam: drive one poll tick (settings hot-sync branch) without fs.watchFile
     __pollTickForTests: () => { try { if (pollTickHook) pollTickHook() } catch { /* guarded like onChange */ } }
   }
+  latestStopDbWatch = () => { try { if (stopDbWatch) stopDbWatch() } catch {} }
+  return api
 }
 
-module.exports = { createExternalDbWatch, seedTomatoWatermark, CLI_SLOT_ABANDON_TTL_MS }
+module.exports = { createExternalDbWatch, seedTomatoWatermark, CLI_SLOT_ABANDON_TTL_MS, stopLatestDbWatch }
