@@ -185,7 +185,16 @@ export default {
         if (done.length) g.push({ key: 'day-done', label: this.$t('statsE.SearchView.statusCompleted'), todos: done, count: done.length })
         return g
       }
-      // Expired uncompleted: output collapsed groups in descending date order (yesterday/2 days ago/earlier...), replacing the standalone "recent todos" page
+      // [UX 2026-10-21] TODAY FIRST: the user's own day must not sink below every overdue
+      // group (with uncompleted tasks on many past days it needed bottom-scrolling to reach).
+      const done = this.fitProj(this.v.todayDoneList || [])
+      const undone = this.fitProj(this.v.todayTodoList.filter(t => !t.complete))
+      // Same avoidance as the selected-day branch above: an all-empty today must not render a
+      // 0-count "Today" header next to the empty-state illustration
+      if (undone.length) {
+        g.push({ key: 'today-today', label: this.$t('statsA.core.today'), weekOf: dayjs().valueOf(), brand: true, todos: undone, count: undone.length })
+      }
+      // Expired uncompleted AFTER today: descending date groups (yesterday/2 days ago/earlier...), default-collapsed via defaultFold (session-local in TodoGroups)
       const expired = this.fitProj((this.v.recent && this.v.recent.expiredUncompleted) || [])
       const byDate = new Map()
       for (const t of expired) {
@@ -201,16 +210,9 @@ export default {
           ? this.$t('statsE.TodayView.overdueFromYesterday')
           : this.$t('statsA.core.calMd', { m: d.month() + 1, d: d.date(), w: this.$t('statsA.core.weekOf', { w: this.$t('statsA.core.wd' + d.day()) }) })
         const todos = byDate.get(k)
-        g.push({ key: 'expired-' + k, label: lbl, todos, count: todos.length })
+        g.push({ key: 'expired-' + k, label: lbl, todos, count: todos.length, defaultFold: true })
       }
 
-      const done = this.fitProj(this.v.todayDoneList || [])
-      const undone = this.fitProj(this.v.todayTodoList.filter(t => !t.complete))
-      // Same avoidance as the selected-day branch above: an all-empty today must not render a
-      // 0-count "Today" header next to the empty-state illustration
-      if (undone.length) {
-        g.push({ key: 'today-today', label: this.$t('statsA.core.today'), weekOf: dayjs().valueOf(), brand: true, todos: undone, count: undone.length })
-      }
       // Completed group always present (collapsed by default, finalized by user on 2026-08-30: a hide toggle adds mental burden)
       if (done.length) {
         g.push({ key: 'today-done', label: this.$t('statsE.TodayView.completedToday'), todos: done, count: done.length })
