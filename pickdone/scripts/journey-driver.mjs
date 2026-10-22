@@ -21,6 +21,10 @@
  *
  * Team rules (AGENTS.md): ONE cdpPort per engineer; renderer-dist is PRE-BUILT by the lead —
  * NEVER run build:renderer concurrently; end() every journey (orphan electrons hold ports).
+ * PROCESS HYGIENE (2026-10-22 incident): NEVER name-wide or time-windowed electron sweeps on
+ * this shared host — kill ONLY your stored child pid (end()/crash()) or exact-port match
+ * (Get-CimInstance Win32_Process | Where CommandLine -like '*--remote-debugging-port=93xx*').
+ * A windowed sweep killed a teammate's minutes-timed reminder run (exit 0xFFFFFFFF readback).
  *
  * Round-2 additions (2026-10-22 deep audit):
  *   bootJourney({ resumeDir })  → re-boot on an EXISTING data dir (reboot-persistence journeys:
