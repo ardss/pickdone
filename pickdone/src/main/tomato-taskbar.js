@@ -102,8 +102,13 @@ function update (p = {}) {
   if (!wantButtons) { if (buttonsSet) clearButtons(); return }
   if (buttonsSet) return
   try {
+    // F2 (2026-10-22 review): the tooltip fallback used to borrow the tray menu's QUIT-APP
+    // label ('Quit') for a button that gives up the pomodoro — vocabulary drift, the same
+    // affordance/behavior class as the float X. Phase-aware fallback; the renderer's
+    // per-second btnStopText remains the primary source.
+    const fallbackTooltip = mt(status === 'startRestTime' ? 'thumbarGiveUpRest' : 'thumbarGiveUpFocus')
     mainWin.setThumbarButtons([
-      { tooltip: p.btnStopText || mt('trayQuit'), icon: icon('stop'), click: () => send('giveup') }
+      { tooltip: p.btnStopText || fallbackTooltip, icon: icon('stop'), click: () => send('giveup') }
     ])
     buttonsSet = true
   } catch (e) { log.warn('[TomatoTaskbar] thumbar 设置失败', e) }

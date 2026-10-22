@@ -47,6 +47,8 @@ function createWindowManager (ctx) {  const {
     tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
     isLocked, lockAppNow, showMainOrLock,
   isQuitting, getState, getTray,
+  /** F1 (2026-10-22): index.js's guarded user-quit chain (quitFromTray) — exit-mode X routes here */
+  requestUserQuit,
   /** D10 (2026-09-27): index.js hook — clears the tomato countdown lease when the renderer dies. */
   onRendererGone
 } = ctx
@@ -275,7 +277,12 @@ function createWindowManager (ctx) {  const {
       if (!s || process.argv.includes('--dev')) showMainOrLock()
     })
     win.on('close', e => {
-      if (!getState().quitByUser && closeBehavior.isCloseToTray(readConfig())) {
+      // F1 (2026-10-22 window-chrome review): the intent is a named three-way decision
+      // (close-behavior.closeIntent) instead of an inline boolean — exit mode (closeActionMinimize
+      // =false) must QUIT (the promise written by onboarding step 4 / Settings→General), not
+      // destroy the window while window-all-closed stays resident (the 0.1.0-era drift).
+      const intent = closeBehavior.closeIntent({ quitByUser: getState().quitByUser, closeToTray: closeBehavior.isCloseToTray(readConfig()) })
+      if (intent === 'hide') {
         e.preventDefault(); win.hide()
         const cfg = readConfig()
         if (closeBehavior.shouldShowTrayNotice(cfg)) {
@@ -285,6 +292,13 @@ function createWindowManager (ctx) {  const {
           const tray = getTray()
           try { if (tray && process.platform === 'win32') tray.displayBalloon({ iconType: 'info', title: i18n.mt('appName'), content: i18n.mt('closeTrayNotice') }) } catch (err) { /* balloon is best-effort */ }
         }
+      } else if (intent === 'quit') {
+        // Exit mode: route X (and Alt+F4 — same 'close' event) through the tray's guarded quit
+        // chain: running-focus confirm → bounds persist → tray destroy → app.quit() (full flush
+        // window). preventDefault first: the window stays visible while the confirm is up; the
+        // re-issued quit re-enters this handler with quitByUser=true ('close' intent above).
+        e.preventDefault()
+        requestUserQuit()
       } else {
         // [F4 #5]: close saves the same normalized shape as the move/resize debouncer (normal
         // bounds + maximized flag), so quit-time persistence can no longer stamp a maximized

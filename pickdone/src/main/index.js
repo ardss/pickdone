@@ -99,6 +99,9 @@ const windowManager = createWindowManager({
   tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
   isLocked, lockAppNow, showMainOrLock,
   isQuitting: () => quitting, getState: () => state, getTray: () => tray,
+  // F1 (2026-10-22): exit-mode X must reach the same guarded quit chain as the tray
+  // (quitFromTray is a hoisted function declaration — safe to reference here, defined below).
+  requestUserQuit: quitFromTray,
   // D10 (2026-09-27): renderer-death hooks — clear the stale tomato countdown lease and let the // crash counter health window live in windows.js (see crashRelaunchDecision in handlers/shared).
   onRendererGone: clearTomatoLiveText
 })
