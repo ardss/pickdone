@@ -99,8 +99,7 @@ const windowManager = createWindowManager({
   tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
   isLocked, lockAppNow, showMainOrLock,
   isQuitting: () => quitting, getState: () => state, getTray: () => tray,
-  // F1 (2026-10-22): exit-mode X must reach the same guarded quit chain as the tray
-  // (quitFromTray is a hoisted function declaration — safe to reference here, defined below).
+  // F1 (2026-10-22): exit-mode X must reach the same guarded quit chain as the tray (quitFromTray is a hoisted declaration — safe to reference here)
   requestUserQuit: quitFromTray,
   // D10 (2026-09-27): renderer-death hooks — clear the stale tomato countdown lease and let the // crash counter health window live in windows.js (see crashRelaunchDecision in handlers/shared).
   onRendererGone: clearTomatoLiveText
@@ -151,10 +150,9 @@ function restoreFromCriticalBackup (ud) {
       habitsPut: pair => busCommit('meta', 'put', pair),
       // metaState (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
       metaPut: pair => busCommit('meta', 'put', pair),
-      // F1 (2026-10-17) sync-identity restore: sync.deviceId / sync.pairingSecret live in
-      // settings_rows (lan-sync-bootstrap reads settingsRowsAll), NOT the meta table — without
-      // this door the whitelist-preserved identity keys would land in the wrong table (inert)
-      // and a JSON restore would mint a fresh deviceId while every peer paired the dead one.
+      // F1 (2026-10-17) sync-identity restore: sync.deviceId / sync.pairingSecret live in settings_rows
+      // (lan-sync-bootstrap reads settingsRowsAll), NOT the meta table — without this door the whitelist-preserved
+      // identity keys would land in the wrong table (inert) and a JSON restore would mint a fresh deviceId.
       settingsPut: pair => busCommit('setting', 'put', { key: pair[0], value: pair[1] })
     })
   // [Sync-13 reader + F4 #9] a degraded dump's missing segments must be visible: logged here and surfaced in the recovery dialog below (describeRecoveryDegraded).

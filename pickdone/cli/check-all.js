@@ -67,15 +67,16 @@ const GROUPS = [
       ['vue-tsc 类型检查(SFC script lang=ts + 全局契约)', 'node', ['node_modules/vue-tsc/bin/vue-tsc.js', '--noEmit', '--incremental']],
       // 经 check-test-summary.cjs 跑同一套 fail=0 + skip 棘轮校验(与 pre-commit 单一实现,防两处分叉)
       // --with-coverage: run-all also writes tests/.artifacts/coverage-summary.json on this pass
-      // 15min budget (was 10): the D10 wave's new suites (loopback/quarantine regression tests
-      // spawning real child processes) pushed the 4vCPU Windows runner past 10min — a budget kill
-      // with zero diagnostics, not a test failure.
-      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage'], null, 15],
+      // 40min budget (was 15): the round-2 audit wave (J15/J17 pin suites + anchor re-pins) plus
+      // general suite growth pushed the loaded Windows host past 15min — two budget kills at
+      // exactly 15.3min with zero diagnostics (2026-10-22 21:52 + 23:07 fast runs); the suite
+      // itself completes in ~33min there with a full TAP. Same class as the earlier 10->15 raise.
+      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage'], null, 40],
       // D4 覆盖率棘轮(只升不降,回退即红);--await-summary 复用上一 stage 的 coverage 摘要,
       // 不再并发重跑全量单测(4vCPU CI 上双份套件并发=互相拖到超时红,2026-09-26 实锤)
       // Budget must EXCEED the unit stage's: it runs in a parallel lane and polls until the
-      // summary lands (22 > 15; its own work is seconds once the summary exists).
-      ['覆盖率棘轮（lines/branch/funcs 对比 cli/.coverage-baseline.json,通过时自动上调基线）', 'node', ['cli/check-coverage-ratchet.cjs', '--await-summary'], null, 22],
+      // summary lands (45 > 40; its own work is seconds once the summary exists).
+      ['覆盖率棘轮（lines/branch/funcs 对比 cli/.coverage-baseline.json,通过时自动上调基线）', 'node', ['cli/check-coverage-ratchet.cjs', '--await-summary'], null, 45],
     ]
   },
   {
