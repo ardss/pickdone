@@ -30,15 +30,27 @@ const path = require('node:path')
 
 const ROOT = path.join(__dirname, '..')
 
-// Code surfaces → the test dirs that exercise them. Keys are repo-relative POSIX dir prefixes
-// (longest-prefix wins), values are tests/ dirs (relative to pickdone/). One test dir may
-// serve several surfaces; unions dedupe.
+// Code surfaces → the test dirs that exercise them. Keys are repo-relative POSIX dir prefixes,
+// values are tests/ dirs (relative to pickdone/). One test dir may serve several surfaces;
+// unions dedupe. ORDER MATTERS: match takes the FIRST entry whose prefix hits (see scopeFor),
+// so MORE-SPECIFIC prefixes must sit ABOVE their generic parents (src/main/lan-sync before
+// src/main, shared/sync-* before shared, renderer/js/store before renderer/js).
 const SURFACE_MAP = [
+  // billing: server/billing/** is pinned by the tests/unit/billing suites (dynamic import —
+  // an import graph would MISS these, the coarse map is exactly what covers them)
+  ['server/billing', ['tests/unit/billing']],
+  // lan-sync + shared sync cores (2026-10-23 audit: these were unmapped — a scoped run on a
+  // shared/sync-core change would have SKIPPED tests/unit/sync, an undershoot)
+  ['src/main/lan-sync', ['tests/unit/lan-sync', 'tests/unit/main']],
+  ['shared/sync-core', ['tests/unit/sync', 'tests/unit/lan-sync', 'tests/unit/main']],
+  ['shared/sync-crypto', ['tests/unit/sync', 'tests/unit/lan-sync', 'tests/unit/security']],
+  ['shared/sync-transport', ['tests/unit/lan-sync', 'tests/unit/sync']],
   ['renderer/js/store', ['tests/unit/store', 'tests/unit/components', 'tests/unit/renderer']],
   ['renderer/js/utils', ['tests/unit/renderer', 'tests/unit/utils', 'tests/unit/components']],
   ['renderer/js/components', ['tests/unit/components', 'tests/unit/renderer']],
   ['renderer/js/views', ['tests/unit/renderer', 'tests/unit/components']],
-  ['renderer/js/i18n', ['tests/unit/cli', 'tests/unit/renderer']],  ['renderer/js', ['tests/unit/renderer', 'tests/unit/components', 'tests/unit/store', 'tests/unit/utils']],
+  ['renderer/js/i18n', ['tests/unit/cli', 'tests/unit/renderer']],
+  ['renderer/js', ['tests/unit/renderer', 'tests/unit/components', 'tests/unit/store', 'tests/unit/utils']],
   ['src/main', ['tests/unit/main']],
   ['src/preload', ['tests/unit/main', 'tests/unit/renderer']],
   ['shared', ['tests/unit/main', 'tests/unit/store', 'tests/unit/lan-sync']],
