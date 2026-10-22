@@ -223,8 +223,10 @@ dispatch leaves no phantom undo entry. Verified red on the pre-fix view (stash) 
 Adjacent suites (navgate/d4/d-wave) 18/18 green; eslint clean.
 
 **Status**: fixed — commit a6b902e9 (renderer/js/views/TodoBoxView.vue +
-tests/unit/components/j9-batch-undo-snapshot.test.mjs); live re-verification queued on rebuild
-train #5.
+tests/unit/components/j9-batch-undo-snapshot.test.mjs); live re-verified on rebuild train #6
+(j10b-undo-reverify.mjs, j10b-0*.png): batchToday undo → rows back to `d:0`, box badge restored 2;
+batchCat undo → categoryId back to 0 (未分类); batch-delete undo (first-ever coverage) → both rows
+restored from the recycle path, box badge 2.
 
 ---
 
