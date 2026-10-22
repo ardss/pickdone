@@ -195,6 +195,9 @@ regression matrix, since efec4cea touches QuickAdd.vue again) queued on rebuild 
 - Control: single-item complete→undo restores correctly in the same session (undated row back in
   the box, undone) → the defect is batch-specific, pinning the batch handlers.
 - batchCat (移动到分类) carries the same construction → same no-op.
+- Impact note (lead-requested): a batch mis-move is exactly when 撤销 matters most — every user who
+  batch-moved rows and hit 撤销 has been silently stranded in the moved state since the batch
+  feature shipped, with the toast actively promising a revert that never happens.
 
 **Root cause** — snapshot-after-dispatch on a row mutated in place:
 - `TodoBoxView.batchToday`: `snap.push({ id, revert: crossDayRevertPatch(raw, patch) })` runs AFTER
@@ -219,7 +222,9 @@ double-apply (no drift); (3) batchCat snapshot holds the pre-dispatch categoryId
 dispatch leaves no phantom undo entry. Verified red on the pre-fix view (stash) / green after.
 Adjacent suites (navgate/d4/d-wave) 18/18 green; eslint clean.
 
-**Status**: fixed — live re-verification queued on rebuild train #5 (commit hash below in git log).
+**Status**: fixed — commit a6b902e9 (renderer/js/views/TodoBoxView.vue +
+tests/unit/components/j9-batch-undo-snapshot.test.mjs); live re-verification queued on rebuild
+train #5.
 
 ---
 
