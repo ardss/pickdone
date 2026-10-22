@@ -153,7 +153,10 @@ export default {
       if (this.remaining == null) return '--:--'
       return formatMMSS(this.remaining)
     },
-    knobIcon () { return this.working ? '❚❚' : '▶' },
+    /* J3 (2026-10-22 journey audit): the old ❚❚ glyph promised a pause that does not exist
+       (pomodoro has no pause — user-finalized); the running knob's real action is the give-up
+       confirm, so it wears a stop glyph. ▶ stays the idle "start" affordance. */
+    knobIcon () { return (this.working || this.resting) ? '■' : '▶' },
     // A13: formula single-sourced in utils/tomatoShared.js focusedMinutesText
     focusedMinText () {
       const s = this.st
@@ -285,10 +288,17 @@ export default {
       this.abandoning = true
     },
     persist (patch) { this.$store.commit('tomato/patch', patch); this.st = this.$store.state.tomato },
-    minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
+    minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat(); this.pingVisClosed() },
     /* ✕ while idle = close the floater (same 'hide-tomato-float' close path). The persist-reset it
        replaced was a visual no-op at a full ring — read as a dead close button (2026-10-22). */
-    closeFloat () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
+    closeFloat () { if (window.todoAPI) window.todoAPI.hideTomatoFloat(); this.pingVisClosed() },
+    /* J2 (2026-10-22 journey audit): this window's own hides bypassed TomatoBar's toggle sync —
+       the bar kept 小窗=on for up to 15s and swallowed the first reopen click (hide-on-hidden).
+       The ping is a signal token only (value never read): TomatoBar's storage listener re-queries
+       the authoritative visibility over IPC. Same-origin cross-window storage event = instant. */
+    pingVisClosed () {
+      try { localStorage.setItem('tomatoFloatVisPing', String(Date.now())) } catch (e) { /* degraded LS: the 15s poll fallback still applies */ }
+    },
     // [D22 P2] giveUp is awaited (same fix as TomatoAbandonModal): the layer collapses only on success.
     async confirmAbandon () {
       if (this.abandonBusy) return

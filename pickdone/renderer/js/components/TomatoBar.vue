@@ -145,10 +145,25 @@ export default {
     if (window.todoAPI && window.todoAPI.tomatoFloatShown) {
       window.todoAPI.tomatoFloatShown().then(v => { this.floatOn = !!v }).catch(() => {})
     }
+    // J2 (2026-10-22 journey audit): the float's OWN close (✕ / minimize on TomatoFloatPage) left
+    // this toggle stale for up to 15s and INVERTED the next click (hide on an already-hidden float
+    // = swallowed first reopen click; live-verified). The float page writes a localStorage ping
+    // after its own hides; the storage event fires here cross-window and we re-query the REAL
+    // visibility. The ping is a signal token only — its value is never read, so a stale ping
+    // surviving a reboot can never mislead: mount-time sync below stays the authoritative IPC
+    // query, and this handler always re-queries too.
+    this._onFloatVisPing = e => {
+      if (!e || e.key !== 'tomatoFloatVisPing' || e.newValue == null) return
+      if (window.todoAPI && window.todoAPI.tomatoFloatShown) {
+        window.todoAPI.tomatoFloatShown().then(v => { this.floatOn = !!v }).catch(() => {})
+      }
+    }
+    window.addEventListener('storage', this._onFloatVisPing)
   },
   beforeUnmount () {
     this._unmounted = true // pending pips-tour setTimeout callbacks use this to skip popping
     clearInterval(this._iv)
+    if (this._onFloatVisPing) window.removeEventListener('storage', this._onFloatVisPing)
     if (typeof this._offTaskbar === 'function') this._offTaskbar() // the browser shim once downgraded it to a Promise (non-function); a bare truthiness check would crash
     // Clear taskbar traces on unmount, preventing leftover progress bar/countdown title from the previous session
     // Not cleared while focus is running (avoids the countdown flashing blank for a beat on future remounts/refactors)
