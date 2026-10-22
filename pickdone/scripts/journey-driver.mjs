@@ -27,8 +27,11 @@
  * A windowed sweep killed a teammate's minutes-timed reminder run (exit 0xFFFFFFFF readback).
  *
  * Round-2 additions (2026-10-22 deep audit):
- *   bootJourney({ resumeDir })  → re-boot on an EXISTING data dir (reboot-persistence journeys:
- *                                 write → crash() → bootJourney({ resumeDir }) → assert survival)
+ *   bootJourney({ dataDir })    → re-boot on an EXISTING data dir (reboot-persistence journeys:
+ *                                 write → crash() → bootJourney({ dataDir }) → assert survival).
+ *                                 OPTION KEY IS `dataDir:` — `resumeDir` is an internal alias only;
+ *                                 a wrong key is silently ignored and boots a FRESH empty db
+ *                                 (this exact trap caused the K1 false alarm — todo R2 leg 6).
  *   bootJourney({ dbDir })      → override TODO_DB_DIR independently (dual-instance / CLI-race
  *                                 orchestration: two boots sharing one db dir, different userData)
  *   j.crash()                   → hard-kill WITHOUT the quit chain (crash-recovery journeys)
