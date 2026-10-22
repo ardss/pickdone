@@ -30,8 +30,10 @@
            role="button" tabindex="0" :aria-label="$t('statsE.TodoItem.openTaskAria', { name: todo.taskContent || $t('statsE.TodoItem.untitled') })"
            @click.stop="openEdit" @keydown="onTitleKey">
         <!-- U-15: wire the search highlight (query prop existed but was never rendered; SearchView passes it) -->
+        <!-- [J4 2026-10-22] the title renders the tag-stripped displayTitle: the #tag chips below
+             already show every tag, and the old raw title echoed each token a second time on one row -->
         <span v-if="query" v-html="highlightedTitle"></span>
-        <template v-else>{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</template>
+        <template v-else>{{ displayTitle }}</template>
       </div>
       <div v-if="todo.taskDescribe" class="td-desc" :style="descLineClamp">{{todo.taskDescribe}}</div>
       <div v-if="subtasks.length" class="td-subs">
@@ -113,7 +115,7 @@
  */
 import {dayjs, formatDayLabel, parseSubtasks, firstImageOfList, subsCompleteTarget, FMT } from '../utils/core.js'
 import { dateBadgeColor } from '../utils/core.js'
-import { extractTags, highlightHTML } from '../utils/search.js'
+import { extractTags, highlightHTML, stripTagTokens } from '../utils/search.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { chkColor, neighborInList } from '../utils/taskRow.js'
@@ -208,8 +210,16 @@ export default {
     img () { return firstImageOfList(this.todo.image) },
     fileCount () { try { return JSON.parse(this.todo.files || '[]').length } catch { return 0 } },
     tags () { return extractTags(this.todo.taskContent, this.todo.taskDescribe) },
+    // [J4 2026-10-22] the visible title drops the tag tokens (the chips below already show them);
+    // an only-tag title falls back to the raw content so the row never goes blank. The tooltip
+    // (:title) and aria-label keep the full raw content.
+    displayTitle () {
+      const raw = this.todo.taskContent
+      if (!raw) return this.$t('statsE.TodoItem.untitled')
+      return stripTagTokens(raw) || raw
+    },
     // U-15: escape+wrap the query match (highlightHTML escapes first, safe for v-html)
-    highlightedTitle () { return highlightHTML(this.todo.taskContent || this.$t('statsE.TodoItem.untitled'), this.query) },
+    highlightedTitle () { return highlightHTML(this.displayTitle, this.query) },
     selected () { const ed = this.$store.state.ui.rightSidebarTodoEdit; return ed.visible && ed.taskId === this.todo.taskId },
     isRepeat () { return !!(this.todo.repeatId && this.todo.repeatId !== 'null') },
     hasExtras () {
