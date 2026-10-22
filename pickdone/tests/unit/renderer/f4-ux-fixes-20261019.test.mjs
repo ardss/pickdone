@@ -107,7 +107,9 @@ test('F4-9 completeAction undo has a re-entry guard (behavior)', async () => {
   const store = {
     state: { todo: { todoList: [todo], recycleList: [] } },
     dispatch (type, t) {
-      if (type === 'todo/toggleComplete') undoDispatches.push(t)
+      // J17 (journey-audit round 2) re-aimed the undo dispatch from todo/toggleComplete to the
+      // todo/updateTodoFields snapshot revert — count the dispatch type the undo actually sends.
+      if (type === 'todo/updateTodoFields') undoDispatches.push(t)
       if (undoDispatches.length === 1) {
         // first undo stays in flight until we release it
         return new Promise(res => { gate = res })

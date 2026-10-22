@@ -73,7 +73,11 @@ test('GOLDEN harness hygiene: the fixture env carries NO git pointers (hook GIT_
     return e
   })()
   assert.deepEqual(Object.keys(scrubbed).filter(k => /^GIT_/i.test(k)), [], 'scrubbed env must carry zero GIT_* keys')
-  assert.equal(scrubbed.PATH, process.env.PATH, 'scrubbing only removes git pointers, not the rest of the env')
+  // PATH lookup is case-insensitive on Windows: process.env spreads preserve the original key
+  // casing (`Path` under a native shell, `PATH` under CI/posix-style parents), and a plain-object
+  // spread loses the case-insensitive getter. Resolve the key instead of hardcoding either casing.
+  const pathVal = e => e[Object.keys(e).find(k => k.toLowerCase() === 'path')]
+  assert.equal(pathVal(scrubbed), pathVal(poisoned), 'scrubbing only removes git pointers, not the rest of the env')
 })
 
 test('GOLDEN file-size: a file past its per-dir error cap is red; within it is green', () => {
