@@ -74,16 +74,29 @@ maint-0927-domainA, qc-ui-followup-store2, r-render-store-fixes,
 fix-20261009-store-consistency) — same bomb shape, not yet tripped; same
 one-move fix in a follow-up wave (see D8).
 
-### D8. Same premature-force-exit bomb shape in 7 more test files (NEW 2026-10-23)
-The D7 doctrine violation (test() registrations interleaved with a module-
-level await import) exists in 7 more files (list in D7). None has tripped in
-observed runs yet — the window needs the import to still be resolving when
-the LAST currently-registered test finalizes — but the shape is load-hostile.
-Plan: mechanical one-move fix per file (hoist the await import above all
-registrations), batched in one wave with the same repro rig.
-Acceptance: all 7 files green in the loaded repro context; a repo-wide grep
-guard (gate or golden) that fails when a test file registers test() before a
-module-level await.
+### D8. Premature-force-exit bomb shape in 7 more test files (RESOLVED 2026-10-23, d636d2a3 + 5e639a38)
+All 7 files hoisted their module-body await imports above every test()
+registration (the D7 doctrine). The investigation exposed a SECOND,
+sneakier force-exit face: when the event loop drains with no unfinished
+test at finalize, force-exit ends the child with EXIT 0 and every test
+registered below the suspend point is silently NEVER RUN — the gate's
+"6/6 green" on maint-0927-domainA was truncation false-green (file really
+holds 18 tests; loaded repro pre-fix ran 54/95 across the 7 files). Post-fix
+the loaded repro runs 95/95 every time.
+The fix unmasked 4 PRE-EXISTING stale tests in maint-0927-domainA; triaged
+(5e639a38) as product evolution, verified by git archaeology: b85b5ca8's
+shake-replay markFailed path (ctx now binds the real method), the
+locale-aware FMT.cnDate current-year branch in TaskAccountModal (harness
+stub was missing cnDate), and dropOn's `e` param from the 2026-10-09
+cross-view-drop fix (anchor regex tracked the signature). 18/18 green.
+Acceptance: 7/7 files fully registered in loaded repro; maint suite 18/18;
+adjacent dirs 1494 tests green after triage. Corpus capstone (2026-10-23
+06:43, quiet host): fast gate 23/23 green, 11.9min, unit stage plans 4754
+tests (the 41 previously-truncated ones now counted), retry not engaged.
+Follow-up (small): add a golden/gate guard that fails any test file whose
+test() registrations precede a module-level await import, so the bomb shape
+cannot re-enter (apply the D8 doctrine check mechanically). → DONE:
+tests/unit/cli/test-file-registration-order.test.mjs (corpus scan 1s, green).
 
 ### D6. CLI fixture-suite double-connection lock race (NEW 2026-10-23, root-caused)
 Evidence trail: c1-parse-ux file-level 300s-ceiling kills at conc 4 AND 8
