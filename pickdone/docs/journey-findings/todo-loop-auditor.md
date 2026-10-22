@@ -325,4 +325,46 @@ round-2 rebuild.
   belong at unit level); synthetic contextmenu cannot drive the task-menu builder (real-input
   path verified separately); `window.todoAPI` is frozen (op sniffing needs a main/preload hook).
 
+## Round 2 — undo edge matrix (j16/j16b): all green
+
+- Expiry: after 6.5s the toast is gone and the completion persists (link dead = no hidden revert).
+- Undo after an unrelated add: only its own row reverts; the unrelated task survives.
+- Double-click 撤销: exactly one revert (F4 guard + idempotent snapshot-revert).
+- Undo after reload: toast gone, undoStack cleared to 0, the completion itself persisted.
+
+## Round 2 — search 搜索 deep (j18): all green
+
+- Field coverage: title hit + description hit both return with the term highlighted; tag-only
+  rows are found via `#tag` queries (verified WITH J4's stripped titles — the chips index, not
+  the title text, so the dedup fix does not hollow out search).
+- No-results: 共 0 条 + a named-query empty state ("… 没有找到相关日程") + 清除筛选并重搜 escape
+  hatch; cleared-state returns to the previous route with rows restored; whitespace-only queries
+  are ignored (no search route entered).
+
+## Round 2 — 日程概览 walk (j19b): all green
+
+- Month grid renders (custom grid, Monday start), today cell highlighted, seeded event pill
+  visible; month nav `<`/`>` cycles 2026年10月 → 11月 → back; event click opens the edit panel;
+  月/周/时间块 view switcher works (week title 2026年9月28日 · 周日, `?view=week`).
+
+## Round 2 — 数据复盘 seeded truth + 300-row smoke (j20/j21): all green
+
+- Seeded via cli/lib.js in-process (TODO_DB_DIR = userData root per the corrected env split):
+  5 dated-today + 1 expired-undone + 1 future + 300 undated 压测行; 2 completed today. CLI
+  overview locked the truth (today 5/2 done, overdue 1, noDate 300, upcoming 1).
+- App on the same dir (bootJourney `dataDir:` — first run used the wrong option key `resumeDir`
+  and silently booted a fresh db; the driver option is `dataDir`, alias `resumeDir` is internal):
+  复盘 shows 完成事件 2 / 新增 307 / 达成率 33% (= 2 done ÷ 6 dated-today+overdue — reconciles
+  exactly), trend window 10.19–10.22.
+- 300-row smoke: box renders 300/300 rows, six scroll sweeps ~1.6s total, quick-add + complete
+  land within ~1s rounds, ZERO console errors.
+
+## Round 2 — i18n flip en-US (j22): surfaces green; html-lang red = d2's fix pending rebuild
+
+- en-US: nav (Today/Calendar), quick-add placeholder, and the add toast all render English;
+  zh-CN flip-back restores everything.
+- `<html lang>` stays `zh-CN` under en-US on the train-8 bundle — the exact d2-HTMLLANG defect
+  already fixed on-branch (ea8a8a09, boot-time lang application); live re-check queued on the
+  round-2 rebuild. Cross-check, not a new finding.
+
 ---
