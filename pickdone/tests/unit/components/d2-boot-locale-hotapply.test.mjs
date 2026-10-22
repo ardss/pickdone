@@ -59,3 +59,16 @@ test('D2-LOC: settings/updateSettings mutation hot-applies a changed appLocale (
   assert.match(m[0], /localStorage\.setItem\('appLocale', loc\)/)
   assert.match(m[0], /import\('\.\.\/i18n\/index\.js'\)/)
 })
+
+test('D2-HTMLLANG: i18n/index.js applies the html lang attribute at MODULE LOAD (not only inside setLocale)', () => {
+  // live evidence: an en-US boot (LS seeded) dumped { i18n: 'en-US', htmlLang: 'zh-CN' } — the
+  // static index.html lang survived the whole session because setLocale() is the only writer and
+  // nothing calls it at boot. Screen readers + CJK/Latin font selection read this attribute.
+  // setLocale is defined before the i18n const in this file, so pin by COUNT: one application
+  // inside setLocale + at least one at module scope (the D2-HTMLLANG block reads i18n.global.locale).
+  const src = read('renderer/js/i18n/index.js')
+  const hits = (src.match(/documentElement\.setAttribute\('lang'/g) || []).length
+  assert.ok(hits >= 2, `module-scope lang application missing (found ${hits} of >=2; setLocale's alone cannot cover boot)`)
+  const modScope = src.slice(Math.max(0, src.indexOf('// D2-HTMLLANG')))
+  assert.ok(modScope.includes("documentElement.setAttribute('lang'") && modScope.includes('i18n.global.locale'), 'the module-scope D2-HTMLLANG application must read the resolved i18n locale')
+})
