@@ -18,7 +18,14 @@ import path from 'node:path'
 import { runPool, resetFlakeEvents, getFlakeEvents, evaluateFlakeThreshold, writeFlakeEvents } from '../../../cli/check-all.js'
 import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-const POOL_TIMEOUT_MS = 30000 // 兜底:runPool 卡死(如 workerGate 实现回归成前置全量等待)时按红而不是挂死
+// 120s guard (was 30s): the guard's purpose is catching a workerGate REGRESSION
+// (前置全量等待 = the pool never finishes at all), not measuring speed. Under full-pool
+// contention each okStage spawn is a real node process launch and a loaded host can take
+// seconds per spawn (measured 2026-10-23: even `git --version` took 45s at 100% ambient
+// load) — the workerGate test chains 3 sequential spawns and 30s was hit under that load
+// (2026-10-23 03:37 acceptance pass 1). 120s still catches any true hang far below the
+// 300s per-test ceiling, and a regression to a blocking gate never finishes anyway.
+const POOL_TIMEOUT_MS = 120000 // 兜底:runPool 卡死(如 workerGate 实现回归成前置全量等待)时按红而不是挂死
 
 /** 带 ProgressGuard 地跑 runPool:超时即 fail,防 gate 回归把池挂死吞掉测试进程 */
 async function runPoolGuarded (stages, limit, opts) {
