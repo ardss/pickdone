@@ -39,8 +39,10 @@ const SURFACE_MAP = [
   // billing: server/billing/** is pinned by the tests/unit/billing suites (dynamic import —
   // an import graph would MISS these, the coarse map is exactly what covers them)
   ['server/billing', ['tests/unit/billing']],
+  ['server/billing-service', ['tests/unit/billing']],
   // lan-sync + shared sync cores (2026-10-23 audit: these were unmapped — a scoped run on a
   // shared/sync-core change would have SKIPPED tests/unit/sync, an undershoot)
+  ['server/sync-relay', ['tests/unit/lan-sync', 'tests/unit/sync']],
   ['src/main/lan-sync', ['tests/unit/lan-sync', 'tests/unit/main']],
   ['shared/sync-core', ['tests/unit/sync', 'tests/unit/lan-sync', 'tests/unit/main']],
   ['shared/sync-crypto', ['tests/unit/sync', 'tests/unit/lan-sync', 'tests/unit/security']],
@@ -56,6 +58,9 @@ const SURFACE_MAP = [
   ['shared', ['tests/unit/main', 'tests/unit/store', 'tests/unit/lan-sync']],
   ['cli', ['tests/unit/cli']],
   ['scripts', ['tests/unit/cli']],
+  // generic server fallback (specific server/* entries above): any other server-side change
+  // runs both server-side consumers — overshoot by design, never an undershoot
+  ['server', ['tests/unit/billing', 'tests/unit/lan-sync', 'tests/unit/cli']],
   ['tests/lib', ['tests/unit']],
 ]
 
