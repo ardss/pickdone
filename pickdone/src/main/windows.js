@@ -297,8 +297,14 @@ function createWindowManager (ctx) {  const {
         // chain: running-focus confirm → bounds persist → tray destroy → app.quit() (full flush
         // window). preventDefault first: the window stays visible while the confirm is up; the
         // re-issued quit re-enters this handler with quitByUser=true ('close' intent above).
+        // LIVE-VERIFIED (2026-10-22 e2e-exit-close): calling requestUserQuit() SYNCHRONOUSLY here
+        // hung the quit — app.quit() issued inside a preventDefault'ed close handler collides with
+        // the in-flight close in the same tick: before-quit fired but will-quit NEVER arrived
+        // (quit aborted in the window-closing phase; the 3s hang fallback never armed because
+        // flushNow was never reached). Deferring past the current tick lets the prevented close
+        // fully settle first — then the quit chain closes the window cleanly.
         e.preventDefault()
-        requestUserQuit()
+        setImmediate(() => requestUserQuit())
       } else {
         // [F4 #5]: close saves the same normalized shape as the move/resize debouncer (normal
         // bounds + maximized flag), so quit-time persistence can no longer stamp a maximized
