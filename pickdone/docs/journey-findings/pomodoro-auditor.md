@@ -49,9 +49,12 @@ to the `storage` event and re-syncs `floatOn` from `tomatoFloatShown()` (same-or
 event — instant, no polling cadence change; tray-dock closes keep the existing 15s fallback).
 **Status:** fix applied (see J2 commit), live-verified defect cycle; post-rebuild re-check pending.
 
-**Status:** fix committed 0a7a0766 — full defect cycle live-verified pre-fix (journeyA1b-log.json:
-`bar-btn-after-x-t1s {关闭小窗,on:true}` → `shown-after-click1:false` (swallowed) → `shown-after-click2:true`);
-post-rebuild re-check pending (rides rebuild #2).
+**Status:** fix committed 0a7a0766 — **live re-verified on the rebuilt dist (journeyV-log.json,
+shots/jV-01, jV-02)**: ✕-close → bar stays consistent → first 小窗 click REOPENS
+(`shown-after-reopen-click:true`, bar flips 关闭小窗/on), bar-close round-trip clean.
+Residual (pre-existing, P4): the float AUTO-show path (renderer main.js 6s gate) and tray-dock
+path write no ping, so the bar can read 小窗/off for up to 15s after them (15s poll fallback);
+within that window the first toggle click is swallowed. Not widened further — poll covers it.
 
 ## [J3] P3→P4 Float knob icon shows ❚❚ (pause glyph) while focusing — clicking it opens the give-up confirm, no pause exists
 **Evidence (live, shots/jA1-02-float-running.png):** knob renders ❚❚ during focus (`knobIcon:"❚❚"`,
@@ -61,13 +64,39 @@ and the click opens 放弃本次专注？. Tooltip mitigates; glyph misleads at 
 **Proposed fix:** glyph honesty per lead's design nod — the running knob's real action is the
 give-up confirm, so it wears the stop glyph ■ (matches the taskbar give-up button's stop icon);
 ▶ stays the idle start affordance. No pause feature added.
-**Status:** fix committed 0a7a0766 (rides rebuild #2).
+**Status:** fix committed 0a7a0766 (rides rebuild #2) — **live-verified post-rebuild**: knob shows
+■ + 放弃专注 while running (journeyV-log.json j3-knob-running, shots/jV-01-knob-stop-glyph.png).
 
 ## [J4] P2 REAL DRAG VERIFIED + clamp: whole-card drag follows the OS cursor exactly
 Not a finding — live evidence recorded: real mouse drag (down/move/up at OS level) from DIP
 (120,120) landed at exactly (680,-10) = cursor delta applied by the main-process 16ms timer,
 with the folded-card clamp keeping the visible card on screen at the top edge. Circuit healthy
 (tomato-float.js dragStart/clampDrag/stopDrag + renderer pointer capture).
+
+## [J5] P2 TomatoPanel duration steppers bypass the settings ledger — the value visibly BOUNCES back ~1.5s later, and loses to the stale ledger at boot
+**Evidence (live, journeyB3-log.json + shots/jB2-01-divergence.png):**
+- Settings page set 专注时长=5 (canonical path), then TomatoPanel stepper set 10:
+  - t+300ms: tomato blob **10**, settings input **10**, panel input **10**, bar clock **10:00** (all surfaces agree at 10)
+  - t+1500ms: **all four surfaces snap back to 5** — the user watches their change un-apply itself, in the panel's own input.
+- The same journey family showed the settings↔DB split: after the settings write, `dbCall('settingsRowsAll')` still returned `{key:"tomatoTime",value:25}` (journeyB-log) — three ledgers (tomato LS blob / settings state / db rows) disagreeing after one panel write.
+- journeyB boot2 on a persistent dir: the harvest counter **persists across reboot** (1/8 recomputed from the DB ledger) — that half is healthy.
+**Root cause:** TomatoPanel.vue `commitPatch (p) { store.commit('tomato/patch', p) }` — raw commit
+updates ONLY the transient tomato runtime blob; the settings ledger (SettingsModal display, synced
+blob, db mirror, config.json) never hears about it, and the settings-ledger echo/mirror then
+reasserts the old value over the panel's write. The adjacent tip `panelSyncHint`
+("与番茄面板实时同步") promises the sync that does not exist in this direction.
+**Proposed fix:** `commitPatch` dispatches `settings/update` — the canonical writer
+(SettingsModal.set uses the same action), which mirrors TOMATO_LEDGER_KEYS back down into
+tomato/patch: the running countdown still updates and every ledger agrees (single writer,
+echo-consistent, reboot-stable).
+**Status:** fix committed 91eb1d1b + guard tests (j4-tomato-panel-settings-ledger.test.mjs 2/2,
+eslint clean); visual re-verify rides the next rebuild.
+
+## Live-verified-good (no finding): taskbar five-piece during run
+- Native window title live-verified: `04:59 专注中 · 拾事 [TEST]` while focusing, `00:59 休息中 · …` during rest, plain app name idle (PowerShell MainWindowTitle sampling).
+- Progress bar / thumbar give-up button / overlay badge / tray progress ring: native, code-verified only (tomato-taskbar.js update(); thumbar fallback tooltip is phase-aware post-F2).
+- Tray menu labels (rebuildTrayMenu, code-verified): 显示番茄悬浮窗 (docked) / 收起番茄悬浮窗到托盘 (shown); quit confirm gates on the durable `tomatoRunningSession` row — live-verified written at focus AND rest start, cleared on give-up/finishRest (null), so the quit-confirm promise holds.
+- Slim bar on non-today views mid-focus: phase + countdown + 放弃 present, harvest/noise/小窗 correctly hidden (shots/j2-04-slim-running.png).
 
 ## Live-verified-good (no finding): float abandon circuit
 - Knob click during focus → in-card confirm 放弃本次专注？ with live 已专注 n 分钟 forward counter; ✕ during confirm = cancel (title 关闭), focus continues — the recently-fixed exit-mode regression holds (e2e-locked circuit untouched).
