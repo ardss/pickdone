@@ -262,3 +262,67 @@ restored from the recycle path, box badge 2.
 - Sidebar collapse/expand; date-strip day navigation; 回到今天 button; per-day empty states
   (j4-01..07).
 - Date-only input (`明天`) is politely refused with a dedicated message (F3) — by design.
+
+---
+
+# Round 2 (2026-10-22 evening) — mandate A2
+
+## [K1] Quick-add durability — CLOSED AS PROBE ARTIFACT, zero product defect
+
+The P0 candidate (quick-add rows gone after reboot) did not survive forensics. My write-chain
+trace (Enter → `todo/addTodo` → `upsertLocal` + `safeUpsert` → pending queue + localStorage mirror
+→ `commitCommand('todo','put')` → `commands:commit` → op `upsert`, success-spliced) is confirmed
+healthy end-to-end, and config-surface-auditor's corrected smoke-v3 (a921e3d0) proved the full
+4-flavor matrix (today/box × crash-0-dwell/graceful) SURVIVES: graceful quit checkpoints the DB;
+crash-riding rows fold in from the WAL at resume. Round-1 lesson re-earned: my session-2 "getAll
+empty / pending blob absent" read was a probe-shape bug (promise serialized inside
+JSON.stringify; view/selector mismatch), not a store truth. D15 crash-proof queue analysis stands.
+Renderer chain + durable store: healthy at every link.
+
+## [J15] P2 清空回收站 always reported failure while actually purging — ids-array contract vs `=== true`
+
+**Evidence (j14b/j14c)**: the full triple-confirmation keyword flow completed, then the honest
+wait-for-success rule toasted 清空失败：回收站数据未删除，请重试 — while a direct
+`window.todoAPI.purgeRecycleBin()` probe returned the purged-id ARRAY and the next getAll came up
+empty (rows hard-deleted; the in-memory bin "revived" until reboot). Per-item 彻底删除 was
+unaffected (purgeIds → hardDelete path) — the bin looked half-working. Root cause: db.purgeRecycleBin
+returns the physically purged ids (row-granular contract, oplog tombstone expansion); store/todo.js
+checked `=== true`.
+
+**Fix** (commit 81b5aaf8): accept `res === true || Array.isArray(res)`; rejections keep the
+honest-failure path. **Tests**: tests/unit/store/j15-purgeall-ids-contract.test.mjs (ids-array ACK
+clears the in-session bin, empty-array ACK, rejection stays failure) — RED on the old check,
+verified.
+
+## [J17] P3→dispositioned 子任务 auto-complete 撤销 ate the user's own child checks
+
+**Evidence (j13)**: check 子一 (1/2) → check 子二 (2/2, parent auto-completes with undo toast) →
+undo → parent incomplete AND both children unchecked (0/2). Root cause: the toast's undo closure
+re-dispatched `toggleComplete` (a blind re-toggle); with isCompleteWithSubtasks ON the re-toggle's
+uncheck cascade wiped both children — reverting more than the system did and eating the user's own
+click. **Disposition (lead)**: snapshot-revert.
+
+**Fix** (commit ad1207d6): `toggleCompleteWithUndo` snapshots the exact pre-toggle completion
+surface (complete/completedAt/subtasks) BEFORE the dispatch; the undo restores it via
+`updateTodoFields` (a revert, not a second toggle), and now returns the dispatch promise
+(awaitable). The F4 double-click guard and honest-feedback paths kept; cascade-OFF isolation
+unchanged. **Tests**: tests/unit/components/j17-complete-undo-snapshot.test.mjs — four directions
+(child-driven auto-complete / parent-driven cascade / uncomplete restore / cascade-OFF);
+scenarios 1+3 verified RED on the old re-toggle (stash check). Live re-verify queued on the
+round-2 rebuild.
+
+## Round 2 — healthy so far
+
+- Subtask add/counts/cascades (j13): add 2 subs → 0/2; parent complete → children checked 2/2;
+  uncomplete → unchecked 0/2; child-driven auto-complete fires at 2/2; 已达成 reflects the state;
+  isCompleteWithSubtasks=false isolates (parent completes, children untouched, no reverse cascade).
+- Recycle bin walk (j14): quick-del + Shift+Delete both bin with deletedAt stamped (durable
+  verified); bin view count; 恢复到今天 returns the row to today; complete-inside-bin keeps the
+  deleted state; single 彻底删除 hard-deletes durably; retention aging (backdated deletedAt past
+  N days → force purge removes from store AND durable; fresh row kept — deletedAt-only trust
+  confirmed live).
+- Probe-shape lessons recorded: raw settings pokes do not dispatch computeViews (order checks
+  belong at unit level); synthetic contextmenu cannot drive the task-menu builder (real-input
+  path verified separately); `window.todoAPI` is frozen (op sniffing needs a main/preload hook).
+
+---
