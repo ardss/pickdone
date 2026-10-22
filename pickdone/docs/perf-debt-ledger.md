@@ -49,30 +49,40 @@ child-pid file (tests/.artifacts/runner-children.json) and `--cleanup` reaps
 exactly those pids; hook scripts call it on trap. Acceptance: zero surviving
 children 10s after a killed run.
 
-### D7. Store-suite teardown hang poisons the retry pass (NEW 2026-10-23)
-f4-sync-category-tombstone-filter-cascade (and the f2b purge family) leave a
-pending promise/handle at file end — `cancelledByParent: "Promise resolution
-is still pending but the event loop has already resolved"`; the file-level
-hang delays node --test's closing TAP summary, and a budget kill mid-pass
-lands on a summary-less TAP (2026-10-23 03:22 acceptance run: pass2 was
-zero-not-ok but the stage budget executed it before the summary flushed).
-Retries cannot save a pass that cannot FINISH. Real fix: diagnose the store
-singleton's async tail (ledger debounce / writeEventBackup fire-and-forget)
-in these suites and await a settle contract. Acceptance: the suite families
-finish with a written summary in 3 consecutive loaded full-pool runs.
+### D7. Store-suite teardown "hang" was node:test premature force-exit (RESOLVED 2026-10-23, e36814e0)
+Not a pending product promise and not a settle-contract gap: --test-force-exit
+fires when root.waitingOn > root.subtests.length at ANY test's finalize
+(node:internal/test_runner/test.js finalize → harness teardown →
+root.postRun(cancelledByParent "Promise resolution is still pending…") →
+process.exit()). f2b tripped it by registering tests AROUND a top-level
+`await import('todo.js?f2b')`: 4 tests done > 4 registered while the import
+was still resolving under load. Doctrine: a test file must register ALL its
+tests before the first one starts — no test() above a module-level await.
+Timer-based mitigations (watchdog races, keep-alive sleeps) cannot help —
+process.exit() survives nothing — and were removed.
+The "tombstone×3" co-symptom was a separate load flake: f4's module-load-time
+future stamps (+1..5s) lost their LWW margin when db.init slowed past 1s, and
+sync-apply's CORRECT local-wins LWW returned false; fixed with per-test
++60s stamps (deep inside the 10-min SKEW_CLAMP).
+Acceptance met: repro context (pair + coverage + 10 CPU burners) 6/6 green
+zero-cancelled (pre-fix 4/4 red on iteration 1); adjacent store+main dirs
+1789/0/0; a full pre-commit core tier ran 4715 pass / 0 fail / 0 cancelled.
+Residual inventory: 7 other test files register tests before a module-level
+await import (c-wave-ui-20261013, component-fixes-renderer, d6-ux-fixes,
+maint-0927-domainA, qc-ui-followup-store2, r-render-store-fixes,
+fix-20261009-store-consistency) — same bomb shape, not yet tripped; same
+one-move fix in a follow-up wave (see D8).
 
-**Last-mile mechanism (2026-10-23 04:16 acceptance run, pass2 authoritative
-TAP):** `1..4707 / # pass 4705 / # fail 0` — ZERO test failures — yet the
-runner exits 1 because the teardown hang CANCELS the store files
-(`# cancelled` counts toward node --test's exit code; the summary gate's
-校验一 exit-code check correctly red's it before the fail=0 summary can read
-green). Also ruled out tonight: handle accumulation (db.init re-entry already
-closes cleanly, P2 re-entry policy) and better-sqlite3 lock contention in
-these two suites (that mechanism belongs to c1-parse-ux / D6). Next session:
-run the tombstone file with a promise tracker (async_hooks / pino of pending
-promise creations) under --test-concurrency=1 to pin the exact un-resolved
-promise; likely candidates are the main-side ledger-changed hook chain or a
-fire-and-forget audit write inside the required category-ops module.
+### D8. Same premature-force-exit bomb shape in 7 more test files (NEW 2026-10-23)
+The D7 doctrine violation (test() registrations interleaved with a module-
+level await import) exists in 7 more files (list in D7). None has tripped in
+observed runs yet — the window needs the import to still be resolving when
+the LAST currently-registered test finalizes — but the shape is load-hostile.
+Plan: mechanical one-move fix per file (hoist the await import above all
+registrations), batched in one wave with the same repro rig.
+Acceptance: all 7 files green in the loaded repro context; a repo-wide grep
+guard (gate or golden) that fails when a test file registers test() before a
+module-level await.
 
 ### D6. CLI fixture-suite double-connection lock race (NEW 2026-10-23, root-caused)
 Evidence trail: c1-parse-ux file-level 300s-ceiling kills at conc 4 AND 8
