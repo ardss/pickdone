@@ -21,6 +21,19 @@
  *
  * Team rules (AGENTS.md): ONE cdpPort per engineer; renderer-dist is PRE-BUILT by the lead —
  * NEVER run build:renderer concurrently; end() every journey (orphan electrons hold ports).
+ *
+ * Round-2 additions (2026-10-22 deep audit):
+ *   bootJourney({ resumeDir })  → re-boot on an EXISTING data dir (reboot-persistence journeys:
+ *                                 write → crash() → bootJourney({ resumeDir }) → assert survival)
+ *   bootJourney({ dbDir })      → override TODO_DB_DIR independently (dual-instance / CLI-race
+ *                                 orchestration: two boots sharing one db dir, different userData)
+ *   j.crash()                   → hard-kill WITHOUT the quit chain (crash-recovery journeys)
+ *   j.end({ preserveDir })      → keep the data dir across a reboot pair; rm it on the final end
+ *   CLI seeding pattern (pre-boot, app closed) — MIND THE ENV SPLIT (live-verified by pomodoro R2):
+ *     the APP derives its db from TODO_USER_DATA_DIR (<userData>/todos.db, src/main/index.js),
+ *     while the CLI prefers TODO_DB_DIR as the dir CONTAINING todos.db (user-dir.js).
+ *     Point the CLI at the USERDATA ROOT, not at j.dbDir:
+ *     $env:TODO_DB_DIR='<j.dataDir>'; node cli/… add "…"   (AGENTS isolation rule satisfied)
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
@@ -112,14 +125,19 @@ async function waitInteractiveMain (cdpBase, { requireApi = true, timeoutMs = 45
  * Boot one isolated real instance. seedConfig: object merged into a pre-seeded config.json
  * (e.g. { closeActionMinimize: false, skipOnboarding: ... } — keys must match config-store).
  */
-export async function bootJourney ({ cdpPort, seedConfig, urlFilter } = {}) {
+export async function bootJourney ({ cdpPort, seedConfig, urlFilter, dataDir: resumeDir, dbDir: dbDirOverride } = {}) {
   if (!cdpPort) throw new Error('bootJourney: cdpPort is required (one per engineer, e.g. 9381)')
   const electronBin = requireElectron()
   if (!electronBin || !spawnSync) throw new Error('electron binary unavailable')
-  const dataDir = await mkdtemp(join(tmpdir(), 'pickdone-journey-'))
-  await mkdir(join(dataDir, 'db'), { recursive: true })
+  const dataDir = resumeDir || (await mkdtemp(join(tmpdir(), 'pickdone-journey-')))
+  if (!resumeDir) await mkdir(join(dataDir, 'db'), { recursive: true })
+  const dbDir = dbDirOverride || join(dataDir, 'db')
   if (seedConfig) await writeFile(join(dataDir, 'config.json'), JSON.stringify(seedConfig), 'utf8')
-  const env = { ...process.env, TODO_USER_DATA_DIR: dataDir, TODO_DB_DIR: join(dataDir, 'db') }
+  const env = {
+    ...process.env,
+    TODO_USER_DATA_DIR: dataDir,
+    TODO_DB_DIR: dbDir,
+  }
   delete env.ELECTRON_RUN_AS_NODE // DSH/IDE hosts export it → electron boots as plain Node and crashes
   const child = spawn(electronBin, ['.', '--no-focus', '--remote-debugging-port=' + cdpPort], { cwd: appRoot, env, stdio: 'ignore' })
   const cdpBase = 'http://127.0.0.1:' + cdpPort
@@ -127,9 +145,18 @@ export async function bootJourney ({ cdpPort, seedConfig, urlFilter } = {}) {
   try {
     const { wsUrl, cdp } = await waitInteractiveMain(cdpBase, { urlFilter })
     return {
-      dataDir, child, cdpBase,
+      dataDir, dbDir, child, cdpBase,
       /** Evaluate in the MAIN shell page. */
       eval: (expr, timeoutMs) => cdp.eval(expr, timeoutMs),
+      /** Poll an expression until truthy — SPA mount/race guard (todoAPI exists before Vue mounts). */
+      waitFor: async (expression, { timeoutMs = 15000, intervalMs = 400 } = {}) => {
+        const deadline = Date.now() + timeoutMs
+        while (Date.now() < deadline) {
+          try { const v = await cdp.eval(expression, Math.min(intervalMs * 2, 4000)); if (v) return v } catch { /* retry until deadline */ }
+          await sleep(intervalMs)
+        }
+        throw new Error('waitFor timeout: ' + String(expression).slice(0, 80))
+      },
       /** Screenshot the main shell page to a PNG (READ the file afterwards — review like a user). */
       shot: async outFile => {
         const r = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: false })
@@ -152,16 +179,18 @@ export async function bootJourney ({ cdpPort, seedConfig, urlFilter } = {}) {
         if (!t) throw new Error('no page target matching: ' + urlPart)
         return Cdp.connect(t.webSocketDebuggerUrl)
       },
-      /** Kill the instance and remove its data dir. ALWAYS call (finally). */
-      end: async () => {
+      /** Hard-kill WITHOUT the quit chain (crash-recovery journeys). */
+      crash: kill,
+      /** Kill the instance; preserveDir=true keeps the data dir for a resumeDir reboot. ALWAYS end. */
+      end: async ({ preserveDir = false } = {}) => {
         kill()
         await new Promise(res => { const t = setTimeout(res, 8000); child.once('exit', () => { clearTimeout(t); res() }) })
-        await rm(dataDir, { recursive: true, force: true }).catch(() => {})
+        if (!preserveDir) await rm(dataDir, { recursive: true, force: true }).catch(() => {})
       },
     }
   } catch (err) {
     kill()
-    await rm(dataDir, { recursive: true, force: true }).catch(() => {})
+    if (!resumeDir) await rm(dataDir, { recursive: true, force: true }).catch(() => {})
     throw err
   }
 }
