@@ -707,7 +707,15 @@ export default {
       // DB rows first, then attachment files; converge only on success — a failed purge IPC keeps the local rows
       // (the old flow hardRemoved anyway, so purged rows "revived" after restart)
       let purged = false
-      try { purged = await window.todoAPI.purgeRecycleBin() === true } catch (err) { reportError('purgeRecycleBin', err) }
+      try {
+        const res = await window.todoAPI.purgeRecycleBin()
+        // [J15 2026-10-22] the main side returns the PURGED IDS ARRAY (db.purgeRecycleBin's row-granular
+        // contract — the oplog expands them into per-id tombstone pointers), never `true`. The old
+        // `=== true` check classified EVERY successful purge-all as a failure: the 清空失败 toast fired
+        // while the rows WERE hard-deleted — an in-session ghost bin that "revived" until reboot
+        // (live-verified j14b/j14c). An ids array (including empty) is an ACK; only a rejection is failure.
+        purged = res === true || Array.isArray(res)
+      } catch (err) { reportError('purgeRecycleBin', err) }
       if (!purged) { dispatch('computeViews'); return false }
       // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
       // [C15 fix, same class as purgeIds] attachment-file cleanup failures are logged, not swallowed
