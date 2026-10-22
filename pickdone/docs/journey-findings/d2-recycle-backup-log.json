@@ -1,0 +1,93 @@
+{
+ "steps": [
+  {
+   "n": "cli-seeded",
+   "d": {
+    "idStale": "tid_8400019skx2A_1792672276455",
+    "idFresh": "tid_840001CZ3PSB_1792672283337",
+    "totalRows": 2
+   }
+  },
+  {
+   "n": "backdated-stale-row",
+   "d": {
+    "patched": true,
+    "deletedAtNow": 1789216294813,
+    "staleTarget": 1789216294813
+   }
+  },
+  {
+   "n": "after-boot-state",
+   "d": {
+    "recycle": [
+     {
+      "c": "Fresh recycled task",
+      "deletedAt": 1792672289077
+     }
+    ],
+    "live": [],
+    "settingsDays": 30,
+    "initError": null,
+    "getAllCount": 1,
+    "getAllErr": null
+   }
+  },
+  {
+   "n": "D2-RECYCLE verdict",
+   "d": {
+    "staleGone": true,
+    "freshKept": true
+   }
+  },
+  {
+   "n": "writeAutoBackup dispatched",
+   "d": "{\"ok\":true}"
+  },
+  {
+   "n": "D2-BACKUP result",
+   "d": {
+    "dir": "C:\\Users\\13397\\AppData\\Local\\Temp\\d2-recycle-iFG0KZ\\backups",
+    "files": [
+     "att-manifest-auto-20261022-203146.json",
+     "att-manifest-critical-state-backup.json",
+     "att-manifest-evt-purge-20261022-203141.json",
+     "auto-20261022-203146.json",
+     "critical-state-backup.json",
+     "evt-purge-20261022-203141.json"
+    ],
+    "autoCount": 1,
+    "newestHead": "{\"backup\":{\"settingsState\":\"{\\\"foldedTodoList\\\":[\\\"today-done\\\",\\\"day-done\\\"],\\\"isCompleteWithSubtasks\\\":true,\\\"isTodoEditModalCloseAutoSave\\\":true,\\\"isCompleteCheckboxColorFollow\\\":true,\\\"runWhenComputerStart\\\":false,\\\""
+   }
+  }
+ ],
+ "recycle": {
+  "recycle": [
+   {
+    "c": "Fresh recycled task",
+    "deletedAt": 1792672289077
+   }
+  ],
+  "live": [],
+  "settingsDays": 30,
+  "initError": null,
+  "getAllCount": 1,
+  "getAllErr": null
+ },
+ "recycleVerdict": {
+  "staleGone": true,
+  "freshKept": true
+ },
+ "backup": {
+  "dir": "C:\\Users\\13397\\AppData\\Local\\Temp\\d2-recycle-iFG0KZ\\backups",
+  "files": [
+   "att-manifest-auto-20261022-203146.json",
+   "att-manifest-critical-state-backup.json",
+   "att-manifest-evt-purge-20261022-203141.json",
+   "auto-20261022-203146.json",
+   "critical-state-backup.json",
+   "evt-purge-20261022-203141.json"
+  ],
+  "autoCount": 1,
+  "newestHead": "{\"backup\":{\"settingsState\":\"{\\\"foldedTodoList\\\":[\\\"today-done\\\",\\\"day-done\\\"],\\\"isCompleteWithSubtasks\\\":true,\\\"isTodoEditModalCloseAutoSave\\\":true,\\\"isCompleteCheckboxColorFollow\\\":true,\\\"runWhenComputerStart\\\":false,\\\""
+ }
+}
