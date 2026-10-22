@@ -123,7 +123,7 @@ const makeCtx = (todoState, settingsPatch = {}) => {
   return { ctx, committed, fakeThis }
 }
 
-test('todo: inbox sort by difficulty / by deadline branches', () => {
+test('todo: inbox sort by difficulty / legacy due persists as created', () => {
   // 难度字段退役:排序键已改为预计番茄(工作量唯一账本)
   setEstimate('d1', 1); setEstimate('d2', 2); setEstimate('d3', 3)
   const st = freshBox()
@@ -133,12 +133,17 @@ test('todo: inbox sort by difficulty / by deadline branches', () => {
   const byDiff = v.todoBox.map(t => getEstimate(t.taskId))
   assert.deepEqual(byDiff, [...byDiff].sort((a, b) => a - b).reverse(), 'by workload(estimate) should be descending (default descending)')
 
+  // [J3 2026-10-22] 'due' is no longer a box option: the box holds only undated rows, so the old
+  // case sorted by orphaned drifted todoTime (a state DB hydration never produces for dayStart 0)
+  // and duplicated the created sort for the normal population. A legacy persisted 'due' now sorts
+  // by createTime (the default branch) — asserted here on the same drifted fixture to pin that
+  // the case is really gone, not just unselectable.
   const st2 = freshBox()
   const { ctx: c2, committed: cm2, fakeThis: f2 } = makeCtx(st2, { todoBoxCategoryId: -1, todoBoxSortMethod: 'due', todoBoxSortOrder: 'asc' })
   todo.actions.computeViews.call(f2, c2)
   v = cm2.filter(([n]) => n === 'setViews').pop()[1]
-  const byDate = v.todoBox.map(t => t.todoTime)
-  assert.deepEqual(byDate, [...byDate].sort((a, b) => a - b), 'by deadline should be ascending')
+  const byCreated = v.todoBox.map(t => t.createTime)
+  assert.deepEqual(byCreated, [...byCreated].sort((a, b) => a - b), "legacy 'due' persists as a created-sort (ascending)")
 
   function freshBox () {
     return {

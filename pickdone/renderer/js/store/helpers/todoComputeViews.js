@@ -105,10 +105,12 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
   // subtraction comparator return NaN (implementation-defined order); missing numbers now fall
   // back to 0 so rows keep a deterministic position instead of reshuffling every recompute.
   const tsOf = t => (typeof t.createTime === 'number' && Number.isFinite(t.createTime)) ? t.createTime : 0
-  const dueOf = t => (typeof (t.todoTime || t.createTime) === 'number' && Number.isFinite(t.todoTime || t.createTime)) ? (t.todoTime || t.createTime) : 0
   box.sort((a, b) => {
     switch (settings.todoBoxSortMethod) {
-      case 'due': return (dueOf(a) - dueOf(b)) * dir
+      // [J3 2026-10-22] 'due' removed: the box holds only undated rows, so the old case sorted by
+      // orphaned drifted todoTime (a state DB hydration never produces for dayStart 0) and for the
+      // normal population merely duplicated the created sort. A legacy persisted 'due' now falls
+      // to the default (createTime) — same order users ever actually saw, honestly labeled.
       case 'difficulty': return (getEstimate(a.taskId) - getEstimate(b.taskId)) * dir // Difficulty retired: by estimated workload = estimated tomatoes
       default: return (tsOf(a) - tsOf(b)) * dir
     }

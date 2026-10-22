@@ -155,9 +155,12 @@ export default {
     initError () { return this.$store.state.todo.initError },
     // value is the persisted stable key; label is the display text resolved via $t
     sortMethodOptions () {
+      // [J3 2026-10-22] no 按截止日期 here: the box only holds UNDATED rows, so a due sort has
+      // nothing to sort by — dueOf falls back to createTime and the option silently duplicated
+      // 按创建时间 (live-verified journey finding J3). A legacy persisted 'due' keeps working
+      // (comparator default branch) and labels as 按创建时间 via the sortMethodLabel fallback.
       return [
         { value: 'created', labelKey: 'statsC.TodoBox.sortByCreate' },
-        { value: 'due', labelKey: 'statsC.TodoBox.sortByDue' },
         { value: 'difficulty', labelKey: 'statsC.TodoBox.sortByDifficulty' }
       ].map(o => ({ ...o, label: this.$t(o.labelKey) }))
     },
@@ -167,7 +170,7 @@ export default {
         { value: 'asc', labelKey: 'statsC.TodoBox.orderAsc' }
       ].map(o => ({ ...o, label: this.$t(o.labelKey) }))
     },
-    sortMethodLabel () { const o = this.sortMethodOptions.find(x => x.value === this.settings.todoBoxSortMethod); return o ? o.label : this.settings.todoBoxSortMethod },
+    sortMethodLabel () { const o = this.sortMethodOptions.find(x => x.value === this.settings.todoBoxSortMethod); return o ? o.label : this.$t('statsC.TodoBox.sortByCreate') }, // [J3] legacy 'due' labels as created, never the raw key
     sortOrderLabel () { const o = this.sortOrderOptions.find(x => x.value === this.settings.todoBoxSortOrder); return o ? o.label : this.settings.todoBoxSortOrder },
     cats () { return this.$store.state.category.list.filter(c => !c.delete) },
     list () { return this.$store.state.todo.views.todoBox },
