@@ -213,19 +213,6 @@ export function runJourney (force = false) {
     if (document.querySelector('.driver-popover')) rearm()
     else finishAll()
   })
-  if (!document.querySelector('.td-item')) {
-    seedOnce()
-    watch = pollCapped(() => !!document.querySelector('.td-item'), () => {
-      clearWatch()
-      rememberSeed() // 种子已渲染:按内容回查 taskId 记入清理账本(finishAll 据此回收)
-      stageCreate()
-    })
-    // Sample task not landed within 2.4s = creation failed (input chain busy/view abnormal); retry once
-    setTimeout(() => {
-      if (!document.querySelector('.td-item') && !document.querySelector('.tour-journey-banner')) seedOnce()
-    }, 2400)
-    return true // stageCreate is relayed by the poll above
-  }
   let ending = false // × close = exit the whole journey (no relaying to the next stage); next-step/auto-advance is the only way forward
   let advancing = false // guards driver.js onDestroy firing synchronously during a poll-driven stage switch: without it, destroy() → onDestroy → onDone re-enters the next stage, double-advancing and leaking a duplicate driver
   const singleStep = (step, onDone, { doneLabel = false } = {}) => {
@@ -293,12 +280,32 @@ export function runJourney (force = false) {
   const stageCreate = () => {
     const seedText = J_SEED_TEXT()
     const userItemCount = () => [...document.querySelectorAll('.td-item')].filter(el => !(el.textContent || '').includes(seedText)).length
+    // singleStep FIRST, growth watch SECOND: singleStep's clearWatch() would kill a watch armed
+    // before it (J-audit round 2 ordering fix — auto-advance-on-create must survive the popover).
+    singleStep({ element: '.qa-input', popover: { title: tt(T('jCreateTitle')), description: tt(T('jCreateDesc')), side: 'bottom', align: 'start' } }, stagePick)
     const armGrowth = () => {
       const baseCount = userItemCount()
       watch = pollCappedTour(() => userItemCount() > baseCount, () => { clearWatch(); stagePick() }, armGrowth)
     }
     armGrowth()
-    singleStep({ element: '.qa-input', popover: { title: tt(T('jCreateTitle')), description: tt(T('jCreateDesc')), side: 'bottom', align: 'start' } }, stagePick)
+  }
+  // Seed presetting (fresh install only). [J-audit round 2, 2026-10-22] This block MUST stay
+  // BELOW every stage closure: it early-returns, and before today it sat above `let ending` /
+  // `const singleStep` / `const stageCreate` — its async relay then called stageCreate() with
+  // those consts still in TDZ, throwing a ReferenceError INSIDE the poll interval (swallowed,
+  // unlogged): the journey died silently on every version — no popover, no advance, no cleanup.
+  if (!document.querySelector('.td-item')) {
+    seedOnce()
+    watch = pollCapped(() => !!document.querySelector('.td-item'), () => {
+      clearWatch()
+      rememberSeed() // 种子已渲染:按内容回查 taskId 记入清理账本(finishAll 据此回收)
+      stageCreate()
+    })
+    // Sample task not landed within 2.4s = creation failed (input chain busy/view abnormal); retry once
+    setTimeout(() => {
+      if (!document.querySelector('.td-item') && !document.querySelector('.tour-journey-banner')) seedOnce()
+    }, 2400)
+    return true // stageCreate is relayed by the poll above
   }
   // Start once the quick-add box is ready
   watch = pollCapped(() => !!document.querySelector('.qa-input'), () => { clearWatch(); stageCreate() })

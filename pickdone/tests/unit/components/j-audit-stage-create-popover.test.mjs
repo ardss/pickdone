@@ -45,6 +45,29 @@ test('capped stage-A poll re-arms while a driver popover is open; safe exit othe
   assert.match(stageCreate[0], /pollCappedTour\(\(\) => userItemCount\(\) > baseCount, \(\) => \{ clearWatch\(\); stagePick\(\) \}, armGrowth\)/)
 })
 
+test('seeded path must not early-return above the stage-closure declarations (TDZ regression pin)', () => {
+  // J-audit round 2 root cause: the seeded `if (!td-item)` block early-returned ABOVE
+  // let ending/const singleStep/const finishAll/const stageCreate — its async relay then ran
+  // stageCreate() with those consts in TDZ and threw a swallowed ReferenceError inside the poll
+  // interval: silent journey death (no popover/advance/cleanup) on every code version.
+  const idxSeeded = src.indexOf("if (!document.querySelector('.td-item')) {")
+  const idxEnding = src.indexOf('let ending = false')
+  const idxSingleStep = src.indexOf('const singleStep =')
+  const idxFinishAll = src.indexOf('const finishAll =')
+  const idxStageCreate = src.indexOf('const stageCreate =')
+  assert.ok(idxSeeded > -1 && idxEnding > -1 && idxSingleStep > -1 && idxFinishAll > -1 && idxStageCreate > -1, 'all landmarks found')
+  assert.ok(idxEnding < idxSeeded, 'let ending declared before the seeded block')
+  assert.ok(idxSingleStep < idxSeeded, 'singleStep declared before the seeded block')
+  assert.ok(idxFinishAll < idxSeeded, 'finishAll declared before the seeded block')
+  assert.ok(idxStageCreate < idxSeeded, 'stageCreate declared before the seeded block')
+})
+
+test('stage A arms the growth watch AFTER the popover (singleStep clearWatch must not kill it)', () => {
+  const body = stageCreate[0]
+  assert.ok(body.indexOf('singleStep({ element:') < body.indexOf('armGrowth()'),
+    'popover must be created before armGrowth() so its clearWatch cannot kill the growth watch')
+})
+
 test('every journey watch stays capped (no bare poll watches; cleanup anchor intact)', () => {
   assert.ok(!/watch = poll\(/.test(src), 'no uncapped journey watch polls remain (d7 anchor)')
   assert.match(src, /const pollCapped = \(test, cb\) => poll\(test, cb, 300, JOURNEY_POLL_CAP_MS, \(\) => finishAll\(\)\)/, 'pollCapped unchanged (d7 anchor)')
