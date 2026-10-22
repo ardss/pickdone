@@ -131,6 +131,10 @@
     "authority": "local-only",
     "note": "今日页视图模式偏好"
   },
+  "renderer/js/views/TomatoFloatPage.vue::tomatoFloatVisPing": {
+    "authority": "local-only",
+    "note": "J2 float-close signal token: value is a write timestamp, never read as state; TomatoBar's storage listener re-queries real visibility over IPC. Cross-window trigger only, no DB channel or sync semantics"
+  },
   "renderer/js/utils/dayPlans.js::dayPlanState": {
     "authority": "sqlite",
     "note": "排程芯片根修(2026-09-03):唯一权威=SQLite plan_chips 行;LS 仅一次性兜底导入后删除,永不回写"
