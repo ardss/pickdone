@@ -19,11 +19,15 @@ const db = require_('../../../src/main/db.js')
 const { __test } = require_('../../../src/main/lan-sync-bootstrap.js')
 const catOps = require_('../../../src/main/db-category-ops.js')
 
-const STAMP1 = Date.now() + 1000
-const STAMP2 = Date.now() + 2000
-const STAMP3 = Date.now() + 3000
-const STAMP4 = Date.now() + 4000
-const STAMP5 = Date.now() + 5000
+/* Fixture stamps must be computed PER TEST with a fat future margin (D7, 2026-10-23): the old
+ * module-level `Date.now() + 1000..5000` bakes a +1..5s head start at module-load time, and under
+ * full-suite load db.init/upsertCategory can take longer than that — the local row then carries a
+ * NEWER stamp than the "future" tombstone, sync-apply's LWW keeps the local row (silent
+ * "local version stands", sync-apply.js `winner !== incoming -> return false`), applyRow returns
+ * false and the test reds with "the remote tombstone must land (F2 path intact)". A +60s margin is
+ * far beyond any init delay and still deep inside the 10-minute SKEW_CLAMP window (stamp-clamp.js
+ * STAMP_CLAMP_MS), so clampSkew never rewrites it and the tombstone always wins LWW. */
+const futureStamp = () => Date.now() + 60 * 1000
 
 function makeState () {
   return {
@@ -40,6 +44,7 @@ function tombstoneRow (id, deletedAt) {
 }
 
 test('remote category tombstone purges its referencing saved filter WITH a stamped catFiltersBak backup', () => {
+  const STAMP1 = futureStamp()
   db.init(fs.mkdtempSync(path.join(os.tmpdir(), 'f4-sync-cascade-t-')))
   assert.equal(db.call('upsertCategory', { id: 810001, userId: 840001, name: 'F4Cat', color: null, createdAt: 1, sort: 1, isFolder: 0, parentId: 0, deleted: 0 }), true)
   const fid = db.call('filterUpsert', { name: 'F4 filter', conds: { catId: 810001 }, sort: 0 })
@@ -66,6 +71,7 @@ test('remote category tombstone purges its referencing saved filter WITH a stamp
 })
 
 test('a filter on a SURVIVING category is untouched; filters referencing other victims stay put', () => {
+  const STAMP2 = futureStamp()
   db.init(fs.mkdtempSync(path.join(os.tmpdir(), 'f4-sync-cascade-t-')))
   assert.equal(db.call('upsertCategory', { id: 810002, userId: 840001, name: 'F4Keep', color: null, createdAt: 1, sort: 1, isFolder: 0, parentId: 0, deleted: 0 }), true)
   assert.equal(db.call('upsertCategory', { id: 810003, userId: 840001, name: 'F4Kill', color: null, createdAt: 1, sort: 2, isFolder: 0, parentId: 0, deleted: 0 }), true)
@@ -79,6 +85,7 @@ test('a filter on a SURVIVING category is untouched; filters referencing other v
 })
 
 test('re-landing the same tombstone is idempotent (no backup rewrite, no doomed set)', () => {
+  const STAMP3 = futureStamp()
   db.init(fs.mkdtempSync(path.join(os.tmpdir(), 'f4-sync-cascade-t-')))
   assert.equal(db.call('upsertCategory', { id: 810004, userId: 840001, name: 'F4Again', color: null, createdAt: 1, sort: 1, isFolder: 0, parentId: 0, deleted: 0 }), true)
   db.call('filterUpsert', { name: 'again', conds: { catId: 810004 }, sort: 0 })
@@ -94,6 +101,7 @@ test('re-landing the same tombstone is idempotent (no backup rewrite, no doomed 
 })
 
 test('ghost tombstone (category never existed locally) still applies with NO cascade', () => {
+  const STAMP4 = futureStamp()
   db.init(fs.mkdtempSync(path.join(os.tmpdir(), 'f4-sync-cascade-t-')))
   db.call('filterUpsert', { name: 'unrelated', conds: { catId: 424242 }, sort: 0 })
   const state = makeState()
@@ -105,6 +113,7 @@ test('ghost tombstone (category never existed locally) still applies with NO cas
 })
 
 test('shared core purgeFiltersForCategoryVictims works store-free with the default db writer', () => {
+  const STAMP5 = futureStamp()
   db.init(fs.mkdtempSync(path.join(os.tmpdir(), 'f4-sync-cascade-t-')))
   assert.equal(db.call('upsertCategory', { id: 810005, userId: 840001, name: 'F4Core', color: null, createdAt: 1, sort: 1, isFolder: 0, parentId: 0, deleted: 0 }), true)
   db.call('filterUpsert', { name: 'core', conds: { catId: 810005 }, sort: 0 })

@@ -28,6 +28,43 @@ const clearLS = () => { for (let i = LS.length - 1; i >= 0; i--) LS.removeItem(L
 
 const moment = (id, over = {}) => Object.assign({ id, name: 'm-' + id, date: '2026-01-01', kind: 'countdown' }, over)
 
+/* ---------------- [2]/[3] todo purge: predecessor stripping + deletedAt-only cutoff ---------------- */
+
+const calls = []
+let dbHandler = null
+// Merge-style stubs (maint-d7 pattern): mutate the shared window instead of replacing it, and
+// import todo.js with a cache-busting query so this file gets a FRESH instance bound to OUR
+// stubs — the plain-import instance may have been hydrated by setup.mjs's import graph with a
+// different window shape, which under full-suite load showed up as a never-settling purge await.
+if (!globalThis.window.location) globalThis.window.location = { hash: '' }
+globalThis.window.commands = {
+  commit: (entity, verb, payload) => {
+    calls.push([entity, verb, payload])
+    if (entity === 'todo' && verb === 'hardDeleteMany') return Promise.resolve(payload)
+    return Promise.resolve(null)
+  }
+}
+globalThis.window.todoAPI = Object.assign(globalThis.window.todoAPI || {}, {
+  dbCall: (op, params) => { calls.push([op, params]); return dbHandler ? dbHandler(op, params) : Promise.resolve(null) },
+  writeCriticalStateBackup: () => Promise.resolve(),
+  deleteTodoFilesMany: () => Promise.resolve(0),
+  purgeRecycleBin: () => Promise.resolve(true)
+})
+
+// ORDERING CONSTRAINT (D7 root cause, 2026-10-23): this top-level await MUST run BEFORE any
+// test() registration in this file. node:test's root harness fires its --test-force-exit
+// teardown as soon as `waitingOn > subtests.length` at a test's finalize — with tests
+// registered BEFORE this await, the first four can all finish while the import is still
+// resolving under full-suite load, the guard reads 4 finished > 4 registered, and the runner
+// calls process.exit() mid-file, cancelling every not-yet-finished test with
+// "Promise resolution is still pending but the event loop has already resolved"
+// (cancelledByParent, exit 1 with # fail 0). Registering ALL tests after the await resolves
+// makes subtests.length final before the first test starts, so the guard can only fire after
+// the last test. Same doctrine for any future additions here: no test() above this line.
+const todoMod = await import('../../../renderer/js/store/todo.js?f2b')
+const todoActions = todoMod.default.actions
+const { pendingUpserts } = todoMod._testInternals
+
 /* ---------------- [1] habits moments union-merge on the external fold channels ---------------- */
 
 test('habits [1a] applyExternal: newer blob missing a local moment keeps BOTH moments', () => {
@@ -65,32 +102,8 @@ test('habits [1d] stale rounds still rejected outright (unchanged guard)', () =>
   assert.deepEqual(s.moments.map(m => m.id), ['m-a'])
 })
 
-/* ---------------- [2]/[3] todo purge: predecessor stripping + deletedAt-only cutoff ---------------- */
-
-const calls = []
-let dbHandler = null
-// Merge-style stubs (maint-d7 pattern): mutate the shared window instead of replacing it, and
-// import todo.js with a cache-busting query so this file gets a FRESH instance bound to OUR
-// stubs — the plain-import instance may have been hydrated by setup.mjs's import graph with a
-// different window shape, which under full-suite load showed up as a never-settling purge await.
-if (!globalThis.window.location) globalThis.window.location = { hash: '' }
-globalThis.window.commands = {
-  commit: (entity, verb, payload) => {
-    calls.push([entity, verb, payload])
-    if (entity === 'todo' && verb === 'hardDeleteMany') return Promise.resolve(payload)
-    return Promise.resolve(null)
-  }
-}
-globalThis.window.todoAPI = Object.assign(globalThis.window.todoAPI || {}, {
-  dbCall: (op, params) => { calls.push([op, params]); return dbHandler ? dbHandler(op, params) : Promise.resolve(null) },
-  writeCriticalStateBackup: () => Promise.resolve(),
-  deleteTodoFilesMany: () => Promise.resolve(0),
-  purgeRecycleBin: () => Promise.resolve(true)
-})
-
-const todoMod = await import('../../../renderer/js/store/todo.js?f2b')
-const todoActions = todoMod.default.actions
-const { pendingUpserts } = todoMod._testInternals
+/* ---------------- [2]/[3] todo purge harness shared state lives ABOVE the first test (see the
+   ORDERING CONSTRAINT note there) — the tests below only consume it. ---------------- */
 
 const row = (taskId, over = {}) => Object.assign({
   taskId, taskContent: 't-' + taskId, delete: false, complete: false,
@@ -151,11 +164,6 @@ test('purgeIds: live AND bin survivors referencing a purged id get their predece
   assert.equal(byId.s1.status, 'update')
   assert.equal(byId.b1.status, 'update')
   assert.ok(!edits.some(e => e.taskId === 's2'), 'unaffected survivor is not rewritten')
-
-  // node:test PromiseTracker force-rejects any promise still pending when the event loop
-  // momentarily drains after the test body — under the full corpus this killed these tests with
-  // "Promise resolution is still pending". A short keep-alive lets dangling resolutions land first.
-  await new Promise(r => setTimeout(r, 100))
 })
 
 test('purgeAllRecycle: live survivors referencing a binned-purged id are stripped too', async () => {
@@ -171,11 +179,6 @@ test('purgeAllRecycle: live survivors referencing a binned-purged id are strippe
   assert.equal(edits.length, 1)
   assert.equal(edits[0].taskId, 's1')
   assert.deepEqual(edits[0].patch.predecessors, [], 'last reference stripped -> empty predecessors')
-
-  // node:test PromiseTracker force-rejects any promise still pending when the event loop
-  // momentarily drains after the test body — under the full corpus this killed these tests with
-  // "Promise resolution is still pending". A short keep-alive lets dangling resolutions land first.
-  await new Promise(r => setTimeout(r, 100))
 })
 
 test('purgeIds: a stripping edit dispatch never happens when nothing references the purged ids', async () => {
@@ -184,11 +187,6 @@ test('purgeIds: a stripping edit dispatch never happens when nothing references 
   const state = { todoList: [row('s1')], recycleList: [row('gone', { delete: true })] }
   await withWatchdog('purgeIds#noop', todoActions.purgeIds.call({}, mkCtx(state, { dispatch }), ['gone']))
   assert.equal(dispatchedEdits(dispatchCalls).length, 0)
-
-  // node:test PromiseTracker force-rejects any promise still pending when the event loop
-  // momentarily drains after the test body — under the full corpus this killed these tests with
-  // "Promise resolution is still pending". A short keep-alive lets dangling resolutions land first.
-  await new Promise(r => setTimeout(r, 100))
 })
 
 test('purgeExpiredRecycle: legacy rows without deletedAt opt OUT; deletedAt rows past cutoff purge', async () => {
@@ -207,9 +205,4 @@ test('purgeExpiredRecycle: legacy rows without deletedAt opt OUT; deletedAt rows
   const purgeCall = dispatchCalls.find(d => d.action === 'purgeIds')
   assert.ok(purgeCall, 'auto-purge dispatched')
   assert.deepEqual(purgeCall.payload, ['stamped'], 'only the deletedAt-stamped row past cutoff purges; legacy and fresh rows survive')
-
-  // node:test PromiseTracker force-rejects any promise still pending when the event loop
-  // momentarily drains after the test body — under the full corpus this killed these tests with
-  // "Promise resolution is still pending". A short keep-alive lets dangling resolutions land first.
-  await new Promise(r => setTimeout(r, 100))
 })
