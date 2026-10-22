@@ -10,7 +10,8 @@
  *   files kept at the tests/ root (npm-script / check-all entrypoints) count as integration.
  */
 import { readdirSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 // 2026-10-09 preflight sweep: exit-only cleanup is bypassed when a test child is SIGKILLed
@@ -123,8 +124,8 @@ if (tierArg && !['core', 'deep'].includes(tierArg)) {
   console.error(`✗ [run-all] unknown --tier=${tierArg} (valid: core|deep)`)
   process.exit(1)
 }
-// drop the --suite/--tier args before forwarding the rest to node --test
-const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=')))
+// drop the --suite/--tier/--dirs args before forwarding the rest to node --test
+const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=') || a.startsWith('--dirs=')))
 const all = discover(dir).concat(discover(SIBLING_DIR, [], TEST_EXTS))
 // Every DEEP_FILES entry must match a discovered file — a stale name would silently shrink the
 // deep pool (and silently GROW the core pool) with nobody the wiser.
@@ -154,10 +155,28 @@ if (tierArg === 'core') {
   tierNote = ' (deep pool only)'
   files = files.filter(f => DEEP_FILES.has(path.basename(f)))
 }
+// --dirs=<comma-separated tests/ subdirs> (2026-10-23 S2 affected-scope): restrict the pool to
+// the given directory prefixes (repo-relative to pickdone/, e.g. tests/unit/store). Fail-closed:
+// a named dir matching ZERO discovered files is an error, never a silent empty run — the whole
+// point of scoping is safe wall-time, not silent green. Prefix matching runs against the path
+// relative to appRoot (covers tests/** AND the sibling test/ dir uniformly).
+const relFromAppRoot = f => path.relative(appRoot, f).split(path.sep).join('/')
+const dirsArg = (/^--dirs=([\w./,-]+)$/.exec(process.argv.find(a => a.startsWith('--dirs='))) || [])[1]
+if (dirsArg) {
+  const prefixes = dirsArg.split(',').filter(Boolean)
+  const missing = prefixes.filter(p => !all.some(f => relFromAppRoot(f).startsWith(p + '/')))
+  if (missing.length) {
+    console.error(`✗ [run-all] --dirs entries matching no discovered test file: ${missing.join(', ')}`)
+    process.exit(1)
+  }
+  files = files.filter(f => prefixes.some(p => relFromAppRoot(f).startsWith(p + '/')))
+  tierNote += ` (dirs: ${prefixes.join(',')})`
+}
 
 if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites.length ? ` (suite=${suites.join(',')})` : ''}${tierArg ? ` (tier=${tierArg})` : ''}`); process.exit(1) }
 if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} -> ${files.length} file(s)`)
 if (tierArg) console.error(`[run-all] tier=${tierArg}: ${files.length} file(s)${tierNote}`)
+else if (dirsArg) console.error(`[run-all] scope: ${files.length} file(s)${tierNote}`)
 
 // With shell:true, unquoted file paths explode when the project path contains spaces (e.g. D:My Projects): the argument string is cut at the space;
 // executing the binary inside the electron package does not rely on shell lookup, so shell can be safely dropped here
@@ -175,7 +194,12 @@ const TEST_TIMEOUT_MS = 300000
 // default" (= cores, observed 8-12 here) to 4 — the electron-booting integration specs are the
 // flake surface under a loaded box, and the boot flakes (J4/F4a family) reproduce only at high
 // concurrency. 4 trades wall time for boot stability; TEST_CONCURRENCY env still overrides.
-const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
+// 2026-10-23 perf wave, tier-aware default: the boot-stability cliff is a DEEP-tier property
+// (real process/socket spawning). Pure in-process specs have no such cliff and scale with
+// workers — core tier defaults to cores-2 (cap 8), deep/all keep the boot-stability cap.
+const CORE_COUNT = availableParallelism()
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY ||
+  String(tierArg === 'core' ? Math.min(CORE_COUNT - 2, 8) : 4)
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
@@ -219,21 +243,35 @@ function runnerFileArgs () {
   return args
 }
 
+// Streaming spawn (2026-10-23 perf wave S3): the old spawnSync buffered the ENTIRE TAP until
+// process exit — a budget-killed or hung run showed ZERO output for its whole lifetime (the
+// 2026-10-22 fast gate sat 15.3min on a 0-byte TAP). spawn + pipe-through prints each suite's
+// results as its file completes; the same bytes are still accumulated for the downstream
+// consumers below (native-crash retry, coverage summary, slow-test margin), so behavior is
+// identical — only visibility changed.
 function spawnRunner () {
-  return spawnSync(process.execPath, [...RUNNER_ARGS,
-    ...forwardArgs, ...runnerFileArgs()],
-  // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
-  // paths (K:\...\pickdone\tests\...) blow past it and spawnSync fails with ENAMETOOLONG —
-  // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
-  // (2026-09-26 check:fast round-2). Anchor STAYS at the app root: a D25 experiment moving the
-  // cwd to tests/ to shave the argv broke ~20 cwd-anchored specs (build-whitelist, CI-workflow,
-  // structure pins) for a ~4k-char saving — not worth it. The argv-cap guard margin instead
-  // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
-  // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
-  { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1 << 28 })
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, [...RUNNER_ARGS,
+      ...forwardArgs, ...runnerFileArgs()],
+    // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
+    // paths (K:\...\pickdone\tests\...) blow past it and spawn fails with ENAMETOOLONG —
+    // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
+    // (2026-09-26 check:fast round-2). Anchor STAYS at the app root: a D25 experiment moving the
+    // cwd to tests/ to shave the argv broke ~20 cwd-anchored specs (build-whitelist, CI-workflow,
+    // structure pins) for a ~4k-char saving — not worth it. The argv-cap guard margin instead
+    // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
+    // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
+    { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'] })
+    const out = []
+    const err = []
+    child.stdout.on('data', d => { out.push(d); process.stdout.write(d) })
+    child.stderr.on('data', d => { err.push(d); process.stderr.write(d) })
+    child.on('error', e => resolve({ status: null, stdout: Buffer.concat(out), stderr: Buffer.concat(err), error: e }))
+    child.on('close', code => resolve({ status: code, stdout: Buffer.concat(out), stderr: Buffer.concat(err) }))
+  })
 }
 
-let r = spawnRunner()
+let r = await spawnRunner()
 // Native-crash retry (2026-10-10 nightly R2b): on Windows, per-file child processes die at
 // teardown to a libuv assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c)
 // surfacing as exitCode 3221226505 (0xC0000409) — a Node bug, NOT a test failure, and the
@@ -249,7 +287,7 @@ const onlyNativeCrash = tap => {
 }
 if (r.status !== 0 && r.stdout && onlyNativeCrash(String(r.stdout))) {
   console.error('[run-all] native teardown crash(s) (0xC0000409 libuv async assert) were the only failures — retrying the suite once (CI rerun doctrine)')
-  r = spawnRunner()
+  r = await spawnRunner()
 }
 // Fail closed and LOUD on spawn errors: r.status is null when the child never ran, so the
 // old `r.status ?? 1` fell through to exit 1 with empty output — indistinguishable from a
@@ -258,11 +296,7 @@ if (r.error) {
   console.error(`✗ [run-all] test runner failed to spawn: ${r.error.code || r.error.message}`)
   process.exit(1)
 }
-// Timing summary: print the enforced per-test ceiling next to the SLOWEST observed test, so a
-// near-ceiling duration reads as "slow but finished" and a kill-at-ceiling reads as "hung".
-// The 5min ceiling itself stays as-is (2026-09-29 recalibration, see TEST_TIMEOUT_MS above).
-if (r.stdout) process.stdout.write(r.stdout) // forward the TAP verbatim (summary gate parses it)
-if (r.stderr) process.stderr.write(r.stderr) // spec reporter stream (coverage table) + runner warnings
+// TAP/spec streams were already piped through live by spawnRunner() — no end-of-run replay.
 // When coverage was requested, persist a machine-readable summary for the coverage ratchet,
 // so the gate can compare without re-running the whole unit suite (running both concurrently
 // on a 4-vCPU CI runner doubled the load enough to time tests out, 2026-09-26).

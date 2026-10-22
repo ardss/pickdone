@@ -95,22 +95,59 @@ let exitCode = 0
 if (arg) {
   if (!fs.existsSync(arg)) red(`TAP 文件不存在: ${arg}`)
 } else {
-  // 主管道模式:跑全量单测,TAP 重定向进临时文件(不靠管道,exit code 不被吞)
+  // 主管道模式:跑单测层,TAP 重定向进临时文件(不靠管道,exit code 不被吞)
   tapFile = path.join(os.tmpdir(), `check-test-summary-${process.pid}-${Date.now()}.tap`)
-  const fd = fs.openSync(tapFile, 'w')
   // --with-coverage: forward --experimental-test-coverage so run-all also writes the coverage
   // summary for the ratchet gate (avoids a second concurrent full-suite run)
   // --core: forward --tier=core (pure in-process specs; deep suites — live Electron, two-instance
   // lan-sync journeys, loopback drills — stay with the full check:all gate)
+  // --affected: consult cli/check-test-scope.cjs; scoped → --dirs run, full → plain --core,
+  // skip → docs-only change, unit stage not meaningful (loud, never silent).
   const extra = [
     ...(process.argv.includes('--with-coverage') ? ['--experimental-test-coverage'] : []),
     ...(process.argv.includes('--core') ? ['--tier=core'] : []),
   ]
-  const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
-    cwd: path.join(__dirname, '..'),
-    stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部
-  })
-  fs.closeSync(fd)
+  if (process.argv.includes('--affected')) {
+    const { scopeFor } = require('./check-test-scope.cjs')
+    const verdict = scopeFor() // no args: reads git staged set itself
+    if (verdict.verdict === 'skip') {
+      console.log(`✓ [check-test-summary] SKIPPED: ${verdict.reason}`)
+      process.exit(0)
+    }
+    if (verdict.verdict === 'scoped') {
+      extra.push(`--dirs=${verdict.dirs.join(',')}`)
+      console.log(`[check-test-summary] affected scope: ${verdict.reason}`)
+    } else {
+      console.log(`[check-test-summary] affected scope unavailable → full core tier (${verdict.reason})`)
+    }
+  }
+  const runOnce = tapPath => {
+    const fd = fs.openSync(tapPath, 'w')
+    // run-all is streaming now: the tap file grows live, so a hung/budget-killed run leaves
+    // diagnostics instead of a 0-byte mystery.
+    const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
+      cwd: path.join(__dirname, '..'),
+      stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部
+    })
+    fs.closeSync(fd)
+    return r
+  }
+  let r = runOnce(tapFile)
+  // --retry-once (2026-10-23, load-flake doctrine): on a loaded dev host a DIFFERENT
+  // timing-sensitive suite dies per run (2026-10-22/23 evidence: purge family at conc 4,
+  // +tombstone at conc 8, updater-metadata in a third run — each green in isolation). Same
+  // doctrine as run-all's native-crash retry and the CI rerun-failed rule: a single rerun;
+  // green second pass = pass with a loud note, red again = real red. The first TAP is kept
+  // as *.prev for forensics either way.
+  if (process.argv.includes('--retry-once')) {
+    const firstTap = tapFile + '.prev'
+    const judge = rr => rr.status ?? (rr.error ? 1 : 1)
+    if (judge(r) !== 0) {
+      try { fs.copyFileSync(tapFile, firstTap) } catch { /* forensics best-effort */ }
+      console.error('[check-test-summary] red on pass 1 — retry-once (load-flake doctrine); pass-1 TAP kept at ' + firstTap)
+      r = runOnce(tapFile)
+    }
+  }
   exitCode = r.status ?? (r.error ? 1 : 1)
   if (r.error) console.error(`  [warn] spawn 异常: ${r.error.message}`)
 }

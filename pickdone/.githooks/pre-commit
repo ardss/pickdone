@@ -41,7 +41,7 @@ echo "[pre-commit] 4/4 单元测试（core 层=纯进程内规格;深潜层套�
 # 2026-10-23 效率波:改跑 --core 层。深潜层套件慢(分钟级/个)且负载敏感(宿主高载时级联出
 # 假红,2026-10-22 实锤 17 条 not ok 里 12 条属此类、隔离全绿),不该在每次提交时打全量;
 # 合并门禁 check:all 仍跑全池兜底。
-node cli/check-test-summary.cjs --core || exit 1
+node cli/check-test-summary.cjs --core --affected --retry-once || exit 1
 echo "  ✓ 通过"
 
 echo "[pre-commit] 全部通过 ✓"

@@ -71,7 +71,7 @@ const GROUPS = [
       // general suite growth pushed the loaded Windows host past 15min — two budget kills at
       // exactly 15.3min with zero diagnostics (2026-10-22 21:52 + 23:07 fast runs); the suite
       // itself completes in ~33min there with a full TAP. Same class as the earlier 10->15 raise.
-      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage'], null, 40],
+      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage', '--retry-once'], null, 40],
       // D4 覆盖率棘轮(只升不降,回退即红);--await-summary 复用上一 stage 的 coverage 摘要,
       // 不再并发重跑全量单测(4vCPU CI 上双份套件并发=互相拖到超时红,2026-09-26 实锤)
       // Budget must EXCEED the unit stage's: it runs in a parallel lane and polls until the
@@ -252,6 +252,29 @@ export { runPool, GROUPS }
 
 async function main () {
 const results = []
+// Ambient-load label (2026-10-23 S4): pure diagnostics, never blocks. A loaded host inflates
+// every timing 2-3x — a red landing exactly on a stage budget is a KILL, not a product
+// failure, and timing flakes multiply (2026-10-22/23 evidence). Sampling once over 300ms via
+// os.cpus() deltas (os.loadavg is a stub on Windows).
+try {
+  const c0 = os.cpus()
+  await new Promise(res => setTimeout(res, 300))
+  const c1 = os.cpus()
+  let busy = 0
+  let total = 0
+  for (let i = 0; i < c1.length; i++) {
+    const d = c1[i].times
+    const p = c0[i]?.times || { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 }
+    busy += (d.user - p.user) + (d.nice - p.nice) + (d.sys - p.sys) + (d.irq - p.irq)
+    total += busy + (d.idle - p.idle)
+  }
+  const pct = total > 0 ? Math.round(busy / total * 100) : 0
+  if (pct >= 80) {
+    console.warn(`  [check-all] ⚠ ambient CPU load ~${pct}% — timings inflated 2-3x under this load; a red landing exactly on a stage budget is a budget KILL (re-run in a quiet window before triaging it as product red)`)
+  } else {
+    console.log(`  [check-all] ambient CPU load ~${pct}% (within normal band)`)
+  }
+} catch { /* diagnostics only — never block the gate on its own label */ }
 // ① 构建先行（产物依赖,唯一硬串行;构建失败后续全无意义,直接短路）——fast 档纯静态,无产物依赖,跳过
 if (FAST) {
   console.log('\n[check:fast] 跳过 ①构建（静态门禁不依赖 renderer-dist）')
