@@ -95,7 +95,7 @@ Settings persistence pattern (flip → config.json → `location.reload()` → U
 - Security lock circuit: enable guard, 立即锁定, wrong-pw rejection (`密码错误`), right-pw unlock, disable, password persistence (`enc1:`) — J3 + J6.
 - Reminder circuit: UI-set reminder fires on time (J5b above).
 
-## [J6] P2 (FIXED `8caae2e6` — live verify rides train #6) — two quick tomato-duration writes: the first write silently bounces back on every surface, config.json included
+## [J6] P2 (FIXED `8caae2e6`→`b31aec05`→`8c1ff8ce` — CLOSED, live-verified on train #9) — two quick tomato-duration writes: the first write silently bounces back on every surface, config.json included
 
 Evidence (my J10 repro, DB forensics; corroborates pomodoro journeyB5/B6): settings page, 专注时长 5 then 10 written ~2.3s apart. t+2.8–3.8s all surfaces = 10 ✓; **t+4.35s store/LS/UI/config.json ALL revert to 5**, and the DB blob reads `{tomatoTime:5, _savedAt:t+2.0}` — the pre-second-write snapshot, landing late; t+4.9s the second blob lands and 10 re-applies. The user sees their change flap back to the old value and (per pomodoro B6's later reads) the flap can settle on the stale value.
 
@@ -109,11 +109,16 @@ Fix (`8caae2e6` + v2 `b31aec05`, D1 preserved): dbMirror records the newest `_sa
 
 **Pre-existing gate red (not mine):** `cli/check-dualwrite.cjs` fails on HEAD for `TomatoFloatPage.vue::tomatoFloatVisPing:300` — LS write point landed unregistered with pomodoro's `0a7a0766`; needs the tomato owner's ledger registration.
 
-**Self-audit: <5s flip pairs in my earlier stick-verifications (suspects until re-verified on the fixed build):**
-- J7: 开机自启动 ON→OFF ~1.1s apart (same key twice) — post-reload read showed false, but the read happened well after the 4.3s bounce window, so a transient bounce-and-restore (or a settle-on-stale) would have been invisible. SUSPECT.
-- J7c: 专注时长 30 → 休息时长 10 → 负载 20, three different keys ~0.5–1s apart — different keys means blob#2's diff could have carried a stale tomatoTime back; final reload read was ≥5s later. SUSPECT.
-- All other flips were ≥5s apart or single-write-per-key and are NOT suspects.
-Re-verification of both suspect sequences queued on train #6.
+**CLOSED on train #9 (18:29:33, `8c1ff8ce` aboard) — the honest gate green:** same-key 专注 5→10 @2.5s → **16/16 samples at 10 through +8s, zero reverts, config.json holds 10** (`45-j11-seqB.png`: the bottom-bar timer itself reads 10:00, the live tomato surface included). A/C/D also green for the record. Why this three-layer story is the reference for "why the honest gate matters":
+- **Layer 1 — dispatch-signature bypass (v1):** the fix's unit test called the action DIRECTLY (`actions.updateExternal(ctx, …)`), bypassing `store.dispatch` — so the Vuex 3-arg drop that made the fix inert in-app was invisible to a 100%-green suite.
+- **Layer 2 — poisoned stamp class (v2):** the guard was correct on BOTH sides and still inert, because the sender shipped a DIFFERENT stamp (`at`, folded with `settings_rows` timestamps) than the receiver tracked (blob `_savedAt`). Every pairwise unit test passed; only intercepting the live dispatch exposed it.
+- **Layer 3 — structural blindness of easy pairs (A/C/D):** different-key pairs revert to the CURRENT value (invisible even dead); sub-debounce pairs coalesce into ONE mirror generation (nothing stale can exist). Only the same-key, past-debounce pair exercises the defect. The gate that looked hardest was the only real one.
+Method note for future excavations: the decisive tool at every deadlock was live in-page instrumentation (dispatch monkey-patch, storage-event counter, DB-blob stamp reads via `dbCall`) — source reading supplied hypotheses; only the running app adjudicated.
+
+**Self-audit: <5s flip pairs in my earlier stick-verifications — CLOSED on train #9 (j11 sequences C and D):**
+- J7: 开机自启动 ON→OFF ~1.1s apart — re-run on train #9: both clicks registered, final state false in store+LS+config through the sampling window. **Stands verified** — with the honest caveat that a 1.1s pair coalesces into ONE mirror generation, so it could never have triggered the bounce in the first place; its original pass was real, just not probative for THIS defect.
+- J7c: 专注 30 → 休息 10 → 负载 20 at 0.7s apart — re-run on train #9: all three hold in store+LS+config (`cfg [30,10,20]`). **Stands verified**, same coalescing caveat.
+- Net: no earlier stick-verification is retracted; the pairs simply could not have caught the J6 mechanism, which is exactly why the same-key B-sequence was made the gate.
 
 ## Test-infrastructure notes
 - **`document.visibilityState` does NOT track Electron `BrowserWindow.hide()` in this Electron/CDP setup** — control test J3c: even the e2e-proven close-to-tray hide keeps the page reporting `visible` (8/8 samples). Any hide-oracle in journeys/e2e must read window state (`win.isVisible()` main-side), never page visibility. (J3's "main window stayed visible while locked" was this artifact; the lock's hide uses the same `win.hide()` as the e2e-locked close-to-tray path.)
