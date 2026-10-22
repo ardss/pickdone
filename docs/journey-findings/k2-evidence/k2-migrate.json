@@ -18,47 +18,35 @@
     }
   },
   "C": {
-    "target": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\k2-migrated-target",
+    "target": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\k2-migrated-target",
     "settingsOpen": "gear-clicked",
     "dataTabOpen": "tab-clicked",
     "modalForce": "instance-not-found@1",
-    "selfClick": "dialog-STILL-PRESENT-after-invoke",
+    "selfClick": "fast-clicked",
+    "invokeReturned": "{\"ok\":true,\"target\":\"C:\\\\Users\\\\13397\\\\AppData\\\\Local\\\\Temp\\\\pickdone-k2-YOFBGk\\\\appdata\\\\k2-migrated-target\"}",
     "phaseShots": {},
-    "phases": [],
-    "bootFileContent": "ABSENT",
+    "bootFileContent": "{\n  \"userDataDir\": \"C:\\\\Users\\\\13397\\\\AppData\\\\Local\\\\Temp\\\\pickdone-k2-YOFBGk\\\\appdata\\\\k2-migrated-target\"\n}\n",
     "relaunch": "RELAUNCH-PROBE-FAILED",
     "oldLocation": {
       "todosDb": true,
       "dbKey": true,
       "configJson": true
     },
-    "cliNewDir": "NOT FOUND: {\n  \"ok\": true,\n  \"command\": \"list\",\n  \"data\": []\n}\n"
+    "cliNewDir": "TASKS PRESENT"
   },
-  "D": {
-    "targetDeleted": true,
-    "bootRedirectFileBeforeBoot": "ABSENT",
-    "fallback": {
-      "locationInfo": {
-        "currentDir": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\pickdone",
-        "bootRedirect": null
-      },
-      "tasks": [
-        "K2迁移存活任务A",
-        "K2迁移存活任务B"
-      ]
-    }
-  },
+  "D": {},
   "sandbox": {
-    "home": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\home",
-    "appdata": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata",
-    "userData": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\pickdone",
-    "bootFile": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\home\\.pickdone-data-location.json"
+    "home": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\home",
+    "appdata": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata",
+    "userData": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\pickdone",
+    "bootFile": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\home\\.pickdone-data-location.json"
   },
   "A": {
     "locationInfo": {
-      "currentDir": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\pickdone",
+      "currentDir": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\pickdone",
       "bootRedirect": null
     },
     "taskCount": 2
-  }
+  },
+  "fatal": "Error: EBUSY: resource busy or locked, unlink 'C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\k2-migrated-target\\DIPS'"
 }
