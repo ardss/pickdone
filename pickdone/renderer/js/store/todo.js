@@ -700,25 +700,20 @@ export default {
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
       // F3 (dw wave6): same honest-failure handling as purgeIds — a failed pre-purge snapshot is logged + stamped, not swallowed
-      if (!(await dispatch('writeEventBackup', 'purge-all'))) console.error('[todo] purge-all proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)') // snapshot before emptying the recycle bin
+      if (!(await dispatch('writeEventBackup', 'purge-all'))) console.error('[todo] purge-all proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)')
       // Round-3 P1 (parity with purgeIds): permanently deleted tasks still bound by focus detach first
       const at = rootState && rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
-      // DB rows first, then attachment files; converge only on success — a failed purge IPC keeps the local rows
-      // (the old flow hardRemoved anyway, so purged rows "revived" after restart)
+      // DB rows first, then files; converge only on success — a failed purge IPC keeps the local rows (they would revive on restart)
       let purged = false
       try {
         const res = await window.todoAPI.purgeRecycleBin()
-        // [J15 2026-10-22] the main side returns the PURGED IDS ARRAY (db.purgeRecycleBin's row-granular
-        // contract — the oplog expands them into per-id tombstone pointers), never `true`. The old
-        // `=== true` check classified EVERY successful purge-all as a failure: the 清空失败 toast fired
-        // while the rows WERE hard-deleted — an in-session ghost bin that "revived" until reboot
-        // (live-verified j14b/j14c). An ids array (including empty) is an ACK; only a rejection is failure.
+        // [J15 2026-10-22] main returns the PURGED IDS ARRAY (live j14b/j14c), never `true` — any array (incl. empty) is an ACK; only a rejection is failure
         purged = res === true || Array.isArray(res)
       } catch (err) { reportError('purgeRecycleBin', err) }
       if (!purged) { dispatch('computeViews'); return false }
-      // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
-      // [C15 fix, same class as purgeIds] attachment-file cleanup failures are logged, not swallowed
+      // Attachment cleanup aligned with per-item permanent deletion (main's purgeRecycleBin deletes rows only, not files);
+      // [C15, same class as purgeIds] cleanup failures are logged, not swallowed
       // Perf (purge batch): ONE delete-todo-files-many IPC for the whole bin instead of a per-id readdir+unlink IPC each.
       try { if (window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(ids) } catch (err) { reportError('deleteTodoFilesMany', err) }
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
