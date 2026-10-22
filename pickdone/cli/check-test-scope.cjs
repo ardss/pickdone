@@ -80,10 +80,12 @@ function stagedFiles () {
   }
 }
 
-// Strip the optional "pickdone/" repo-root prefix so both root-level and pickdone-relative
-// staged paths map onto the same surfaces (hooks run from the repo root; check:all from pickdone/).
+// Strip the optional "pickdone/" repo-root prefix and normalize ".." segments so traversal
+// paths like renderer/js/../store cannot sneak past prefix matching (found by the scope
+// golden self-tests: renderer/js/../../escape.js used to match the generic renderer entry).
 function normalize (f) {
-  return f.startsWith('pickdone/') ? f.slice('pickdone/'.length) : f
+  const noRoot = f.startsWith('pickdone/') ? f.slice('pickdone/'.length) : f
+  return path.posix.normalize(noRoot)
 }
 
 function scopeFor (files = stagedFiles()) {
