@@ -430,8 +430,25 @@ export default {
   getters: {},
   mutations: {
     updateSettings (state, patch) {
+      const prevLocale = state.appLocale
       Object.assign(state, patch)
       persist(state)
+      // D2-LOC (2026-10-22 round-2 journey audit): this mutation is the BOOT channel — main.js
+      // bootstrap's dual-channel fallback ("restore known keys from config.json when localStorage
+      // was cleared") lands here — and it was a bare assign+persist: a config-carried appLocale
+      // reached the store while LS (i18n's boot cache) and i18n.global.locale stayed stale, so the
+      // UI booted in the old language (live-proven: config 'en-US' + store 'en-US' + LS null +
+      // $i18n 'zh-CN' in one boot dump). Same contract as restore()'s F9 block: enum-gated,
+      // changed-only, fire-and-forget; the update action's Y1 path and setAppLocale IPC stay.
+      const loc = state.appLocale
+      const legalLocales = SETTINGS_MANIFEST.enum.appLocale
+      if (typeof loc === 'string' && loc && (!legalLocales || legalLocales.includes(loc)) && loc !== prevLocale) {
+        try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
+        import('../i18n/index.js').then(m => {
+          if (m && m.setLocale && typeof document !== 'undefined') m.setLocale(loc)
+          else if (m && m.default && m.default.global) m.default.global.locale = loc
+        }).catch(() => { /* degraded host (tests / stub env) must not break the write */ })
+      }
     },
     restore (state, saved) {
       const prevLocale = state.appLocale

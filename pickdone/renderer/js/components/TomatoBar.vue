@@ -19,8 +19,9 @@
         <template v-else>
           <app-icon name="timer" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : 'var(--tt-work-accent)'}"/>
           <!-- J1 (2026-10-22 journey audit): the no-attach branch hardcoded readyStatus, so a FREE
-               focus/rest showed 待开始 for its whole run while panel/float/taskbar said 专注中/休息中.
-               statusText (the existing computed) carries the phase-aware copy for all three states. -->
+               focus/rest showed the READY label for its whole run while panel/float/taskbar showed
+               the phase copy (focusing/resting). statusText (the existing computed) carries the
+               phase-aware copy for all three states. -->
           <span>{{ statusText }}</span>
         </template>
       </div>
