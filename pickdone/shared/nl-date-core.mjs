@@ -176,11 +176,14 @@ function parseDateCore (text, base, cnFullFormat = 'YYYY年M月D日') {
     }
   }
 
-  // M月D日 (standalone) — may be followed by a time-of-day phrase ("8月30日15:00", "9月20日早上8点"):
-  // the old end-anchor `$` rejected those, the date was dropped and the time fell through to the
-  // time-only branch landing on today. The matched time text is returned as restText so
-  // parseChineseNaturalDate applies it to the parsed date (same flow as "周五下午3点").
-  m = trimmed.match(new RegExp(`^${NUM_RE}\\s*月\\s*${NUM_RE}\\s*[日号](?:\\s*(${TIME_RE_NC}))?$`))
+  // M月D日 (standalone) — may be followed by a time-of-day phrase ("8月30日15:00", "9月20日早上8点")
+  // or by the task content itself ("10月30日 交房租", "10月30日会议"). Journey-audit J2 (2026-10-22):
+  // the branch used to end-anchor at $, so date+content missed the whole branch — the date
+  // silently dropped (task created today with the date text left inside the title). The remainder
+  // after the date now becomes restText (same slice idiom as the N天后/下周X branches); a glued
+  // clock time still lands via the optional time group + parseChineseNaturalDate's TIME_RE pass.
+  // The lookahead keeps mid-token continuations ("10月30日100元", "10月30日15楼") unmatched.
+  m = trimmed.match(new RegExp(`^${NUM_RE}\\s*月\\s*${NUM_RE}\\s*[日号](?:\\s*(${TIME_RE_NC}))?(?=$|[^\\d月日号])`))
   if (m) {
     const mo = cnToNum(m[1]); const da = cnToNum(m[2])
     if (!Number.isNaN(mo) && !Number.isNaN(da)) {
@@ -195,7 +198,9 @@ function parseDateCore (text, base, cnFullFormat = 'YYYY年M月D日') {
       return {
         date: target.startOf('day'),
         label: `${mo}月${da}日`,
-        restText: (m[3] || '').trim()
+        // The captured time stays in restText: parseChineseNaturalDate's TIME_RE pass applies it
+        // to the parsed date and strips it from the content ("15:00 交房租" → 15:00 + "交房租")
+        restText: ((m[3] ? m[3] + ' ' : '') + trimmed.slice(m[0].length)).replace(/^[\s，,。.、!！?？]+/, '').trim()
       }
     }
   }
