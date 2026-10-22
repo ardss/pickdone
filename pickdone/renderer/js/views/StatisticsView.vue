@@ -317,7 +317,12 @@ export default {
     },
     periodRangeLabel () {
       const { start, end } = this.periodBounds
-      return `${dayjs(start).format('MM.DD')} - ${dayjs(Math.min(end, +dayjs().endOf('day'))).format('MM.DD')}`
+      // [J5 stats journey-audit 2026-10-22] `end` is an EXCLUSIVE upper bound (see periodBounds),
+      // so displaying it as-is put an uncovered day in the label: 上周 10.12-10.19 (real last day
+      // 10.18), 上月 09.01-10.01 (real last day 09.30), a custom to=10.07 range showed 10.07.
+      // One millisecond back lands on the last covered day; wall-clock ends (end=now) are
+      // unaffected at MM.DD resolution.
+      return `${dayjs(start).format('MM.DD')} - ${dayjs(Math.min(end, +dayjs().endOf('day')) - 1).format('MM.DD')}`
     },
     customDraftDays () {
       if (!this.customDraft || !this.customDraft[0] || !this.customDraft[1]) return 0

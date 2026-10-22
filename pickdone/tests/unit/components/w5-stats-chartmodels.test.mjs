@@ -111,6 +111,21 @@ test('periodBounds: named periods produce exclusive-end bounds with translated l
   assert.ok(bw.label.startsWith('statsA.StatisticsView.period_thisWeek'))
 })
 
+// [J5 stats journey-audit 2026-10-22] The 上周 branch called .add(7,'day') on the NUMBER returned
+// by isoWeekStart → "TypeError: s.add is not a function" on EVERY 上周 click. The computed's throw
+// was swallowed upstream and Vue kept serving the STALE this-week bounds, so the review page
+// showed this week's label + KPIs under a selected 上周 pill (live evidence j5-02/j6c probes).
+test('periodBounds: lastWeek returns number bounds covering the previous iso week (no throw)', () => {
+  // NOW = 2026-09-12 (Saturday, per this file's base) 10:00 local → last iso week Mon 08-31 .. Sun 09-06
+  const blw = periodBounds('lastWeek', null, NOW, t)
+  assert.equal(blw.start, +dayjs('2026-08-31').startOf('day'), 'start = last Monday 00:00')
+  assert.equal(blw.end, +dayjs('2026-08-31').startOf('day') + 7 * 24 * 3600 * 1000, 'end = start + 7d (exclusive, covers through Sunday)')
+  assert.ok(blw.label.startsWith('statsA.StatisticsView.period_lastWeek'))
+  const blm = periodBounds('lastMonth', null, NOW, t)
+  assert.equal(blm.start, +dayjs('2026-08-01').startOf('day'))
+  assert.equal(blm.end, +dayjs('2026-09-01').startOf('day'))
+})
+
 test('buildWeekdayModel: 7 bars + 7 overlay points, summary references the peak-focus weekday label', () => {
   const m = {
     doneByWeekday: [1, 2, 3, 0, 0, 0, 0],

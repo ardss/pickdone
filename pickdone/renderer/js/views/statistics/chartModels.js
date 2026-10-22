@@ -24,8 +24,12 @@ export function periodBounds (period, customRange, nowTick, t) {
   const now = dayjs(nowTick)
   switch (period) {
     case 'lastWeek': {
+      // [J5 stats journey-audit 2026-10-22] isoWeekStart returns an epoch NUMBER; the old
+      // `s.add(7, 'day')` threw "s.add is not a function" every 上周 click. The computed's
+      // TypeError was swallowed upstream, so Vue kept serving the STALE this-week bounds:
+      // the pill showed 上周 while label + KPIs silently stayed on this week. Pure number math.
       const s = isoWeekStart(+now.subtract(1, 'week'))
-      return { start: +s, end: +s.add(7, 'day'), label: t(T + 'period_lastWeek') }
+      return { start: s, end: s + 7 * DAY_MS, label: t(T + 'period_lastWeek') }
     }
     case 'thisMonth': return { start: +now.startOf('month'), end: +now, label: t(T + 'period_thisMonth') }
     case 'lastMonth': {
