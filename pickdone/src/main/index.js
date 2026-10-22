@@ -52,6 +52,8 @@ app.commandLine.appendSwitch('disable-http-cache')
 const bootRedirect = require('./data-location.cjs').readBootRedirect()
 if (process.env.TODO_USER_DATA_DIR) app.setPath('userData', process.env.TODO_USER_DATA_DIR)
 else if (bootRedirect) app.setPath('userData', bootRedirect)
+// Boot-location honesty (boot-notice.cjs): snapshotted at module init — before whenReady.
+const bootRedirectState = require('./data-location.cjs').readBootRedirectState()
 // Hardware acceleration switch (aligned with the reference enableHardwareAcceleration; must be called before ready)
 try {
   const c = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
@@ -328,8 +330,7 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // recovery, testable without electron); whenReady keeps one-line calls. Behavior unchanged:
     // 无 todos.db 但 .plain-bak 存在 = 加密迁移两步 rename 间崩溃的'两头都没有'窗口(2026-09-04 深审 P0),
     // 必须在此显式把 plain-bak 放回去;pending-delete-<ts>-* 是上次「重置数据」被占用改名挂起的文件。
-    dbRecovery.preflightMigrateResidue(app.getPath('userData'), log)
-    dbRecovery.sweepPendingDeletes(app.getPath('userData'), log)
+    require('./boot-notice.cjs').surfaceMissingBootTarget({ getMainWindow, i18n: i18nM, log }, bootRedirectState)
     try {
       dbm.init(app.getPath('userData'))
     } catch (e0) {

@@ -81,6 +81,13 @@
       <div class="form-item danger-row"><span class="form-item__label">{{ $t('statsE.SettingsModal.emptyBinLabel') }}</span>
         <div class="form-item__control"><button class="danger-btn" :disabled="purging" @click="purgeRecycle">{{ $t('statsE.SettingsModal.emptyBinBtn') }}</button></div></div>
     </div>
+    <!-- Migration modal: shown for the whole close→copy→verify→boot→relaunch window. Unclosable
+         on purpose — closing the settings tab is harmless, but the copy must not be second-guessed;
+         main keeps the DB closed and flips the boot file only after full verification. -->
+    <el-dialog :model-value="relocating" :title="$t('statsE.SettingsModal.dataLocProgressTitle')" width="420px" :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-progress :percentage="migratePct" :status="migratePct >= 100 ? 'success' : undefined" />
+      <p class="tip" style="margin-top:8px">{{ migratePhaseText }}</p>
+    </el-dialog>
   </div>
 </template>
 
@@ -171,7 +178,11 @@ export default {
       // F-RELOC: data storage location display + migration busy flag
       dataDirShown: '',
       dataDirRedirected: false,
-      relocating: false
+      relocating: false,
+      // migration progress modal state (data-migrate-progress push; 0/-1 = indeterminate)
+      migrateDone: 0,
+      migrateTotal: -1,
+      migratePhase: '' as string
     }
   },
   computed: {
@@ -191,11 +202,33 @@ export default {
         return this.$t('statsH.SettingsModal.lastBackupFailPrefix') + (this.autoBackupLastError || this.$t('statsH.SettingsModal.backupFailed')) + ' (' + this.dfmt(this.autoBackupLastFailAt) + ')'
       }
       return this.autoBackupLastAt ? this.$t('statsE.SettingsModal.lastRunPrefix') + this.dfmt(this.autoBackupLastAt) : this.$t('statsH.SettingsModal.notRunYet')
+    },
+    // Migration modal: percentage (0 before the first copy tick, 100 through verify/boot) and
+    // the phase line under the bar
+    migratePct () {
+      if (this.migratePhase === 'verify' || this.migratePhase === 'boot') return 100
+      if (this.migrateTotal <= 0) return 0
+      return Math.min(100, Math.round(this.migrateDone / this.migrateTotal * 100))
+    },
+    migratePhaseText () {
+      if (this.migratePhase === 'verify') return this.$t('statsE.SettingsModal.dataLocProgressVerify')
+      if (this.migratePhase === 'boot') return this.$t('statsE.SettingsModal.dataLocProgressBoot')
+      return this.$t('statsE.SettingsModal.dataLocProgressCopy')
     }
   },
   mounted () {
     this.loadBackupDirDisplay()
     this.loadDataDir()
+    // Migration progress push — subscribed for the component lifetime; the disposer pattern
+    // matches onShortcutConflict/onReminderOpenTask in preload
+    this._disposeMigrateProgress = window.todoAPI.onMigrateProgress((p: any) => {
+      if (!p || typeof p !== 'object') return
+      this.migratePhase = p.phase || ''
+      if (p.phase === 'copy') { this.migrateDone = p.done || 0; this.migrateTotal = p.total || -1 }
+    })
+  },
+  unmounted () {
+    if (this._disposeMigrateProgress) this._disposeMigrateProgress()
   },
   methods: {
     dfmt (ts) { return dayjs(ts).format(FMT.dateTime) },

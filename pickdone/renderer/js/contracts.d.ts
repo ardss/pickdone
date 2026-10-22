@@ -67,6 +67,8 @@ interface TodoAPI {
   getDataLocationInfo: (...args: any[]) => any
   /** F-RELOC: relocate userData; targetDir omitted = main process pops the directory picker */
   relocateDataDir: (...args: any[]) => any
+  /** F-RELOC: migration progress push {phase:'copy'|'verify'|'boot', done?, total?}; returns disposer */
+  onMigrateProgress: (...args: any[]) => any
   getSettings: (...args: any[]) => any
   /** Batch meta read (CONTRACT 2026-09-20, F-UI): replaces per-key getMeta loops */
   getMetaMany: (...args: any[]) => any

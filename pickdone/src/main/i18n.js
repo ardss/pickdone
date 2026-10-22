@@ -102,8 +102,14 @@ const MESSAGES = {
     dataLocConfirmMsg: '将把以下内容搬移到新位置：\n{d}\n\n· 数据库 todos.db（含密钥 db.key）\n· 自动备份目录 backups/\n· 应用配置 config.json 与审计日志\n\n· 源目录中的文件将完整保留、不会被删除，可作为回退；\n· 迁移完成后应用将自动重启并启用新位置。',
     dataLocConfirmBtn: '开始迁移并重启',
     dataLocDoneTitle: '迁移完成',
-    dataLocDoneMsg: '数据已迁移到新位置，应用即将重启。',
-    dataLocCloseFailed: '关闭数据库失败，已恢复运行：{msg}'
+    dataLocDoneMsg: '数据已迁移到新位置，应用即将重启。\n\n旧位置 {old} 中的文件已完整保留，确认新位置一切正常后可自行删除。',
+    dataLocCloseFailed: '关闭数据库失败，已恢复运行：{msg}',
+    dataLocProgressTitle: '正在迁移数据，请勿关闭应用',
+    dataLocProgressCopy: '正在拷贝数据文件…（{done}/{total}）',
+    dataLocProgressVerify: '正在校验拷贝结果…',
+    dataLocProgressBoot: '正在切换启动位置…',
+    dataLocMissingTitle: '数据位置已回退',
+    dataLocMissingMsg: '配置的数据存储位置 {dir} 已不存在（可能被移动或删除），本次启动已回退到默认位置，数据完好。可在设置中重新选择数据位置。'
   },
   'en-US': {
     appName: 'PickDone',
@@ -161,8 +167,14 @@ const MESSAGES = {
     dataLocConfirmMsg: 'The following will be moved to the new location:\n{d}\n\n· Database todos.db (with its key db.key)\n· Auto-backup folder backups/\n· App config config.json and the audit log\n\n· Files in the SOURCE directory are fully preserved, never deleted - they remain the fallback;\n· After migrating, the app restarts automatically and uses the new location.',
     dataLocConfirmBtn: 'Migrate and restart',
     dataLocDoneTitle: 'Migration complete',
-    dataLocDoneMsg: 'Data has been migrated to the new location. The app will restart now.',
-    dataLocCloseFailed: 'Failed to close the database; the app keeps running on the current location: {msg}'
+    dataLocDoneMsg: 'Data has been migrated to the new location. The app will restart now.\n\nThe files at the OLD location {old} are fully preserved; once you have confirmed everything works from the new location, you can delete them yourself.',
+    dataLocCloseFailed: 'Failed to close the database; the app keeps running on the current location: {msg}',
+    dataLocProgressTitle: 'Migrating data — do not close the app',
+    dataLocProgressCopy: 'Copying data files… ({done}/{total})',
+    dataLocProgressVerify: 'Verifying the copied data…',
+    dataLocProgressBoot: 'Switching the startup location…',
+    dataLocMissingTitle: 'Data location fell back',
+    dataLocMissingMsg: 'The configured data location {dir} no longer exists (it may have been moved or deleted). This launch fell back to the default location; your data is intact. You can pick a new data location in Settings.'
   }
 }
 

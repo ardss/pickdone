@@ -128,16 +128,36 @@ function validateTarget (targetDir, currentDir, opts) {
   return { ok: true, target: t }
 }
 
-function copyDirRecursive (src, dest) {
+const YIELD_EVERY = 8 // fs objects per event-loop yield — keeps the main process responsive
+                     // (progress IPC + window events flow) during a large files/ copy
+
+/** Yield to the event loop; called every YIELD_EVERY copied objects in migrateData. */
+function tick () { return new Promise(resolve => setImmediate(resolve)) }
+
+/** Pre-count fs objects of a migration entry (file=1; dir=tree incl. the dir itself). */
+function entryObjectCount (srcDir, name) {
+  const p = path.join(srcDir, name)
+  if (!fs.existsSync(p)) return 0
+  const st = fs.statSync(p)
+  return st.isDirectory() ? countFsObjects(p) : 1
+}
+
+async function copyDirRecursive (src, dest, onFile, counter) {
   fs.mkdirSync(dest, { recursive: true })
-  let n = 0
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, entry.name)
     const d = path.join(dest, entry.name)
-    if (entry.isDirectory()) n += copyDirRecursive(s, d)
-    else { fs.copyFileSync(s, d); n++ }
+    if (entry.isDirectory()) await copyDirRecursive(s, d, onFile, counter)
+    else {
+      fs.copyFileSync(s, d)
+      counter.n++
+      if (onFile && counter.n % YIELD_EVERY === 0) {
+        onFile(counter.n)
+        await tick()
+      }
+    }
   }
-  return n + 1 // count the dir itself so source/target tree shapes must match
+  counter.n++ // count the dir itself so source/target tree shapes must match
 }
 
 function countFsObjects (dir) {
@@ -200,16 +220,39 @@ function statIdentity (p) {
   return s.size + ':' + s.mtimeMs
 }
 
+/** Read the boot redirect WITH its failure reason (index.js uses this to tell the user WHY the
+ *  configured location was not honored — a vanished target dir used to fall back silently).
+ *  status: 'ok' | 'missing' (valid JSON, absolute path, dir gone) | 'invalid' (bad JSON/relative)
+ *  | 'none' (no boot file). */
+function readBootRedirectState () {
+  let raw = null
+  try { raw = fs.readFileSync(bootRedirectPath(), 'utf8') } catch (e) { return { status: 'none', dir: null } }
+  let d = null
+  try {
+    const j = JSON.parse(raw)
+    d = j && j.userDataDir
+  } catch (e) { return { status: 'invalid', dir: null } }
+  if (typeof d !== 'string' || !d || !path.isAbsolute(d)) return { status: 'invalid', dir: null }
+  if (!fs.existsSync(d)) return { status: 'missing', dir: d }
+  return { status: 'ok', dir: d }
+}
+
 let relocationPending = false // B#5: in-process gate for the migrate→relaunch window (see getRelocationPending)
 
 /**
- * Synchronous migration. PRECONDITION: the caller has closed the DB handle (better-sqlite3's
+ * Asynchronous migration. PRECONDITION: the caller has closed the DB handle (better-sqlite3's
  * close checkpoints TRUNCATEs the WAL and removes -wal/-shm); this function assumes the source
  * files are static. On ANY failure the only deletions are files this call wrote into the
  * target — the source stays byte-identical, which IS the rollback. On success the boot file
  * is written so the NEXT launch picks the new dir up.
+ *
+ * opts.onProgress(p) — p is { phase: 'copy', done, total } during the copy (done advances every
+ * YIELD_EVERY objects; the event loop yields alongside, so progress IPC and window events keep
+ * flowing) and { phase: 'verify' } / { phase: 'boot' } at the tail.
  */
-function migrateData (srcDir, targetDir, opts) {
+async function migrateData (srcDir, targetDir, opts = {}) {
+  const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null
+  const report = p => { try { if (onProgress) onProgress(p) } catch (e) { /* progress is best-effort */ } }
   // Torn-DB defense #1: after a clean close the WAL/SHM are GONE. A resurrected NON-EMPTY one
   // means an external writer (CLI process) re-opened the db between close() and here — the
   // copy would capture a torn snapshot. (An empty residual file is inert and may copy.)
@@ -233,29 +276,37 @@ function migrateData (srcDir, targetDir, opts) {
   try {
     fs.mkdirSync(t, { recursive: true })
     stash = stashCollisions(t, names) // pre-existing target content the copy will overwrite
+    // Progress denominator: pre-count every fs object the copy will create. A source that
+    // GROWS mid-copy would skew done/total slightly — harmless (progress only) and the
+    // stat-identity check below still fails the whole migration for the db itself.
+    let total = 0
+    for (const name of names) total += entryObjectCount(srcDir, name)
+    const counter = { n: 0 }
     for (const name of names) {
       const s = path.join(srcDir, name)
       const d = path.join(t, name)
-      if (name === 'backups' || name === 'files') { copyDirRecursive(s, d); written.push(d) }
-      else { fs.copyFileSync(s, d); written.push(d) }
+      if (name === 'backups' || name === 'files') { await copyDirRecursive(s, d, n => report({ phase: 'copy', done: n, total }), counter); written.push(d) }
+      else { fs.copyFileSync(s, d); counter.n++; written.push(d); if (counter.n % YIELD_EVERY === 0) await tick() }
     }
+    report({ phase: 'copy', done: total, total })
     // Torn-DB defense #2: the source db's stat identity must be IDENTICAL before/after the copy —
     // a change mid-flight means a concurrent writer advanced it while we snapshotted it.
     if (statIdentity(dbSrc) !== dbIdentityBefore) throw new Error('source database changed during the copy (concurrent writer)')
     // Post-copy verification: db non-empty, key present, dir trees shape-identical.
+    report({ phase: 'verify' })
     const dbSt = fs.existsSync(path.join(t, 'todos.db')) ? fs.statSync(path.join(t, 'todos.db')) : null
     if (!dbSt || dbSt.size <= 0) throw new Error('verification failed: target todos.db missing or empty')
     if (!fs.existsSync(path.join(t, 'db.key'))) throw new Error('verification failed: target db.key missing')
     for (const d of ['backups', 'files']) {
-      const sp = path.join(srcDir, d)
-      if (fs.existsSync(sp) &&
-          countFsObjects(sp) !== countFsObjects(path.join(t, d))) {
+      if (fs.existsSync(path.join(srcDir, d)) &&
+          countFsObjects(path.join(srcDir, d)) !== countFsObjects(path.join(t, d))) {
         throw new Error('verification failed: ' + d + ' tree mismatch')
       }
     }
     // Boot write lives INSIDE the same rollback contract: a failure here must also undo the
     // copy (otherwise the target holds a full data dir with NO redirect — and cleanup would
     // previously have skipped it, orphaning content next to the user's prior data).
+    report({ phase: 'boot' })
     writeBootRedirect(t)
     relocationPending = true // B#5: the window until relaunch — backup writers consult getRelocationPending()
   } catch (e) {
@@ -276,7 +327,7 @@ function getRelocationPending () {
 }
 
 module.exports = {
-  bootRedirectPath, readBootRedirect, writeBootRedirect, clearBootRedirect,
+  bootRedirectPath, readBootRedirect, readBootRedirectState, writeBootRedirect, clearBootRedirect,
   requiredFiles, validateTarget, migrateData, volumeFreeBytes,
   getRelocationPending,
   MIN_FREE_BYTES

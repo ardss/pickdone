@@ -22,26 +22,26 @@ function sandbox (tag) {
 
 /** Isolate the boot file into the sandbox: the module derives its path from os.homedir(), so
  *  HOME/USERPROFILE are pointed at a fresh temp dir for the duration of a test. */
-function withHome (home, fn) {
+async function withHome (home, fn) {
   const old = { HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE }
   process.env.HOME = home
   process.env.USERPROFILE = home
-  try { return fn() } finally { Object.assign(process.env, old) }
+  try { return await fn() } finally { Object.assign(process.env, old) }
 }
 
 // ---------- boot redirect file ----------
 
-test('bootRedirectPath is a dot-file under homedir', () => {
-  withHome(sandbox('path'), () => {
+test('bootRedirectPath is a dot-file under homedir', async () => {
+  await withHome(sandbox('path'), async () => {
     const p = dl.bootRedirectPath()
     assert.ok(path.isAbsolute(p))
     assert.equal(path.basename(p), '.pickdone-data-location.json')
   })
 })
 
-test('readBootRedirect: missing file / bad JSON / relative path / vanished dir → null', () => {
+test('readBootRedirect: missing file / bad JSON / relative path / vanished dir → null', async () => {
   const home = sandbox('read')
-  withHome(home, () => {
+  await withHome(home, async () => {
     assert.equal(dl.readBootRedirect(), null, 'no file yet')
     // bad JSON tolerated
     fs.writeFileSync(dl.bootRedirectPath(), '{not json')
@@ -60,9 +60,9 @@ test('readBootRedirect: missing file / bad JSON / relative path / vanished dir �
   })
 })
 
-test('writeBootRedirect is atomic (no tmp residue) and round-trips; clear removes it', () => {
+test('writeBootRedirect is atomic (no tmp residue) and round-trips; clear removes it', async () => {
   const home = sandbox('write')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const dir = path.join(home, 'ud2')
     fs.mkdirSync(dir)
     dl.writeBootRedirect(dir)
@@ -80,9 +80,9 @@ test('writeBootRedirect is atomic (no tmp residue) and round-trips; clear remove
   })
 })
 
-test('writeBootRedirect rejects relative dirs', () => {
+test('writeBootRedirect rejects relative dirs', async () => {
   const home = sandbox('reject')
-  withHome(home, () => {
+  await withHome(home, async () => {
     assert.throws(() => dl.writeBootRedirect('relative'), /absolute/)
   })
 })
@@ -99,7 +99,7 @@ function makeSource (root) {
   return src
 }
 
-test('validateTarget rejects: relative / equals current / inside current / non-dir / junk non-empty target', () => {
+test('validateTarget rejects: relative / equals current / inside current / non-dir / junk non-empty target', async () => {
   const root = sandbox('vt')
   const src = makeSource(root)
   assert.equal(dl.validateTarget('relative', src).ok, false, 'relative')
@@ -115,7 +115,7 @@ test('validateTarget rejects: relative / equals current / inside current / non-d
   assert.match(dl.validateTarget(junk, src).reason, /neither empty nor a valid data directory/)
 })
 
-test('validateTarget allows: nonexistent, empty, and already-valid data dir (switch back)', () => {
+test('validateTarget allows: nonexistent, empty, and already-valid data dir (switch back)', async () => {
   const root = sandbox('vt-ok')
   const src = makeSource(root)
   assert.equal(dl.validateTarget(path.join(root, 'brand-new'), src).ok, true, 'nonexistent')
@@ -130,7 +130,7 @@ test('validateTarget allows: nonexistent, empty, and already-valid data dir (swi
   assert.equal(v.ok, true, 'valid data dir = switch-back allowed')
 })
 
-test('validateTarget rejects unwritable target', () => {
+test('validateTarget rejects unwritable target', async () => {
   const root = sandbox('vt-ro')
   const src = makeSource(root)
   const ro = path.join(root, 'ro')
@@ -148,7 +148,7 @@ test('validateTarget rejects unwritable target', () => {
   }
 })
 
-test('validateTarget rejects insufficient free space (injected probe)', () => {
+test('validateTarget rejects insufficient free space (injected probe)', async () => {
   const root = sandbox('vt-disk')
   const src = makeSource(root)
   const v = dl.validateTarget(path.join(root, 'new'), src, { freeBytes: 256 * 1024 * 1024 })
@@ -174,9 +174,9 @@ function snapshotDir (dir) {
   return out
 }
 
-test('migrateData success: copies the required set (logs/ excluded), verifies, writes boot redirect', () => {
+test('migrateData success: copies the required set (logs/ excluded), verifies, writes boot redirect', async () => {
   const home = sandbox('mig-ok-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const root = sandbox('mig-ok')
     const src = makeSource(root)
     fs.mkdirSync(path.join(src, 'logs'))
@@ -188,7 +188,7 @@ test('migrateData success: copies the required set (logs/ excluded), verifies, w
 
     const target = path.join(root, 'target')
     const beforeSrc = snapshotDir(src)
-    const r = dl.migrateData(src, target)
+    const r = await dl.migrateData(src, target)
     assert.equal(r.ok, true, 'migration succeeds: ' + (r.error || ''))
     assert.equal(fs.readFileSync(path.join(target, 'todos.db'), 'utf8'), 'SQLITE-DATA')
     assert.equal(fs.readFileSync(path.join(target, 'db.key'), 'utf8').length, 64)
@@ -203,16 +203,16 @@ test('migrateData success: copies the required set (logs/ excluded), verifies, w
   })
 })
 
-test('migrateData failure (junk pre-existing target): source zero-change, NO boot file written', () => {
+test('migrateData failure (junk pre-existing target): source zero-change, NO boot file written', async () => {
   const home = sandbox('mig-fail-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const root = sandbox('mig-fail')
     const src = makeSource(root)
     const junk = path.join(root, 'junk')
     fs.mkdirSync(junk)
     fs.writeFileSync(path.join(junk, 'occupied.txt'), 'keep me')
     const beforeSrc = snapshotDir(src)
-    const r = dl.migrateData(src, junk)
+    const r = await dl.migrateData(src, junk)
     assert.equal(r.ok, false)
     assert.match(r.error, /neither empty nor a valid data directory/)
     assert.deepEqual(snapshotDir(src), beforeSrc, 'source untouched on rejection')
@@ -221,9 +221,9 @@ test('migrateData failure (junk pre-existing target): source zero-change, NO boo
   })
 })
 
-test('migrateData verification failure cleans only what IT wrote (switch-back into valid dir keeps prior content)', () => {
+test('migrateData verification failure cleans only what IT wrote (switch-back into valid dir keeps prior content)', async () => {
   const home = sandbox('mig-ver-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const root = sandbox('mig-ver')
     const src = makeSource(root)
     const target = path.join(root, 'prior-ud')
@@ -243,7 +243,7 @@ test('migrateData verification failure cleans only what IT wrote (switch-back in
     fs.writeFileSync(path.join(target, 'backups', 'extra-old.json'), '{}')
     fs.writeFileSync(path.join(src, 'backups', 'b1.json'), '{}')
     const beforeSrc = snapshotDir(src)
-    const r = dl.migrateData(src, target)
+    const r = await dl.migrateData(src, target)
     assert.equal(r.ok, false, 'divergent backups tree fails verification: ' + (r.error || ''))
     assert.match(r.error, /backups tree mismatch/)
     assert.deepEqual(snapshotDir(src), beforeSrc, 'source untouched after verification failure')
@@ -255,17 +255,17 @@ test('migrateData verification failure cleans only what IT wrote (switch-back in
   })
 })
 
-test('migrateData rejects the same targets validateTarget rejects', () => {
+test('migrateData rejects the same targets validateTarget rejects', async () => {
   const root = sandbox('mig-rej')
   const src = makeSource(root)
-  assert.equal(dl.migrateData(src, src).ok, false)
-  assert.equal(dl.migrateData(src, path.join(src, 'nested')).ok, false)
-  assert.equal(dl.migrateData(src, 'relative').ok, false)
+  assert.equal((await dl.migrateData(src, src)).ok, false)
+  assert.equal((await dl.migrateData(src, path.join(src, 'nested'))).ok, false)
+  assert.equal((await dl.migrateData(src, 'relative')).ok, false)
 })
 
 // ---------- index.js wiring anchors (source-level, no electron boot) ----------
 
-test('index.js wiring: env branch stays BEFORE the boot-redirect branch (test isolation wins)', () => {
+test('index.js wiring: env branch stays BEFORE the boot-redirect branch (test isolation wins)', async () => {
   const src = fs.readFileSync(path.join(process.cwd(), 'src/main/index.js'), 'utf8')
   const envIdx = src.indexOf("if (process.env.TODO_USER_DATA_DIR) app.setPath('userData', process.env.TODO_USER_DATA_DIR)")
   const bootIdx = src.indexOf("const bootRedirect = require('./data-location.cjs').readBootRedirect()")
@@ -277,7 +277,7 @@ test('index.js wiring: env branch stays BEFORE the boot-redirect branch (test is
   assert.ok(envIdx < elseIdx, 'env branch precedes the boot-redirect branch')
 })
 
-test('preload exposes the two data-location channels aligned with handlers/system.js', () => {
+test('preload exposes the two data-location channels aligned with handlers/system.js', async () => {
   const pre = fs.readFileSync(path.join(process.cwd(), 'src/preload/index.js'), 'utf8')
   const sys = fs.readFileSync(path.join(process.cwd(), 'src/main/handlers/system.js'), 'utf8')
   for (const ch of ['data:location-info', 'data:relocate']) {
@@ -294,7 +294,7 @@ test('preload exposes the two data-location channels aligned with handlers/syste
 
 // ---------- D1 fix-wave regressions (2026-10-21) ----------
 
-test('D1#2 validateTarget rejects a target that CONTAINS the current dir (ancestor)', () => {
+test('D1#2 validateTarget rejects a target that CONTAINS the current dir (ancestor)', async () => {
   const root = sandbox('anc')
   const src = path.join(root, 'outer', 'inner-ud')
   fs.mkdirSync(path.join(src, 'backups'), { recursive: true })
@@ -303,7 +303,7 @@ test('D1#2 validateTarget rejects a target that CONTAINS the current dir (ancest
   const v = dl.validateTarget(path.join(root, 'outer'), src)
   assert.equal(v.ok, false)
   assert.match(v.reason, /contains the current data directory/)
-  assert.equal(dl.migrateData(src, path.join(root, 'outer')).ok, false)
+  assert.equal((await dl.migrateData(src, path.join(root, 'outer'))).ok, false)
 })
 
 test('D1#5 windows case-insensitive bypass: casing variant of the current dir is rejected', { skip: process.platform !== 'win32' }, () => {
@@ -318,14 +318,14 @@ test('D1#5 windows case-insensitive bypass: casing variant of the current dir is
   assert.match(v.reason, /equals the current data directory/)
 })
 
-test('D1#4a migrateData aborts when a NON-EMPTY todos.db-wal/-shm sits in the source (external writer)', () => {
+test('D1#4a migrateData aborts when a NON-EMPTY todos.db-wal/-shm sits in the source (external writer)', async () => {
   const home = sandbox('wal-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const root = sandbox('wal')
     const src = makeSource(root)
     fs.writeFileSync(path.join(src, 'todos.db-wal'), 'LIVE-WAL-FRAMES')
     const beforeSrc = snapshotDir(src)
-    const r = dl.migrateData(src, path.join(root, 'target'))
+    const r = await dl.migrateData(src, path.join(root, 'target'))
     assert.equal(r.ok, false)
     assert.match(r.error, /in use by another process/)
     assert.deepEqual(snapshotDir(src), beforeSrc, 'source untouched')
@@ -333,19 +333,19 @@ test('D1#4a migrateData aborts when a NON-EMPTY todos.db-wal/-shm sits in the so
     // same for -shm
     fs.rmSync(path.join(src, 'todos.db-wal'), { force: true })
     fs.writeFileSync(path.join(src, 'todos.db-shm'), 'S')
-    const r2 = dl.migrateData(src, path.join(root, 'target'))
+    const r2 = await dl.migrateData(src, path.join(root, 'target'))
     assert.equal(r2.ok, false)
     assert.match(r2.error, /todos\.db-shm/)
     // an EMPTY residual wal is inert and may still migrate
     fs.rmSync(path.join(src, 'todos.db-shm'), { force: true })
     fs.writeFileSync(path.join(src, 'todos.db-wal'), '')
-    assert.equal(dl.migrateData(src, path.join(root, 'target')).ok, true)
+    assert.equal((await dl.migrateData(src, path.join(root, 'target'))).ok, true)
   })
 })
 
-test('D1#4b migrateData aborts when the source todos.db changes during the copy (concurrent writer)', () => {
+test('D1#4b migrateData aborts when the source todos.db changes during the copy (concurrent writer)', async () => {
   const home = sandbox('mtime-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const root = sandbox('mtime')
     const src = makeSource(root)
     const target = path.join(root, 'target')
@@ -362,7 +362,7 @@ test('D1#4b migrateData aborts when the source todos.db changes during the copy 
     }
     fs.copyFileSync = patched
     let r
-    try { r = dl.migrateData(src, target) } finally { fs.copyFileSync = realCopy }
+    try { r = await dl.migrateData(src, target) } finally { fs.copyFileSync = realCopy }
     assert.equal(r.ok, false)
     assert.match(r.error, /changed during the copy/)
     // full rollback contract: only THIS call's writes are removed, source byte-identical
@@ -372,9 +372,9 @@ test('D1#4b migrateData aborts when the source todos.db changes during the copy 
   })
 })
 
-test('D1#6 requiredFiles carries files/ and allowed-backup-dirs.json; trees verified', () => {
+test('D1#6 requiredFiles carries files/ and allowed-backup-dirs.json; trees verified', async () => {
   const home = sandbox('files-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const root = sandbox('files')
     const src = makeSource(root)
     fs.writeFileSync(path.join(src, 'allowed-backup-dirs.json'), '[]')
@@ -382,7 +382,7 @@ test('D1#6 requiredFiles carries files/ and allowed-backup-dirs.json; trees veri
     fs.mkdirSync(path.join(src, 'files', 'att-1'))
     fs.writeFileSync(path.join(src, 'files', 'att-1', 'a.bin'), 'AA')
     const target = path.join(root, 'target')
-    const r = dl.migrateData(src, target)
+    const r = await dl.migrateData(src, target)
     assert.equal(r.ok, true, 'migration succeeds: ' + (r.error || ''))
     assert.equal(fs.readFileSync(path.join(target, 'allowed-backup-dirs.json'), 'utf8'), '[]')
     assert.equal(fs.readFileSync(path.join(target, 'files', 'att-1', 'a.bin'), 'utf8'), 'AA')
@@ -397,7 +397,7 @@ test('D1#6 requiredFiles carries files/ and allowed-backup-dirs.json; trees veri
     fs.writeFileSync(path.join(prior, 'db.key'), 'd'.repeat(64))
     fs.mkdirSync(path.join(prior, 'files'))
     fs.writeFileSync(path.join(prior, 'files', 'old.bin'), 'O')
-    const r2 = dl.migrateData(src2, prior)
+    const r2 = await dl.migrateData(src2, prior)
     assert.equal(r2.ok, false)
     assert.match(r2.error, /files tree mismatch/)
     assert.equal(fs.readFileSync(path.join(prior, 'files', 'old.bin'), 'utf8'), 'O', 'prior files/ restored')
@@ -408,15 +408,15 @@ test('D1#6 requiredFiles carries files/ and allowed-backup-dirs.json; trees veri
     fs.writeFileSync(path.join(bare, 'todos.db'), 'B')
     fs.writeFileSync(path.join(bare, 'db.key'), 'e'.repeat(64))
     const t2 = path.join(root3, 'bare-target')
-    assert.equal(dl.migrateData(bare, t2).ok, true)
+    assert.equal((await dl.migrateData(bare, t2)).ok, true)
     assert.equal(fs.existsSync(path.join(t2, 'files')), false, 'no files/ dir minted')
     assert.equal(fs.existsSync(path.join(t2, 'allowed-backup-dirs.json')), false, 'no whitelist minted')
   })
 })
 
-test('D1#3 boot-redirect write failure is inside the rollback contract (copy undone, stash restored)', () => {
+test('D1#3 boot-redirect write failure is inside the rollback contract (copy undone, stash restored)', async () => {
   const home = sandbox('bootfail-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     // Sabotage the boot file path: make it an existing DIRECTORY — the atomic tmp+rename throws,
     // which used to fall into the second catch and leave the copied content + orphaned stash.
     fs.mkdirSync(dl.bootRedirectPath(), { recursive: true })
@@ -427,7 +427,7 @@ test('D1#3 boot-redirect write failure is inside the rollback contract (copy und
     fs.writeFileSync(path.join(target, 'todos.db'), 'PRIOR-DB')
     fs.writeFileSync(path.join(target, 'db.key'), 'f'.repeat(64))
     const beforeSrc = snapshotDir(src)
-    const r = dl.migrateData(src, target)
+    const r = await dl.migrateData(src, target)
     assert.equal(r.ok, false)
     assert.match(r.error, /boot redirect|rename|EPERM|EEXIST|EISDIR/i)
     assert.deepEqual(snapshotDir(src), beforeSrc, 'source untouched')
@@ -437,20 +437,20 @@ test('D1#3 boot-redirect write failure is inside the rollback contract (copy und
   })
 })
 
-test('D1#8c migrateData sets the in-process relocation-pending gate on success', () => {
+test('D1#8c migrateData sets the in-process relocation-pending gate on success', async () => {
   const home = sandbox('gate-home')
-  withHome(home, () => {
+  await withHome(home, async () => {
     const root = sandbox('gate')
     const src = makeSource(root)
     // The gate is module-level and sticky-until-exit BY DESIGN: it arms at the first successful
     // migration and stays armed for the migrate→relaunch window (the process exits right after),
     // so this suite only asserts the arming, not a reset.
-    assert.equal(dl.migrateData(src, path.join(root, 'target')).ok, true)
+    assert.equal((await dl.migrateData(src, path.join(root, 'target'))).ok, true)
     assert.equal(dl.getRelocationPending(), true, 'gate open for the migrate→relaunch window')
   })
 })
 
-test('D1#1 handlers/system.js data:relocate refuses isolated/test instances BEFORE any side effect', () => {
+test('D1#1 handlers/system.js data:relocate refuses isolated/test instances BEFORE any side effect', async () => {
   const sys = fs.readFileSync(path.join(process.cwd(), 'src/main/handlers/system.js'), 'utf8')
   const h = sys.indexOf("'data:relocate'")
   const body = sys.slice(h, sys.length)
@@ -466,4 +466,83 @@ test('D1#1 handlers/system.js data:relocate refuses isolated/test instances BEFO
   assert.ok(body.indexOf('stopLatestDbWatch') < body.indexOf('dbm.close'), 'watch stop precedes db close')
   // D1#8b: a running pomodoro is confirmed before the close (same gate as quit-and-install)
   assert.ok(body.includes('hasRunningSession()'), 'pomodoro gate present')
+})
+
+// ---------- migration progress + boot-state honesty (2026-10-22 UX round) ----------
+
+test('migrateData onProgress: copy ticks are monotone with a correct total, then verify+boot phases', async () => {
+  const home = sandbox('prog-home')
+  await withHome(home, async () => {
+    const root = sandbox('prog')
+    const src = makeSource(root)
+    // enough files/ objects that several YIELD_EVERY ticks fire
+    fs.mkdirSync(path.join(src, 'files'), { recursive: true })
+    for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(src, 'files', 'f' + i + '.bin'), 'x'.repeat(i + 1))
+    const events = []
+    const target = path.join(root, 'target')
+    const r = await dl.migrateData(src, target, { onProgress: p => events.push({ ...p }) })
+    assert.equal(r.ok, true, r.error || '')
+    const copy = events.filter(e => e.phase === 'copy')
+    assert.ok(copy.length >= 2, 'multiple copy progress ticks fired, got ' + copy.length)
+    assert.equal(copy[copy.length - 1].done, copy[copy.length - 1].total, 'final copy tick reaches the total')
+    for (let i = 1; i < copy.length; i++) {
+      assert.ok(copy[i].done >= copy[i - 1].done, 'copy progress is monotone')
+      assert.equal(copy[i].total, copy[0].total, 'total is stable across ticks')
+    }
+    assert.deepEqual(events.filter(e => e.phase !== 'copy').map(e => e.phase), ['verify', 'boot'], 'verify then boot phases at the tail')
+    // denominator sanity: the pre-count equals the real tree size (db+key+config+backups tree+files tree+…)
+    const countTree = d => { let n = 0; for (const e of fs.readdirSync(d, { withFileTypes: true })) n += e.isDirectory() ? countTree(path.join(d, e.name)) : 1; return n }
+    const last = copy[copy.length - 1]
+    assert.ok(last.total >= 30, 'total covers the files/ tree, got ' + last.total)
+    assert.equal(countTree(target), countTree(src), 'shape identity preserved')
+  })
+})
+
+test('migrateData onProgress is optional (legacy two-arg call still migrates)', async () => {
+  const home = sandbox('prog2-home')
+  await withHome(home, async () => {
+    const root = sandbox('prog2')
+    const src = makeSource(root)
+    const r = await dl.migrateData(src, path.join(root, 'target'))
+    assert.equal(r.ok, true, r.error || '')
+    assert.equal(dl.readBootRedirect(), path.join(root, 'target'))
+  })
+})
+
+test('readBootRedirectState: ok / missing / invalid / none, and readBootRedirect still null-guards', async () => {
+  const home = sandbox('state-home')
+  await withHome(home, async () => {
+    assert.equal(dl.readBootRedirectState().status, 'none', 'no boot file yet')
+    dl.writeBootRedirect(home)
+    assert.deepEqual(dl.readBootRedirectState(), { status: 'ok', dir: home })
+    // target vanished: 'missing' with the dir remembered (index.js surfaces a dialog), readBootRedirect null
+    const gone = path.join(home, 'gone')
+    fs.writeFileSync(dl.bootRedirectPath(), JSON.stringify({ userDataDir: gone }))
+    const st = dl.readBootRedirectState()
+    assert.equal(st.status, 'missing')
+    assert.equal(st.dir, gone)
+    assert.equal(dl.readBootRedirect(), null, 'legacy read still guards the vanished dir')
+    // invalid: corrupt JSON / relative dir
+    fs.writeFileSync(dl.bootRedirectPath(), '{ truncated')
+    assert.equal(dl.readBootRedirectState().status, 'invalid')
+    fs.writeFileSync(dl.bootRedirectPath(), JSON.stringify({ userDataDir: 'relative/path' }))
+    assert.equal(dl.readBootRedirectState().status, 'invalid')
+  })
+})
+
+test('startup honesty anchors: index.js surfaces a missing boot target; preload pushes progress', () => {
+  const idx = fs.readFileSync(path.join(process.cwd(), 'src/main/index.js'), 'utf8')
+  assert.match(idx, /readBootRedirectState\(\)/, 'index.js snapshots the boot state')
+  const notice = fs.readFileSync(path.join(process.cwd(), 'src/main/boot-notice.cjs'), 'utf8')
+  assert.match(notice, /dataLocMissingTitle/, 'missing-target dialog wired (boot-notice.cjs)')
+  assert.match(notice, /status !== 'missing'/, 'notice no-ops unless the target truly vanished')
+  // the snapshot must be taken in the same module-init region as the setPath branches (before ready)
+  const snapIdx = idx.indexOf('const bootRedirectState =')
+  const readyIdx = idx.indexOf('app.whenReady()')
+  assert.ok(snapIdx > -1 && readyIdx > -1 && snapIdx < readyIdx, 'boot state read before whenReady')
+  const pre = fs.readFileSync(path.join(process.cwd(), 'src/preload/index.js'), 'utf8')
+  assert.match(pre, /onMigrateProgress/, 'preload exposes the progress push')
+  const sys = fs.readFileSync(path.join(process.cwd(), 'src/main/handlers/system.js'), 'utf8')
+  assert.match(sys, /data-migrate-progress/, 'relocate handler emits progress')
+  assert.match(sys, /await dl\.migrateData/, 'handler awaits the async migration')
 })

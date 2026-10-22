@@ -280,7 +280,16 @@ module.exports = function systemHandlers (ctx) {
         try { if (ctx.dbm && ctx.dbm.init) ctx.dbm.init(ud) } catch { /* re-init is best-effort; close() already swallowed real errors */ }
         return { ok: false, error: i18n.mt('dataLocCloseFailed', { msg }) }
       }
-      const r = dl.migrateData(ud, targetDir)
+      const r = await dl.migrateData(ud, targetDir, {
+        // Progress fan-out to the asking renderer (the migration modal subscribes via
+        // onMigrateProgress; copy yields the event loop every few files so these actually fire).
+        onProgress: p => {
+          try {
+            const win = e.sender && !e.sender.isDestroyed() ? e.sender : getMainWindow()
+            if (win && !win.isDestroyed()) win.webContents.send('data-migrate-progress', p)
+          } catch (err) { /* progress is best-effort */ }
+        },
+      })
       if (!r.ok) {
         // Source untouched by contract (data-location.cjs never deletes/modifies the source) —
         // re-init on the old dir restores the running state and the user gets an honest error.
@@ -292,7 +301,7 @@ module.exports = function systemHandlers (ctx) {
       // Success: inform (best-effort — the process is about to exit), then relaunch into the
       // new location via the boot file written by migrateData. exit() skips the quit-flush chain,
       // which is correct here: the DB handle is already closed and the source dir is intact.
-      try { dialog.showMessageBox({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg') }).catch(() => {}) } catch { /* best-effort */ }
+      try { dialog.showMessageBox({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg', { old: ud }) }).catch(() => {}) } catch { /* best-effort */ }
       setTimeout(() => { try { app.relaunch(); app.exit(0) } catch { /* dying anyway */ } }, 400)
       return { ok: true, target: r.target }
     }

@@ -55,6 +55,13 @@ contextBridge.exposeInMainWorld('todoAPI', {
   // targetDir is omitted; migration closes the DB, copies, writes the boot file and relaunches)
   getDataLocationInfo: () => invoke('data:location-info'),
   relocateDataDir: targetDir => invoke('data:relocate', { targetDir }),
+  // Migration progress push (data-migrate-progress): the relocate modal renders
+  // {phase:'copy'|'verify'|'boot', done?, total?} and blocks closing while it runs
+  onMigrateProgress: fn => {
+    const h = (_e, p) => fn(p)
+    ipcRenderer.on('data-migrate-progress', h)
+    return () => ipcRenderer.removeListener('data-migrate-progress', h)
+  },
   encryptSecret: plain => invoke('encrypt-secret', plain),
   // r3 dead-channel removal (2026-09-28): decryptSecret had zero renderer callers while keeping
   // a reachable main-window IPC door to the lock-screen plaintext — deleted on both ends.
