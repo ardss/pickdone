@@ -46,7 +46,7 @@
  */
 import { parseNaturalDate } from '../utils/nlDate.js'
 import {dayjs, FMT } from '../utils/core.js'
-import { resolveQuickAddDate } from '../utils/quickAddDate.js'
+import { resolveQuickAddDate, reminderTsFromParse } from '../utils/quickAddDate.js'
 import { splitPasteLines, ensureTagSuffix } from '../utils/quickAddPaste.js'
 import { $elOf } from '../utils/el.js'
 import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9/A16] Space+Enter button activation
@@ -110,6 +110,12 @@ export default {
       const st = this.$store && this.$store.state
       const sel = st && st.ui ? st.ui.daySelectedTs : 0
       return (typeof sel === 'number' && Number.isFinite(sel)) ? sel : 0
+    },
+    // [P2 config-surface 2026-10-22] A time-bearing NL parse ("明天下午3点 …", "后天 09:30 …") shows
+    // the time in the chip — the created task must carry it as reminderTime. 0 for date-only
+    // parses and when a manual date chip overrides the parsed date (decision in quickAddDate.js).
+    parsedReminderTs () {
+      return reminderTsFromParse({ pickedDate: this.pickedDate, parsed: this.parsed })
     }
   },
   mounted () {
@@ -194,6 +200,7 @@ export default {
             todoContent: content,
             todoDescription: '',
             todoDate: resolveQuickAddDate({ pickedDate: effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf(), viewDayTs: this.viewDayTs }),
+            // multi-line paste lines skip NL parsing (createLines contract) → no reminder handoff here
             todoReminderTime: 0,
             todoDifficultyLevel: 0
           }
@@ -298,7 +305,9 @@ export default {
         // When no date is specified: the todo box page defaults to "no date" (into the todo box), other pages default to today (project baseline semantics);
         // a non-today selected day on the today page is the target ([J1 journey-audit])
         todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf(), viewDayTs: this.viewDayTs }),
-        todoReminderTime: 0,
+        // [P2 config-surface 2026-10-22] the chip's time is a promise: a time-bearing NL parse wires
+        // the reminder; date-only parses and manual-chip overrides stay 0 (quickAddDate.reminderTsFromParse)
+        todoReminderTime: this.parsedReminderTs,
         todoDifficultyLevel: 0,
         }
       // Category/project page context: belong to the current list, not the global default category (otherwise the current page cannot see the created task)
