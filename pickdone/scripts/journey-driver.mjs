@@ -153,7 +153,11 @@ export async function bootJourney ({ cdpPort, seedConfig, urlFilter, dataDir: re
     const { wsUrl, cdp } = await waitInteractiveMain(cdpBase, { urlFilter })
     return {
       dataDir, dbDir, child, cdpBase,
-      /** Evaluate in the MAIN shell page. */
+      /** Evaluate in the MAIN shell page. NOTE (probe-shape trap, bitten 3x): eval awaits the
+       * OUTER promise (awaitPromise:true), but JSON.stringify INSIDE the page cannot serialize a
+       * Promise-valued property — it emits {}. Await inner values FIRST, then build the object:
+       *   good: `await (async () => { const c = await todoAPI.getAll(); return { count: c.length } })()`
+       *   bad:  `JSON.stringify({ count: todoAPI.getAll() })`  → {"count":{}}  (phantom 0) */
       eval: (expr, timeoutMs) => cdp.eval(expr, timeoutMs),
       /** Poll an expression until truthy — SPA mount/race guard (todoAPI exists before Vue mounts). */
       waitFor: async (expression, { timeoutMs = 15000, intervalMs = 400 } = {}) => {
