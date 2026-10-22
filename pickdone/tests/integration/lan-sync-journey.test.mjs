@@ -177,17 +177,22 @@ class Instance {
     // linux CI (ubuntu-latest) has no user namespaces / GPU: electron needs --no-sandbox and
     // --disable-gpu or it dies with code=null before the CDP port ever opens (PR #160 evidence)
     const linuxFlags = process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] : []
+    const env = {
+      ...process.env,
+      PICKDONE_MULTI: '1',
+      TODO_USER_DATA_DIR: this.userDir,
+      // keep TODO_DB_DIR out: the data dir is owned by TODO_USER_DATA_DIR (dev-duo contract)
+      TODO_DB_DIR: '',
+      TODO_SYNC_PORT: String(this.syncPort),
+    }
+    // Agent/IDE hosts (DSH/VSCode) export ELECTRON_RUN_AS_NODE=1 — electron.exe then boots as
+    // plain Node and require('electron') resolves to the npm path-string shim (same crash shape
+    // e2e-exit-close.test.mjs strips for; journey-driver.mjs line-145 precedent).
+    delete env.ELECTRON_RUN_AS_NODE
     this.proc = spawn(ELECTRON_BIN, ['.', ...linuxFlags, '--remote-debugging-port=' + this.cdpPort], {
       cwd: PICKDONE_ROOT,
       stdio: 'ignore',
-      env: {
-        ...process.env,
-        PICKDONE_MULTI: '1',
-        TODO_USER_DATA_DIR: this.userDir,
-        // keep TODO_DB_DIR out: the data dir is owned by TODO_USER_DATA_DIR (dev-duo contract)
-        TODO_DB_DIR: '',
-        TODO_SYNC_PORT: String(this.syncPort),
-      },
+      env,
     })
     this.pid = this.proc.pid
     this.proc.on('exit', (code) => { this.exitCode = code })
