@@ -311,9 +311,11 @@ async function bootstrap () {
   // sanitized (unknown/type-mismatch keys dropped, numeric strings coerced) exactly like the
   // restore()/load() paths, so junk from a peer or an old CLI build cannot corrupt live settings.
   if (window.todoAPI.onExternalSettingsChanged) {
+    // PACKED payload: store.dispatch() drops a bare third argument (it reads it as Vuex options),
+    // so the origin stamp must ride INSIDE the payload (updateExternal unpacks it).
     window.todoAPI.onExternalSettingsChanged((patch, originSavedAt) => {
       try {
-        if (patch && Object.keys(patch).length) store.dispatch('settings/updateExternal', patch, originSavedAt)
+        if (patch && Object.keys(patch).length) store.dispatch('settings/updateExternal', { patch, originSavedAt })
       } catch (e) { console.error('[cli-settings] hot-apply failed', e) }    })
   }
 

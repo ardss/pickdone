@@ -533,7 +533,7 @@ export default {
      *  Y6: the onboardingToursSeen ledger merges per-key max on inbound (never whole-doc clobber) —
      *  a peer seeing tour "pips" must not erase this device's other seen entries. Local writes
      *  (resetToursSeen) still replace wholesale because they bypass this merge. */
-    async updateExternal ({ state, dispatch }, patch, originSavedAt) {
+    async updateExternal ({ state, dispatch }, payload, maybeOrigin) {
       // [J-audit P2 fix 2026-10-22] Echo suppression: the CLI watcher hot-applies db.settingsState
       // changes, but the renderer's OWN debounced mirror lands in that same channel — and its
       // two-layer debounce (persist 2s + dbMirror 2s) lets a STALE generation land AFTER a newer
@@ -542,7 +542,16 @@ export default {
       // covered by this window's own mirror watermark is our own echo, not an external change.
       // Callers without an origin (LAN sync, DB restore re-dispatch) are unaffected; aux windows
       // never mirror, so their watermark stays empty and every patch applies.
+      // PAYLOAD SHAPE: store.dispatch() only forwards (type, payload, options) — a bare third arg
+      // is dropped as Vuex options (the v1 of this fix died exactly there: suppression inert in
+      // the real app while the direct-call unit test passed). In-app callers pack
+      // { patch, originSavedAt }; legacy/plain callers (LAN sync, DB restore, unit tests) pass a
+      // bare patch and the optional direct-call origin still works.
+      const packed = payload && typeof payload === 'object' && !Array.isArray(payload) && 'patch' in payload
+      const patch = packed ? payload.patch : payload
+      const originSavedAt = packed ? payload.originSavedAt : maybeOrigin
       if (originSavedAt && isOwnMirrorStamp('db.settingsState', originSavedAt)) return
+      if (!patch) return
       const clean = sanitizeSettingsPatch(patch, state) // U3: live state is the merge base for partial object fields
       if (clean.onboardingToursSeen && typeof clean.onboardingToursSeen === 'object' && !Array.isArray(clean.onboardingToursSeen)) {
         clean.onboardingToursSeen = mergeTourMap(state.onboardingToursSeen, clean.onboardingToursSeen)

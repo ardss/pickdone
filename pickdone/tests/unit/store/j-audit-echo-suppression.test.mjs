@@ -65,3 +65,23 @@ test('the real key works end to end: mirror the state, then the watcher echo of 
   await settings.actions.updateExternal(ctx, { tomatoTime: 42 }, 777778)
   assert.equal(dispatched.length, 1, 'a later CLI/peer stamp still applies')
 })
+
+test('PACKED payload form works: store.dispatch drops a bare 3rd arg, so the origin must ride inside the payload', async () => {
+  // The v1 of this fix was inert in the real app for exactly this reason: main.js dispatched
+  // (type, patch, origin) and Vuex read the origin as options and dropped it — the direct-call
+  // unit test passed while every real echo applied. This pins the packed shape main.js uses.
+  const { dispatched, ctx } = makeCtx()
+  // stamps must stay monotonic ACROSS tests in this module (lastOwnStamp is a running max)
+  dbMirror.mirrorToDb('db.settingsState', { tomatoTime: 5, _savedAt: 9000000, schemaV: 1 })
+  await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 5 }, originSavedAt: 9000000 })
+  await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 5 }, originSavedAt: 8999999 })
+  assert.equal(dispatched.length, 0, 'packed own echo (current and stale) suppressed')
+  await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 30 }, originSavedAt: 9000001 })
+  assert.equal(dispatched.length, 1, 'packed foreign stamp applies')
+  assert.equal(dispatched[0].tomatoTime, 30)
+  await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 35 } })
+  assert.equal(dispatched.length, 2, 'packed payload without origin applies')
+  // legacy direct-call form stays supported for LAN-sync/DB-restore/tests
+  await settings.actions.updateExternal(ctx, { tomatoTime: 5 }, 9000000)
+  assert.equal(dispatched.length, 2, 'legacy direct-call own echo still suppressed')
+})
