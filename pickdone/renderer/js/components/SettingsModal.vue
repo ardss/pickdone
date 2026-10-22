@@ -129,10 +129,15 @@
             <div class="form">
               <div class="form-label">{{ $t('statsE.SettingsModal.securityPrivacySection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.securityLockLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableSecurityLock" @change="onLockToggle"/></div></div>
-              <div class="form-item" v-if="st.enableSecurityLock"><span class="form-item__label">{{ $t('statsE.SettingsModal.lockPasswordLabel') }}</span>
+              <!-- J-audit 2026-10-22 P1: the password row was v-if="st.enableSecurityLock" while
+                   onLockToggle refuses to enable the lock until a password exists — a fresh user
+                   could never reach the password input (guard demands it, the UI hid it). The row
+                   is always rendered now; "Lock now" stays gated on the enabled lock. -->
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.lockPasswordLabel') }}</span>
                 <div class="form-item__control">
                   <el-input size="small" class="ctl-md" show-password :aria-label="$t('statsE.SettingsModal.lockPasswordLabel')" :model-value="lockPwDraft" @change="saveLockPassword($event)"/>
-                  <button class="mini" @click="setLockTest">{{ $t('statsE.SettingsModal.lockNowBtn') }}</button>
+                  <button v-if="st.enableSecurityLock" class="mini" @click="setLockTest">{{ $t('statsE.SettingsModal.lockNowBtn') }}</button>
+                  <span v-if="!st.securityLockPassword" class="tip">{{ $t('statsE.SettingsModal.lockNeedsPassword') }}</span>
                 </div></div>
             </div>
             <!-- Developer mode sinks to the bottom and is de-emphasized (user-finalized): a low-frequency internal switch, one line of hint suffices -->
@@ -386,7 +391,10 @@ export default {
     document.removeEventListener('click', this.maskClickHide)
   },
   methods: {
-    /* Replay onboarding: clear the ledger flag and re-run the today-page spotlight */
+    /* Replay onboarding: clear the tour ledger and run the FULL hands-on first journey
+       (onboardingTours.runJourney — seeds a sample task, then walks create -> pick -> drag ->
+       focus -> done). NOT a today-page spotlight: the journey's first stage has no visible UI
+       until the user creates a task (live-verified 2026-10-22, journey audit). */
     replayOnboarding () {
       import('../utils/onboardingTours.js').then(m => {
         m.resetToursSeen()
