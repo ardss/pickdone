@@ -11,7 +11,6 @@
  */
 import { readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { availableParallelism } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 // 2026-10-09 preflight sweep: exit-only cleanup is bypassed when a test child is SIGKILLed
@@ -66,6 +65,11 @@ const DEEP_FILES = new Set([
   'relay-413-forceexit-teardown.test.mjs',
   // cross-process relay drill, self-declared 120s timeout (unit/main)
   'relay-cross-process-outbox.test.mjs',
+  // D6-pending: parent+CLI-child DOUBLE CONNECTION race on the fixture SQLite ("database is
+  // locked" → tomato-ledger migration warning → child output never settles → the whole FILE
+  // burns the 300s ceiling). Spawn-heavy + lock-racy under ANY concurrency; green in isolation.
+  // Returns to core the moment D6 (fixture busy_timeout/awaited child lifecycle) lands.
+  'c1-parse-ux.test.mjs',
 ])
 
 // Sibling spec dir: pickdone/test/ (flat, next to tests/) used to be executed by NOTHING —
@@ -194,12 +198,15 @@ const TEST_TIMEOUT_MS = 300000
 // default" (= cores, observed 8-12 here) to 4 — the electron-booting integration specs are the
 // flake surface under a loaded box, and the boot flakes (J4/F4a family) reproduce only at high
 // concurrency. 4 trades wall time for boot stability; TEST_CONCURRENCY env still overrides.
-// 2026-10-23 perf wave, tier-aware default: the boot-stability cliff is a DEEP-tier property
-// (real process/socket spawning). Pure in-process specs have no such cliff and scale with
-// workers — core tier defaults to cores-2 (cap 8), deep/all keep the boot-stability cap.
-const CORE_COUNT = availableParallelism()
-const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY ||
-  String(tierArg === 'core' ? Math.min(CORE_COUNT - 2, 8) : 4)
+// 2026-10-23 FALSIFIED HYPOTHESIS (kept for the record): a tier-aware core default of
+// cores-2 (8) was measured LIVE — 22.1min but 7 not-ok entries, and the follow-up acceptance
+// run reproduced the SAME suite families twice in a row (c1-parse-ux, d26 plan, purge family):
+// root cause is NOT scheduling starvation but a parent+child DOUBLE CONNECTION race on fixture
+// SQLite DBs in the cli suite family ("database is locked" → tomato-ledger migration hang →
+// 300s ceiling executes the whole file). Concurrency 4 shows the same families at lower
+// frequency; the real fix is D6 (fixture busy_timeout + awaited child connections), not a
+// bigger worker pool. Default stays 4 until D6 lands.
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
