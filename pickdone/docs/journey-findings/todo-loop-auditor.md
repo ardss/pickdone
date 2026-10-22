@@ -367,4 +367,43 @@ round-2 rebuild.
   already fixed on-branch (ea8a8a09, boot-time lang application); live re-check queued on the
   round-2 rebuild. Cross-check, not a new finding.
 
+## Round 2 — train #10 triple verify + addenda closures
+
+- **J15 ✓ LIVE** (train #10): purge-all → success toast 已永久清空回收站（1 条任务）, no
+  清空失败, bin empties in-session (j23-01).
+- **J17 ✓ LIVE** (train #10): child-driven auto-complete → undo → child checks survive [T,T],
+  parent back to incomplete — snapshot-revert works in the real app (j23-02).
+- **html-lang ✓** with the assertion corrected per the lead's verdict: ea8a8a09 sets the BCP47
+  short form `en`, not `en-US` — my j23 leg-3 expectation was the artifact; no product change.
+- **[dw3 day-caliber] REAL REGRESSION from my round-1 merges — fixed 66a86011, not re-anchored.**
+  The counted ratchet (no additive/multiplicative ms day-step in renderer/js) caught MY J5 stats
+  repair: chartModels.js lastWeek used `end: s + 7 * DAY_MS`. `s` is always a local midnight, so
+  `+dayShift(s, 7)` is semantically identical and calendar-exact — the sanctioned primitive, same
+  as the file's own line-61 window builder. Caliber suite 15/15, f1-stats-fixes 8/8, eslint clean.
+- **[ENV] lan-sync-journey spawn stripped of ELECTRON_RUN_AS_NODE (d91eab72)** — this DSH host
+  exports it (=1 confirmed); J1 standalone green after the fix. e2e-exit-close F1 already strips
+  (line 131) and passes standalone; its observed red is host-load flakiness on the closeRequest
+  quit races, not env. Known pre-existing: full lan-sync-journey hits the 300s runner cap at J5+
+  under load (J1–J4 green individually).
+
+## [J7] P2 a reminder born ALREADY PAST-DUE never fires — the two mechanisms disagreed — FIXED 8c889c07
+
+pomodoro R2 located the root (scheduler.js was outside their scope); this lane fixed it.
+`needsCatchUp(todo)` returns true for a past unfired instance, so the write path delegates to the
+full reloadAll — whose catch-up gate `ts > lastSeen` can never cover a main reminder created
+behind the frontier (the watermark predates the row). Swallowed with zero feedback; the frontier
+then advanced past it forever.
+
+**Fix (reloadAll catch-up branch)**: exemption for the MAIN instance (offset 0) whose row
+`createTime > lastSeen` — never seen by any sweep → fires once through the same fire-then-watermark
+path. Guardrails: peer-synced history (createTime ≤ lastSeen) stays swallowed (D22 anti-bombardment);
+offset/extra instances keep never-fire-past semantics (a degenerate past offset on a future anchor
+is an anchoring artifact); firstRun still skips everything; failed fires still roll the frontier to
+ts−1 (D22 P3) and firedReminders still dedups forever. **Tests**
+(tests/unit/main/j7-born-past-due-reminder.test.mjs): fire-once + no-re-fire, history-not-fired,
+degenerate-offset-not-fired, failed-fire-retry-eligibility — 1+4 RED on the old gate, 2+3 green
+guards; all 8 scheduler suites 37/37; eslint clean. Known residual (needs a reminder-modified row
+stamp to do right): re-aiming an OLD task's main reminder into the past via the edit panel stays
+unfired — filed, not fixed, to keep the sync-history guarantee.
+
 ---
