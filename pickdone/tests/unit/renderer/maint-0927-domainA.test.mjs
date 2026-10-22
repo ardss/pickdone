@@ -160,7 +160,12 @@ function quickAddCtx (quiet, dispatch) {
         success () { message.success++ }
       },
       $emit () {},
-      $announce: null
+      $announce: null,
+      // [2026-10-23 D8 triage] b85b5ca8 introduced the shake-replay failure path: onEnter now
+      // calls this.markFailed() instead of setting this.failed directly. The ctx binds the REAL
+      // component method with a sync $nextTick so the replay logic itself stays under test.
+      $nextTick: fn => fn(),
+      markFailed: QuickAddComp.methods.markFailed
     },
     message
   }
@@ -186,21 +191,24 @@ test('fix8 static anchors: failed class binding, inline alert div, cleared on in
   assert.match(src, /'qa-failed': failed/)
   assert.match(src, /@input="failed = false"/)
   assert.match(src, /class="qa-error" role="alert"/)
-  assert.match(src, /if \(this\.quiet\) this\.failed = true/, 'error path mirrors the success path quiet contract')
+  assert.match(src, /if \(this\.quiet\) this\.markFailed\(\)/, 'error path mirrors the success path quiet contract (shake replay via markFailed, b85b5ca8)')
 })
 
 /* ================= Fix 9: TaskAccountModal fmtDate keeps the year for past years ================= */
 
 const AccountComp = loadSFC('renderer/js/components/TaskAccountModal.vue', {
-  FMT: { date: 'YYYY-MM-DD' }, dayjs, dialogA11y: {}, FOCUS_MAX_MINUTES: 600
+  FMT: { date: 'YYYY-MM-DD', cnDate: 'MMM D' }, dayjs, dialogA11y: {}, FOCUS_MAX_MINUTES: 600
 })
 
-test('fix9 fmtDate: previous-year ledger rows keep YYYY-MM-DD; current-year rows stay MM-DD', () => {
+test('fix9 fmtDate: previous-year ledger rows keep YYYY-MM-DD; current-year rows use the locale FMT.cnDate abbreviation', () => {
   const fmtDate = AccountComp.methods.fmtDate
   const past = fmtDate.call(null, { endTime: +dayjs('2024-05-03 12:00') })
   assert.equal(past, '2024-05-03', 'the year must survive on previous-year rows')
   const cur = dayjs().month(5).date(3).hour(12)
-  assert.equal(fmtDate.call(null, { endTime: +cur }), cur.format('MM-DD'), 'current-year abbreviation unchanged')
+  // [2026-10-23 D8 triage] the current-year branch is locale-driven now (FMT contract comment in
+  // TaskAccountModal.vue): it formats via FMT.cnDate instead of a hardcoded MM-DD, matching
+  // DayDeck/EditPanel fmtMd. The harness pins cnDate:'MMM D' (the en-US shape) above.
+  assert.equal(fmtDate.call(null, { endTime: +cur }), cur.format('MMM D'), 'current-year abbreviation via the locale FMT.cnDate')
 })
 
 /* ================= Fix 10: openAdd never books a future "completed" focus ================= */
@@ -286,6 +294,8 @@ test('fix16 static anchors: template routes dragend through endDrag; dropOn keep
   const src = read('renderer/js/components/MatrixGrid.vue')
   assert.match(src, /@dragend="endDrag"/)
   assert.doesNotMatch(src, /@dragend="dragId=null"/, 'the asymmetric inline reset is gone')
-  const dropOn = src.match(/dropOn \(q\) \{[\s\S]*?\n {2}\}/)
+  // [2026-10-23 D8 triage] dropOn gained the `e` param in the 2026-10-09 cross-view-drop fix;
+  // the anchor regex tracks the signature, the pinned contract (drop clears overKey) is unchanged.
+  const dropOn = src.match(/dropOn \(q, e\) \{[\s\S]*?\n {2}\}/)
   assert.ok(dropOn && /this\.overKey = null/.test(dropOn[0]), 'drop path still clears overKey')
 })
