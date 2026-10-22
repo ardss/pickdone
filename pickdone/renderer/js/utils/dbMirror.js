@@ -19,6 +19,24 @@ const timers = {}
 const pendings = {} // Blobs pending within the debounce window (used by quit flush)
 const newest = {} // Newest blob ever queued per key — a late rejection of an older write must never clobber it
 const attempts = {} // Consecutive failure count per key (drives the backoff and the give-up)
+// [J-audit P2 fix 2026-10-22] Echo-suppression watermark: the newest _savedAt THIS window has
+// queued per key. The main-process external-db-watch hot-applies db.settingsState changes for CLI
+// coexistence, but the renderer's OWN debounced mirror lands in that same channel — and its
+// two-layer debounce (persist 2s + dbMirror 2s) lets a STALE generation land AFTER a newer user
+// write, which the watcher then treats as a fresh external change and hot-applies over it
+// (measured: 专注时长 5→10 double write bounced to 5 at +4.3s, config.json included). A patch
+// whose origin stamp is not newer than this watermark originated from this window's own mirror
+// pipeline and must never be applied back (store/settings.js updateExternal).
+const lastOwnStamp = {}
+/** True when `stamp` identifies a blob this window itself queued (any generation up to the newest).
+ *  Foreign stamps (CLI / peer, stamped at their write time) are never "own" unless the clock says
+ *  they predate our watermark — the only accepted loss is a same-instant CLI/echo race, which the
+ *  next external change re-syncs. */
+export function isOwnMirrorStamp (metaKey, stamp) {
+  const s = Number(stamp)
+  if (!s) return false
+  return s <= (lastOwnStamp[metaKey] || 0)
+}
 
 function scheduleTimer (metaKey, delay) {
   if (timers[metaKey]) return
@@ -152,6 +170,7 @@ function writeNow (metaKey, blob) {
 export function mirrorToDb (metaKey, blob, immediate = false) {
   pendings[metaKey] = blob
   newest[metaKey] = blob
+  if (blob && blob._savedAt) lastOwnStamp[metaKey] = Math.max(lastOwnStamp[metaKey] || 0, Number(blob._savedAt))
   attempts[metaKey] = 0 // a fresh user write gets a fresh retry budget
   clearUnflushed(metaKey) // a fresh blob supersedes any parked copy of this key
   if (immediate) {

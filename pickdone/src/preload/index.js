@@ -209,9 +209,10 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('tomato-records-changed', h)
     return () => ipcRenderer.removeListener('tomato-records-changed', h)
   },
-  // CLI settings set hot-sync: the main process watcher pushes this event after diffing changed keys, and the renderer dispatches settings/update
+  // CLI settings set hot-sync: the main process watcher pushes this event after diffing changed keys, and the renderer dispatches settings/update.
+  // [J-audit P2 fix] the 2nd arg is the origin blob's _savedAt — the renderer suppresses its own mirror's echoes (stale-generation bounce).
   onExternalSettingsChanged: fn => {
-    const h = (_e, patch) => fn(patch)
+    const h = (_e, patch, originSavedAt) => fn(patch, originSavedAt)
     ipcRenderer.on('external-settings-changed', h)
     return () => ipcRenderer.removeListener('external-settings-changed', h)
   },
