@@ -40,6 +40,33 @@ const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-vis
 
 const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
 
+// --tier=core|deep (2026-10-23 efficiency wave): the full pool mixes pure in-process specs with
+// suites that bind real sockets, spawn real processes, or boot real Electron instances. Those
+// deep suites are slow (minutes each) AND load-sensitive: under a loaded dev host they cascade
+// into contention-artifact reds (2026-10-22 fast-gate unit run: 12 of 17 not-ok entries were
+// exactly this class, every one green in isolation). `--tier=core` = default pool minus this
+// list; `--tier=deep` = this list only; no --tier = everything (CI / full check:all unchanged).
+// The split never silently drops a suite from the FULL pool — it only re-routes where a tier
+// runs. Exclusion is by bare FILENAME across all suites (same doctrine as EXCLUDE above):
+// never reuse these names elsewhere.
+const DEEP_FILES = new Set([
+  // live Electron, boots the real app twice (exit-mode quit + tray-mode hide)
+  'e2e-exit-close.test.mjs',
+  // two real paired instances, multi-minute journey (J4 reconnect lives here)
+  'lan-sync-journey.test.mjs',
+  // loopback server suites — bind real ports / long socket lifecycles
+  'lan-sync-loopback.test.mjs',
+  'v2-acceptance-drill.test.mjs',
+  'd9-loopback-mesh-scale.test.mjs',
+  'd9-loopback-two-machine-drill.test.mjs',
+  'd9-loopback-restart-conflict.test.mjs',
+  'd9-concurrency-smoke.test.mjs',
+  'same-host-instance-20261015.test.mjs',
+  'relay-413-forceexit-teardown.test.mjs',
+  // cross-process relay drill, self-declared 120s timeout (unit/main)
+  'relay-cross-process-outbox.test.mjs',
+])
+
 // Sibling spec dir: pickdone/test/ (flat, next to tests/) used to be executed by NOTHING —
 // discover() only scanned tests/**, so 13 regression specs lived on manual discipline alone and
 // at least two had silently rotted to red (2026-09-28). They are now discovered alongside tests/
@@ -91,9 +118,24 @@ const suites = process.argv
   .map(a => /^--suite=([\w,]+)$/.exec(a)?.[1])
   .filter(Boolean)
   .flatMap(s => s.split(','))
-// drop the --suite args before forwarding the rest to node --test
-const forwardArgs = process.argv.slice(2).filter(a => !a.startsWith('--suite='))
+const tierArg = (/^--tier=(\w+)$/.exec(process.argv.find(a => a.startsWith('--tier=')) || '') || [])[1]
+if (tierArg && !['core', 'deep'].includes(tierArg)) {
+  console.error(`✗ [run-all] unknown --tier=${tierArg} (valid: core|deep)`)
+  process.exit(1)
+}
+// drop the --suite/--tier args before forwarding the rest to node --test
+const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=')))
 const all = discover(dir).concat(discover(SIBLING_DIR, [], TEST_EXTS))
+// Every DEEP_FILES entry must match a discovered file — a stale name would silently shrink the
+// deep pool (and silently GROW the core pool) with nobody the wiser.
+{
+  const discovered = new Set(all.map(f => path.basename(f)))
+  const missing = [...DEEP_FILES].filter(n => !discovered.has(n))
+  if (missing.length) {
+    console.error(`✗ [run-all] DEEP_FILES entries matching no discovered test file: ${missing.join(', ')}`)
+    process.exit(1)
+  }
+}
 // Fail-closed: refuse to run (instead of silently misclassifying) when a test file lives under an
 // unknown top-level directory — force an explicit suite classification. Sibling specs
 // (pickdone/test/) are pre-classified as 'unit' by suiteOf, so they skip this check.
@@ -103,10 +145,19 @@ if (unclassified.length) {
   unclassified.forEach(f => console.error(`  ${path.relative(dir, f)}`))
   process.exit(1)
 }
-const files = suites.length ? all.filter(f => suites.includes(suiteOf(f))) : all
+let files = suites.length ? all.filter(f => suites.includes(suiteOf(f))) : all
+let tierNote = ''
+if (tierArg === 'core') {
+  tierNote = ` (deep pool: ${[...DEEP_FILES].length} file(s) re-routed to --tier=deep / full runs)`
+  files = files.filter(f => !DEEP_FILES.has(path.basename(f)))
+} else if (tierArg === 'deep') {
+  tierNote = ' (deep pool only)'
+  files = files.filter(f => DEEP_FILES.has(path.basename(f)))
+}
 
-if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites.length ? ` (suite=${suites.join(',')})` : ''}`); process.exit(1) }
+if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites.length ? ` (suite=${suites.join(',')})` : ''}${tierArg ? ` (tier=${tierArg})` : ''}`); process.exit(1) }
 if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} -> ${files.length} file(s)`)
+if (tierArg) console.error(`[run-all] tier=${tierArg}: ${files.length} file(s)${tierNote}`)
 
 // With shell:true, unquoted file paths explode when the project path contains spaces (e.g. D:My Projects): the argument string is cut at the space;
 // executing the binary inside the electron package does not rely on shell lookup, so shell can be safely dropped here
@@ -238,8 +289,10 @@ if (forwardArgs.includes('--experimental-test-coverage')) {
     const failCount = (stdoutText.match(/^not ok /gm) || []).length
     // suite tag: the coverage ratchet only auto-raises its baseline from the suite it was
     // calibrated on ('unit'); a full-suite summary must be visibly labeled so the ratchet
-    // can tell the instruments apart instead of silently mixing them.
-    const suiteTag = suites.length ? suites.join('+') : 'all'
+    // can tell the instruments apart instead of silently mixing them. A --tier run is a
+    // DIFFERENT instrument still (its file set is a strict subset/superset) — the tier rides
+    // the tag so the ratchet treats it as compare-only, never as a raise source.
+    const suiteTag = (suites.length ? suites.join('+') : 'all') + (tierArg ? `+${tierArg}` : '')
     fs.writeFileSync(path.join(artifacts, 'coverage-summary.json'),
       JSON.stringify({ ...all, failCount, suite: suiteTag, generatedAt: new Date().toISOString() }, null, 2) + '\n')
     if (all) console.error(`[run-all] coverage summary written: ${all.lines}/${all.branches}/${all.functions}`)

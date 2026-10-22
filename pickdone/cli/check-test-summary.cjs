@@ -54,6 +54,16 @@ function parseSummary (tap) {
 function red (msg, tapFile) {
   console.error(`✗ [check-test-summary] ${msg}`)
   if (tapFile) {
+    // Failure TAP lands IN THE REPO TREE (tests/.artifacts/last-failed-unit.tap), not just
+    // %TEMP%: a tmpdir path nobody can find cost a whole diagnostic cycle on 2026-10-22 (a
+    // budget-killed run left zero accessible diagnostics and burned three gate re-runs).
+    // Overwrite per run — it is a pointer to the LATEST failure, not an archive.
+    try {
+      const repoTap = path.join(__dirname, '..', 'tests', '.artifacts', 'last-failed-unit.tap')
+      fs.mkdirSync(path.dirname(repoTap), { recursive: true })
+      fs.copyFileSync(tapFile, repoTap)
+      console.error(`  —— full failing TAP copied to ${repoTap} ——`)
+    } catch { /* best effort — the tmpdir original below is still there */ }
     const lines = fs.readFileSync(tapFile, 'utf8').split(/\r?\n/)
     if (lines.length) {
       console.error(`  —— TAP 输出尾部 ${TAIL_LINES} 行 ——`)
@@ -90,7 +100,12 @@ if (arg) {
   const fd = fs.openSync(tapFile, 'w')
   // --with-coverage: forward --experimental-test-coverage so run-all also writes the coverage
   // summary for the ratchet gate (avoids a second concurrent full-suite run)
-  const extra = process.argv.includes('--with-coverage') ? ['--experimental-test-coverage'] : []
+  // --core: forward --tier=core (pure in-process specs; deep suites — live Electron, two-instance
+  // lan-sync journeys, loopback drills — stay with the full check:all gate)
+  const extra = [
+    ...(process.argv.includes('--with-coverage') ? ['--experimental-test-coverage'] : []),
+    ...(process.argv.includes('--core') ? ['--tier=core'] : []),
+  ]
   const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
     cwd: path.join(__dirname, '..'),
     stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部

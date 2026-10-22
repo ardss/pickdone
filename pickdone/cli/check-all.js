@@ -274,8 +274,19 @@ const ON_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS)
 const SKIP_LIVE = process.env.CHECK_ALL_SKIP_LIVE === '1'
 if (SKIP_LIVE && !ON_CI) console.warn('  [warn] 本地环境忽略 CHECK_ALL_SKIP_LIVE——活体池只在 CI 的双 OS 分工下跳过(红队 G1:防该 env 未来被误用成本地静默降级开关)')
 if (FAST) {
-  console.log('\n===== [check:fast] 只跑静态门禁+类型+单元（跳过 build/活体/视觉——CI 与发布仍走全量 check:all） =====')
-  results.push(...await runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }))
+  // Fast tier runs the CORE test tier: the deep suites (live-Electron e2e, two-instance
+  // lan-sync journeys, loopback drills) are the wall-time dominators AND the load-sensitive
+  // flake surface — under a loaded dev host they cascade into contention-artifact reds
+  // (2026-10-22 fast unit run: 12 of 17 not-ok entries, each green in isolation). CI and the
+  // full check:all keep the FULL pool. The coverage ratchet stage is also skipped here: its
+  // baseline is calibrated on the full pool, a core-pool percentage is a different instrument
+  // (compare-only at the ratchet), and coverage discipline stays enforced by the merge gate.
+  const fastStages = GROUPS[1].stages
+    .filter(([name]) => !name.startsWith('覆盖率棘轮'))
+    .map(([name, cmd, args, env, budget]) =>
+      (name.startsWith('单元测试') ? [name, cmd, [...(args || []), '--core'], env, budget] : [name, cmd, args, env, budget]))
+  console.log('\n===== [check:fast] 静态门禁+类型+core 层单元（深潜层套件与覆盖棘轮归全量 check:all） =====')
+  results.push(...await runPool(fastStages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }))
 } else if (ON_CI) {
   if (SKIP_LIVE) {
     console.log('\n===== [CI 模式+SKIP_LIVE] 只跑静态池(2 道),活体池由另一 OS job 独扛 =====')
