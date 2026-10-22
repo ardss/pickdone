@@ -95,6 +95,22 @@ Settings persistence pattern (flip → config.json → `location.reload()` → U
 - Security lock circuit: enable guard, 立即锁定, wrong-pw rejection (`密码错误`), right-pw unlock, disable, password persistence (`enc1:`) — J3 + J6.
 - Reminder circuit: UI-set reminder fires on time (J5b above).
 
+## [J6] P2 (FIXED `8caae2e6` — live verify rides train #6) — two quick tomato-duration writes: the first write silently bounces back on every surface, config.json included
+
+Evidence (my J10 repro, DB forensics; corroborates pomodoro journeyB5/B6): settings page, 专注时长 5 then 10 written ~2.3s apart. t+2.8–3.8s all surfaces = 10 ✓; **t+4.35s store/LS/UI/config.json ALL revert to 5**, and the DB blob reads `{tomatoTime:5, _savedAt:t+2.0}` — the pre-second-write snapshot, landing late; t+4.9s the second blob lands and 10 re-applies. The user sees their change flap back to the old value and (per pomodoro B6's later reads) the flap can settle on the stale value.
+
+Root cause: the renderer's own debounced db.settingsState mirror (persist 2s + dbMirror 2s ≈ DB write 4s after the change) lands in the SAME DB channel the external-db-watch settings branch hot-applies for CLI coexistence. A stale mirror generation landing after a newer state has `_savedAt >` the watcher watermark, so the watcher treats OUR OWN mirror as a fresh external change, diffs it against its previous snapshot, and broadcasts `{tomatoTime:5}` back — the renderer hot-applies it (updateExternal → update action → config IPC), reverting everything. Not LS ping-pong: it is mirror-generation reordering consumed as an external write.
+
+Fix (`8caae2e6`, D1 preserved): dbMirror records the newest `_savedAt` this window queued per key (`isOwnMirrorStamp`); the watcher sends the origin stamp as a 2nd arg on `external-settings-changed`; preload/main.js thread it into `settings/updateExternal`, which skips patches covered by our own watermark. Foreign stamps (CLI/LAN peer) are newer and still apply; no-origin callers (LAN-sync rows, DB restore) and aux windows (never mirror) are untouched. Tests: `tests/unit/store/j-audit-echo-suppression.test.mjs` + 146 green across watcher/dualwrite-shape/settings suites.
+
+**Pre-existing gate red (not mine):** `cli/check-dualwrite.cjs` fails on HEAD for `TomatoFloatPage.vue::tomatoFloatVisPing:300` — LS write point landed unregistered with pomodoro's `0a7a0766`; needs the tomato owner's ledger registration.
+
+**Self-audit: <5s flip pairs in my earlier stick-verifications (suspects until re-verified on the fixed build):**
+- J7: 开机自启动 ON→OFF ~1.1s apart (same key twice) — post-reload read showed false, but the read happened well after the 4.3s bounce window, so a transient bounce-and-restore (or a settle-on-stale) would have been invisible. SUSPECT.
+- J7c: 专注时长 30 → 休息时长 10 → 负载 20, three different keys ~0.5–1s apart — different keys means blob#2's diff could have carried a stale tomatoTime back; final reload read was ≥5s later. SUSPECT.
+- All other flips were ≥5s apart or single-write-per-key and are NOT suspects.
+Re-verification of both suspect sequences queued on train #6.
+
 ## Test-infrastructure notes
 - **`document.visibilityState` does NOT track Electron `BrowserWindow.hide()` in this Electron/CDP setup** — control test J3c: even the e2e-proven close-to-tray hide keeps the page reporting `visible` (8/8 samples). Any hide-oracle in journeys/e2e must read window state (`win.isVisible()` main-side), never page visibility. (J3's "main window stayed visible while locked" was this artifact; the lock's hide uses the same `win.hide()` as the e2e-locked close-to-tray path.)
 - El-tabs child panels (shortcuts/sync/data) mount lazily (v-if) — DOM dumps must visit the tab first; the dump helper's fallback text match can grab a sibling panel (拼装错误 in J4's sync dump, corrected by reading tab dumps per-tab in J2).
