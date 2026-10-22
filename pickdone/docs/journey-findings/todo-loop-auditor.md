@@ -101,7 +101,9 @@ here (dueOf falls back to createTime, so a truth-label would read 按创建时�
 按创建时间 option) → dropped. TodoBoxView offers created + difficulty only; a legacy persisted
 'due' sorts by createTime (comparator default branch) and labels 按创建时间, never the raw key.
 Pins: tests/unit/components/j3-box-due-sort-honesty.test.mjs (RED-first verified) + unit-more4
-updated to the new contract. Live verify queued on train #7's rebuild.
+updated to the new contract. Live-verified on rebuild train #7 (j11-01/02.png): the dropdown
+offers 按创建日期/按预计工作量 only; a legacy persisted 'due' renders 按创建日期 in the trigger —
+the raw key is gone.
 
 ---
 
@@ -124,8 +126,10 @@ contract as extractTags, whitespace-collapsed, '' when nothing survives); TodoIt
 stripped `displayTitle` in both title branches, an only-tag title falls back to the raw content
 (row never blanks), tooltip/aria-label keep the raw text, and `highlightedTitle` highlights the
 stripped title so a query cannot re-import a stripped token. Store content stays the single
-source. Pins: tests/unit/components/j4-tag-title-dedup.test.mjs (RED-first verified). Live verify
-queued on train #7's rebuild.
+source. Pins: tests/unit/components/j4-tag-title-dedup.test.mjs (RED-first verified). Live-verified
+on rebuild train #7 (j11-03/04.png): `交报告 #工作` renders title 交报告 + a single #工作 chip, the
+tooltip keeps the full content, and searching 交报告 highlights the kept text with no token
+re-imported into the title.
 
 ---
 
