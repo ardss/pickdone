@@ -12,6 +12,7 @@ import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { pathToFileURL, fileURLToPath } from 'node:url'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -19,6 +20,7 @@ const here = p => pathToFileURL(path.join(ROOT, p)).href
 
 const settings = (await import(here('renderer/js/store/settings.js'))).default
 const dbMirror = await import(here('renderer/js/utils/dbMirror.js'))
+const watcherSrc = readFileSync(path.join(ROOT, 'src/main/external-db-watch.js'), 'utf8')
 
 test('isOwnMirrorStamp: watermark tracks mirrorToDb stamps; older/equal = own, newer = foreign', () => {
   const key = 'db.echoProbe'
@@ -84,4 +86,20 @@ test('PACKED payload form works: store.dispatch drops a bare 3rd arg, so the ori
   // legacy direct-call form stays supported for LAN-sync/DB-restore/tests
   await settings.actions.updateExternal(ctx, { tomatoTime: 5 }, 9000000)
   assert.equal(dispatched.length, 2, 'legacy direct-call own echo still suppressed')
+})
+
+test('the watcher sends the BLOB stamp as origin, never the folded watermark `at` (v3 regression pin)', () => {
+  // v3 root cause: the origin sent was `at` = max(blob._savedAt, settingsRowsMaxUpdated), and rows
+  // get re-stamped when our own mirror blob lands (~2s after its snapshot) — so `at` ALWAYS exceeded
+  // the renderer's mirror watermark and every own-echo looked foreign (measured live: origin
+  // ...6477 vs blob stamp ...4461). The origin must be the blob's own stamp for the renderer's
+  // isOwnMirrorStamp comparison to mean anything.
+  assert.ok(watcherSrc.includes('const originSavedAt = (doc && doc._savedAt) || 0'), 'origin = doc._savedAt')
+  assert.ok(!/send\('external-settings-changed', patch, at\)/.test(watcherSrc), 'the folded watermark must never ride as the origin')
+  assert.match(watcherSrc, /send\('external-settings-changed', patch, originSavedAt\)/)
+  // keep the compute -> origin -> send order intact so future edits cannot re-fold `at` in
+  const idxSend = watcherSrc.indexOf("send('external-settings-changed', patch, originSavedAt)")
+  const idxOrigin = watcherSrc.indexOf('const originSavedAt = (doc && doc._savedAt) || 0')
+  const idxPatch = watcherSrc.indexOf('computeSettingsPatch(doc, prev)')
+  assert.ok(idxPatch > -1 && idxOrigin > idxPatch && idxSend > idxOrigin, 'patch computed, then origin from doc stamp, then send')
 })

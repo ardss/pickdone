@@ -239,13 +239,16 @@ function createExternalDbWatch (deps) {
             if (Object.keys(patch).length) {
               // P2 2026-09-11: hot-sync used to push only the main window — the float/quick-add windows
               // kept pre-CLI-change settings until restart (same all-windows pattern as the quit flush)
-              // [J-audit P2 fix 2026-10-22] the origin stamp rides as a 2nd arg: the renderer's own
-              // mirror lands in this channel too, and a STALE generation landing late must not be
-              // hot-applied over a newer user write (the 专注/休息 double-write bounce). The renderer
-              // compares the stamp against its own mirror watermark (dbMirror.isOwnMirrorStamp) and
-              // skips its own echoes; genuine CLI/peer stamps are newer and still apply.
+              // [J-audit P2 fix 2026-10-22] the BLOB's own _savedAt rides as a 2nd arg (NOT `at`):
+              // `at` folds in settingsRowsMaxUpdated, and rows get re-stamped when our own mirror blob
+              // lands (~2s after its snapshot), so `at` always exceeds the renderer's mirror watermark
+              // and every own-echo looked foreign — the J6 bounce survived fix v2 through exactly this.
+              // The renderer compares the blob stamp against its own mirror watermark
+              // (dbMirror.isOwnMirrorStamp) and skips its own echoes; genuine CLI/peer blobs carry
+              // newer stamps and still apply.
+              const originSavedAt = (doc && doc._savedAt) || 0
               for (const w of BrowserWindow.getAllWindows()) {
-                try { if (w && !w.isDestroyed()) w.webContents.send('external-settings-changed', patch, at) } catch {}
+                try { if (w && !w.isDestroyed()) w.webContents.send('external-settings-changed', patch, originSavedAt) } catch {}
               }
               log.info('[CLI] 设置变更热同步:', Object.keys(patch).join(','))
             }
