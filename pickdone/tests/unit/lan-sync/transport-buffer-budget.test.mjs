@@ -69,12 +69,18 @@ test('C4: pushing the AGGREGATE past the cap closes the offending socket, not th
     first._socket.write(drip)
     second._socket.write(drip)
     // Give the second reader's feed a tick to trip the aggregate gate.
+    // 10s window (was 2s): this waits FOR an event (close), so a wider window only adds
+    // patience — a regression (aggregate gate never fires) still fails after the wait.
+    // Under full-pool contention the loopback handshake + auth + drip + close propagation
+    // crossed 2s (2026-10-23 03:37 acceptance pass 1 red).
     const secondClosed = await new Promise((resolve) => {
-      const t = setTimeout(() => resolve(false), 2000)
+      const t = setTimeout(() => resolve(false), 10000)
       second._socket.once('close', () => { clearTimeout(t); resolve(true) })
     })
     assert.equal(secondClosed, true, 'red before the fix: no aggregate budget — both readers could buffer freely')
-    await new Promise((r) => setTimeout(r, 100))
+    // Settle window before the negative assertion (absence of a close): longer = STRONGER,
+    // since it gives a hypothetical wrong late close more room to show up.
+    await new Promise((r) => setTimeout(r, 500))
     assert.equal(first._socket.destroyed, false, 'the innocent reader (under the aggregate) is untouched')
     assert.deepEqual(closed.includes('device-b'), true)
   } finally {
@@ -96,7 +102,8 @@ test('C4: a single legitimate large buffer under the default budget is never clo
     client = await authClient(port, 'device-solo')
     // 4MB buffered unterminated — far under the 64MB default aggregate.
     client._socket.write('y'.repeat(4 * 1024 * 1024))
-    await new Promise((r) => setTimeout(r, 150))
+    // Settle window before the negative assertion — see the 500ms rationale in the C4 test above.
+    await new Promise((r) => setTimeout(r, 500))
     assert.equal(client._socket.destroyed, false, 'solo round buffering is business as usual')
   } finally {
     try { if (client) await client.close() } catch { /* already closed */ }
