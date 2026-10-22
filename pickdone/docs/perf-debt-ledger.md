@@ -49,6 +49,18 @@ child-pid file (tests/.artifacts/runner-children.json) and `--cleanup` reaps
 exactly those pids; hook scripts call it on trap. Acceptance: zero surviving
 children 10s after a killed run.
 
+### D7. Store-suite teardown hang poisons the retry pass (NEW 2026-10-23)
+f4-sync-category-tombstone-filter-cascade (and the f2b purge family) leave a
+pending promise/handle at file end — `cancelledByParent: "Promise resolution
+is still pending but the event loop has already resolved"`; the file-level
+hang delays node --test's closing TAP summary, and a budget kill mid-pass
+lands on a summary-less TAP (2026-10-23 03:22 acceptance run: pass2 was
+zero-not-ok but the stage budget executed it before the summary flushed).
+Retries cannot save a pass that cannot FINISH. Real fix: diagnose the store
+singleton's async tail (ledger debounce / writeEventBackup fire-and-forget)
+in these suites and await a settle contract. Acceptance: the suite families
+finish with a written summary in 3 consecutive loaded full-pool runs.
+
 ### D6. CLI fixture-suite double-connection lock race (NEW 2026-10-23, root-caused)
 Evidence trail: c1-parse-ux file-level 300s-ceiling kills at conc 4 AND 8
 (2026-10-22 22:14 run + 2026-10-23 final-verify pass1 AND pass2 — overlapping

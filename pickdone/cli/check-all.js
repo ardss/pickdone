@@ -71,12 +71,16 @@ const GROUPS = [
       // general suite growth pushed the loaded Windows host past 15min — two budget kills at
       // exactly 15.3min with zero diagnostics (2026-10-22 21:52 + 23:07 fast runs); the suite
       // itself completes in ~33min there with a full TAP. Same class as the earlier 10->15 raise.
-      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage', '--retry-once'], null, 40],
+      // 80min budget (was 40): --retry-once doubles the worst case — the budget covers BOTH
+      // passes. The 2026-10-23 02:40 acceptance run proved the miss: pass1 red at 25min +
+      // pass2 budget-killed at 15min mid-flight (stage total 40.1min) with pass2 heading green.
+      // Coverage poller must still exceed it (85 > 80).
+      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage', '--retry-once'], null, 80],
       // D4 覆盖率棘轮(只升不降,回退即红);--await-summary 复用上一 stage 的 coverage 摘要,
       // 不再并发重跑全量单测(4vCPU CI 上双份套件并发=互相拖到超时红,2026-09-26 实锤)
       // Budget must EXCEED the unit stage's: it runs in a parallel lane and polls until the
-      // summary lands (45 > 40; its own work is seconds once the summary exists).
-      ['覆盖率棘轮（lines/branch/funcs 对比 cli/.coverage-baseline.json,通过时自动上调基线）', 'node', ['cli/check-coverage-ratchet.cjs', '--await-summary'], null, 45],
+      // summary lands (85 > 80; its own work is seconds once the summary exists).
+      ['覆盖率棘轮（lines/branch/funcs 对比 cli/.coverage-baseline.json,通过时自动上调基线）', 'node', ['cli/check-coverage-ratchet.cjs', '--await-summary'], null, 85],
     ]
   },
   {
