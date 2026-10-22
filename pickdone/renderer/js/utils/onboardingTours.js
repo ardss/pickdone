@@ -225,6 +225,9 @@ export function runJourney (force = false) {
       overlayOpacity: 0.4,
       nextBtnText: doneLabel ? tt(T('done')) : tt(T('next')),
       doneBtnText: doneLabel ? tt(T('done')) : tt(T('next')),
+      // [J-audit P4] runTour passes prevBtnText; singleStep forgot it, so the (disabled) first-step
+      // back button rendered driver.js's English default "← Previous" in the zh UI.
+      prevBtnText: tt(T('prev')),
       onDestroy: () => {
         clearWatch()
         if (!ending && !advancing && onDone) onDone()

@@ -68,6 +68,12 @@ test('stage A arms the growth watch AFTER the popover (singleStep clearWatch mus
     'popover must be created before armGrowth() so its clearWatch cannot kill the growth watch')
 })
 
+test('singleStep passes prevBtnText (zh tour must not fall back to driver.js English default)', () => {
+  const singleStep = src.match(/const singleStep = \(step, onDone[\s\S]*?\n {2}\}/)
+  assert.ok(singleStep, 'singleStep found')
+  assert.match(singleStep[0], /prevBtnText: tt\(T\('prev'\)\)/)
+})
+
 test('every journey watch stays capped (no bare poll watches; cleanup anchor intact)', () => {
   assert.ok(!/watch = poll\(/.test(src), 'no uncapped journey watch polls remain (d7 anchor)')
   assert.match(src, /const pollCapped = \(test, cb\) => poll\(test, cb, 300, JOURNEY_POLL_CAP_MS, \(\) => finishAll\(\)\)/, 'pollCapped unchanged (d7 anchor)')
