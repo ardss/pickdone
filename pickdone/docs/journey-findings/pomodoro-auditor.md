@@ -90,7 +90,34 @@ reasserts the old value over the panel's write. The adjacent tip `panelSyncHint`
 tomato/patch: the running countdown still updates and every ledger agrees (single writer,
 echo-consistent, reboot-stable).
 **Status:** fix committed 91eb1d1b + guard tests (j4-tomato-panel-settings-ledger.test.mjs 2/2,
-eslint clean); visual re-verify rides the next rebuild.
+eslint clean). Post-rebuild re-verify (journeyB4-log.json): the panel now reaches the settings
+ledger correctly, BUT the bounce REPRODUCED unchanged (10 → all surfaces back to 5 at t+1.6s) —
+and journeyB5 proved the PANEL WAS NEVER THE (whole) STORY: **two consecutive writes through the
+SETTINGS PAGE ITSELF bounce identically** (5 then 10 → all surfaces snap back to 5 at t+2.5s).
+See [J6].
+
+## [J6] P2 (FOR THE SETTINGS OWNER — outside pomodoro fix scope) A second settings write within ~5s of a first one is silently reverted everywhere ~4.5–5s after the first write
+**Evidence (live, journeyB5-log.json + journeyB6-config-vs-ui.mjs + shots/jB5-01, jB6-01):**
+- Settings page only: write 专注时长=5, wait 2.5s, write 10. Samples: t+0.5s all=10, t+1.6s all=10,
+  **t+2.5s ALL surfaces (settings state, LS blob, settings-page input, tomato blob, bottom-bar
+  countdown) snap back to 5** — no further user action.
+- journeyB6: after the bounce, `getSettings()` (config.json) ALSO reads 5 — the re-apply rewrites
+  config too; the system coherently reverts to the FIRST write. The user's second change is
+  silently lost (worked around only by re-doing it after the echo window).
+- Bounce timing correlates with time-since-FIRST-write (~4.5–5.0s) across B3/B4/B5, regardless of
+  which surface made the second write (panel or settings page).
+**Suspected mechanism (for the owner to confirm — files outside pomodoro scope):** the renderer's
+debounced db.settingsState mirror (utils/dbMirror.js) and the main-process external-db-watch
+settings branch (external-db-watch.js:192-243, `external-settings-changed` hot-apply → renderer
+updateExternal → settings/update) — the watcher appears to hot-apply a snapshot that predates the
+second write, reasserting it through the very same update chain. journeyB-log additionally showed
+`settingsRowsAll` returning `tomatoTime:25` (boot value) after a settings write of 5 — the same
+ledger lag family.
+**Severity note:** the two-write-within-5s pattern is the NORMAL editing pattern (tweak 专注时长
+then 休息时长 back-to-back) — the settings owner may judge this P1 (silent change loss).
+**Status:** filed for the settings owner; pomodoro-side fix (91eb1d1b, panel → canonical writer)
+remains correct and necessary — the panel write no longer bypasses the ledger — but the bounce
+lives one layer up.
 
 ## Live-verified-good (no finding): taskbar five-piece during run
 - Native window title live-verified: `04:59 专注中 · 拾事 [TEST]` while focusing, `00:59 休息中 · …` during rest, plain app name idle (PowerShell MainWindowTitle sampling).
