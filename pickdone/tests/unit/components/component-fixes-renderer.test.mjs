@@ -31,9 +31,12 @@ function pureFns (file, names) {
  * regression where expired groups could never collapse). Only keys older than the 7-day grace
  * window are stale enough to drop. */
 const GRACE_MS = 7 * 86400000
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
 // The pure block takes the cutoff as a parameter; the component computes it via the calendar-day
 // primitive dayShift, and so does this harness (same primitive the production caller uses).
 const { dayShift } = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/todayBounds.js')).href)
+const weekGrid = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/weekGrid.js')).href)
 const cutoffOf = today0 => dayShift(today0, -7)
 
 test('pruneExpiredFoldKeys: fold state for recent expired groups survives (collapse works)', () => {
@@ -70,9 +73,8 @@ test('pruneExpiredFoldKeys: boundary — a key exactly at today start is not exp
 /* ---------- #9 DayDateStrip: week-start-aware calendar grid ----------
  * 2026-09-23: calGridOffset/weekHeaderOrder moved verbatim to utils/weekGrid.js (single source
  * shared with CalendarView/FilterView/chartModels) — the DayDateStrip pure block no longer
- * carries them, so these guards exercise the weekGrid module directly. */
-
-const weekGrid = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/weekGrid.js')).href)
+ * carries them, so these guards exercise the weekGrid module directly (imported above the
+ * first test — see the ORDERING CONSTRAINT note there). */
 
 test('calGridOffset: Monday start maps Mon..Sun to 0..6, Sunday start maps Sun..Sat to 0..6', () => {
   const { calGridOffset } = weekGrid

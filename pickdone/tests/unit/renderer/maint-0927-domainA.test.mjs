@@ -31,6 +31,15 @@ const dayjs = dayjsMod.default
 globalThis.dayjs = dayjs
 globalThis.window.dayjs = dayjs
 
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
+const { matchTodo } = await import('../../../renderer/js/utils/search.js')
+const rbkMod = await import('../../../renderer/js/utils/roleButtonKey.js')
+const { parseNaturalDate } = await import('../../../renderer/js/utils/nlDate.js')
+const { resolveQuickAddDate } = await import('../../../renderer/js/utils/quickAddDate.js')
+const quickAddPaste = await import('../../../renderer/js/utils/quickAddPaste.js')
+const { $elOf } = await import('../../../renderer/js/utils/el.js')
+
 /** Evaluate a .vue <script> block with its imports injected (same harness family as tomato-abandon-modal-ime) */
 function loadSFC (rel, inject = {}) {
   const src = read(rel)
@@ -88,8 +97,6 @@ test('fix1 static anchors: data() declares `now`, the refresh loop ticks it', ()
 
 /* ================= Fix 7: SearchView undated tasks hidden by a date range ================= */
 
-const { matchTodo } = await import('../../../renderer/js/utils/search.js')
-const rbkMod = await import('../../../renderer/js/utils/roleButtonKey.js')
 const SearchComp = loadSFC('renderer/js/views/SearchView.vue', { matchTodo, dayjs, TodoItem: {}, EmptyState: {}, roleButtonActivate: rbkMod.roleButtonActivate })
 
 function searchCtx (tasks, range) {
@@ -130,16 +137,13 @@ test('fix7 static anchors: hint line renders the count with a clear-range action
 
 /* ================= Fix 8: QuickAdd quiet error path ================= */
 
-const { parseNaturalDate } = await import('../../../renderer/js/utils/nlDate.js')
-const { resolveQuickAddDate } = await import('../../../renderer/js/utils/quickAddDate.js')
-const quickAddPaste = await import('../../../renderer/js/utils/quickAddPaste.js')
 const QuickAddComp = loadSFC('renderer/js/components/QuickAdd.vue', {
   parseNaturalDate, dayjs, FMT: { date: 'YYYY-MM-DD', cnDate: 'YYYY-MM-DD' }, resolveQuickAddDate,
   splitPasteLines: quickAddPaste.splitPasteLines, ensureTagSuffix: quickAddPaste.ensureTagSuffix,
   // [A9] the date-chip key handler now routes through the shared factory (this harness strips imports)
-  roleButtonActivate: (await import('../../../renderer/js/utils/roleButtonKey.js')).roleButtonActivate,
+  roleButtonActivate: rbkMod.roleButtonActivate,
   // onEnter's calendar-ref resolution also needs $elOf (imports are stripped by this harness)
-  $elOf: (await import('../../../renderer/js/utils/el.js')).$elOf
+  $elOf
 })
 
 function quickAddCtx (quiet, dispatch) {

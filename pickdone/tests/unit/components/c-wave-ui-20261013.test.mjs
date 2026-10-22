@@ -21,6 +21,18 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
+const mod = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/onboardingTours.js')).href)
+const { tt } = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/core.js')).href)
+const seedText = () => tt('statsH.Onboarding.jSeedTask')
+const menuMod = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/taskMenu.js')).href)
+const vmStub = {
+  $t: k => k,
+  $message: {},
+  $store: { state: { todo: { todoList: [] } } }
+}
+
 /* ---------- #1 tour step selectors must exist in real component sources ---------- */
 
 test('every tour step selector resolves in a real component template (no dead links)', () => {
@@ -46,10 +58,6 @@ test('every tour step selector resolves in a real component template (no dead li
 })
 
 /* ---------- #2 journey seed task cleanup ---------- */
-
-const mod = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/onboardingTours.js')).href)
-const { tt } = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/core.js')).href)
-const seedText = () => tt('statsH.Onboarding.jSeedTask')
 
 function seedHarness (row) {
   const dispatched = []
@@ -126,13 +134,6 @@ test('td-meta .td-ico and .td-snow have hover + focus-within reveal rules', () =
 })
 
 /* ---------- #5 context menu hides move items for completed tasks ---------- */
-
-const menuMod = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/taskMenu.js')).href)
-const vmStub = {
-  $t: k => k,
-  $message: {},
-  $store: { state: { todo: { todoList: [] } } }
-}
 
 test('buildTaskMenu: completed task has no move items; live task keeps them', () => {
   const done = menuMod.buildTaskMenu(vmStub, { taskId: 'a', taskContent: 'x', complete: true })
