@@ -100,6 +100,16 @@ export default {
     // Tag page context: tags are embedded in the content (#tag); the tag text must be appended at creation for the task to appear on that tag page
     routeTag () {
       return this.$route && this.$route.name === 'todo-list-tag' ? String(this.$route.params.id || '') : ''
+    },
+    // [J1 journey-audit 2026-10-22] Selected day on the today page (date strip): when a NON-today
+    // day is selected, quick-add defaults to THAT day — the day view's empty state invites adding
+    // a task for the day on screen, and the old today-default made the new row invisible there.
+    // Meaningful only on the today route (daySelectedTs persists across route changes); 0 = today.
+    viewDayTs () {
+      if (!this.$route || this.$route.name !== 'todo-list-today') return 0
+      const st = this.$store && this.$store.state
+      const sel = st && st.ui ? st.ui.daySelectedTs : 0
+      return (typeof sel === 'number' && Number.isFinite(sel)) ? sel : 0
     }
   },
   mounted () {
@@ -183,7 +193,7 @@ export default {
           const payload: any = {
             todoContent: content,
             todoDescription: '',
-            todoDate: resolveQuickAddDate({ pickedDate: effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
+            todoDate: resolveQuickAddDate({ pickedDate: effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf(), viewDayTs: this.viewDayTs }),
             todoReminderTime: 0,
             todoDifficultyLevel: 0
           }
@@ -200,8 +210,10 @@ export default {
         let d = effDate
         this.text = ''
         this.pickedDate = null
-        // Mirror onEnter's default-date semantics: other pages default to today, the todo box stays undated
-        if (d == null && !this.inTodoBox) d = dayjs().startOf('day').valueOf()
+        // Mirror onEnter's default-date semantics: other pages default to today, the todo box stays undated,
+        // and a non-today selected day on the today page is the target ([J1]) — must match the
+        // resolveQuickAddDate call above or the toast names the wrong day.
+        if (d == null && !this.inTodoBox) d = this.viewDayTs || dayjs().startOf('day').valueOf()
         const when = d && d !== 0 ? this.$t('statsD.QuickAdd.scheduledAt') + (dayjs(d).isSame(dayjs(), 'day') ? this.$t('statsD.QuickAdd.today') : dayjs(d).format(FMT.cnDate)) : this.$t('statsD.QuickAdd.movedToInbox')
         const msg = this.$t('statsD.QuickAdd.created', { c: lines[0] }) + ' …'
         const bulkMsg = (this.$t('statsD.QuickAdd.createdBulk', { n }) || (msg + ` (${n})`)) + when
@@ -283,8 +295,9 @@ export default {
       const payload: any = {
         todoContent: content,
         todoDescription: '',
-        // When no date is specified: the todo box page defaults to "no date" (into the todo box), other pages default to today (project baseline semantics)
-        todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
+        // When no date is specified: the todo box page defaults to "no date" (into the todo box), other pages default to today (project baseline semantics);
+        // a non-today selected day on the today page is the target ([J1 journey-audit])
+        todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf(), viewDayTs: this.viewDayTs }),
         todoReminderTime: 0,
         todoDifficultyLevel: 0,
         }
@@ -295,8 +308,10 @@ export default {
       let d = this.effDate
       this.text = ''
       this.pickedDate = null
-      // When created with a date, toast which day it landed on; when unspecified: the todo box page stays undated (toast says it went to the todo box), others default to today (consistent with addTodo semantics)
-      if (d == null && !this.inTodoBox) d = dayjs().startOf('day').valueOf()
+      // When created with a date, toast which day it landed on; when unspecified: the todo box page stays undated (toast says it went to the todo box), others default to today (consistent with addTodo semantics);
+      // [J1] the default mirrors resolveQuickAddDate above — a selected non-today day on the today
+      // page is the target, so the toast names the day the row actually went to
+      if (d == null && !this.inTodoBox) d = this.viewDayTs || dayjs().startOf('day').valueOf()
       const when = d && d !== 0 ? this.$t('statsD.QuickAdd.scheduledAt') + (dayjs(d).isSame(dayjs(), 'day') ? this.$t('statsD.QuickAdd.today') : dayjs(d).format(FMT.cnDate)) : this.$t('statsD.QuickAdd.movedToInbox')
       const msg = this.$t('statsD.QuickAdd.created', { c: content }) + when
       // quiet mode (standalone quick-add window): skip the toast — the window hides 250ms later
