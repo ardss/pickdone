@@ -23,6 +23,7 @@ export default {
       titleResume: '继续专注',
       titleStart: '开始专注',
       titleMin: '最小化',
+      titleClose: '关闭小窗',
       titleReset: '放弃并复位',
       titleMenu: '选择今日任务开始专注',
       phaseReady: '待开始',

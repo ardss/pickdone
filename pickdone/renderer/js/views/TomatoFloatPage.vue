@@ -24,7 +24,8 @@
 
       <div class="tomato__corner">
         <button type="button" class="corner-btn" :title="$t('statsP.TomatoFloatPage.titleMin')" @click="minimize"><i class="btn-min"></i></button>
-        <button type="button" class="corner-btn corner-btn--muted" :title="abandoning ? $t('statsB.TomatoFloatPage.close') : $t('statsP.TomatoFloatPage.titleReset')" @click="abandoning ? cancelAbandon() : reset()"><i class="btn-close"></i></button>
+        <!-- ✕: abandon-confirm open = cancel; idle = close the floater (hide-tomato-float close path); focus/rest = give-up flow via reset() -->
+        <button type="button" class="corner-btn corner-btn--muted" :title="abandoning ? $t('statsB.TomatoFloatPage.close') : (isIdle ? $t('statsP.TomatoFloatPage.titleClose') : $t('statsP.TomatoFloatPage.titleReset'))" @click="abandoning ? cancelAbandon() : (isIdle ? closeFloat() : reset())"><i class="btn-close"></i></button>
         <button ref="menuBtn" type="button" class="corner-btn" :class="{'corner-btn--on': menuOpen, 'corner-btn--off': abandoning}"
                 :title="$t('statsP.TomatoFloatPage.titleMenu')"
                 :aria-expanded="menuOpen ? 'true' : 'false'"
@@ -186,8 +187,10 @@ export default {
       }
       return 100
     },
+    /* Idle (ready) state: the ✕ corner button closes the floater — nothing to reset at a full ring */
+    isIdle () { return !!(this.st && this.st.status === 'default') },
     /* Ready = menu footer is "start now"; running = footer is "clear attachment" */
-    canPickTask () { return !!(this.st && this.st.status === 'default') },
+    canPickTask () { return this.isIdle },
     /* Today's pomodoro beads: done = completed today, total = daily target (capped 8–12 to prevent overflow) */
     beadsDone () { return Math.min(this.st ? (this.st.todayTomatoCount || 0) : 0, this.beadsTotal) },
     beadsTotal () {
@@ -283,6 +286,9 @@ export default {
     },
     persist (patch) { this.$store.commit('tomato/patch', patch); this.st = this.$store.state.tomato },
     minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
+    /* ✕ while idle = close the floater (same 'hide-tomato-float' close path). The persist-reset it
+       replaced was a visual no-op at a full ring — read as a dead close button (2026-10-22). */
+    closeFloat () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
     // [D22 P2] giveUp is awaited (same fix as TomatoAbandonModal): the layer collapses only on success.
     async confirmAbandon () {
       if (this.abandonBusy) return

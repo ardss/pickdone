@@ -23,6 +23,7 @@ export default {
       titleResume: 'Resume focus',
       titleStart: 'Start focus',
       titleMin: 'Minimize',
+      titleClose: 'Close floater',
       titleReset: 'Give up and reset',
       titleMenu: 'Pick a today task to focus',
       phaseReady: 'Ready',

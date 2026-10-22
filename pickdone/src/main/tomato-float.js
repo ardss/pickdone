@@ -59,7 +59,8 @@ const crashRebuild = {
  * OWNERSHIP lives HERE, in the single convergence point of every open/close path — an earlier attempt
  * wrapped window.todoAPI.showTomatoFloat in the renderer, but contextBridge objects are read-only
  * (strict-mode ESM assignment throws; the wrapper never installed). All paths converge on this module:
- *   close paths → hide() (TomatoBar toggle, float ✕, SettingsModal switch off — all via 'hide-tomato-float');
+ *   close paths → hide() (TomatoBar toggle, float ✕ while idle, SettingsModal switch off — all via
+ *                 'hide-tomato-float'; during focus/rest the float ✕ opens the give-up confirm instead);
  *                 dock() is deliberately NOT a close (undock restores the same session intent).
  *   open paths  → show() AND undock() clear the marker (IPC 'show-tomato-float' from SettingsModal /
  *                 TomatoPanel / TomatoBar, tray undock, auto-show itself — harmless no-op there). */
