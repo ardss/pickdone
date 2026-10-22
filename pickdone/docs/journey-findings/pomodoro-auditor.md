@@ -131,3 +131,11 @@ lives one layer up.
 - Float ⇄ bar phase sync <500ms (bar-started focus appears on the float as 专注中 immediately; give-up on the float idles the bar).
 - Idle float ✕ hides the window but keeps the page target (hide-not-destroy, by design).
 
+## P4 note (filed-only, TomatoPanel neighborhood, no code change)
+After J4, `TomatoPanel.commitPatch` dispatches `settings/update`, whose action resolves
+`{ok:false}` when the config IPC fails — the float's noise picker toasts on that (D22 P3,
+TomatoFloatPage.pickNoise), but the panel's two duration steppers ignore the result: on an IPC
+failure the LS/tomato ledgers update while config.json does not, silently reverted next launch
+(settings files are off-limits to this auditor; same toast pattern as SettingsModal.set's
+settingsSaveFailed would be the fix). Noted for the settings owner's next pass.
+
