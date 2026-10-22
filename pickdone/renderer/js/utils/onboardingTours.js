@@ -203,6 +203,16 @@ export function runJourney (force = false) {
   // polling forever. finishAll is declared below; the closures only run after runJourney returns.
   const JOURNEY_POLL_CAP_MS = 30000
   const pollCapped = (test, cb) => poll(test, cb, 300, JOURNEY_POLL_CAP_MS, () => finishAll())
+  // Every journey watch rides the capped wrapper whose timeout exits through finishAll.
+  // pollCappedTour (J-audit P3 fix, 2026-10-22) additionally refuses the timeout exit while a
+  // driver popover is on screen: an open popover means the user is mid-tour, not stuck — the old
+  // unconditional 30s exit tore the journey down (and silently soft-deleted the seed) while the
+  // instruction card was still up. It re-arms the same watch instead; with no popover open the
+  // safe exit applies as before.
+  const pollCappedTour = (test, cb, rearm) => poll(test, cb, 300, JOURNEY_POLL_CAP_MS, () => {
+    if (document.querySelector('.driver-popover')) rearm()
+    else finishAll()
+  })
   if (!document.querySelector('.td-item')) {
     seedOnce()
     watch = pollCapped(() => !!document.querySelector('.td-item'), () => {
@@ -273,14 +283,21 @@ export function runJourney (force = false) {
       watch = pollCapped(() => !!document.querySelector('.td-tom.active'), () => { clearWatch(); stageDrag() })
     })
   }
-  // Stage A: create your own task (task count growing above baseline = user-created, auto-advance; baseline is snapshotted only after the sample task renders, so the seed isn't mistaken for user creation)
+  // Stage A: create your own task. [J-audit P3 fix, 2026-10-22] The instruction popover must
+  // ALWAYS arm: stageCreate is reached only after the seed has rendered (or the user's own rows
+  // are on screen), so the old `if (document.querySelector('.td-item')) { armGrowth(); return }`
+  // shortcut matched the SEED itself and the jCreate popover never fired — the user saw a silent
+  // sample task appear with zero guidance and, after the 30s cap, silently vanish (finishAll
+  // soft-deletes the unadopted seed). The growth baseline counts rows MINUS the seed row, so
+  // creating your own task still auto-advances exactly as before.
   const stageCreate = () => {
+    const seedText = J_SEED_TEXT()
+    const userItemCount = () => [...document.querySelectorAll('.td-item')].filter(el => !(el.textContent || '').includes(seedText)).length
     const armGrowth = () => {
-      const baseCount = document.querySelectorAll('.td-item').length
-      watch = pollCapped(() => document.querySelectorAll('.td-item').length > baseCount, () => { clearWatch(); stagePick() })
+      const baseCount = userItemCount()
+      watch = pollCappedTour(() => userItemCount() > baseCount, () => { clearWatch(); stagePick() }, armGrowth)
     }
-    if (document.querySelector('.td-item')) { armGrowth(); return }
-    watch = pollCapped(() => !!document.querySelector('.td-item'), () => { clearWatch(); armGrowth() })
+    armGrowth()
     singleStep({ element: '.qa-input', popover: { title: tt(T('jCreateTitle')), description: tt(T('jCreateDesc')), side: 'bottom', align: 'start' } }, stagePick)
   }
   // Start once the quick-add box is ready
