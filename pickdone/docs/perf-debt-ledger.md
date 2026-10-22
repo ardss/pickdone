@@ -11,7 +11,8 @@ minutes" — burned trust worse than the original slowness.)
 |---|---|---|---|
 | Full pool (unit+integration+visual, conc 4) | 33-40min | unchanged (full gate only) | 2026-10-22 22:14 run: 36min |
 | Core tier (727 files, conc 8) | n/a | **FALSIFIED**: 22.1min but 7 not-ok with OVERLAPPING victims across two consecutive passes (c1-parse-ux, d26 plan, purge family) — conc 8 widens the D6 lock race; default reverted to 4 | 2026-10-23 01:26 + 01:55 runs |
-| Core tier (conc 4, post-D6-interim) | n/a | pending (acceptance run of the night wave) | 2026-10-23 |
+| Core tier (conc 4, post-D7-fix) | full pool 33-40min | **12.4min** quiet host (15% load), 23/23 gates green end-to-end, retry not engaged — the first full fast-gate green of the wave (2026-10-23 05:34 capstone run) | 2026-10-23 |
+| Core tier (conc 4, loaded host ~100%) | n/a | ~25min (D5 quiet/loaded split still worth one loaded-window number) | pending |
 | utils dir slice (6 files, streaming) | n/a | 19s wall, slowest test 8.6s (34.7x margin) | 2026-10-23 01:47 |
 | pre-commit on scoped change (e.g. cli/*) | 15-40min (full pool) | ~1-3min expected (tests/unit/cli only), MEASURE PENDING | next natural commit |
 | docs-only commit | 15-40min | seconds (loud skip) | by design |
