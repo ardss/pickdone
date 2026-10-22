@@ -398,9 +398,21 @@ function reloadAll (db) {
       if (ts > now) {
         scheduleTask(t, offset, ts)
         future++
-      } else if (!firstRun && ts > lastSeen && !firedReminders.has(key)) {
+      } else if (firedReminders.has(key)) {
+        // fired at runtime or caught up (the set is meta-persisted) — deduped, never re-fired
+      } else if (!firstRun && (ts > lastSeen || (offset === 0 && Number(t.createTime || 0) > lastSeen))) {
         // D22 (P3): fire first, watermark only on success — a throwing notification path left the
         // old order (markFired before fire) permanently swallowing the reminder (no catch-up retry).
+        // [J7 2026-10-22] born-past-due: the `ts > lastSeen` window alone can never cover a MAIN
+        // reminder created already-due (CLI --reminder <past>, edit-panel past pick, peer sync) —
+        // its due moment predates a frontier written before the row existed, so needsCatchUp said
+        // "fire" while this loop said "already seen" and the reminder was swallowed forever.
+        // Exemption: offset===0 rows CREATED after the frontier were never seen by any sweep —
+        // fire once through the same fire-then-watermark path. Guardrails: offset/extras keep the
+        // never-fire-past semantics (a degenerate past offset on a future anchor is an anchoring
+        // artifact, see scheduleOne); createTime <= lastSeen (peer-synced history) stays swallowed
+        // (D22 anti-bombardment); firstRun still skips everything; a failed fire still rolls the
+        // frontier to ts-1 so the retry stays in-window.
         if (fireImpl(t, offset) !== false) markFired(key)
         else if (ts < earliestFailedTs) earliestFailedTs = ts
         missed++
