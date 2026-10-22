@@ -256,6 +256,27 @@ settingsSaveFailed would be the fix). Noted for the settings owner's next pass.
   live-verified in round 1 (measured minutes, harvest 0/8→1/8) — the two row shapes agree with
   their respective user actions.
 
+### 10-minute soak (mandate #4) — FIRST VERIFICATION ON THE POST-TRAIN-10 BUILD
+- **Timers drift-free**: bar clock read exactly (10−m):00 at every whole-minute sample t1..t10 —
+  zero wall-clock drift across the full run on the fresh dist.
+- **Three-surface agreement**: native taskbar title countdown matched the bar within 1s on all
+  cleanly-attributed samples (t1/t2/t4/t5/t6/t7/t8); float leg N/A under the driver's
+  --no-focus boot (float agreement was round-1-verified on a focus-allowed boot).
+- **Completion contract**: at t10 the run auto-completed into rest (rest-entered ≤5s),
+  `todayTomatoCount` 1, ledger row EXACTLY as promised: `succeed:true, focusDuration:10,
+  rest:1, restDuration:1`, no abandonReason — the full circuit on the new build.
+- Probe honesty: t3 ("拾事" plain) and t9/t10 ("确认迁移数据存储位置") native-title readings are
+  CONTAMINATED samples, not product behavior — the soak's PowerShell probe used unfiltered
+  `Get-Process electron | MainWindowTitle`, which picked up OTHER instances' windows (a second
+  test instance and a config-auditor migration dialog). Instance-filter the probe next pass.
+
+### TQ-1 accept path — the lost ledger check CLOSED on the fresh build
+- Re-run on the post-train-10 dist: real-mouse 放弃专注并退出 → **process exited with code 0**
+  (clean quit, well inside the 20s poll) → reboot on the same dir: durable `tomatoRunningSession`
+  row **null** (quit flush cleared it), ledger **[]** — the running focus UNRECORDED exactly as
+  the dialog copy promises (放弃…不会记入专注账本), harvest 0/8. The TQ-1 circuit is now
+  live-verified end-to-end on both buttons.
+
 ### Round-2 harness/evidence inventory (all under docs/journey-findings/)
 - `pomodoro-boot.mjs` (v3: +stdout capture `logFile`, +`crash()` parity) — journeys R2A
   (matrix v4), R2A3 (fire repro), R2A4 (death-pin control), R2A6 (catch-up isolation), R2B
