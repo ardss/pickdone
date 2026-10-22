@@ -61,6 +61,19 @@ singleton's async tail (ledger debounce / writeEventBackup fire-and-forget)
 in these suites and await a settle contract. Acceptance: the suite families
 finish with a written summary in 3 consecutive loaded full-pool runs.
 
+**Last-mile mechanism (2026-10-23 04:16 acceptance run, pass2 authoritative
+TAP):** `1..4707 / # pass 4705 / # fail 0` — ZERO test failures — yet the
+runner exits 1 because the teardown hang CANCELS the store files
+(`# cancelled` counts toward node --test's exit code; the summary gate's
+校验一 exit-code check correctly red's it before the fail=0 summary can read
+green). Also ruled out tonight: handle accumulation (db.init re-entry already
+closes cleanly, P2 re-entry policy) and better-sqlite3 lock contention in
+these two suites (that mechanism belongs to c1-parse-ux / D6). Next session:
+run the tombstone file with a promise tracker (async_hooks / pino of pending
+promise creations) under --test-concurrency=1 to pin the exact un-resolved
+promise; likely candidates are the main-side ledger-changed hook chain or a
+fire-and-forget audit write inside the required category-ops module.
+
 ### D6. CLI fixture-suite double-connection lock race (NEW 2026-10-23, root-caused)
 Evidence trail: c1-parse-ux file-level 300s-ceiling kills at conc 4 AND 8
 (2026-10-22 22:14 run + 2026-10-23 final-verify pass1 AND pass2 — overlapping
