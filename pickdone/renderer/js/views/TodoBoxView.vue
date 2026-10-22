@@ -286,9 +286,16 @@ export default {
           if (!raw) continue
           try {
             const patch = crossDayMovePatch(raw, ts, startOf)
-            await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch })
+            // [J9 batch-undo fix 2026-10-22] snapshot BEFORE the awaited dispatch: updateTodoFields's
+            // upsertLocal mutates the live row in place (store/todo.js Object.assign), so reading
+            // `raw` after the await recorded the NEW values and the undo toast re-applied the move —
+            // a silent no-op (live-verified: rows still dated today after undo AND page reload).
+            // Same live-ref lesson as side-nav/categoryDelete.js's shallow copies; utils/core.js
+            // rescheduleExpired is the in-repo correct shape. Pop on dispatch failure so a dead row
+            // never gains a phantom undo entry.
             snap.push({ id, revert: crossDayRevertPatch(raw, patch) })
-          } catch { failed++ } // per-row catch mirrors batchDelete: one dead row must not abort the rest
+            await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch })
+          } catch { failed++; snap.pop() } // per-row catch mirrors batchDelete: one dead row must not abort the rest
         }
         this.$message.closeAll()
         if (snap.length) {
@@ -313,8 +320,13 @@ export default {
           const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
           if (!raw) continue
           try {
+            // [J9 batch-undo fix 2026-10-22] capture the PRE-dispatch categoryId: raw is the live
+            // store row and updateTodoFields mutates it in place, so reading it after the await
+            // snapshotted the NEW category and the undo toast was a silent no-op (same root cause
+            // as batchToday above).
+            const prevCatId = raw.categoryId
             await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { categoryId: catId } })
-            snap.push({ id, categoryId: raw.categoryId })
+            snap.push({ id, categoryId: prevCatId })
           } catch { failed++ }
         }
         this.$message.closeAll()

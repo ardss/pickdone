@@ -118,14 +118,120 @@ spot-checks (明天下午3点/明天/下周三/晚上8点/纯10月30日/3天后)
 
 ---
 
+## [J5s] P1 数据复盘 上周 tab: computed threw on every click — the UI kept showing THIS week's data under the 上周 pill, with zero error feedback
+
+**Evidence**
+- `j5-02-stats-lastweek.png` (pre-fix): 上周 pill selected (dark), range label still 「10.19 - 10.22」,
+  KPIs 完成事件3/新增4/达成率75%, 完成最多的一天 3个 **10/22** — a day outside last week, presented
+  as last week's best day.
+- `j6c` state probe (pre-fix): hash correctly became `#/todo-list/statistics?period=lastWeek`
+  (the `period` watcher/syncQuery fired), the label/KPIs did not move, and the console captured
+  `TypeError: s.add is not a function at periodBounds` — once per click.
+- Post-fix (`333f9ec7`, rebuilt bundle, `j6d-01-lastweek-fixed.png`): 上周 → label 「10.12 - 10.18」,
+  KPIs all zero, review headline 「上周共完成 0 个事件、专注 0分钟，以休整为主」, no console errors;
+  上月 label now inclusive 「09.01 - 09.30」 (was 09.01-10.01); 近30天 unchanged (regression held).
+
+**Root cause**
+- `renderer/js/views/statistics/chartModels.js` `periodBounds()` lastWeek branch:
+  `const s = isoWeekStart(...)` — `isoWeekStart()` (`utils/weekGrid.js:27`) returns an epoch
+  **number**; `s.add(7, 'day')` threw on every 上周 click. thisWeek's branch only reads `.start`
+  from the same helper, which is why the default view worked and masked it.
+- The label additionally displayed the **exclusive** `end` as if it were a covered day: 上周
+  10.12-10.19 (real last day 10.18), 上月 09.01-10.01 (real last day 09.30), custom to=10.07
+  showed 10.07. Fixed by formatting `end - 1` (wall-clock ends unaffected at MM.DD resolution).
+
+**Audit-class note (recurring silence pattern — lead asked this be recorded)**: `errorCaptured`
+does **not** see descendant **computed** throws. A computed that throws leaves Vue serving the last
+successfully cached value; no toast, no error note (`cardError` stayed false), route/pill state
+moved while the data silently froze. The evidence chain — route hash moved + label didn't + console
+TypeError — is the proof template for this class: **thrown computed → stale cached computed → UI
+gaslights the user**. Any "control updates but data doesn't" report should check the console for a
+swallowed computed throw before blaming reactivity wiring.
+
+**Fix**
+- `chartModels.js` lastWeek: pure number math `start + 7 * DAY_MS` (same exclusive-end contract).
+- `StatisticsView.vue` `periodRangeLabel`: format `min(end, endOfToday) - 1`.
+
+**Status**: fixed + live-verified on the rebuilt renderer-dist — commit 333f9ec7 (files:
+renderer/js/views/statistics/chartModels.js, renderer/js/views/StatisticsView.vue; test pin in
+tests/unit/components/w5-stats-chartmodels.test.mjs; 46/46 stats unit tests green, eslint clean).
+
+---
+
+## [J1r] P2 Quick-add never sets reminders — a time-bearing NL input ("后天 09:30 写周报") renders a 09:30 chip but creates reminderTime: 0
+
+**Origin**: cross-team handoff (config-surface-auditor live proof; their reminder circuit verified
+healthy end-to-end — a typed reminder fired at +117s). Purely the quick-add handoff:
+`QuickAdd.vue` hardcoded `todoReminderTime: 0` in the onEnter payload while stripping the consumed
+time phrase from the content. The placeholder invites exactly this input; the chip shows the time;
+the reminder silently never happens.
+
+**Fix (option a — pass the parsed time through)**, commit efec4cea:
+- `renderer/js/utils/quickAddDate.js` gains `reminderTsFromParse({ pickedDate, parsed })`: both
+  parser branches append a trailing `HH:mm` to the parse label exactly when a time-of-day phrase
+  was consumed (Chinese core + English branch), making the label a reliable time-bearing signal.
+  Guards: a manual date chip (`pickedDate != null`, including explicit-clear 0) wins the date, so
+  the NL time never becomes a reminder on a different day; date-only / no parse → 0.
+- `renderer/js/components/QuickAdd.vue` onEnter payload: `todoReminderTime = parsedReminderTs`.
+  `createLines` (multi-line paste) stays 0 — its contract skips NL parsing per line.
+
+**Tests**: tests/unit/store/unit-quickadd.test.mjs pins CN date+time / time-only / EN labels and
+date-only ×3 / chip-override / no-parse → 0. Regression suites green (same 4 documented
+maint-0927-domainA pre-existing reds).
+
+**Status**: fixed — commit efec4cea; live verification (reminder ts + visible row chip + full J1/J2
+regression matrix, since efec4cea touches QuickAdd.vue again) queued on rebuild train #4.
+
+---
+
+## [J10] P2 待办箱批量「安排到今天/移动到分类」的撤销是静默空操作 — undo toast closes, nothing reverts (persists through reload)
+
+**Evidence (live classification protocol, `j9-undo-defect.mjs` → j9-0*.png)**
+- Seed 3 undated rows → select all → 安排到今天 → all rows `{d: today}`; click 撤销 → wait 3.5s →
+  **rows still `{d: today}`**, box still empty; `location.reload()` (renderer re-hydrates from the
+  DB = second-path check) → **still `{d: today}`**. Not a UI-refresh bug: the undo never wrote the
+  old values anywhere. Rows still exist (no row loss) — the PRE-MOVE state is silently
+  unrecoverable via the promised control → undo-as-silent-no-op.
+- Control: single-item complete→undo restores correctly in the same session (undated row back in
+  the box, undone) → the defect is batch-specific, pinning the batch handlers.
+- batchCat (移动到分类) carries the same construction → same no-op.
+
+**Root cause** — snapshot-after-dispatch on a row mutated in place:
+- `TodoBoxView.batchToday`: `snap.push({ id, revert: crossDayRevertPatch(raw, patch) })` runs AFTER
+  `await this.$store.dispatch('todo/updateTodoFields', …)`, and `updateTodoFields` →
+  `upsertLocal` mutates the live row in place (`store/todo.js` `Object.assign(list[i], todo)`,
+  its own comment: "capture BEFORE upsertLocal mutates the row in place"). So `raw` is already
+  the NEW row when the snapshot reads it: revert = the move itself.
+- `batchCat`: same ordering — `snap.push({ id, categoryId: raw.categoryId })` after the await.
+- In-repo precedent documenting this exact live-ref class: `side-nav/categoryDelete.js` ("without
+  the copy the pre-delete snapshot the undo restores from would already be overwritten — a silent
+  no-op"); correct shape: `utils/core.js rescheduleExpired` (snapshots BEFORE the dispatch).
+
+**Fix (snapshot before the awaited dispatch, both paths)**
+- batchToday: `snap.push({ id, revert: crossDayRevertPatch(raw, patch) })` moved BEFORE the
+  `await`; dispatch failure pops the entry so a dead row never gains a phantom undo (per-row
+  failure isolation unchanged).
+- batchCat: `const prevCatId = raw.categoryId` captured before the `await`.
+
+**Tests**: tests/unit/components/j9-batch-undo-snapshot.test.mjs — 4 pins: (1) snapshot holds the
+undated pair + the real revert closure restores it; (2) a second apply/undo pair does not
+double-apply (no drift); (3) batchCat snapshot holds the pre-dispatch categoryId; (4) a failed
+dispatch leaves no phantom undo entry. Verified red on the pre-fix view (stash) / green after.
+Adjacent suites (navgate/d4/d-wave) 18/18 green; eslint clean.
+
+**Status**: fixed — live re-verification queued on rebuild train #5 (commit hash below in git log).
+
+---
+
 ## Healthy (no finding)
 
 - Plain add from 今日待办 → lands today, toast names the day; add from 待办箱 → lands undated with
   `已放入待办箱` toast (J1 screenshots + dumps).
 - Complete from box dot → moves to 已完成 with undo `<a>撤销</a>` toast that actually restores
   (verified completed→undone via toast click).
-- Context-menu 删除到回收站 works; batch select/安排到今天/移动到分类/删除(带确认弹窗) all work,
-  aggregate undo toast restores the whole group (j1c-*, j1b-*).
+- Context-menu 删除到回收站 works; batch select/安排到今天/移动到分类/删除(带确认弹窗) all execute —
+  but their aggregate undo was a silent no-op for batchToday/batchCat (see [J10], fixed); batch
+  delete undo was not separately verified.
 - Category create (sidebar +, inline edit), rename (hover pencil), delete-with-todos (tasks move to
   未分类, honest undo toast naming counts), undo restores category AND task assignments (j3-01..03).
 - Tag view (`#工作` chip click) and search (周报) return the right rows (j3-04/05).
