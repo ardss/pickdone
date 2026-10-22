@@ -15,6 +15,13 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
               store.state.todo.recycleList.find(t => t.taskId === todo.taskId) || todo
   const wasComplete = !!raw.complete
   const content = raw.taskContent || ''
+  // [J17 2026-10-22] snapshot the exact pre-toggle completion surface BEFORE the dispatch: the
+  // toast's 撤销 must undo what THE SYSTEM did (the completion flip + its subtask cascade), not
+  // blindly re-toggle. Live finding (round 2 j13): in a child-driven auto-complete the old
+  // re-toggle's uncheck cascade wiped BOTH child checks — eating the user's own earlier click
+  // (0/2 after one undo). Snapshot-revert (the J10 doctrine) restores exactly the pre-cascade
+  // state: the user's own subtask checks survive, the system's cascade reverts with the parent.
+  const snap = { complete: !!raw.complete, completedAt: raw.completedAt || 0, subtasks: raw.subtasks }
   let fromPoint = null
   if (!wasComplete && fromEl && fromEl.getBoundingClientRect) {
     try {
@@ -48,19 +55,20 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
     // Complete → "Undo" (un-complete); un-complete → "Restore completion". Symmetric in both directions, unified 5s duration (same as delete undo)
     let undoInFlight = false
     const undo = () => {
-      const cur = store.state.todo.todoList.find(t => t.taskId === todo.taskId)
+      const cur = store.state.todo.todoList.find(t => t.taskId === todo.taskId) ||
+                  store.state.todo.recycleList.find(t => t.taskId === todo.taskId)
       if (!cur) return
       // [F4] re-entry guard: a fast double-click on "撤销" used to dispatch two toggles and
       // flip the task right back. While an undo dispatch is in flight, further clicks are
       // ignored; the flag releases when the dispatch settles (success OR failure) so a
-      // genuine second revert is never blocked.
+      // genuine second revert is never blocked. (Snapshot-revert is idempotent, but the
+      // guard still spares redundant write rounds.)
       if (undoInFlight) return
       undoInFlight = true
-      // [d21-A2] the undo dispatch used to be fire-and-forget: the "restored" success toast fired
-      // unconditionally even when the write rejected. Observe the promise — success feedback (and
-      // the stale-toast closeAll) only after it RESOLVES; on rejection surface the shared
-      // actionFailedMsg pattern (same shape as confirm.js restoreAndToast's moveFailToast path).
-      Promise.resolve(store.dispatch('todo/toggleComplete', cur)).then(() => {
+      // [J17] restore the exact pre-toggle snapshot (complete/completedAt/subtasks) through the
+      // unified write channel — a REVERT, not a second toggle. Awaitable: callers/tests can wait
+      // for the restore to land instead of racing the fire-and-forget flip.
+      return Promise.resolve(store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...snap } })).then(() => {
         if (announce) announce(tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content }))
         // [uiux-2026-10-01 J2 P3] The undo is the feedback moment this toast exists for: leaving the
         // stale "已完成：… 撤销" toast on screen read as if the click never registered (and invited a
