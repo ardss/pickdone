@@ -39,10 +39,13 @@ test('closeIntent: exit mode routes X through the user-quit chain (F1)', () => {
 
 test('F1 wiring anchor: windows.js preventDefaults BEFORE requestUserQuit, and index.js passes the chain', () => {
   const winSrc = readFileSync(join(srcRoot, 'src', 'main', 'windows.js'), 'utf8')
-  assert.ok(winSrc.includes('closeBehavior.closeIntent('), 'close handler consults closeIntent')
-  const quitIdx = winSrc.indexOf("intent === 'quit'")
-  const pdIdx = winSrc.indexOf('e.preventDefault()', quitIdx)
-  const rqIdx = winSrc.indexOf('requestUserQuit()', quitIdx)
+  // Strip line comments before ordering assertions: a prose mention of requestUserQuit() in a
+  // comment (the LIVE-VERIFIED note) must not fake an earlier call site (2026-10-22 anchor fix).
+  const winCode = winSrc.replace(/\/\/.*$/gm, '')
+  assert.ok(winCode.includes('closeBehavior.closeIntent('), 'close handler consults closeIntent')
+  const quitIdx = winCode.indexOf("intent === 'quit'")
+  const pdIdx = winCode.indexOf('e.preventDefault()', quitIdx)
+  const rqIdx = winCode.indexOf('requestUserQuit()', quitIdx)
   assert.ok(quitIdx !== -1 && pdIdx !== -1 && rqIdx !== -1, 'quit branch present in the close handler')
   assert.ok(pdIdx < rqIdx, 'preventDefault precedes the quit chain call (window survives the confirm)')
   const idxSrc = readFileSync(join(srcRoot, 'src', 'main', 'index.js'), 'utf8')
