@@ -1,0 +1,64 @@
+{
+  "B": {
+    "nonexistent-drive": {
+      "ok": false,
+      "error": "target is not writable: ENOENT: no such file or directory, mkdir 'Q:\\k2-nonexistent\\target'"
+    },
+    "equals-current": {
+      "ok": false,
+      "error": "target equals the current data directory"
+    },
+    "inside-current": {
+      "ok": false,
+      "error": "target is inside the current data directory"
+    },
+    "non-empty": {
+      "ok": false,
+      "error": "target exists and is neither empty nor a valid data directory (todos.db + db.key)"
+    }
+  },
+  "C": {
+    "target": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\k2-migrated-target",
+    "settingsOpen": "gear-clicked",
+    "dataTabOpen": "tab-clicked",
+    "modalForce": "instance-not-found@1",
+    "selfClick": "dialog-STILL-PRESENT-after-invoke",
+    "phaseShots": {},
+    "phases": [],
+    "bootFileContent": "ABSENT",
+    "relaunch": "RELAUNCH-PROBE-FAILED",
+    "oldLocation": {
+      "todosDb": true,
+      "dbKey": true,
+      "configJson": true
+    },
+    "cliNewDir": "NOT FOUND: {\n  \"ok\": true,\n  \"command\": \"list\",\n  \"data\": []\n}\n"
+  },
+  "D": {
+    "targetDeleted": true,
+    "bootRedirectFileBeforeBoot": "ABSENT",
+    "fallback": {
+      "locationInfo": {
+        "currentDir": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\pickdone",
+        "bootRedirect": null
+      },
+      "tasks": [
+        "K2迁移存活任务A",
+        "K2迁移存活任务B"
+      ]
+    }
+  },
+  "sandbox": {
+    "home": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\home",
+    "appdata": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata",
+    "userData": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\pickdone",
+    "bootFile": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\home\\.pickdone-data-location.json"
+  },
+  "A": {
+    "locationInfo": {
+      "currentDir": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-kckdHW\\appdata\\pickdone",
+      "bootRedirect": null
+    },
+    "taskCount": 2
+  }
+}
