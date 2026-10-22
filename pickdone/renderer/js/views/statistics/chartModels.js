@@ -27,9 +27,14 @@ export function periodBounds (period, customRange, nowTick, t) {
       // [J5 stats journey-audit 2026-10-22] isoWeekStart returns an epoch NUMBER; the old
       // `s.add(7, 'day')` threw "s.add is not a function" every 上周 click. The computed's
       // TypeError was swallowed upstream, so Vue kept serving the STALE this-week bounds:
-      // the pill showed 上周 while label + KPIs silently stayed on this week. Pure number math.
+      // the pill showed 上周 while label + KPIs silently stayed on this week.
+      // [dw3 day-caliber 2026-10-22] the first repair used `s + 7 * DAY_MS` — a raw ms
+      // day-step, the exact class the counted ratchet bans (24h blocks land 23:00/01:00 on
+      // DST fall-forward/fall-back days). s is always a local midnight (isoWeekStart derives
+      // from startOf day), so the exclusive end is +7 CALENDAR days: route through the
+      // sanctioned dayShift primitive, same as line 61's window builder.
       const s = isoWeekStart(+now.subtract(1, 'week'))
-      return { start: s, end: s + 7 * DAY_MS, label: t(T + 'period_lastWeek') }
+      return { start: s, end: +dayShift(s, 7), label: t(T + 'period_lastWeek') }
     }
     case 'thisMonth': return { start: +now.startOf('month'), end: +now, label: t(T + 'period_thisMonth') }
     case 'lastMonth': {
