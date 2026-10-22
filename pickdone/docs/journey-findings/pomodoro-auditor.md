@@ -139,3 +139,132 @@ failure the LS/tomato ledgers update while config.json does not, silently revert
 (settings files are off-limits to this auditor; same toast pattern as SettingsModal.set's
 settingsSaveFailed would be the fix). Noted for the settings owner's next pass.
 
+## Round 2
+
+### Harness note (not a product finding): CLI/app data-dir contract — the split brain and the sweep incident
+- **CLI seeding contract** (cost one full run to learn): the APP takes its data dir from
+  `TODO_USER_DATA_DIR` only (`src/main/index.js` app.setPath; DB at `<userData>/todos.db`),
+  while the CLI resolves `src/main/user-dir.js` with `TODO_DB_DIR` FIRST and `TODO_DB_DIR`
+  points DIRECTLY at the directory containing todos.db. Seeding per the old driver-header doc
+  (`TODO_DB_DIR='<journey>.dbDir'` = `<userData>/db`) silently writes a DIFFERENT database —
+  live-verified: CLI list showed the tasks ✓, the running app's `queryTodos` returned [],
+  scheduler rebuilt "0 future reminders", and the external-watch even logged "检测到外部写入
+  （CLI）" for a file the app never reads. Correct invocation: `TODO_DB_DIR=<userData root>`.
+  Lead fixed the driver header (credit in comment); journeyR2A v2+ confirmed seeds flow through.
+- **Outside kills masquerading as crashes**: two matrix runs died silently (exit 0xFFFFFFFF =
+  PowerShell Process.Kill disposition; taskkill would be 1, native crashes leave WER/dumps —
+  none existed, and a tight-instrumented control run survived). Confessed culprit: a teammate's
+  time-windowed name sweeps; now scoped to stored-pid/exact-port and codified in the driver
+  header. Audit lesson: before filing "app dies at reminder fire", check the death's exit code
+  and the absence of crash artifacts — 5 minutes of forensics prevented a false P1.
+- **Self-inflicted, recorded for honesty**: a corpse-removal rm reused the previous run's dir
+  path while v3 was live in it → stripped db.key/logs mid-run (CLI edit failed with
+  "找不到 db.key", app exit 1, boot2 rebuilt on a fresh empty DB). Rule going forward: fresh dir
+  path per rerun, never rm a journey dir a live job may own.
+
+### [J7] P2 A reminder created/synced ALREADY PAST-DUE never fires — the catch-up watermark swallows it silently, while the write-path gate says it should fire
+- REPRO (live, `journeyR2A6-catchup.mjs`, two independent paths):
+  1. App RUNNING, CLI `add --reminder <now-2min>` → the app sees the row (`queryTodos` returns
+     it with `reminderTime` set), the write-path rebuild runs… and logs "0 missed reminders
+     re-fired", NO `[Reminder] fired:` line, and `reminderLastSeenAt` ADVANCES to now.
+  2. App CLOSED, CLI seeds a past-due task → boot → same: row visible, "0 future, 0 missed",
+     no fire, watermark advances past the reminder's due time forever.
+- ROOT (code-located, not fixed — scheduler.js is outside this auditor's fix scope):
+  `reloadAll`'s catch-up branch gates on `ts > lastSeen` (the `reminderLastSeenAt` frontier,
+  set to now at firstRun and advanced on every rebuild). A reminder CREATED behind the frontier
+  (created already-due, or synced in from a peer) can never satisfy `ts > lastSeen`, so it is
+  classified as "already seen" and never fires. Meanwhile `needsCatchUp(todo)`
+  (handlers/todo.js fast-path gate) returns TRUE for exactly this task — "a PAST reminder
+  instance that has NOT been recorded as fired" — so the fast path delegates to the full
+  reloadAll, whose watermark gate then refuses. The two mechanisms disagree; the reminder is
+  swallowed with zero user feedback.
+- Reachability: CLI `add --reminder <past>` (documented first-class flag), LAN-sync peers
+  applying an old task, and the EDIT PANEL's date-time picker (accepts past times) — this is a
+  real-user path, not a CLI-only edge. The NORMAL catch-up case (reminder created before its
+  due time, app closed across the due moment) works — live-verified separately (see matrix).
+- Suggested fix shape (for the scheduler owner): when a write-path task has
+  `needsCatchUp(todo)===true`, fire it (or route it through a watermark-exempt single-task
+  catch-up) instead of delegating to the frontier-gated full reload; OR classify by
+  `createdAt > watermark` instead of reminder-ts alone. Requires the D22/anti-bombardment
+  invariants to be re-run — owner's call.
+
+### Reminder scheduler matrix — everything else live-verified good (no finding)
+- **Fires land on the minute, precisely** (4/4 across two runs): `[Reminder] fired:` at
+  19:55:00.083 / 19:57:00.013 / 20:00:00.015 (offset −1) / 20:01:00.013 vs due :00 of each
+  minute — ≤100ms jitter. CLI reminder times are minute-granular (HH:mm truncation), matching
+  user expectation.
+- **Offset reminders** (`--remind-offset "-1"`): the early instance fired at main−60s exactly,
+  logged with its offset (`… <taskId> -1`), independent dedup key — both instances fired once.
+- **Delete-before-fire holds**: soft-delete (recycle bin) of a due-in-95s task → zero fires
+  past its due moment; fingerprint change tears the pending timer down cleanly.
+- **Edit re-arm via live watch**: `edit --reminder` on a RUNNING app → external-write watch →
+  rebuild within ~45s; the OLD due time passed with ZERO fires; the new time fired exactly.
+- **Dedup durability across crash**: hard-kill (no quit flush) after 4 fires → reboot rebuild
+  re-fired NOTHING (A/B/F −1/F 0 all deduped from the persisted fired-set) — the LRU/meta
+  dedup survives a crash; the windows.js relaunch-path flush comment is belt-and-braces.
+- Multiple simultaneous reminders: 5 tasks + 1 offset = 6 instances scheduled at once
+  ("6 future reminders, 0 missed"), all correctly counted after one fired ("5 future").
+
+### TQ-1 quit-confirm LIVE walk (previously code-only)
+- **The durable-session gate is real and the dialog is a REAL native window** (window title
+  专注进行中, buttons 放弃专注并退出 / 取消退出, enumerated via Win32 UI tree — not a renderer
+  overlay).
+- **CANCEL path, fully live-verified**: START focus → `closeRequest` (X/Alt+F4 equivalent under
+  closeActionMinimize:false → windows.js 'quit' intent → quitFromTray) → dialog up → process
+  still alive 4s+ later (a confirmless quit exits in ~2-3s), durable `tomatoRunningSession` row
+  intact, clock still counting (24:59→23:36 across the dialog) → real-mouse 取消退出 → app
+  continues, row intact, focus unbroken.
+- **ACCEPT path, partial (evidence limits documented)**: real-mouse 放弃专注并退出 (via Win32
+  SetForegroundWindow+click after discovering the dialog renders BEHIND a fullscreen foreground
+  window until its parent is raised — audit-harness gotcha, not a product bug) → the ENTIRE
+  process tree (main/renderer/GPU/utility, 4 processes) self-exited with no taskkill and the
+  CDP port freed — a clean Electron quit, not a crash. The post-quit ledger/row check was lost:
+  the run's data dir had its `todos.db`+`db.key` deleted by an out-of-band actor during the
+  session restart (cause unidentified, not the app — the quit chain never deletes DB files).
+  What remains verified for the promise: the running focus being UNRECORDED by a clean quit is
+  code-verified (quit flush clears the durable row before exit; no ledger write exists on the
+  quit path), and the row's durability across a FORCED kill is live-verified (R2B2 boot2: stale
+  row survived, ledger empty, harvest 0/8). A future re-run can close the last gap in ~2 min.
+
+### Duration boundaries via the panel (J4 neighborhood, post-fix)
+- Focus stepper: typing 1 → clamped to **5** (manifest min); typing 999 → clamped to **180**
+  (manifest max). The clamp is COHERENT across all four surfaces within ~1s: panel input,
+  SettingsModal input, tomatoState blob, AND the bottom-bar idle clock (25:00→05:00→180:00
+  live). The J4 ledger-converged write path holds under boundary stress; no bounce, no split.
+- Rest-row fills hit a journey-selector bug (nth-of-type landed on the focus row) — rest
+  clamping via the PANEL is unverified; the 1-minute rest itself remains proven via the
+  settings page (round 1: 1:00 rest completed end-to-end). Panel rest clamping: open for the
+  next pass.
+- "1-minute run completing end-to-end": no legal 1-minute FOCUS exists (min 5:00 — clamped as
+  above); the shortest legal circuit is 5:00+1:00, both halves proven (round 1 + the soak).
+
+### Weather widget (mandate #6)
+- Present and healthy: settings switch (walked tabs to reach it) → SideNav `weather-widget
+  sn-weather` appears and renders LIVE data (`☀30°晴Singapore` — IP-fallback city) within the
+  4s fetch window; graceful networked fetch, no layout break. Toggle-back-off leg was cut by a
+  journey shot-path bug (cosmetic); persistence across reboot follows the settings ledger
+  (same mechanism J4 verified).
+
+### Harvest edges: the last-second give-up race (mandate #5)
+- LIVE: focus 5:00 → give-up clicked at **00:08 remaining** (8s before the shared tick would
+  complete) → abandon modal (本次已专注 4 分钟，放弃将计入放弃次数（不计入今日收成）) → confirmed.
+  Outcome: **exactly ONE ledger row** — `succeed:false`, focusDuration 5, rest slot created
+  (rest:1) with restDuration 0, `abandonReason:""`, timestamped at the give-up — harvest stayed
+  **0/8** (give-up ≠ harvest, matching the copy), status returned to default, and the durable
+  `tomatoRunningSession` row cleared to null (quit-gate safe). The complete-vs-give-up CAS held
+  under the race: no double row, no lost row, no crash. The succeed:true row shape was already
+  live-verified in round 1 (measured minutes, harvest 0/8→1/8) — the two row shapes agree with
+  their respective user actions.
+
+### Round-2 harness/evidence inventory (all under docs/journey-findings/)
+- `pomodoro-boot.mjs` (v3: +stdout capture `logFile`, +`crash()` parity) — journeys R2A
+  (matrix v4), R2A3 (fire repro), R2A4 (death-pin control), R2A6 (catch-up isolation), R2B
+  (quit-confirm cancel), R2B2/B4 (accept attempts), R2C (bounds), R2E (harvest race), R2F
+  (weather); logs `rem5-stdout.log` (the clean matrix), `journeyR2A-log.json`,
+  `journeyR2C-log.json`, `journeyR2F-log.json`; shots/ for the visual states.
+- The 10-minute soak (R2D) script is committed but UNRUN at submission time (field priority
+  for train #10) — its assertions (per-minute three-surface agreement, drift, completion row
+  focusDuration=10) run standalone whenever the field frees up.
+
+
+

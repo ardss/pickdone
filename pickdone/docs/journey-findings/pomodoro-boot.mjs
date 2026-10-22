@@ -12,7 +12,7 @@
  * scripts/journey-driver.mjs itself is untouched (off-limits per audit rules).
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
+import { mkdtemp, mkdir, writeFile, rm, open } from 'node:fs/promises'
 import { writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
@@ -99,8 +99,10 @@ async function waitInteractiveMain (cdpBase, { timeoutMs = 45000 } = {}) {
  * Boot one isolated REAL instance WITH focus allowed (no --no-focus).
  * persistentDataDir: keep the same data dir across boots (reboot-persistence journeys);
  * caller must clean it up itself.
+ * logFile: capture the electron process's stdout+stderr into this file (round 2: the reminder
+ * scheduler asserts via '[Reminder] fired:' stdout lines — bootJourney discards stdio).
  */
-export async function bootFocus ({ cdpPort, seedConfig, persistentDataDir } = {}) {
+export async function bootFocus ({ cdpPort, seedConfig, persistentDataDir, logFile } = {}) {
   if (!cdpPort) throw new Error('bootFocus: cdpPort is required')
   const electronBin = requireElectron()
   if (!electronBin) throw new Error('electron binary unavailable')
@@ -109,7 +111,10 @@ export async function bootFocus ({ cdpPort, seedConfig, persistentDataDir } = {}
   if (seedConfig) await writeFile(join(dataDir, 'config.json'), JSON.stringify(seedConfig), 'utf8')
   const env = { ...process.env, TODO_USER_DATA_DIR: dataDir, TODO_DB_DIR: join(dataDir, 'db') }
   delete env.ELECTRON_RUN_AS_NODE
-  const child = spawn(electronBin, ['.', '--remote-debugging-port=' + cdpPort], { cwd: appRoot, env, stdio: 'ignore' })
+  let out = null
+  if (logFile) { out = await open(logFile, 'a'); out.write('---- boot ' + new Date().toISOString() + ' ----\n') }
+  const stdioOpt = out ? ['ignore', out.fd, out.fd] : 'ignore'
+  const child = spawn(electronBin, ['.', '--remote-debugging-port=' + cdpPort], { cwd: appRoot, env, stdio: stdioOpt })
   const cdpBase = 'http://127.0.0.1:' + cdpPort
   const kill = () => { try { if (child.exitCode === null) spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* best-effort */ } }
   try {
@@ -128,6 +133,8 @@ export async function bootFocus ({ cdpPort, seedConfig, persistentDataDir } = {}
       click: sel => cdp.eval(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) throw new Error('no element: ${'${'}sel}'); el.click(); return true })()`),
       fill: (sel, text) => cdp.eval(`(() => { const el = document.querySelector(${JSON.stringify(sel)}); if (!el) throw new Error('no element: ${'${'}sel}'); const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, ${JSON.stringify(text)}); el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); return true })()`),
       targets: async () => (await fetchJson(cdpBase + '/json')).map(t => ({ type: t.type, url: t.url, ws: t.webSocketDebuggerUrl })),
+      /** Parity with bootJourney: hard-kill WITHOUT the quit chain. */
+      crash: kill,
       connectPage: async urlPart => {
         const list = await fetchJson(cdpBase + '/json')
         const t = list.find(x => x.type === 'page' && x.url.includes(urlPart))
@@ -137,6 +144,7 @@ export async function bootFocus ({ cdpPort, seedConfig, persistentDataDir } = {}
       end: async ({ keepDir = false } = {}) => {
         kill()
         await new Promise(res => { const t = setTimeout(res, 8000); child.once('exit', () => { clearTimeout(t); res() }) })
+        if (out) { try { await out.close() } catch { /* already closed */ } }
         if (!keepDir) await rm(dataDir, { recursive: true, force: true }).catch(() => {})
       },
     }
