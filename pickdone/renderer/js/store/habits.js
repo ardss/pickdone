@@ -117,6 +117,16 @@ export function applyHabitTombstones (habits, tombstones) {
   return habits.filter(h => !(h && h.id != null && dead.has(h.id)))
 }
 
+/** [W7-R 2026-10-23 P2] moments deletion tombstones — same shape and stickiness caliber as the
+ *  habits `deleted` array above. delMoment used to only filter the local array, so a peer blob
+ *  (or a synced round with an equal/newer savedAt) whose `moments` still carried the deleted id
+ *  resurrected it through the unionMoments merge at every inbound boundary (union-merge keeps
+ *  ids present on EITHER side — exactly the resurrection vector). `deletedMoments` rides the
+ *  blob top level next to `deleted`; both the tombstone-shape helpers above are id-generic
+ *  ({ id, deletedAt }), so they are reused as-is (aliases exported for readability/tests). */
+export const mergeMomentTombstones = mergeHabitTombstones
+export const applyMomentTombstones = applyHabitTombstones
+
 function readLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
@@ -129,8 +139,8 @@ function readLs () {
 /** First-paint state: localStorage takes precedence (synchronously available); newer values from the main DB are merged by initFromDb at startup */
 function load () {
   const d = readLs()
-  if (d) return { habits: d.habits, moments: d.moments || [], savedAt: d.savedAt || 0, deleted: d.deleted || [] }
-  return { habits: [], moments: [], savedAt: 0, deleted: [] }
+  if (d) return { habits: d.habits, moments: d.moments || [], savedAt: d.savedAt || 0, deleted: d.deleted || [], deletedMoments: d.deletedMoments || [] }
+  return { habits: [], moments: [], savedAt: 0, deleted: [], deletedMoments: [] }
 }
 
 /** Aux-window detection: same judgment as dbMirror's writeNow (float / quick-add hashes).
@@ -154,7 +164,7 @@ import { localDayKey } from '../../../shared/date-key.mjs'
 function persist (state) {
   // [F3 fix] the blob now carries the deletion tombstones (additive field — old readers/blobs
   // without it behave unchanged)
-  const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now(), deleted: state.deleted || [] }
+  const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now(), deleted: state.deleted || [], deletedMoments: state.deletedMoments || [] }
   state.savedAt = blob.savedAt
   try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
   try {
@@ -321,13 +331,18 @@ export default {
       // `deleted` field cannot resurrect a habit deleted after it was taken).
       s.deleted = mergeHabitTombstones(s.deleted, blob.deleted)
       s.habits = applyHabitTombstones(blob.habits, s.deleted)
-      s.moments = blob.moments || []
+      // [W7-R P2] sticky tombstone merge for moments too (same caliber as the `deleted` line
+      // above): an old backup without `deletedMoments` cannot resurrect a moment deleted after
+      // the backup was taken; the inbound array is filtered before it lands.
+      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, blob.deletedMoments)
+      s.moments = applyMomentTombstones(blob.moments || [], s.deletedMoments)
       s.savedAt = blob.savedAt || 0
       // 2026-10-09 P3: `force` is an INTERNAL control flag (restore-backup override), not blob
       // content — strip it from the persisted copy so it never reaches LS/DB or the sync fan-out
       // (same internal-field discipline as todo.js's deleting flag strip).
       const clean = Object.assign({}, blob); delete clean.force
       clean.deleted = s.deleted // tombstones survive the LS rewrite (see persist()'s blob shape)
+      clean.deletedMoments = s.deletedMoments
       try { localStorage.setItem(LS_KEY, JSON.stringify(clean)) } catch {}
       if (force) persist(s) // dual-write: durable DB meta row (single writer discipline kept — persist() IS the store's writer)
     },
@@ -350,9 +365,13 @@ export default {
       // array — a peer blob that still carries a deleted habit can no longer resurrect it.
       s.deleted = mergeHabitTombstones(s.deleted, blob.deleted)
       s.habits = mergeHabitRecords(applyHabitTombstones(blob.habits, s.deleted), s.habits)
+      // [W7-R P2] moments: merge the peer's deletion tombstones first, then filter the inbound
+      // array BEFORE the union-merge — unionMoments keeps ids present on either side, so an
+      // unfiltered deleted moment would be resurrected by the local copy every round.
+      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, blob.deletedMoments)
       // F2 2026-10-19: same union-merge as records — a newer peer blob must not erase this
       // device's moments (countdowns/anniversaries) it never saw.
-      s.moments = unionMoments(blob.moments, s.moments)
+      s.moments = unionMoments(applyMomentTombstones(blob.moments, s.deletedMoments), s.moments)
       s.savedAt = Math.max(blob.savedAt || 0, s.savedAt || 0)
     },
     /** F2 (2026-09-20): LAN-sync habits fold channel — S1's main process emits
@@ -381,13 +400,17 @@ export default {
       // still holding a deleted habit cannot resurrect it.
       const tombs = Array.isArray(fields.deleted) ? fields.deleted : (Array.isArray(payload.deleted) ? payload.deleted : null)
       if (tombs) { s.deleted = mergeHabitTombstones(s.deleted, tombs); changed = true }
+      // [W7-R P2] moment tombstones ride the same two shapes as habit tombstones
+      const momentTombs = Array.isArray(fields.deletedMoments) ? fields.deletedMoments : (Array.isArray(payload.deletedMoments) ? payload.deletedMoments : null)
+      if (momentTombs) { s.deletedMoments = mergeMomentTombstones(s.deletedMoments, momentTombs); changed = true }
       if (Array.isArray(fields.habits)) {
         normalizeHabitRecords(fields.habits)
         s.habits = mergeHabitRecords(applyHabitTombstones(fields.habits, s.deleted), s.habits)
         changed = true
       }
-      // F2 2026-10-19: union-merge, same caliber as applyExternal above
-      if (Array.isArray(fields.moments)) { s.moments = unionMoments(fields.moments, s.moments); changed = true }
+      // F2 2026-10-19: union-merge, same caliber as applyExternal above — inbound moments are
+      // tombstone-filtered first so a peer copy of a deleted moment cannot resurrect it.
+      if (Array.isArray(fields.moments)) { s.moments = unionMoments(applyMomentTombstones(fields.moments, s.deletedMoments), s.moments); changed = true }
       if (!changed) return // nothing applicable: no state change, no savedAt bump
       s.savedAt = savedAt || s.savedAt
       // Deliberately NO persist() here — same no-echo contract as applyExternal above.
@@ -435,12 +458,17 @@ export default {
       persist(s)
     },
     addMoment (s, { name, date, kind }) {
-      // Same collision guard as addHabit
-      s.moments.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), name, date, kind })
+      const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7)
+      s.moments.push({ id, name, date, kind })
+      // [W7-R P2] defensive parity with addHabit: a deliberately re-added identical id clears its tombstone
+      s.deletedMoments = (s.deletedMoments || []).filter(t => t.id !== id)
       persist(s)
     },
     delMoment (s, id) {
       s.moments = s.moments.filter(x => x.id !== id)
+      // [W7-R P2] record a deletion tombstone so peer blobs (and old backups) still carrying the
+      // moment id cannot resurrect it through the union-merge inbound boundaries.
+      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, [{ id, deletedAt: Date.now() }])
       persist(s)
     }
   },
