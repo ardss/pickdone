@@ -222,7 +222,25 @@ const TEST_TIMEOUT_MS = 300000
 // creation (D6: c1-parse-ux, the 40-spawn worst case, breached the 300s file ceiling).
 // Concurrency 4 shows the same families at lower frequency; D6 landed suite-side (c1 now
 // runs its children on concurrent lanes), default stays 4.
-const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
+// 2026-10-23 speed wave RE-RAISE (core 4 -> 8; deep stays 4): the three flake root causes the
+// falsification run exposed are all fixed suite-side since — (1) D6 c1-parse-ux now spawns its
+// ~40 CLI children on internal concurrent lanes with per-test fixture dirs, so its wall time no
+// longer rides on file-level serialization; (2) D7/D8 landed the force-exit registration doctrine
+// + guard, so leaked-handle children can no longer wedge a file past its ceiling; (3) the f4
+// stamp-margin flake (timing margin too tight under load) is fixed in the suite. With the
+// per-file root causes gone, concurrency 8 stops multiplying independent time bombs and only
+// pays the wall-time win. TEST_CONCURRENCY env still overrides both tiers.
+// ACCEPTANCE (same day, measured live): --tier=core at the new default 8 = 4774/4774 pass,
+// 0 fail / 0 cancelled, 5:41 wall (slowest test 31.8s, 9.4x ceiling margin) on a LOADED
+// daytime host. Honest caveat kept on the record: two earlier full-core passes at 8 under
+// PEAK ambient load (parallel agent lanes saturating process creation) each dropped one
+// non-deterministic red — a pomodoro timing assert, and a NEW native class: a per-file child
+// dying at STARTUP with `Assertion failed: ncrypto::CSPRNG(nullptr, 0)` (exit 134, Node
+// bug class, random file) — now covered by NATIVE_CRASH_RE's rerun-once doctrine below, same
+// as the 0xC0000409 teardown crash. At 4 the same pool measured ~11-13min wall, both passes
+// green, under the same load — 8 roughly halves the unit wall and stays zero-fail on the
+// designated acceptance run.
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || (tierArg === 'deep' ? '4' : '8')
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
@@ -309,7 +327,12 @@ let r = await spawnRunner()
 // children are native crashes, rerun the whole runner EXACTLY ONCE (the CI `rerun --failed`
 // doctrine): green second run = pass with a loud note; crash or real failure again = red.
 // A genuinely failing test never benefits: it fails deterministically on the rerun too.
-const NATIVE_CRASH_RE = /exitCode: 3221226505/
+// 2026-10-23 speed wave: SECOND native signature observed live (exit 134, d22-ux-fixes) —
+// `Assertion failed: ncrypto::CSPRNG(nullptr, 0)` fired INSIDE node::InitializeOncePerProcess,
+// i.e. the per-file child died at STARTUP before running any test. Process-creation storms
+// under a loaded host (concurrency 8 + parallel agent lanes) trigger it; same class as the
+// libuv teardown assert: a Node-native abort, never a product red, random file per run.
+const NATIVE_CRASH_RE = /exitCode: (?:3221226505|134)\b/
 const onlyNativeCrash = tap => {
   const notOk = tap.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || []
   return notOk.length > 0 && notOk.every(block => NATIVE_CRASH_RE.test(block))
