@@ -98,22 +98,30 @@ test() registrations precede a module-level await import, so the bomb shape
 cannot re-enter (apply the D8 doctrine check mechanically). → DONE:
 tests/unit/cli/test-file-registration-order.test.mjs (corpus scan 1s, green).
 
-### D6. CLI fixture-suite double-connection lock race (NEW 2026-10-23, root-caused)
-Evidence trail: c1-parse-ux file-level 300s-ceiling kills at conc 4 AND 8
-(2026-10-22 22:14 run + 2026-10-23 final-verify pass1 AND pass2 — overlapping
-victims, not random); stderr "tomato ledger migration failed (database is
-locked)" on fixture `todo-cli-c2-integrity-pid*`; green in isolation every
-time (17/17). Mechanism: test parent holds a fixture-db connection while the
-spawned CLI child opens the same db and runs the tomato-ledger migration —
-the lock race widens under scheduler pressure; busy_timeout=5000 (ES1) turns
-it into a 5s-late throw + warning, and the child's output never settles inside
-the file's 300s ceiling. Interim: c1-parse-ux routed to DEEP (spawn-heavy
-criterion). Real fix (this debt): fixture connections opened by spawned CLI
-children need an awaited lifecycle + the suite needs a settled-output
-contract; audit the other cli suites that spawn children against a fixture db
-(c2-integrity family) for the same pattern.
-Acceptance: c1-parse-ux rejoins core and survives 3 consecutive full core runs
-under load.
+### D6. c1-parse-ux 300s-ceiling burn (RESOLVED 2026-10-23, 50291813 — root cause RECLASSIFIED)
+The "parent+CLI-child double-connection lock race" attribution was wrong:
+c1's parent holds no db connection at all, no BUSY was reproducible (0/5
+loaded iterations), and the one historical c2-integrity "database is locked"
+warning has no second connection to blame (c2 spawns no children) — do not
+hang it on this mechanism.
+Pinned mechanism (spawn-trace preload in every node process of the loaded
+repro): ~40 STRICTLY SEQUENTIAL real-CLI children whose per-child wall time
+inflates 10-20x under full-suite process-creation contention (0.8-2.1s quiet
+→ 5.8-22.6s loaded, measured inside spawnSync; parent gaps 1-4ms) — the
+serial chain passed 300s and node --test executed the file at the ceiling
+(2/2 pre-fix reds at 300.9s/324.0s).
+Fix (suite execution model, all 17 test names + assertions verbatim):
+per-test fixture dirs + 8 concurrent async spawn lanes + every child awaited
+with captured stdio and a hard 120s kill timeout (the old C1-11 execFileSync
+had NO timeout — a real forever-block hazard). c1 rejoined core (deep pool
+12→11); one-character lever if a future full run trips it: lanes 8→12.
+Numbers: isolated 17/17 ×3 (15.3-26.0s, was 49.5s serial); loaded repro ×3
+green + 1 instrumented (c1 file-level 131.3s loaded = 2.3x margin); tier=
+core --dirs=cli ×2 = 535/535; hook core tier ×2 passes c1 green.
+Residual: ~15 sibling cli suites share the literal double-connection shape —
+audited BENIGN (no BUSY captured, better-sqlite3 holds no locks between
+statements, sibling walls ≤167s, no ceiling breach); follow-up: per-child
+spawn timeouts as mechanical hardening (low harm evidence, wide churn).
 
 ### D5. Core-tier quiet-host baseline number (measurement debt)
 The 22.1min number is a LOADED-host number. Acceptance: one quiet-window
