@@ -775,7 +775,27 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
       // D2-c: startSync is async and fail-closed now — a bind failure at boot must be logged,
       // not become an unhandled rejection. K_ENABLED stays true so the toggle reflects the
       // user's intent, but getStatus().listening=false shows the device card the truth.
-      startSync().catch(e => log.error('[LanSync] startup enable failed:', e.message))
+      // 2026-10-24 (crash-restart robustness): after a SIGKILL/crash, the predecessor's sync
+      // socket teardown can lag the successor's boot by seconds — the first bind then hits
+      // EADDRINUSE and sync silently stayed OFF until the user toggled manually. Boot-time
+      // enable now retries the transient bind window (3 attempts, 5s apart) before accepting
+      // the failure; interactive toggles keep the immediate fail-closed feedback.
+      const BOOT_ENABLE_ATTEMPTS = 3
+      const BOOT_ENABLE_RETRY_MS = 5000
+      const bootEnable = async () => {
+        for (let attempt = 1; attempt <= BOOT_ENABLE_ATTEMPTS; attempt++) {
+          try { await startSync(); return } catch (e) {
+            const transient = /EADDRINUSE|failed to bind/i.test(String((e && e.message) || e))
+            if (attempt === BOOT_ENABLE_ATTEMPTS || !transient) {
+              log.error('[LanSync] startup enable failed:', e.message)
+              return
+            }
+            log.warn(`[LanSync] startup enable attempt ${attempt}/${BOOT_ENABLE_ATTEMPTS} failed (${e.message}) — retrying in ${BOOT_ENABLE_RETRY_MS}ms`)
+            await new Promise(r => setTimeout(r, BOOT_ENABLE_RETRY_MS))
+          }
+        }
+      }
+      bootEnable()
     }
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
