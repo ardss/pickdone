@@ -145,3 +145,35 @@ guesses.
   affected-scope pre-commit, failing TAP kept in-tree.
 - Size-ratchet baselines for the four round-1 merged main debt files;
   src/main/index.js trimmed back under its ratchet (comment-only).
+
+## D9 - full-gate wall time (RESOLVED 2026-10-23)
+
+Symptom: check:all ran 30-44min (unit tier mixed slow suites with fast ones;
+live pool booted SIX private Electron instances for six interaction gates;
+43min unit+coverage stage under ambient load; the morning full gate lost all
+9 live lanes to the ELECTRON_RUN_AS_NODE host-shell trap).
+
+Fixes shipped (journey-audit, merged through 95505825):
+- ea71d439 central ELECTRON_RUN_AS_NODE strip in check-all (live pool boots
+  from any host shell; suite-level strips stay belt-and-braces).
+- b83435ea D4 orphan hygiene: child-pid registry + verified --cleanup
+  tree-kill + exit-handler reap (killed gates no longer leak electrons).
+- c0974a78 live-pool consolidation: ONE shared instance serves the six
+  interaction gates sequentially (per-target verdicts, single respawn,
+  canonical view per target). 6 boots -> 1; full pool 4:08, 6/6 green.
+- 739716a6 core concurrency 4 -> 8 (deep stays 4) after the D6/D7/D8 flake
+  roots were fixed; designated run 4774/4774 at 5:41 (was 11-13min at 4);
+  new native class ncrypto::CSPRNG boot crash (exit 134) added to the
+  rerun-once doctrine.
+- 95505825 visual lane language pin ordering (dismiss onboarding first,
+  write locale keys last); worktree checkouts need browser-dev npm i + their
+  own blessed baselines (gitignored per-checkout machine state).
+
+Numbers: full gate 44min -> 7.4min on the same loaded daytime box (31
+stages: 30 green + visual red = worktree env debt, green after per-checkout
+baseline re-bless); unit tier 6.4min in-gate; live pool 4.3min in-gate;
+visual lane 14/14 self-consistent. Pre-commit slice runs: seconds-minutes.
+Visual reuse idea honestly declined: the resident browser since c3f8524b IS
+the determinism machinery; 2-scene parallelism hits the single-daemon/
+single-profile wall. Remaining tail risk: the visual stage can still hit a
+bad patch; the 5-6min ideal needs shaving it further.
