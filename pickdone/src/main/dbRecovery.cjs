@@ -135,7 +135,12 @@ function encryptedProbe (file, keyFile) {
   // key is exactly the 'unknown' case this comment block always promised ("key unreadable → stay
   // conservative"); only a READABLE key that is not 64-hex counts as keyless ('no').
   try { key = fs.readFileSync(keyFile, 'utf8').trim() } catch { return 'unknown' }
-  if (!/^[0-9a-fA-F]{64}$/.test(key)) return 'no' // corrupt key = db.js treats it as keyless; header rules apply
+  // M2a (P2): a READABLE key that is not 64-hex used to map to 'no' = "genuinely corrupt", which
+  // let the recovery rename a possibly-healthy db aside. But db.js's key-validity rule treats a
+  // non-64-hex key as NO-KEY (plaintext continuation, db.js:304-309) — the db would open fine as
+  // plaintext at init. The probe cannot classify such a db, so answer 'unknown' (conservative:
+  // no rename, no rollback) exactly like an unreadable key.
+  if (!/^[0-9a-fA-F]{64}$/.test(key)) return 'unknown'
   let db
   try {
     db = new Database(file, { readonly: true })
@@ -773,9 +778,30 @@ function preflightMigrateResidue (ud, log) {
   }
 }
 
+/** M2a (P3): critical-state-backup.empty-*.json side files (written by writeCriticalStateBackupAtomic's
+ *  destroy-guard when an empty snapshot must not clobber a good backup) accumulated forever — no
+ *  cleanup side existed. Keep the most recent KEEP (default 5) by timestamp, sweep older ones.
+ *  Returns the number of entries swept. Exported for direct unit coverage. */
+function sweepEmptyCriticalBackups (ud, keep, log) {
+  const n = Number(keep) > 0 ? Number(keep) : 5
+  let swept = 0
+  try {
+    // The embedded Date.now() makes the names sort chronologically (fixed prefix + epoch ms).
+    const files = fs.readdirSync(ud)
+      .filter(f => /^critical-state-backup\.empty-\d+\.json$/.test(f))
+      .sort()
+    for (const f of files.slice(0, Math.max(0, files.length - n))) {
+      try { fs.rmSync(path.join(ud, f), { force: true }); swept++ } catch { /* locked → next launch */ }
+    }
+  } catch (e) { try { (log || console).warn('[Init] empty-critical-backup 清扫失败', e) } catch { /* best-effort */ } }
+  return swept
+}
+
 /** P2 (dw wave5 2026-09-24, sunk from index.js whenReady): sweep files renamed aside by a previous
  *  "reset data" while their handles were still open (pending-delete-<ts>-*). At next startup the
- *  handles are gone; delete them best-effort. Returns the number of entries swept. */
+ *  handles are gone; delete them best-effort. Returns the number of entries swept.
+ *  M2a (P3): this is the existing startup-sweep call chain index.js already reaches, so the
+ *  empty-critical-backup sweep rides along here — no index.js change needed. */
 function sweepPendingDeletes (ud, log) {
   let swept = 0
   try {
@@ -784,6 +810,7 @@ function sweepPendingDeletes (ud, log) {
       try { fs.rmSync(path.join(ud, f), { force: true, recursive: true }); swept++ } catch {}
     }
   } catch (e) { try { (log || console).warn('[Init] pending-delete 清扫失败', e) } catch { /* best-effort */ } }
+  swept += sweepEmptyCriticalBackups(ud, 5, log)
   return swept
 }
 
@@ -796,4 +823,4 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, criticalBackupRowCount, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore, ...attLoss }
+module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, criticalBackupRowCount, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, sweepEmptyCriticalBackups, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore, ...attLoss }
