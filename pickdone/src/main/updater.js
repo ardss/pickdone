@@ -144,7 +144,13 @@ function init (mainWin) {
     // too — the hang-before-first-progress case is reachable from here just as much.
     if (state.status === 'downloading' && _armStallWatchdog) { try { _armStallWatchdog() } catch { /* arming is best-effort */ } }
   })
-  autoUpdater.on('update-not-available', i => { state.status = 'uptodate'; state.info = i; broadcast() })
+  autoUpdater.on('update-not-available', i => {
+    // M2b (P2 2026-10-23): same guards as 'update-available' above — a later check() firing
+    // update-not-available must not downgrade a settled 'ready' (a downloaded update is already
+    // on disk; quitAndInstall requires status==='ready') nor clobber an in-flight manual download.
+    if (_manualDownload || state.status === 'ready') return
+    state.status = 'uptodate'; state.info = i; broadcast()
+  })
   // F4 (2026-10-21): download stall watchdog. A hung transfer (proxy drop, dead mirror, firewall)
   // used to keep status='downloading' FOREVER — no progress event, no error event, so the settings
   // page spun and autoInstallOnAppQuit never armed. Every download-progress refreshes
@@ -189,6 +195,11 @@ function init (mainWin) {
   // retry path instead of hanging in 'downloading' forever.
   function markUpdateError (e) {
     clearStallWatchdog()
+    // M2b (P2 2026-10-23): 'ready' is terminal for this process run (same guard style as the
+    // 'update-available' handler above) — a stray/late 'error' event (or watchdog fire) after
+    // update-downloaded must not downgrade the "restart and install" state; the watchdog is
+    // already cleared on success and the manual download settled, so there is nothing to abort.
+    if (state.status === 'ready') return
     state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
     // D2 fix (2026-10-21): if a MANUAL download is hung in flight, settle its promise NOW — the
     // old code left `_manualDownload` holding the dead promise and every later "Download now"
@@ -217,8 +228,12 @@ async function check () {
   _inFlight = (async () => {
     syncAutoDownload() // align with the settings-page toggle before every check (hot-applied, no restart needed)
     try { await autoUpdater.checkForUpdates(); return { active: true, ...state } } catch (e) {
-      state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }
-      broadcast() // 手动检查失败也要推给设置页状态条(error 事件路径之外的 catch 不经过 autoUpdater 事件)(三轮扫荡 P2)
+      // M2b (P2 2026-10-23): same 'ready' guard as markUpdateError — a check() racing the tail of
+      // a completed download must not flip the settled 'ready' into 'error'.
+      if (state.status !== 'ready') {
+        state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }
+        broadcast() // 手动检查失败也要推给设置页状态条(error 事件路径之外的 catch 不经过 autoUpdater 事件)(三轮扫荡 P2)
+      }
       return { active: true, ...state }
     } finally { _inFlight = null }
   })()
