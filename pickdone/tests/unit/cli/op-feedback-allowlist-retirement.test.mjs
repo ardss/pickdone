@@ -42,7 +42,7 @@ const writeSfc = (tmp, rel, src) => {
 }
 
 const runGate = tmp =>
-  spawnSync(process.execPath, [path.join(tmp, 'cli', 'check-op-feedback.js')], { encoding: 'utf8' })
+  spawnSync(process.execPath, [path.join(tmp, 'cli', 'check-op-feedback.js')], { timeout: 180000, encoding: 'utf8' })
 
 test('dead UPDATE_FIELDS_ALLOWLIST entry (no matching dispatch anywhere) fails the gate', () => {
   const tmp = makeTree()
@@ -98,7 +98,7 @@ test('live allowlist entry (matching dispatch present) keeps the gate green', ()
 
 test('current real tree passes the gate with the retirement check in place', () => {
   // gates the shipped allowlists: after removing the 6 stale entries the repo must be green
-  execFileSync(process.execPath, [GATE], { stdio: 'pipe' })
+  execFileSync(process.execPath, [GATE], { timeout: 180000, stdio: 'pipe' })
 })
 
 function writeSvcLiveUpdate (tmp, rel) {

@@ -50,7 +50,7 @@ function mkTree (name) {
 function runGate (script, root, args = [], extraEnv = {}) {
   const env = { ...GIT_SAFE_ENV, GATE_ROOT: root, ...extraEnv }
   delete env.CSS_FREEZE_OFF // freeze-gate self-test needs the gate live
-  const r = spawnSync(process.execPath, [path.join(CLI, script), ...args], { env, encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [path.join(CLI, script), ...args], { timeout: 180000, env, encoding: 'utf8' })
   return { code: r.status, out: (r.stdout || '') + (r.stderr || '') }
 }
 

@@ -16,12 +16,12 @@ const GATE = path.join(ROOT, 'cli', 'check-schema-manifests.cjs')
 // CI) so the invariant is not pinned to the single check-all.js invocation point.
 
 test('schema manifest gate executes green: todoToRow ⊆ SCHEMA, migration ADD COLUMNs ⊆ SCHEMA, no ALTER backstop in db.js', () => {
-  const r = spawnSync(process.execPath, [GATE], { encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [GATE], { timeout: 180000, encoding: 'utf8' })
   assert.equal(r.status, 0, `check-schema-manifests.cjs must exit 0 (manifest drift):\n${r.stdout}\n${r.stderr}`)
 })
 
 test('schema manifest gate negative self-test: a fake todoToRow column expectation turns the gate red (the gate is the regression test)', () => {
-  const r = spawnSync(process.execPath, [GATE], { encoding: 'utf8', env: { ...process.env, SCHEMA_MANIFEST_SELFTEST: '1' } })
+  const r = spawnSync(process.execPath, [GATE], { timeout: 180000, encoding: 'utf8', env: { ...process.env, SCHEMA_MANIFEST_SELFTEST: '1' } })
   assert.equal(r.status, 0, `SCHEMA_MANIFEST_SELFTEST run must exit 0 (fake expectation caught):\n${r.stdout}\n${r.stderr}`)
   assert.match(String(r.stdout) + String(r.stderr), /selftestFakeColumn/, 'self-test must report the injected fake column as the caught drift')
 })

@@ -22,7 +22,7 @@ const dayjs = require_('dayjs')
 db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' }))
+const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { timeout: 180000, encoding: 'utf8' }))
 
 let _seq = 0
 function seed (over = {}) {
@@ -157,7 +157,7 @@ test('batch CLI --json envelope is {op, matched, changed, failures, ok}; partial
   const a = seed({ taskContent: '批量信封甲v2' })
   let r
   try {
-    execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'batch', 'done', a.taskId, 'NOPE_x', '--json'], { encoding: 'utf8' })
+    execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'batch', 'done', a.taskId, 'NOPE_x', '--json'], { timeout: 180000, encoding: 'utf8' })
     assert.fail('partial failure must exit non-zero')
   } catch (e) {
     r = JSON.parse(e.stdout)

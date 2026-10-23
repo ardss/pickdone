@@ -42,7 +42,7 @@ test('the two tests/-root *.test.js specs exist and actually pass under node --t
   for (const k of Object.keys(env)) if (/^NODE_TEST_CONTEXT|^TEST_/.test(k)) delete env[k]
   const r = spawnSync(process.execPath,
     ['--test', '--test-reporter=tap', path.join(testsDir, 'dayrail-resize-raf.test.js')],
-    { encoding: 'utf8', env })
+    { timeout: 180000, encoding: 'utf8', env })
   const out = (r.stdout || '') + '\n' + (r.stderr || '')
   const pass = /# pass (\d+)/.exec(out)?.[1]
   const fail = /# fail (\d+)/.exec(out)?.[1]

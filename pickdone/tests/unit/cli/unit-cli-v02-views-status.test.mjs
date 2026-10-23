@@ -23,8 +23,8 @@ const dayjs = require_('dayjs')
 db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' }))
-const runCliRaw = args => execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' })
+const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { timeout: 180000, encoding: 'utf8' }))
+const runCliRaw = args => execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { timeout: 180000, encoding: 'utf8' })
 
 const today0 = () => +dayjs().startOf('day')
 let _seq = 0
@@ -130,7 +130,7 @@ test('view CLI surface: view add/list --json + list --view applies conds (and dr
   assert.ok(!out.includes('CLI视图今日v2'), 'view conditions filter the rest out')
   // unrepresentable flags are rejected (would be stripped by normConds and silently never applied in the App)
   let rejected = false
-  try { execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'view', 'add', '关键词视图v2', '--keyword', 'x', '--json'], { encoding: 'utf8' }) } catch (e) { rejected = e.status === 1 && JSON.parse(e.stderr).error === 'USAGE' }
+  try { execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'view', 'add', '关键词视图v2', '--keyword', 'x', '--json'], { timeout: 180000, encoding: 'utf8' }) } catch (e) { rejected = e.status === 1 && JSON.parse(e.stderr).error === 'USAGE' }
   assert.ok(rejected, '--keyword must be rejected with a USAGE error')
   const rm = runCli(['view', 'rm', 'CLI逾期视图v2', '--json'])
   assert.ok(!runCli(['view', 'list', '--json']).data.some(v => v.id === rm.data.id))
@@ -191,7 +191,7 @@ test('project status CLI surface: --status set/clear, projects --json rows + --s
   const detail = runCli(['project', 'CLI状态乙v2', '--json'])
   assert.equal(detail.data.status, 'active', 'project detail --json gains status')
   let rejected = false
-  try { execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'project', 'CLI状态乙v2', '--status', 'archived', '--json'], { encoding: 'utf8' }) } catch (e) { rejected = e.status === 1 && JSON.parse(e.stderr).error === 'USAGE' }
+  try { execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'project', 'CLI状态乙v2', '--status', 'archived', '--json'], { timeout: 180000, encoding: 'utf8' }) } catch (e) { rejected = e.status === 1 && JSON.parse(e.stderr).error === 'USAGE' }
   assert.ok(rejected, 'invalid status value rejected')
   assert.equal(a.categoryId > 0 && b.categoryId > 0, true)
 })

@@ -32,7 +32,7 @@ db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const cliPath = path.join(ROOT, 'cli', 'pickdone.js')
-const runCli = args => JSON.parse(execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8' }))
+const runCli = args => JSON.parse(execFileSync(process.execPath, [cliPath, ...args], { timeout: 180000, encoding: 'utf8' }))
 
 let _seq = 0
 function seed (over = {}) {
@@ -147,7 +147,7 @@ test('r5-5b: CLI get on a unique recycled hit emits the stderr warning', () => {
   lib.deleteTodo(dead.taskId)
   const res = require_('node:child_process').spawnSync(
     process.execPath, [cliPath, 'get', 'r5回收站警告', '--json'],
-    { encoding: 'utf8', env: { ...process.env } })
+    { timeout: 180000, encoding: 'utf8', env: { ...process.env } })
   assert.equal(res.status, 0)
   JSON.parse(res.stdout) // stdout stays pure JSON (warning must be on stderr)
   assert.match(res.stderr, /recycle bin/, 'warning carried on stderr, not stdout')

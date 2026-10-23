@@ -107,7 +107,7 @@ test('h3-4: empty-DB userId fallback is 840001 (renderer parity), applied to cre
     assert.equal(row.userId, 840001, 'task created on an empty DB must carry the renderer userId, not 0')
     console.log('OK')
   `
-  const out = execFileSync(process.execPath, ['-e', script], {
+  const out = execFileSync(process.execPath, ['-e', script], { timeout: 180000,
     encoding: 'utf8',
     cwd: ROOT,
     env: { ...process.env, NODE_PATH: path.join(ROOT, 'node_modules') },

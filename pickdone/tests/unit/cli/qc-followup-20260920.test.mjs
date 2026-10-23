@@ -21,7 +21,7 @@ const db = require_('../../../src/main/db.js')
 db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const runCliRaw = args => execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' })
+const runCliRaw = args => execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { timeout: 180000, encoding: 'utf8' })
 const runCliJson = args => JSON.parse(runCliRaw([...args, '--json']))
 const taskIdOf = r => (r.data || r).taskId
 

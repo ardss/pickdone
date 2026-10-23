@@ -28,7 +28,7 @@ const lib = require_(path.join(ROOT, 'cli/lib.js'))
 
 const cliPath = path.join(ROOT, 'cli', 'pickdone.js')
 const runCliFail = args => {
-  try { execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); return null } catch (e) {
+  try { execFileSync(process.execPath, [cliPath, ...args], { timeout: 180000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); return null } catch (e) {
     try { return JSON.parse(e.stderr || e.stdout) } catch { return { error: 'UNKNOWN', message: String(e.message) } }
   }
 }
@@ -61,7 +61,7 @@ test('derive-1 regression: a schemaV=2 tomatoRecords segment is refused with SNA
 test('derive-1: a schemaV=1 tomatoRecords segment still validates OK (no over-blocking)', () => {
   const f = path.join(process.env.TODO_DB_DIR, 'ok-tomato.json')
   fs.writeFileSync(f, dumpWith({ tomatoRecords: JSON.stringify({ schemaV: 1, records: [] }) }))
-  const out = JSON.parse(execFileSync(process.execPath, [cliPath, 'restore-backup', f, '--json'], { encoding: 'utf8' })).data
+  const out = JSON.parse(execFileSync(process.execPath, [cliPath, 'restore-backup', f, '--json'], { timeout: 180000, encoding: 'utf8' })).data
   assert.equal(out.todos, 1, 'v1 dump still validates with real counts')
 })
 

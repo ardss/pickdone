@@ -23,7 +23,7 @@ function runCliExpectingFailure (args) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pickdone-cli-fail-'))
   try {
     // stderr/stdout PIPED (not inherited) — the exact condition the truncation bug bit in
-    const r = spawnSync(process.execPath, [CLI, ...args], {
+    const r = spawnSync(process.execPath, [CLI, ...args], { timeout: 180000,
       encoding: 'utf8',
       env: { ...process.env, TODO_DB_DIR: dir },
     })
