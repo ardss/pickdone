@@ -8,5 +8,6 @@
   "src/main/index.js": 860,
   "renderer/js/main.js": 802,
   "renderer/js/views/StatisticsView.vue": 802,
-  "renderer/js/views/TomatoFloatPage.vue": 816
+  "renderer/js/views/TomatoFloatPage.vue": 816,
+  "src/main/sync-apply.js": 822
 }
