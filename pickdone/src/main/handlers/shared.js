@@ -130,6 +130,25 @@ function purgeAttachmentFiles (attachDir, ids) {
  *  age and are conservatively kept UNLESS the id is live again (a recovered category deletes its
  *  own backup in recover; a live id with a leftover backup is a stale re-created-id orphan). */
 const CAT_FILTERS_BAK_RETENTION_MS = 30 * 86400000
+// W7 fix (2026-10-23, P2): the sync-state meta families below are REPLICATED state — another
+// device's live row can legitimately reference a repeatRule/project* key that THIS device's
+// local (category/todo) tables cannot see yet (the anchor row is still in flight, or lives only
+// on the peer for a family this device participates in). The local-activity-only rule above then
+// GC'd a peer-referenced meta row and the deletion SYNCED (meta is a sync entity), destroying the
+// peer's rule/deadline/docs. Grace period: a meta row whose updatedAt is younger than
+// SYNC_META_GC_GRACE_MS is never GC'd — a genuinely dead key is re-GC'd on a later startup once
+// it ages past the window, while an in-flight anchor gets its round to land. The stamps arrive
+// via `opts.metaStamps` (Map or object key→updatedAt); callers that omit them keep the exact
+// legacy behavior (age unknown → no grace, nothing loosened).
+const SYNC_META_GC_GRACE_MS = 24 * 3600000
+const SYNC_META_FAMILY_RE = /^(?:repeatRule:|projectDeadline:|projectMilestones:|projectStatus:|projectCategoryFlag:|projectDocs:)/
+function syncMetaStamp (opts, k) {
+  const s = opts && opts.metaStamps
+  if (!s) return null
+  const v = s instanceof Map ? s.get(k) : s[k]
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
 function computeMetaGc (metaKeys, categories, todos, opts = {}) {
   const now = Number(opts.now) || Date.now()
   const retentionMs = Number(opts.catFiltersBakRetentionMs) || CAT_FILTERS_BAK_RETENTION_MS
@@ -200,6 +219,19 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
       if (!paired.has(id) && id !== opts.ownDeviceId) dead.push(k)
       continue
     }
+  }
+  // W7 grace-period filter (see SYNC_META_GC_GRACE_MS above): sync-state families get a last
+  // chance — a row written within the window is skipped, everything else (including unknown
+  // ages and non-sync families) is unchanged. catFiltersBak keys carry their own decidable age
+  // and tomatoRunAnnounce rows are per-device beacons, so neither is shielded.
+  const graceMs = Number(opts.syncMetaGraceMs)
+  const grace = Number.isFinite(graceMs) ? graceMs : SYNC_META_GC_GRACE_MS
+  if (grace > 0 && opts.metaStamps) {
+    return dead.filter(k => {
+      if (!SYNC_META_FAMILY_RE.test(k)) return true
+      const ts = syncMetaStamp(opts, k)
+      return ts == null || now - ts >= grace
+    })
   }
   return dead
 }
