@@ -118,6 +118,10 @@ had NO timeout — a real forever-block hazard). c1 rejoined core (deep pool
 Numbers: isolated 17/17 ×3 (15.3-26.0s, was 49.5s serial); loaded repro ×3
 green + 1 instrumented (c1 file-level 131.3s loaded = 2.3x margin); tier=
 core --dirs=cli ×2 = 535/535; hook core tier ×2 passes c1 green.
+ACCEPTANCE MET (2026-10-23 08:52): three consecutive full core runs with c1
+green — the hook's two passes + the Lead's capstone fast gate (23/23 green,
+24.3min total, unit stage passed on pass 1, retry not engaged, c1 "ok" in
+core context).
 Residual: ~15 sibling cli suites share the literal double-connection shape —
 audited BENIGN (no BUSY captured, better-sqlite3 holds no locks between
 statements, sibling walls ≤167s, no ceiling breach); follow-up: per-child
