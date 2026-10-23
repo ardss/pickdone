@@ -314,6 +314,10 @@ try {
     console.log(`  [check-all] ambient CPU load ~${ambientPct}% (within normal band)`)
   }
 } catch { /* diagnostics only — never block the gate on its own label */ }
+// CI detection hoisted here (was below, after the build stage): the gate
+// doctor's scope decision needs it BEFORE the build, and redeclaring it at
+// its old site would be a SyntaxError.
+const ON_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS)
 // Gate doctor (2026-10-23 architecture): declared environment needs validated + auto-
 // provisioned BEFORE any pool starts. Scope: fast tier = structural only; local full gate
 // = + visual-lane machine-state (browser-dev deps, baselines, agent-browser). CI skips the
@@ -355,7 +359,7 @@ if (FAST) {
 // 只有 CPU 竞争——两池各自限道(3+3)避免把机器打满;更新链路类时序敏感阶段靠重试1次兜底
 // CI 自适应降道:GitHub windows runner 仅 4 vCPU,3+3 车道会挤爆多 Electron 实例+单测池
 // (2026-09-06 首次公开 CI 实锤:本地全绿、CI 6 项全红且全是自拉起实例门禁)。CI=静态 2 道+活体 1 道且两池不并发
-const ON_CI = !!(process.env.CI || process.env.GITHUB_ACTIONS)
+// (ON_CI hoisted above the gate doctor — it is needed before the build stage)
 // CHECK_ALL_SKIP_LIVE=1: 跳过③活体池(双 OS 分工——ubuntu runner 靠 xvfb 拉 Electron 最慢,
 // 让它只跑静态池+单测,活体全量由 windows job 独扛;墙钟取 max 而非两 OS 各跑全套)
 const SKIP_LIVE = process.env.CHECK_ALL_SKIP_LIVE === '1'
