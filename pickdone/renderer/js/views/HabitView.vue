@@ -91,7 +91,7 @@
         <div class="habit-add moment-add">
           <span class="moment-sec-title">{{ $t('statsB.HabitView.momentTitle') }}</span>
           <input v-model="newMoment" class="habit-add-input" :placeholder="$t('statsB.HabitView.momentNamePlaceholder')" :aria-label="$t('statsB.HabitView.momentNameAria')"/>
-          <input v-model="newMomentDate" type="date" class="habit-add-input" :aria-label="$t('statsB.HabitView.dateAria')"/>
+          <input v-model="newMomentDate" type="date" class="habit-add-input" :aria-label="$t('statsB.HabitView.dateAria')" :max="newMomentKind === 'memorial' ? todayKey : null"/>
           <select v-model="newMomentKind" class="habit-add-input" :aria-label="$t('statsB.HabitView.kindAria')">
             <option value="countdown">{{ $t('statsB.HabitView.countdown') }}</option>
             <option value="memorial">{{ $t('statsB.HabitView.memorial') }}</option>
@@ -196,7 +196,7 @@ export default {
     freqLabel (h) {
       const f = h.frequency || { type: 'daily' }
       if (f.type === 'daily') return this.$t('statsB.HabitView.freqDaily')
-      if (f.type === 'weekdays') return (f.weekdays || []).map(w => this.WD[w]).join(' ')
+      if (f.type === 'weekdays') return (f.weekdays || []).slice().sort((a, b) => a - b).map(w => this.WD[w]).join(' ')
       return this.$t('statsB.HabitView.freqEveryN', { n: f.intervalN || 1 })
     },
     addHabit () {
@@ -305,6 +305,11 @@ export default {
     },
     addMoment () {
       if (!this.newMoment.trim() || !this.newMomentDate) return this.$message.warning(this.$t('statsB.HabitView.nameAndDateRequired'))
+      // [w7] a memorial (anniversary) dated in the future renders a nonsense "已保持 N 天":
+      // reject at submit (the :max on the date input is only a picker hint, keyboard entry bypasses it)
+      if (this.newMomentKind === 'memorial' && this.newMomentDate > this.todayKey) {
+        return this.$message.warning(this.$t('statsE.w7.memorialFutureDate'))
+      }
       const n = this.newMoment.trim()
       this.$store.commit('habits/addMoment', { name: n, date: this.newMomentDate, kind: this.newMomentKind })
       // [maint-0924 A12] creation feedback (was silent)
