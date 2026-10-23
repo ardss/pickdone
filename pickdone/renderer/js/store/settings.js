@@ -266,6 +266,17 @@ export function sanitizeSettingsPatch (patch, current) {
  *  now fulfilled, no second copy to drift). */
 import { SETTINGS_MANIFEST, SECRET_KEYS } from '../../../shared/settings-manifest.mjs'
 export const SETTING_RANGES = SETTINGS_MANIFEST.ranges
+/** [W7-R 2026-10-23 P3] the single appLocale enum gate (SETTINGS_MANIFEST.enum.appLocale — the
+ *  same source the sanitizer pins values against). Every writer path that can seat a locale into
+ *  live state / the LS boot cache / main's config.json routes through this one predicate: the
+ *  updateSettings mutation's boot channel, restore()'s LS-adoption branch, and the `update`
+ *  action's Y1 write-through + hot-apply path (which previously accepted any non-empty string —
+ *  dispatch('settings/update', { appLocale: 'junk' }) wrote 'junk' into LS 'appLocale' and pushed
+ *  it at main). CONSISTENCY PREDICATE: only ever tightened, never loosened. */
+export function isLegalAppLocale (loc) {
+  const legal = SETTINGS_MANIFEST.enum.appLocale
+  return typeof loc === 'string' && !!loc && (!legal || legal.includes(loc))
+}
 export function clampNumericSettings (patch) {
   if (!patch || typeof patch !== 'object') return patch
   for (const k of Object.keys(SETTING_RANGES)) {
@@ -441,8 +452,7 @@ export default {
       // $i18n 'zh-CN' in one boot dump). Same contract as restore()'s F9 block: enum-gated,
       // changed-only, fire-and-forget; the update action's Y1 path and setAppLocale IPC stay.
       const loc = state.appLocale
-      const legalLocales = SETTINGS_MANIFEST.enum.appLocale
-      if (typeof loc === 'string' && loc && (!legalLocales || legalLocales.includes(loc)) && loc !== prevLocale) {
+      if (isLegalAppLocale(loc) && loc !== prevLocale) {
         try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
         import('../i18n/index.js').then(m => {
           if (m && m.setLocale && typeof document !== 'undefined') m.setLocale(loc)
@@ -506,9 +516,8 @@ export default {
       // [restore-locale-enum fix] same SETTINGS_MANIFEST.enum gate the sanitizer applies on other
       // trust-boundary paths (the sanitizer above already drops junk locales, but the LS adoption
       // branch can still seat a stale/junk LS value): a junk locale string must neither flip i18n
-      // nor reach the LS boot cache.
-      const legalLocales = SETTINGS_MANIFEST.enum.appLocale
-      if (typeof loc === 'string' && loc && (!legalLocales || legalLocales.includes(loc)) && loc !== prevLocale) {        try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
+      // nor reach the LS boot cache. (W7-R: routed through the shared isLegalAppLocale helper.)
+      if (isLegalAppLocale(loc) && loc !== prevLocale) {        try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
         import('../i18n/index.js').then(m => {
           if (m && m.setLocale && typeof document !== 'undefined') m.setLocale(loc)
           else if (m && m.default && m.default.global) m.default.global.locale = loc
@@ -518,25 +527,36 @@ export default {
   },
   actions: {
     async update ({ commit }, patch) {
-      commit('updateSettings', patch)
+      // [W7-R P3 locale-enum-gate] a junk appLocale is rejected at the action boundary: stripped
+      // before the commit (never seats in state / LS / config.json) and the Y1 hot-apply block
+      // below never sees it. Same SETTINGS_MANIFEST.enum.appLocale gate as the mutation's boot
+      // channel and restore()'s adoption branch (shared isLegalAppLocale helper).
+      let effective = patch
+      if (patch && patch.appLocale !== undefined && !isLegalAppLocale(patch.appLocale)) {
+        console.warn('[settings] update: illegal appLocale rejected:', patch.appLocale)
+        effective = { ...patch }
+        delete effective.appLocale
+      }
+      commit('updateSettings', effective)
       // P1-1: mirror duration keys into the tomato runtime ledger (all inbound paths converge here —
       // updateExternal re-dispatches through this action; see tomatoLedgerPatch above).
-      mirrorTomatoLedger(commit, patch)
+      mirrorTomatoLedger(commit, effective)
       // Y1: locale hot-apply — mirror the local-change path (main handlers/settings.js 'set-app-locale'):
       // main-process i18n + tray rebuild. LS 'appLocale' stays as i18n's boot cache (write-through).
-      if (patch && patch.appLocale && typeof patch.appLocale === 'string') {
-        try { localStorage.setItem('appLocale', patch.appLocale) } catch (e) { /* empty */ }
+      if (isLegalAppLocale(effective && effective.appLocale)) {
+        const loc = effective.appLocale
+        try { localStorage.setItem('appLocale', loc) } catch (e) { /* empty */ }
         try {
           const i18nMod = await import('../i18n/index.js')
-          if (i18nMod.default && i18nMod.default.global) i18nMod.default.global.locale = patch.appLocale
+          if (i18nMod.default && i18nMod.default.global) i18nMod.default.global.locale = loc
         } catch (e) { /* i18n unavailable in degraded hosts */ }
-        try { if (window.todoAPI && window.todoAPI.setAppLocale) window.todoAPI.setAppLocale(patch.appLocale) } catch (e) { /* empty */ }
+        try { if (window.todoAPI && window.todoAPI.setAppLocale) window.todoAPI.setAppLocale(loc) } catch (e) { /* empty */ }
       }
       // P2-2 (maint/dw 2026-09-23): the IPC result is now REPORTED instead of swallowed — the
       // shortcuts tab awaits it and must not show "saved" (nor advance its dirty snapshot) when
       // config.json was not written. A missing bridge (tests / browser host) counts as ok.
       if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.updateSettings) {
-        try { await window.todoAPI.updateSettings(patch) } catch (e) {
+        try { await window.todoAPI.updateSettings(effective) } catch (e) {
           // IPC failure = LS written but config.json not; next launch config would overwrite it back (settings changed during lock → lost on restart): at least leave a trace
           console.error('[settings] updateSettings IPC failed, patch may be reverted on next launch:', patch, e)
           return { ok: false, error: e }
