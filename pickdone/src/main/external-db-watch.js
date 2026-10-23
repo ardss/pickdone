@@ -55,6 +55,7 @@ function createExternalDbWatch (deps) {
   let resyncDbWatch = null // set by watchDbForExternalWrites: re-baselines lastMtime after OUR OWN db writes (P1 2026-09-11)
   let stopDbWatch = null // set by watchDbForExternalWrites: unwatchFile both files on the quit chain (P2 2026-09-11)
   let pollTickHook = null // set by watchDbForExternalWrites: manual poll-tick drive for unit tests (settings seed contract)
+  let changeHook = null // M2a: manual onChange drive for unit tests (debounce-failure baseline-rollback contract)
   function watchDbForExternalWrites () {
     const ud = app.getPath('userData')
     const dbFile = path.join(ud, 'todos.db')
@@ -257,7 +258,13 @@ function createExternalDbWatch (deps) {
         }
       } catch (e) { log.warn('[CLI] 设置热同步失败', e) }
     }
-    const kick = () => {
+    // M2a (P2): rollbackMtime = the baseline value BEFORE the change that scheduled this kick.
+    // The sync段 of onChange already rolls back on a synchronous throw, but kick only ARMS a
+    // debounce — the reloadAll/broadcast work actually runs inside the timer, where a failure
+    // used to be swallowed with lastMtime already advanced: the external write was consumed
+    // forever (next poll saw m === lastMtime). On failure the baseline is rolled back so the
+    // next poll re-processes the same change (kick's success path re-baselines as before).
+    const kick = (rollbackMtime) => {
       clearTimeout(debounce)
       debounce = setTimeout(() => {
         try {
@@ -278,7 +285,10 @@ function createExternalDbWatch (deps) {
           // Resync the mtime baseline: reloadAll itself writes reminderLastSeenAt (touching -wal); without this
           // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop
           lastMtime = readWatchMtime() ?? lastMtime
-        } catch (e) { log.warn('[TodoDB] 外部写入刷新失败', e) }
+        } catch (e) {
+          lastMtime = rollbackMtime
+          log.warn('[TodoDB] 外部写入刷新失败,基线已回滚待下轮重处理:', e && e.message)
+        }
       }, 150)
     }
     const onChange = () => {
@@ -309,7 +319,7 @@ function createExternalDbWatch (deps) {
         const prevMtime = lastMtime
         try {
           lastMtime = m
-          kick()
+          kick(prevMtime)
           forwardTomatoCmd()
           forwardSyncCmd()
         } catch (e) {
@@ -327,6 +337,7 @@ function createExternalDbWatch (deps) {
     // after every write-type todo-db:call so the next poll sees mtime === baseline.
     resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
     pollTickHook = () => forwardTomatoCmd() // test seam: one manual poll tick without fs.watchFile
+    changeHook = () => onChange() // M2a test seam: one poll tick that goes through the change path
     // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
     stopDbWatch = () => {
       // Round-3 stability (2026-09-26): a pending debounce kick survived the unwatch and fired against the closed DB handle. Clear it first.
@@ -345,7 +356,9 @@ function createExternalDbWatch (deps) {
     // quit chain hook (was: try { if (stopDbWatch) stopDbWatch() } catch {})
     stopForQuit: () => { try { if (stopDbWatch) stopDbWatch() } catch {} },
     // unit-test seam: drive one poll tick (settings hot-sync branch) without fs.watchFile
-    __pollTickForTests: () => { try { if (pollTickHook) pollTickHook() } catch { /* guarded like onChange */ } }
+    __pollTickForTests: () => { try { if (pollTickHook) pollTickHook() } catch { /* guarded like onChange */ } },
+    // M2a unit-test seam: drive one poll tick through the change path (kick scheduling) without fs.watchFile
+    __pollChangeForTests: () => { try { if (changeHook) changeHook() } catch { /* onChange swallows its own */ } }
   }
   latestStopDbWatch = () => { try { if (stopDbWatch) stopDbWatch() } catch {} }
   return api
