@@ -129,8 +129,11 @@ async function resetSharedPage () {
   ws.onmessage = e => { const m = JSON.parse(e.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) } }
   const send = (method, params = {}) => new Promise(res => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })) })
   // bounded send: the minimal CDP client above has no socket-level timeout, and a wedged page
-  // must fail THIS reset (named) instead of hanging the whole pool outside any per-target budget
-  const sendT = (method, params = {}, ms = 8000) => Promise.race([
+  // must fail THIS reset (named) instead of hanging the whole pool outside any per-target budget.
+  // 20s (was 8s): under burst load a CDP round-trip to a LIVE page stalled past 8s and the reset
+  // red'd as "timeout Runtime.enable" (2026-10-23 full gate, both attempts) — a wedged page still
+  // fails named within the 20s probe budget below.
+  const sendT = (method, params = {}, ms = 20000) => Promise.race([
     send(method, params),
     sleep(ms).then(() => { throw new Error('timeout ' + method) })
   ])

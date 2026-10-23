@@ -240,7 +240,15 @@ const TEST_TIMEOUT_MS = 300000
 // as the 0xC0000409 teardown crash. At 4 the same pool measured ~11-13min wall, both passes
 // green, under the same load — 8 roughly halves the unit wall and stays zero-fail on the
 // designated acceptance run.
-const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || (tierArg === 'deep' ? '4' : '8')
+// 2026-10-23 EVENING RE-REVERT of the default (8 stays available via TEST_CONCURRENCY=8 for
+// quiet windows): the evening full gate under the day's worst ambient burst red'd the unit tier
+// at 8 (28.7min, 5 victims) — the lan-sync drill convergence budgets (mesh / scale / 4-pair) and
+// the C14/D19 sleepBackoff timing assert are FIXED-budget asserts that a burst can push past
+// their ceilings in BOTH retry passes, and the CSPRNG rerun-once doctrine absorbed crashes but
+// not budget overruns. Tally at 8 across the day: 2 green / 1 red depending on load — not a
+// safe DEFAULT on a family box whose load is uncontrollable; 4 stayed green in every window
+// measured today. The re-raise rationale above stands for quiet windows; flip via env.
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
