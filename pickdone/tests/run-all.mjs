@@ -65,11 +65,12 @@ const DEEP_FILES = new Set([
   'relay-413-forceexit-teardown.test.mjs',
   // cross-process relay drill, self-declared 120s timeout (unit/main)
   'relay-cross-process-outbox.test.mjs',
-  // D6-pending: parent+CLI-child DOUBLE CONNECTION race on the fixture SQLite ("database is
-  // locked" → tomato-ledger migration warning → child output never settles → the whole FILE
-  // burns the 300s ceiling). Spawn-heavy + lock-racy under ANY concurrency; green in isolation.
-  // Returns to core the moment D6 (fixture busy_timeout/awaited child lifecycle) lands.
-  'c1-parse-ux.test.mjs',
+  // D6 (2026-10-23): c1-parse-ux was routed here for the fixture-suite lock/ceiling burn.
+  // Root-caused as a SEQUENTIAL-SPAWN WALL-TIME problem, not a db lock: ~40 strictly serial
+  // CLI children inflate to 6-23s each under full-suite process-creation contention and the
+  // 300s file ceiling executes mid-file. Fixed in the suite itself (per-test fixture dirs +
+  // 8 concurrent async spawn lanes + bounded child lifecycle) — c1 rejoined core; keep this
+  // comment as the routing-history anchor for the perf-debt-ledger D6 entry.
 ])
 
 // Sibling spec dir: pickdone/test/ (flat, next to tests/) used to be executed by NOTHING —
@@ -201,11 +202,11 @@ const TEST_TIMEOUT_MS = 300000
 // 2026-10-23 FALSIFIED HYPOTHESIS (kept for the record): a tier-aware core default of
 // cores-2 (8) was measured LIVE — 22.1min but 7 not-ok entries, and the follow-up acceptance
 // run reproduced the SAME suite families twice in a row (c1-parse-ux, d26 plan, purge family):
-// root cause is NOT scheduling starvation but a parent+child DOUBLE CONNECTION race on fixture
-// SQLite DBs in the cli suite family ("database is locked" → tomato-ledger migration hang →
-// 300s ceiling executes the whole file). Concurrency 4 shows the same families at lower
-// frequency; the real fix is D6 (fixture busy_timeout + awaited child connections), not a
-// bigger worker pool. Default stays 4 until D6 lands.
+// root cause is NOT scheduling starvation but the cli-suite spawn storm: each file spawns
+// dozens of real CLI children whose wall time inflates 10-20x under concurrent process
+// creation (D6: c1-parse-ux, the 40-spawn worst case, breached the 300s file ceiling).
+// Concurrency 4 shows the same families at lower frequency; D6 landed suite-side (c1 now
+// runs its children on concurrent lanes), default stays 4.
 const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
