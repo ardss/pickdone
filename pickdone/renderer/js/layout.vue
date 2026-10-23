@@ -64,6 +64,23 @@ export default {
     announceMsg (m) {
       this.announce = ''
       this.$nextTick(() => { this.announce = m })
+    },
+    // [w7] resize tracking while the panel is visible — _preEditWidth follows the LATEST
+    // pre-open width so closing the panel never undoes a manual resize made while it was open
+    _attachPreWidthResize () {
+      if (!this._onPreWidthResize) {
+        this._onPreWidthResize = () => {
+          clearTimeout(this._preWidthTimer)
+          this._preWidthTimer = setTimeout(() => {
+            if (this._preEditWidth != null) this._preEditWidth = window.innerWidth
+          }, 150)
+        }
+      }
+      window.addEventListener('resize', this._onPreWidthResize)
+    },
+    _detachPreWidthResize () {
+      clearTimeout(this._preWidthTimer)
+      if (this._onPreWidthResize) window.removeEventListener('resize', this._onPreWidthResize)
     }
   },
   computed: {
@@ -136,25 +153,6 @@ export default {
       if (v) this._attachTimer = setTimeout(() => { this._attachTimer = null; document.addEventListener('mousedown', this._onDocClick) }, 0)
       else document.removeEventListener('mousedown', this._onDocClick)
     }, { immediate: true })
-  },
-  // [w7] resize tracking is attached only while the panel is visible (same lifecycle contract
-  // as the outside-click listener below) and always cleaned up on unmount.
-  methods: {
-    _attachPreWidthResize () {
-      if (!this._onPreWidthResize) {
-        this._onPreWidthResize = () => {
-          clearTimeout(this._preWidthTimer)
-          this._preWidthTimer = setTimeout(() => {
-            if (this._preEditWidth != null) this._preEditWidth = window.innerWidth
-          }, 150)
-        }
-      }
-      window.addEventListener('resize', this._onPreWidthResize)
-    },
-    _detachPreWidthResize () {
-      clearTimeout(this._preWidthTimer)
-      if (this._onPreWidthResize) window.removeEventListener('resize', this._onPreWidthResize)
-    }
   },
   beforeUnmount () {
     if (this._attachTimer) clearTimeout(this._attachTimer)

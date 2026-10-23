@@ -164,8 +164,8 @@ test('R3.2 updateRecord succeed true→false enqueues a negative task-side compe
   tomatoMod.default.mutations.updateRecord(s, { tomatoId: 'tmt_f_1760000000000_salt', patch: { succeed: false } })
   assert.equal(s.tomatoRecordList[0].succeed, false, 'the correction still applies')
   const keys = []
-  for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith('tomatoPendingSnow.')) keys.push(k) }
-  const entries = keys.map(k => JSON.parse(localStorage.getItem(k)).entry)
+  for (let i = 0; i < globalThis.localStorage.length; i++) { const k = globalThis.localStorage.key(i); if (k && k.startsWith('tomatoPendingSnow.')) keys.push(k) }
+  const entries = keys.map(k => JSON.parse(globalThis.localStorage.getItem(k)).entry)
   const comp = entries.find(e => e.params && String(e.params.dedupKey || '').startsWith('undo:'))
   assert.ok(comp, 'a compensation entry is enqueued in the durable snow queue')
   assert.equal(comp.params.taskId, 'task-1')
@@ -176,9 +176,9 @@ test('R3.2 updateRecord succeed true→false enqueues a negative task-side compe
 test('R3.3 no compensation on false→true, other patches, zero-minute or unlinked records', () => {
   const countUndoEntries = () => {
     let n = 0
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i)
-      if (k && k.startsWith('tomatoPendingSnow.') && String(localStorage.getItem(k) || '').includes('"undo:')) n++
+    for (let i = 0; i < globalThis.localStorage.length; i++) {
+      const k = globalThis.localStorage.key(i)
+      if (k && k.startsWith('tomatoPendingSnow.') && String(globalThis.localStorage.getItem(k) || '').includes('"undo:')) n++
     }
     return n
   }
@@ -207,13 +207,13 @@ test('R4.1 isLegalAppLocale pins the manifest enum', () => {
 
 test('R4.2 dispatch settings/update with a junk appLocale: rejected, never seats in state nor LS', async () => {
   const state = Object.assign({}, settings.state)
-  const prevLs = localStorage.getItem('appLocale')
+  const prevLs = globalThis.localStorage.getItem('appLocale')
   const ctx = { commit: (type, payload) => settings.mutations[type](state, payload) }
   const r = await settings.actions.update(ctx, { appLocale: 'junk', developerMode: true })
   assert.ok(r && r.ok !== false, 'the action still completes (locale field rejected, not the whole patch)')
   assert.equal(state.appLocale, 'zh-CN', 'junk locale never seats in state')
   assert.equal(state.developerMode, true, 'the rest of the patch still applies')
-  assert.equal(localStorage.getItem('appLocale'), prevLs, 'LS boot cache untouched')
+  assert.equal(globalThis.localStorage.getItem('appLocale'), prevLs, 'LS boot cache untouched')
   const setLocaleCalls = dbCalls.filter(c => false) // no direct assertion needed; setAppLocale bridge absent in tests
   assert.ok(Array.isArray(setLocaleCalls))
 })
@@ -224,9 +224,9 @@ test('R4.3 a legal locale still passes the action gate and reaches the LS boot c
   try {
     await settings.actions.update(ctx, { appLocale: 'en-US' })
     assert.equal(state.appLocale, 'en-US')
-    assert.equal(localStorage.getItem('appLocale'), 'en-US')
+    assert.equal(globalThis.localStorage.getItem('appLocale'), 'en-US')
   } finally {
-    try { localStorage.removeItem('appLocale') } catch { /* shared stub LS */ }
+    try { globalThis.localStorage.removeItem('appLocale') } catch { /* shared stub LS */ }
   }
 })
 

@@ -572,8 +572,15 @@ const OPS = {
     return true
   },
   bumpSnow: ({ taskId, minutes, dedupKey } = {}) => {
-    // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
-    const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
+    // W7-R (2026-10-23): a dedupKey prefixed undo: is the renderer succeed->false compensation
+    // (the exact reverse of a prior credit). It takes a NEGATIVE-only clamp mirrored on the
+    // credit-side FOCUS_MAX cap; an undo: key can never credit (positive clamps to 0). Every
+    // other caller keeps the original positive-only clamp (the renderer, incl. the float window,
+    // must not tamper with the focus ledger; a single focus session capped at 600 minutes).
+    const undoRollback = typeof dedupKey === 'string' && dedupKey.startsWith('undo:')
+    const m = undoRollback
+      ? Math.max(-LIMITS.FOCUS_MAX_MINUTES, Math.min(0, Math.floor(Number(minutes) || 0)))
+      : Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
     // P3 2026-10-09: m===0 is a zero-content no-op (the old path still touched updatedAt/status/oplog/sync) — short-circuit before any row touch.
     if (m === 0) return { ok: true, minutes: 0 }
     // P1 2026-09-20 idempotency contract: the renderer replays bumpSnow on an AMBIGUOUS failure

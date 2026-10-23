@@ -84,7 +84,7 @@ test('F1: run-auto-backup quarantines an EMPTY dump instead of making it the new
   })
 })
 
-test('F1: run-auto-backup — a cascade of empties (newest is also empty) writes normally', () => {
+test('F1: run-auto-backup — a cascade of empties (no good point ever) stays fully quarantined', () => {
   withBackupDir((dir) => {
     const { ctx, event } = makeCtx()
     const handlers = backup(ctx)
@@ -92,7 +92,10 @@ test('F1: run-auto-backup — a cascade of empties (newest is also empty) writes
     assert.equal(r1.ok, true)
     const r2 = handlers['run-auto-backup'](event, realDump(0), { recent: 4, dailyDays: 0, weeklyWeeks: 0, eventKeep: 0 })
     assert.equal(r2.ok, true)
-    assert.ok(!r2.emptyQuarantined, 'nothing good left to protect — the empty point lands normally (critical-channel parity)')
+    // re-anchored 2026-10-23 (M2b w7): the first-ever guard — with NO good point on disk, an
+    // empty dump must never seed the restore list's newest slot either, so both runs quarantine
+    assert.ok(r1.emptyQuarantined, 'first-ever empty run is quarantined too')
+    assert.ok(r2.emptyQuarantined, 'cascade of empties never lands an empty point')
   })
 })
 

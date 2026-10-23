@@ -175,6 +175,7 @@ function snapshotDir (dir) {
 }
 
 test('migrateData success: copies the required set (logs/ excluded), verifies, writes boot redirect', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('mig-ok-home')
   await withHome(home, async () => {
     const root = sandbox('mig-ok')
@@ -204,6 +205,7 @@ test('migrateData success: copies the required set (logs/ excluded), verifies, w
 })
 
 test('migrateData failure (junk pre-existing target): source zero-change, NO boot file written', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('mig-fail-home')
   await withHome(home, async () => {
     const root = sandbox('mig-fail')
@@ -222,6 +224,7 @@ test('migrateData failure (junk pre-existing target): source zero-change, NO boo
 })
 
 test('migrateData verification failure cleans only what IT wrote (switch-back into valid dir keeps prior content)', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('mig-ver-home')
   await withHome(home, async () => {
     const root = sandbox('mig-ver')
@@ -256,6 +259,7 @@ test('migrateData verification failure cleans only what IT wrote (switch-back in
 })
 
 test('migrateData rejects the same targets validateTarget rejects', async () => {
+  dl._resetRelocationGatesForTests()
   const root = sandbox('mig-rej')
   const src = makeSource(root)
   assert.equal((await dl.migrateData(src, src)).ok, false)
@@ -319,6 +323,7 @@ test('D1#5 windows case-insensitive bypass: casing variant of the current dir is
 })
 
 test('D1#4a migrateData aborts when a NON-EMPTY todos.db-wal/-shm sits in the source (external writer)', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('wal-home')
   await withHome(home, async () => {
     const root = sandbox('wal')
@@ -344,6 +349,7 @@ test('D1#4a migrateData aborts when a NON-EMPTY todos.db-wal/-shm sits in the so
 })
 
 test('D1#4b migrateData aborts when the source todos.db changes during the copy (concurrent writer)', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('mtime-home')
   await withHome(home, async () => {
     const root = sandbox('mtime')
@@ -397,11 +403,13 @@ test('D1#6 requiredFiles carries files/ and allowed-backup-dirs.json; trees veri
     fs.writeFileSync(path.join(prior, 'db.key'), 'd'.repeat(64))
     fs.mkdirSync(path.join(prior, 'files'))
     fs.writeFileSync(path.join(prior, 'files', 'old.bin'), 'O')
+    dl._resetRelocationGatesForTests()
     const r2 = await dl.migrateData(src2, prior)
     assert.equal(r2.ok, false)
     assert.match(r2.error, /files tree mismatch/)
     assert.equal(fs.readFileSync(path.join(prior, 'files', 'old.bin'), 'utf8'), 'O', 'prior files/ restored')
     // absent on a bare source → absent in target
+    dl._resetRelocationGatesForTests()
     const root3 = sandbox('bare')
     const bare = path.join(root3, 'bare-ud')
     fs.mkdirSync(bare)
@@ -427,6 +435,7 @@ test('D1#3 boot-redirect write failure is inside the rollback contract (copy und
     fs.writeFileSync(path.join(target, 'todos.db'), 'PRIOR-DB')
     fs.writeFileSync(path.join(target, 'db.key'), 'f'.repeat(64))
     const beforeSrc = snapshotDir(src)
+    dl._resetRelocationGatesForTests()
     const r = await dl.migrateData(src, target)
     assert.equal(r.ok, false)
     assert.match(r.error, /boot redirect|rename|EPERM|EEXIST|EISDIR/i)
@@ -438,6 +447,7 @@ test('D1#3 boot-redirect write failure is inside the rollback contract (copy und
 })
 
 test('D1#8c migrateData sets the in-process relocation-pending gate on success', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('gate-home')
   await withHome(home, async () => {
     const root = sandbox('gate')
@@ -471,6 +481,7 @@ test('D1#1 handlers/system.js data:relocate refuses isolated/test instances BEFO
 // ---------- migration progress + boot-state honesty (2026-10-22 UX round) ----------
 
 test('migrateData onProgress: copy ticks are monotone with a correct total, then verify+boot phases', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('prog-home')
   await withHome(home, async () => {
     const root = sandbox('prog')
@@ -499,6 +510,7 @@ test('migrateData onProgress: copy ticks are monotone with a correct total, then
 })
 
 test('migrateData onProgress is optional (legacy two-arg call still migrates)', async () => {
+  dl._resetRelocationGatesForTests()
   const home = sandbox('prog2-home')
   await withHome(home, async () => {
     const root = sandbox('prog2')

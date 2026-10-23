@@ -368,9 +368,17 @@ function getRelocationPending () {
   return relocationPending
 }
 
+/** Test-only seam: both gates are sticky-until-relaunch BY DESIGN (production migrates exactly
+ *  once per process); suites that exercise several migrations in one process reset between
+ *  cases. No production caller. */
+function _resetRelocationGatesForTests () {
+  relocationPending = false
+  migrationInFlight = false
+}
+
 module.exports = {
   bootRedirectPath, readBootRedirect, readBootRedirectState, writeBootRedirect, clearBootRedirect,
   requiredFiles, validateTarget, migrateData, volumeFreeBytes,
-  getRelocationPending,
+  getRelocationPending, _resetRelocationGatesForTests,
   MIN_FREE_BYTES
 }
