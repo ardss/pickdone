@@ -36,7 +36,10 @@ if (electronBin && !existsSync(electronBin)) { electronMissing = 'electron binar
 
 const CDP_PORT = 9377 // dedicated port: never overlaps the shared e2e instance on 9333
 const CDP = 'http://127.0.0.1:' + CDP_PORT
-const BOOT_TIMEOUT_MS = 45000
+// 90s (was 45s, 2026-10-24 night): in-gate the renderer's interactive-ready hydration
+// measured past 45s under unit-tier self-load (final19: not ready within 45000ms at
+// 48.6s total). Quiet-host boots land in ~8-15s, so 90s only widens the load band.
+const BOOT_TIMEOUT_MS = 90000
 // 60s (was 20s, 2026-10-24 night): the guarded quit chain (DB close, window teardown,
 // child reaping) measured 25.7-34.3s in-gate where the three pools race for CPU - the
 // 20s budget was a quiet-host number. A healthy quit still lands in 3-6s, so 60s only
