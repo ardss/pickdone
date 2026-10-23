@@ -80,8 +80,10 @@ test('B9/B3: stripHabitsFamily preserves the blob-own schemaV; bootstrap consume
   assert.equal(stripped.schemaV, 7, 'the SETTINGS blob schemaV must survive the strip (only habits-exclusive fields go)')
   assert.deepEqual(Object.keys(stripped).sort(), ['schemaV', 'tomatoTime'])
   // habits blob shape keeps schemaV in the FAMILY set (both blobs may carry it)
-  assert.deepEqual([...HABITS_BLOB_FIELDS].sort(), ['habits', 'moments', 'savedAt', 'schemaV'])
-  assert.deepEqual([...HABITS_EXCLUSIVE_FIELDS].sort(), ['habits', 'moments', 'savedAt'])
+  // w7 tombstone lockstep (a91da88c): deleted/deletedMoments joined both sets so applied
+  // habit/moment tombstone rows fold into db.habitsState instead of stranding in settingsState.
+  assert.deepEqual([...HABITS_BLOB_FIELDS].sort(), ['deleted', 'deletedMoments', 'habits', 'moments', 'savedAt', 'schemaV'])
+  assert.deepEqual([...HABITS_EXCLUSIVE_FIELDS].sort(), ['deleted', 'deletedMoments', 'habits', 'moments', 'savedAt'])
   // B3 source anchor: lan-sync-bootstrap must consume the shared module, not a hand-copied literal
   const boot = read('src/main/lan-sync-bootstrap.js')
   assert.ok(boot.includes("require('../../shared/settings-families.mjs')"), 'bootstrap imports the shared family contract')
