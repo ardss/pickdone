@@ -36,7 +36,11 @@ export function buildBackupDump (rootState, state, { stripVolatileSettings = fal
       // (dbMirror.js 注释确认),UI 恢复七段与 dbRecovery 三段都从不读它,全仓无恢复端消费者。
       tomatoRecords: JSON.stringify(rootState.tomato && rootState.tomato.tomatoRecordList || []),
       categoryState: JSON.stringify({ schemaV: SCHEMA_V, list: rootState.category.list }),
-      habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0 }),
+      // [W7-R 2026-10-23 P2] the dump used to drop the deletion tombstones: a JSON disaster
+      // restore fed the habits segment into replaceAll, and without `deleted` the restore-side
+      // sticky tombstone merge had nothing to merge — a habit (or moment) deleted after the dump
+      // could be resurrected by an older synced blob. Additive fields; old readers ignore them.
+      habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0, deleted: rootState.habits.deleted || [], deletedMoments: rootState.habits.deletedMoments || [] }),
       // D6-F14: saved filters were never in dumps — a JSON disaster recovery wiped every smart list
       filterState: JSON.stringify({ schemaV: SCHEMA_V, list: (rootState.filters && rootState.filters.list) || [] }),
       // D6-F14: schedule chips live in SQLite (plan_chips), not in vuex state — callers pass the
