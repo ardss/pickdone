@@ -157,7 +157,7 @@ test('w7-3b: Map-shaped metaStamps work and unknown ages keep legacy GC', () => 
 /* ---------- 4. habits deletion-tombstone families join HABITS_BLOB_OWNED ---------- */
 
 test('w7-4: `deleted` removed from the habits mirror tombstones its settings_row', async () => {
-  const state = freshDevice('habits-own')
+  freshDevice('habits-own')
   const T1 = Date.now()
   db.call('setMeta', ['db.habitsState', JSON.stringify({ schemaV: 1, habits: [], moments: [], savedAt: T1, deleted: [{ id: 'h1', deletedAt: T1 }], deletedMoments: [] })])
   let row = db.call('settingsRowsAll').find(r => r.key === 'deleted')
@@ -175,7 +175,7 @@ test('w7-4: `deleted` removed from the habits mirror tombstones its settings_row
 })
 
 test('w7-4b: the SETTINGS mirror must not tombstone the habits-family deletion arrays', async () => {
-  const state = freshDevice('habits-cross')
+  freshDevice('habits-cross')
   const T1 = Date.now()
   db.call('setMeta', ['db.habitsState', JSON.stringify({ schemaV: 1, habits: [], moments: [], savedAt: T1, deleted: [{ id: 'h9', deletedAt: T1 }] })])
   await sleep(25)
