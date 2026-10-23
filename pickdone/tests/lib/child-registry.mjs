@@ -8,7 +8,7 @@
  * kill left exactly such a tree behind.
  *
  * Contract: every long-lived child a gate spawns is REGISTERED HERE at spawn time
- * (tests/.artifacts/runner-children.json, keyed by pid) and pruned when its 'close' event
+ * (tests/.artifacts/runner-children/<pid>.json, one file per child) and pruned when its 'close' event
  * fires. A runner that dies hard simply leaves its entries behind; `node tests/run-all.mjs
  * --cleanup` (or reapAllRegisteredSync from an exit handler) then reaps the survivors.
  *
@@ -22,23 +22,43 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
-const REGISTRY = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.artifacts', 'runner-children.json')
+const REGISTRY_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.artifacts', 'runner-children')
+
+function entryFile (pid) { return path.join(REGISTRY_DIR, `${pid}.json`) }
 
 function readAll () {
-  try {
-    const list = JSON.parse(fs.readFileSync(REGISTRY, 'utf8'))
-    return Array.isArray(list) ? list : []
-  } catch { return [] }
+  let names = []
+  try { names = fs.readdirSync(REGISTRY_DIR) } catch { return [] }
+  const list = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    try {
+      const e = JSON.parse(fs.readFileSync(path.join(REGISTRY_DIR, name), 'utf8'))
+      if (e && e.pid) list.push(e)
+    } catch { /* corrupt/partial entry from a concurrent writer — skip */ }
+  }
+  return list
 }
 
 function writeAll (list) {
-  fs.mkdirSync(path.dirname(REGISTRY), { recursive: true })
-  const tmp = REGISTRY + '.tmp'
-  fs.writeFileSync(tmp, JSON.stringify(list, null, 2) + '\n')
-  fs.renameSync(tmp, REGISTRY)
+  fs.mkdirSync(REGISTRY_DIR, { recursive: true })
+  // 2026-10-24 (final18 orphan post-mortem): the registry used to be ONE shared JSON with a
+  // read-modify-write cycle per register — concurrent gate pools (unit + live lanes spawn
+  // electrons at the same time) lost updates to each other, and the losing lane's children
+  // became unreapable orphans. One file PER registered pid now: no RMW, no lock, no loss.
+  const keep = new Set(list.map(e => String(e.pid)))
+  let names = []
+  try { names = fs.readdirSync(REGISTRY_DIR) } catch { /* first use */ }
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    if (!keep.has(name.slice(0, -5))) { try { fs.rmSync(path.join(REGISTRY_DIR, name), { force: true }) } catch { /* raced */ } }
+  }
+  for (const e of list) {
+    try { fs.writeFileSync(entryFile(e.pid), JSON.stringify(e, null, 2) + '\n') } catch { /* best-effort */ }
+  }
 }
 
-export function registryPath () { return REGISTRY }
+export function registryPath () { return REGISTRY_DIR }
 
 /**
  * Record one child. `meta.match` is the list of literal fragments that MUST appear in the
