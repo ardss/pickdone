@@ -190,6 +190,50 @@ function twinMatches (fsMod, filePath, jsonText) {
 }
 
 
+/** M2b (P2 2026-10-23): chunked twin of dbRecovery.criticalBackupRowCount for the F1 empty-snapshot
+ *  guard's "newest existing point" read — the guard used to readFileSync the ENTIRE newest snapshot
+ *  (up to the 64MB ingress cap) synchronously on the main thread. Reads in 1MB chunks via fd.readSync
+ *  (same shape as twinMatches below). Files above NEWEST_READ_CAP_BYTES are treated as non-empty
+ *  without reading (an empty todoState snapshot is at most a few KB of metadata; a multi-MB snapshot
+ *  overwhelmingly carries rows — and misreading toward "non-empty" only skips a quarantine, it never
+ *  destroys data). Returns -1 on unreadable/unparsable (conservative quarantine, as before). */
+const NEWEST_READ_CAP_BYTES = 8 * 1024 * 1024
+function newestRowCountChunked (fsMod, filePath) {
+  let st
+  try { st = fsMod.statSync(filePath) } catch { return -1 }
+  if (st.size > NEWEST_READ_CAP_BYTES) return 1 // too large to plausibly be empty — skip the read
+  const CHUNK = 1024 * 1024
+  let fd
+  try {
+    fd = fsMod.openSync(filePath, 'r')
+    const parts = []
+    let off = 0
+    while (off < st.size) {
+      const len = Math.min(CHUNK, st.size - off)
+      const buf = Buffer.alloc(len)
+      if (fsMod.readSync(fd, buf, 0, len, off) !== len) return -1
+      parts.push(buf)
+      off += len
+    }
+    return dbRecovery.criticalBackupRowCount(Buffer.concat(parts).toString('utf8'))
+  } catch { return -1 } finally { try { if (fd != null) fsMod.closeSync(fd) } catch { /* best-effort */ } }
+}
+
+/** M2b (P2 2026-10-23): "is this jsonText a REAL dump whose todo+recycle rows are ALL empty".
+ *  criticalBackupRowCount answers 0 for any payload it does not recognize (no backup.todoState
+ *  segment at all), so gating the empty-snapshot quarantine on `=== 0` alone would quarantine
+ *  foreign/legacy-shaped payloads too. Only a genuine dump shape (backup.todoState present,
+ *  nested string tolerated) with zero todoList AND zero recycleList rows counts as an empty
+ *  snapshot; anything else keeps the historical write/dedup behavior. */
+function emptyRealDump (jsonText) {
+  try {
+    const t = (JSON.parse(jsonText).backup || {}).todoState
+    if (t === undefined) return false // not a real dump shape — never treated as an empty snapshot
+    const s = typeof t === 'string' ? JSON.parse(t) : t
+    return ((s && s.todoList) || []).length === 0 && ((s && s.recycleList) || []).length === 0
+  } catch { return false }
+}
+
 module.exports = function backupHandlers (ctx) {
   const { isLocked, app, getMainWindow } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
@@ -307,10 +351,16 @@ module.exports = function backupHandlers (ctx) {
         // still holds rows, the empty dump is quarantined to a side file OUTSIDE the ^(auto|evt)-
         // restore namespace (list-auto-backups filters it out) and the freshest good point is
         // preserved untouched; no prune runs (D18: an unproven write must not thin the tier).
-        if (dbRecovery.criticalBackupRowCount(jsonText) === 0 && existing.length) {
-          const [newestName] = existing // newest of both tiers (sorted newest-first)
-          let newestRows = -1 // unreadable newest → cannot prove it is good; quarantine conservatively
-          try { newestRows = dbRecovery.criticalBackupRowCount(fs.readFileSync(path.join(dir, newestName), 'utf8')) } catch {}
+        // M2b (P2 2026-10-23): the guard now also covers the FIRST-EVER run — previously gated on
+        // `existing.length`, so on an empty backup dir a 0-row snapshot (renderer hydrated blank at
+        // first boot) landed as the tier's first and newest restore point. An empty dir has no good
+        // point to preserve, but it has even less reason to seed the restore namespace with an empty
+        // snapshot; quarantine it too (the tier simply stays empty until real data exists).
+        // The newest-point read is chunked (see newestRowCountChunked) instead of a full readFileSync.
+        if (emptyRealDump(jsonText)) {
+          const [newestName] = existing // newest of both tiers (sorted newest-first); absent on first run
+          // no existing point (or unreadable newest) → cannot prove a good point exists → quarantine
+          const newestRows = newestName ? newestRowCountChunked(fs, path.join(dir, newestName)) : -1
           if (newestRows !== 0) {
             const side = 'empty-quarantine-' + stamp + '-' + d.getTime() + '.json'
             const wq = atomicWriteJson(fs, dir, side, jsonText)
@@ -338,7 +388,13 @@ module.exports = function backupHandlers (ctx) {
               writeAttachmentSidecar(fs, dir, twin, safeAttachDir())
               return { ok: true, file: twin, dedup: true }
             }
-          } catch {}
+          } catch (e) {
+            // M2b (P3 2026-10-23): the catch kept the write path alive (correct — dedup is an
+            // optimization), but it silently swallowed twin-read/compare failures; a persistently
+            // unreadable twin meant unbounded same-content snapshots with no trace. Log and fall
+            // through to the normal write; the return value is unchanged.
+            log.warn('[Backup] dedup twin compare failed, writing a fresh snapshot:', twin, e && e.message)
+          }
         }
         // Atomic write: temp file + rename, prevents corruption on interruption; on failure the temp
         // file is cleaned up inline (P2 2026-09-17) and the structured error is returned
