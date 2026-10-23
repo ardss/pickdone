@@ -4,7 +4,7 @@ require('../log-isolation') // test isolation: redirect electron-log file transp
 const i18nM = require('../i18n')
 const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
-const { makeAssertMainWindow, stripForbiddenSettingsKeys } = require('./shared')
+const { makeAssertMainWindow, makeSenderIsMain, stripForbiddenSettingsKeys } = require('./shared')
 
 // Response-shaped projector for outbound config: stripForbiddenSettingsKeys only cleans the
 // INBOUND patch, but writeConfig returns the FULL merged on-disk config (config-store.js
@@ -22,6 +22,14 @@ function sanitizeConfigOut (c) {
 module.exports = function settingsHandlers (ctx) {
   const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
+  // M2b (P3 2026-10-23): boolean ownership twin (shared.js makeSenderIsMain) — the inline
+  // `getMainWindow() && e.sender === getMainWindow().webContents` test below threw a TypeError when
+  // the main window was destroyed mid-tick (isDestroyed-safe like the throw twin); a destroyed
+  // window's sender now simply reads as "not main" → forbidden, same as null.
+  // The inline fallback only covers test stubs of './shared' predating makeSenderIsMain.
+  const senderIsMain = typeof makeSenderIsMain === 'function'
+    ? makeSenderIsMain(getMainWindow)
+    : (e) => { const w = getMainWindow(); return !!(w && !w.isDestroyed() && e && e.sender === w.webContents) }
 
   return {
     // --- Settings / config ---
@@ -76,7 +84,7 @@ module.exports = function settingsHandlers (ctx) {
     },
     'notify-settings-updated': (e, patch) => {
       // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
-      if (!(tomatoFloat.isSelfSender(e.sender) || (getMainWindow() && e.sender === getMainWindow().webContents))) {
+      if (!(tomatoFloat.isSelfSender(e.sender) || senderIsMain(e))) {
         log.warn('[IPC] 拒绝非主窗/浮窗写配置, sender:', e.sender.id)
         throw new Error('forbidden: main window or float only')
       }
@@ -95,7 +103,7 @@ module.exports = function settingsHandlers (ctx) {
       // main-consumed keys. Main-window senders keep the full surface; float senders get the
       // forbidden set stripped (their white-noise choice still passes).
       const fromFloat = tomatoFloat.isSelfSender(e.sender)
-      const clean = stripForbiddenSettingsKeys(patch, { float: !(getMainWindow() && e.sender === getMainWindow().webContents) })
+      const clean = stripForbiddenSettingsKeys(patch, { float: !senderIsMain(e) })
       // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
       // safely); writeConfig's mergeConfig filters it before any merge, and a direct
       // `delete clean.__proto__` is banned by eslint no-proto.
