@@ -43,8 +43,16 @@ function parseList (raw) {
   if (!Array.isArray(v)) return null
   // Every entry must be an object with a usable id — otherwise entries are not independently
   // addressable and a union merge could duplicate or mis-resolve them: bail out to whole-key LWW.
+  // W7 (2026-10-23): the id must also be UNIQUE within one side. The merge keys a Map by
+  // String(id), so two same-id entries on one side silently COLLAPSED into the last one —
+  // a content-bearing entry vanished without the whole-key LWW fallback (and without the
+  // caller's metaConflictBackup safety net, which only fires when this function returns null).
+  const seen = new Set()
   for (const m of v) {
     if (!m || typeof m !== 'object' || m.id == null || m.id === '') return null
+    const k = String(m.id)
+    if (seen.has(k)) return null
+    seen.add(k)
   }
   return v
 }
@@ -92,7 +100,17 @@ export function mergeBlobMetaValue (key, localVal, incomingVal) {
     const k = String(m.id)
     merged.set(k, merged.has(k) ? preferEntry(merged.get(k), m) : m)
   }
-  const out = [...merged.values()].sort((a, b) => sortKeyOf(key, a) - sortKeyOf(key, b))
+  const out = [...merged.values()].sort((a, b) => {
+    const d = sortKeyOf(key, a) - sortKeyOf(key, b)
+    // W7 (2026-10-23): the bare numeric compare is not a TOTAL order — entries with EQUAL sort
+    // keys (same-date milestones are the norm, not the edge case) ordered by Array.prototype.sort
+    // insertion stability, which follows the Map iteration order = local-then-incoming. That made
+    // the serialized output argument-order dependent (merge(A,B) !== merge(B,A) as bytes), so the
+    // two peers converged on differently ORDERED blobs and re-echoed forever. Tiebreak on the id —
+    // unique per side (parseList rejects duplicates) and identical after the union — restores a
+    // total order and byte-identical convergence.
+    return d !== 0 ? d : (String(a.id) < String(b.id) ? -1 : String(a.id) > String(b.id) ? 1 : 0)
+  })
   return JSON.stringify(out)
 }
 
