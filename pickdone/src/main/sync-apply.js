@@ -499,7 +499,29 @@ function applyRowInner (state, incoming) {
       // blobs like the local purge routes (renderer scrubMilestonesForPurged, cli purgeBin) —
       // a peer purge otherwise leaves a phantom taskId and flips an UNMET milestone to done.
       try { scrubMilestoneBlobsFor(state, [incoming.id]) } catch { /* best-effort, never block the delete */ }
-      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0, updateTime: winner.deletedAt || incoming.deletedAt || 0, syncAuthor: incoming.author || '' })
+      // W7 root-cause fix (2026-10-23): the old bare shape `{taskId, delete:1, deletedAt,
+      // updateTime, syncAuthor}` went through upsertMany → todoToRow, which normalizes EVERY
+      // absent field to its zero value, and db.js stmts.upsert is a FULL-COLUMN
+      // `SET col = excluded.col` overwrite — so landing a peer's deletion WIPED the local row:
+      // the recycle bin lost the deleted task's content (it could no longer be restored) and
+      // recurGroupId was nulled (bypassing restore's twin-record guard). A bare tombstone must
+      // not rebuild the row — it may only flip the tombstone columns. Root fix here: base the
+      // write on the freshly-read LOCAL row (cache.todo → getAll → rowToTodo shape, which
+      // todoToRow maps back column-for-column, recurGroupId via repeatId) and override only
+      // deleted/deletedAt/updateTime/syncAuthor — semantically the column-level UPDATE the
+      // tombstone is, with no zeroed columns. The ghost guard above already returned for the
+      // no-local-row case, so the minimal fallback shape below is defensive only. The winner's
+      // LWW age still rides updateTime (= deletedAt, Sync-1) so the landed tombstone keeps its
+      // delete-ordering against the local row's own (strictly older) live stamp.
+      const tombAt = winner.deletedAt || incoming.deletedAt || 0
+      const base = localRow && localRow.data ? localRow.data : null
+      state.pendingWrites.todos.push({
+        ...(base ? { ...base, taskId: incoming.id } : { taskId: incoming.id }),
+        delete: 1,
+        deletedAt: tombAt,
+        updateTime: tombAt,
+        syncAuthor: incoming.author || ''
+      })
       return true
     }
     if (!winner.data) return false
