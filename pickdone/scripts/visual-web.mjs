@@ -158,7 +158,14 @@ async function setEnv (theme) {
       try { boot = readBoot(); if (boot && boot !== 'undefined') break } catch (e) { /* retry */ }
     }
   }
-  ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
+  // 2026-10-23: pin and onboarding-click used to share ONE eval. On a cold profile the wizard
+  // button exists, and completing it persists the CURRENT locale (zh-CN on a fresh host) OVER the
+  // just-pinned appLocale — the reload then booted Chinese and every scene failed at a uniform
+  // ~0.6% pixel diff (main's old profile had the wizard already dismissed, so it never showed).
+  // Order is now: dismiss onboarding FIRST, then write the locale keys LAST so nothing re-stamps
+  // them before the reload.
+  ab(['--session', SESSION, 'eval', `(() => { const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
+  ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} return 'ok' })()`])
   ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
   // reload 同样断言纪元变化(未变则重试一次)
   for (let i = 0; i < 2; i++) {
