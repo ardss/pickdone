@@ -174,8 +174,13 @@ function focusMainFromNotification (taskId) {
   let shown = false
   if (showMainEntry) { try { showMainEntry(); shown = true } catch (e) { log.warn('[Reminder] showMainOrLock failed', e) } }
   if (!shown) {
-    const win = require('./window-ref').getMainWindow()
-    if (win) { win.show(); win.focus() }
+    // M2b (P2 2026-10-23): the old bare fallback `win.show(); win.focus()` fired when the lock-aware
+    // entry threw (or was never wired), and it bypassed the security lock — clicking a reminder on a
+    // locked app revealed its full contents. The scheduler cannot probe the lock state here (index.js
+    // wires only showMainOrLock via setShowMainEntry; the security-lock instance is module-private to
+    // index.js), so the fallback now FAILS CLOSED: nothing is shown, the failure is logged, and the
+    // renderer's ui.isLocked gate (see pushOpenTask) still covers the task-locate push.
+    try { log.warn('[Reminder] show entry unavailable/failed — keeping the window hidden (lock-safe fallback)', taskId || '') } catch { /* logging is best-effort */ }
   }
   pushOpenTask(taskId)
 }
@@ -255,9 +260,12 @@ function fire (todo, offset) {
       })
     }
     n.show()
-    // Notification sound
+    // Notification sound — M2b (P3 2026-10-23): a synchronously-detected delivery failure must not
+    // play the chime (notify without notification). An ASYNCHRONOUS 'failed' (the production shape)
+    // lands after this line has already run: the sound cannot be un-played — accepted tradeoff,
+    // the watermark/catch-up semantics above still treat it as failed.
     const { sound } = require('./notify-sound')
-    if (sound && dingFile) sound(dingFile)
+    if (!deliveryFailed && sound && dingFile) sound(dingFile)
     // F-B8 (dw wave 3): task titles no longer go to main.log (plaintext side channel — same nature
     // as the index.js plain-bak cleanup); the taskId is enough to correlate a reminder with its task.
     log.info('[Reminder] fired:', todo.taskId, offset || 0)
