@@ -170,6 +170,37 @@ export function resolveFocusedTask (attachTodo, todoRows) {
   return { taskId: attachTodo.taskId, taskContent: row.taskContent != null ? row.taskContent : attachTodo.taskContent }
 }
 
+/** [W7-R 2026-10-23 P3, pure/unit-tested] parse the focus phase's startedAt back out of a tomatoId.
+ *  mintTomatoId('tmt_f_', startedAt) concatenates the phase timestamp followed by an optional
+ *  '_' + deviceSalt suffix — the same phase identity the original task-side credit was booked
+ *  under (snowWrite's dedupKey = String(startedAt)).
+ *  Returns 0 for give-up ('tmt_a_') ids / malformed ids — nothing was bumped for those. */
+export function focusStartedAtOf (tomatoId) {
+  const s = String(tomatoId || '')
+  if (!s.startsWith('tmt_f_')) return 0
+  const m = s.slice(6).match(/^(\d+)/)
+  const t = m ? Number(m[1]) : 0
+  return Number.isFinite(t) && t > 0 ? t : 0
+}
+
+/** [W7-R P3] symmetric task-side rollback for a succeed true→false correction in updateRecord:
+ *  completeFocus credited the linked task via snowWrite({ taskId, minutes, dedupKey }) — turning
+ *  the record into a failure must un-credit it, or the task keeps focus minutes for a session the
+ *  user crossed out. The compensation reuses the same durable queue (snowWrite, so it survives a
+ *  crash and replays like any bump) with a NEGATIVE delta and its OWN dedupKey ('undo:' + the
+ *  phase identity) so it can never be deduped against the original credit. Zero/negative-minute
+ *  records, non-focus ids and unlinked records are skipped (nothing was ever credited).
+ *  MAIN-PROCESS PARITY NOTE (coordination point): db.js bumpSnow currently clamps minutes with
+ *  Math.max(0, ...) — for this rollback to actually subtract, the clamp must accept negative
+ *  compensations (e.g. dedupKey.startsWith('undo:')); until then the compensation no-ops server
+ *  side (ok:true, minutes:0) and the entry retires — no data corruption, just no un-credit. */
+function rollbackFocusSnow (rec) {
+  const startedAt = focusStartedAtOf(rec && rec.tomatoId)
+  const minutes = Math.round(Number(rec && rec.focusDuration) || 0)
+  if (!startedAt || minutes <= 0 || !rec.focusTaskId) return
+  snowWrite({ taskId: rec.focusTaskId, minutes: -minutes, dedupKey: 'undo:' + String(startedAt) })
+}
+
 /** Todo-module row pool for accounting-time attach validation. In a real Vuex action `this` is the
  *  store, so the todo module lives on `rootState`; fake-ctx tests (and defensive symmetry) may only
  *  carry it on `state`. Missing module or lists resolve to an empty pool = attach fails as free focus. */
@@ -411,7 +442,13 @@ export default {
       // the DB layer's clamp (_recToRow restDuration). The old inline 120 silently truncated a
       // 300-minute rest on any entry-card patch — memory said 120, ledger said 600, reload diverged.
       if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, Math.round(patch.restDuration)))
-      if (patch.succeed != null) rec.succeed = !!patch.succeed
+      if (patch.succeed != null) {
+        // [W7-R P3] a true→false correction un-credits the linked task (symmetric rollback of the
+        // original completeFocus bumpSnow); a false→true flip credits nothing new (the original
+        // credit was never revoked — idempotent in both directions).
+        if (rec.succeed === true && patch.succeed === false) rollbackFocusSnow(rec)
+        rec.succeed = !!patch.succeed
+      }
       s.tomatoRecordList = [...s.tomatoRecordList]
       // D14-B2: the mutated list is the truth — re-derive the today count inline (the broadcast
       // echo that would otherwise fix it excludes this window, so drift persisted until restart)
