@@ -229,6 +229,16 @@ try { execSync('agent-browser close --all', { shell: true, stdio: 'ignore', time
 // daemon(agent-browser-win32-x64.exe,专属二进制,误伤不了用户 Chrome)存活时 profile 目录被锁、
 // --profile 也会被忽略——必须整段杀掉让下一次 open 以专用 profile 重启(机器独占门禁,与 5175 清场同级)
 try { execSync('taskkill /IM agent-browser-win32-x64.exe /T /F', { shell: true, stdio: 'ignore', timeout: 30000 }) } catch { /* 无实例 */ }
+// 2026-10-24 night (final17): killing the daemon and immediately opening races the OLD
+// daemon's control-port teardown — the fresh daemon's browser configure then gets
+// connection-refused (10061) and the whole lane crashes. Wait for the process to be
+// GONE before any respawn, same discipline as the vite port poll above.
+for (let i = 0; i < 20; i++) {
+  let alive = false
+  try { execSync('tasklist /FI "IMAGENAME eq agent-browser-win32-x64.exe" /NH', { encoding: 'utf8', timeout: 15000, shell: true }).includes('agent-browser-win32-x64') && (alive = true) } catch { /* gone */ }
+  if (!alive) break
+  await new Promise(r => setTimeout(r, 750))
+}
 // 孤儿托管 chrome(crashpad/gpu 子进程靠继承句柄锁 profile,命令行里没有 profile 字样,/T 也可能
 // 因父已死够不着)——按 .agent-browser 自带浏览器路径特征补杀;用户 Chrome 装在别处,绝不误伤
 {
@@ -259,7 +269,7 @@ if (probe.includes('--profile ignored')) {
   killVite()
   process.exit(2)
 }
-ab(['--session', SESSION, 'close'])
+try { ab(['--session', SESSION, 'close']) } catch { /* probe tab closes with the first scene's open anyway; a flaky daemon close must not crash the run (final17 pass-1 crash was exactly here) */ }
 
 async function runAll () {
   // 硬期限:自愈(宿主重生/场景重试)必须让位于 check:all 的看门狗——超 20min 自断,
