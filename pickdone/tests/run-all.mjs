@@ -19,8 +19,23 @@ import { fileURLToPath } from 'node:url'
 // (family prefix + mtime > 12h + dead owning pid) are removed; fresh or live-owned dirs
 // are never touched (double-guard inside sweepStaleTmpDirs).
 import { sweepStaleTmpDirs } from './lib/tmp-dir.mjs'
+// D4 orphan hygiene (2026-10-23 speed wave): the runner child is registered at spawn and
+// pruned on 'close'. A run-all killed from the outside (watchdog / CI timeout / harness
+// kill) never reaches its own cleanup — the registry entry it leaves behind is what
+// `node tests/run-all.mjs --cleanup` reaps, after verifying the live command line still
+// matches (pid-reuse safety, see tests/lib/child-registry.mjs).
+import { registerChild, unregisterChild, cleanupRegisteredChildren } from './lib/child-registry.mjs'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
+// --cleanup must short-circuit BEFORE any discovery/spawn: it is a maintenance mode that
+// reaps children recorded by run-all / check-all stage spawns (see child-registry.mjs).
+if (process.argv.includes('--cleanup')) {
+  const r = await cleanupRegisteredChildren()
+  console.error(`[run-all] --cleanup: killed=${r.killed.length} already-gone=${r.gone.length} foreign=${r.foreign.length} survivors=${r.survivors.length}`)
+  for (const e of r.foreign) console.error(`  [foreign] pid ${e.pid} alive but command line no longer matches (${e.purpose || 'unknown'}) — left untouched`)
+  for (const e of r.survivors) console.error(`  [survivor] pid ${e.pid} matched but refused to die (${e.purpose || 'unknown'})`)
+  process.exit(r.survivors.length ? 1 : 0)
+}
 {
   const { scanned, removed } = sweepStaleTmpDirs()
   if (removed > 0) console.error(`[run-all] preflight temp sweep: removed ${removed} orphaned dir(s) of ${scanned} scanned in %TEMP%`)
@@ -270,6 +285,12 @@ function spawnRunner () {
     // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
     // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
     { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'] })
+    // D4: registry write at spawn, prune on close — a hard-killed run-all leaves its runner
+    // child discoverable by `run-all --cleanup` instead of orphaned forever.
+    if (child.pid) {
+      registerChild(child.pid, { match: ['--test-force-exit', '--test-reporter=tap'], purpose: 'node --test runner (run-all)' })
+      child.on('close', () => unregisterChild(child.pid))
+    }
     const out = []
     const err = []
     child.stdout.on('data', d => { out.push(d); process.stdout.write(d) })

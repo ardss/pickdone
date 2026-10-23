@@ -20,6 +20,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import evtUtils from './event-utils.cjs'
+// D4 orphan hygiene (2026-10-23 speed wave): every stage child is registered at spawn and
+// pruned on 'close'; an exit-handler reap covers the crash paths (a hard-killed check-all
+// used to leave its live stage children — Electron instances included — as orphans).
+import { registerChild, unregisterChild, reapAllRegisteredSync } from '../tests/lib/child-registry.mjs'
 
 const WITH_A11Y = process.argv.includes('--a11y')
 const FAST = process.argv.includes('--fast')
@@ -151,6 +155,12 @@ function runStage (stage) {
       env: { ...process.env, ...(extraEnv || {}) },
       stdio: ['ignore', 'pipe', 'pipe']
     })
+    // D4: registry write at spawn (command-line fragments = the reaper's kill permit), prune on close.
+    if (child.pid) {
+      const frags = [path.basename(String(binary))]
+      for (const a of (Array.isArray(argv) ? argv : [])) if (a && !String(a).startsWith('-')) frags.push(String(a))
+      registerChild(child.pid, { match: frags.slice(0, 4), purpose: `check-all stage: ${name}` })
+    }
     let out = ''
     const CAP = 16 * 1024 * 1024 // 尾部 25 行足够,但保留较大环形缓冲防大输出丢关键信息
     child.stdout.on('data', d => { out = (out + d).slice(-CAP) })
@@ -182,6 +192,7 @@ function runStage (stage) {
     }, (timeoutMin || 15) * 60 * 1000)
     child.on('close', (code, signal) => {
       clearTimeout(timer)
+      if (child.pid) unregisterChild(child.pid)
       const timedOut = signal === 'SIGKILL'
       resolve({ name, ok: code === 0 && !timedOut, timedOut, out, ms: Date.now() - t0, budget: timeoutMin || 15 })
     })
@@ -267,6 +278,12 @@ export { runPool, GROUPS }
 
 async function main () {
 const results = []
+// D4 exit-handler reap: normal runs prune each entry at 'close', so this is a no-op on a
+// clean exit; on a crash/throw/hard-signal path the still-registered stage children get
+// tree-killed here (command-line-verified, sync) instead of surviving as orphans.
+// Registered inside main() only — importing modules (the flake-metrics unit test) must not
+// grow process-level side effects.
+process.on('exit', () => { try { reapAllRegisteredSync() } catch { /* best-effort by contract */ } })
 // Ambient-load label (2026-10-23 S4): pure diagnostics, never blocks. A loaded host inflates
 // every timing 2-3x — a red landing exactly on a stage budget is a KILL, not a product
 // failure, and timing flakes multiply (2026-10-22/23 evidence). Sampling once over 300ms via
