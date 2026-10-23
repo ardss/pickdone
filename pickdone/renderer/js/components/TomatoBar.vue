@@ -260,7 +260,7 @@ export default {
         // Give the main process a beat to apply the change, then write back from its real visibility
         await new Promise(r => setTimeout(r, 300))
         this.floatOn = !!(await window.todoAPI.tomatoFloatShown())
-      } catch { /* keep the previous state on error */ } finally { this._floatToggling = false }
+      } catch (e) { this.reportDispatchFail(e) /* [w7] a failed float toggle is surfaced, not swallowed */ } finally { this._floatToggling = false }
     },
 
   },
