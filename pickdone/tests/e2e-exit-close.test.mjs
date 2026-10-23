@@ -20,6 +20,7 @@ import assert from 'node:assert/strict'
 import { spawn, spawnSync } from 'node:child_process'
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises'
 import { existsSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -36,7 +37,11 @@ if (electronBin && !existsSync(electronBin)) { electronMissing = 'electron binar
 const CDP_PORT = 9377 // dedicated port: never overlaps the shared e2e instance on 9333
 const CDP = 'http://127.0.0.1:' + CDP_PORT
 const BOOT_TIMEOUT_MS = 45000
-const EXIT_TIMEOUT_MS = 20000
+// 60s (was 20s, 2026-10-24 night): the guarded quit chain (DB close, window teardown,
+// child reaping) measured 25.7-34.3s in-gate where the three pools race for CPU - the
+// 20s budget was a quiet-host number. A healthy quit still lands in 3-6s, so 60s only
+// widens the load band while still reding a truly wedged quit, named.
+const EXIT_TIMEOUT_MS = 60000
 const TRAY_ALIVE_MS = 5000
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -124,6 +129,13 @@ async function bootInstance ({ exitMode }) {
     ...process.env,
     TODO_USER_DATA_DIR: dataDir,
     TODO_DB_DIR: join(dataDir, 'db'),
+    // 2026-10-24: per-instance sync port — the fixed default 3442 collides with the
+    // lan-sync-journey pair racing in the same unit tier (B2 restart then EADDRINUSEs).
+    TODO_SYNC_PORT: String(await new Promise((resolve, reject) => {
+      const srv = net.createServer()
+      srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)) })
+      srv.on('error', reject)
+    })),
   }
   // Agent/IDE hosts (DSH/VSCode) export ELECTRON_RUN_AS_NODE=1 — electron.exe then boots as
   // plain Node and require('electron') resolves to the npm path-string shim (crash:

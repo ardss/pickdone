@@ -6,6 +6,7 @@
  */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -84,9 +85,17 @@ export async function spawnApp (opts = {}) {
     `spawnApp refuses non-isolated userData dir: ${userDataDir}`)
   const logFile = path.join(ARTIFACTS, `${opts.name || 'app'}-app.log`)
   const baseArgs = opts.allowFocus ? [] : ['--no-focus']
+  // 2026-10-24: per-instance sync port — without an override every spawned app binds the
+  // FIXED default 3442, colliding with concurrently-running instances (unit tier's
+  // lan-sync-journey pair rides the same gate). Ephemeral port per instance.
+  const syncPort = await new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)) })
+    srv.on('error', reject)
+  })
   const child = spawn(ELECTRON, ['.', ...baseArgs, '--remote-debugging-port=' + port, ...(opts.appArgs || []), ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: APP_CWD,
-    env: { ...process.env, TODO_USER_DATA_DIR: userDataDir },
+    env: { ...process.env, TODO_USER_DATA_DIR: userDataDir, TODO_SYNC_PORT: String(syncPort) },
     // app 输出写文件：node:test 会捕获 hook console，启动日志必须落盘可查
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')],
     detached: false

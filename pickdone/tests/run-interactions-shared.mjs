@@ -81,11 +81,16 @@ process.on('exit', reapIsolated)
 
 async function bootInstance () {
   const port = await pickFreePort()
+  // 2026-10-24: per-instance sync port — without an override the shared instance binds the
+  // FIXED default 3442, colliding with the unit tier's lan-sync-journey pair (its B2 restart
+  // then hits EADDRINUSE, sync stays OFF, and the pairing poll reds). No gate-spawned
+  // instance may ever touch the production default port.
+  const syncPort = await pickFreePort()
   CDP = `http://127.0.0.1:${port}`
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-shared-'))
   fs.mkdirSync(path.join(appCwd, 'tests', '.artifacts'), { recursive: true })
   const logFile = path.join(appCwd, 'tests', '.artifacts', 'smoke-shared-pool-' + process.pid + '.log')
-  const env = { ...process.env, TODO_USER_DATA_DIR: tmpDir, TODO_CDP: CDP }
+  const env = { ...process.env, TODO_USER_DATA_DIR: tmpDir, TODO_CDP: CDP, TODO_SYNC_PORT: String(syncPort) }
   delete env.ELECTRON_RUN_AS_NODE // harness/IDE hosts export it → electron boots as plain Node (check-all strips centrally; belt-and-braces here)
   child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + port,
     '--disable-background-timer-throttling', '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',

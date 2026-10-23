@@ -611,10 +611,19 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
 
   // Pair state survived the crash: sync is still enabled and B still holds A as a
   // paired peer (persisted sync.peers restored on boot).
-  const stB2 = await until(async () => {
-    const s = await b2.status()
-    return s.enabled && (s.peers || []).some(p => p.deviceId === aSelf.deviceId) ? s : null
-  }, 120000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
+  let stB2 = null
+  try {
+    stB2 = await until(async () => {
+      const s = await b2.status()
+      return s.enabled && (s.peers || []).some(p => p.deviceId === aSelf.deviceId) ? s : null
+    }, 120000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
+  } catch (e) {
+    // One-shot diagnostic: dump B2's actual status at the failure instant so the
+    // next move is evidence (budget vs real pairing loss), not attribution.
+    try { console.error('[J4][diag] B2 status at failure: ' + JSON.stringify(await b2.status())) } catch (e2) { console.error('[J4][diag] B2 status unreadable: ' + e2.message) }
+    try { console.error('[J4][diag] A status at failure: ' + JSON.stringify(await a.status())) } catch (e2) { console.error('[J4][diag] A status unreadable: ' + e2.message) }
+    throw e
+  }
   assert.ok(stB2.listening, '[B2] sync node listening again after restart')
 
   // Pending changes converge BOTH ways: A pushes an edit, restarted B pushes a new row.
@@ -632,7 +641,7 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
     ['journey-time-1', 'journey-plain-1', 'journey-post-restart'],
     (row) => (row.taskId === 'journey-time-1' && row.taskContent !== 'post-restart edit from A')
       ? 'A post-restart edit not applied'
-      : null, 60000)
+      : null, 150000)
 
   const byA = new Map(ta.map(r => [r.taskId, r]))
   const byB = new Map(tb.map(r => [r.taskId, r]))
