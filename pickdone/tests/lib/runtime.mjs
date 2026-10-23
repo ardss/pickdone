@@ -57,8 +57,19 @@ export async function pickFreePort () {
  * @param {string} [opts.userDataDir]       缺省 mkdtemp 临时目录（预置空 todos.db 跳过 legacy 迁移）
  * @param {string[]} [opts.appArgs]         额外命令行参数
  * @returns {Promise<{child, port, cdp, userDataDir, wsUrl:()=>string}>}
+ *
+ * Attach mode (2026-10-23 speed wave): when TODO_SHARED_CDP points at a live debug endpoint,
+ * spawnApp returns an ATTACHED ctx without spawning anything — the shared live-pool runner
+ * (tests/run-interactions-shared.mjs) owns the instance lifecycle. stopApp() on an attached
+ * ctx only drops the WebSocket; the instance is NOT ours to kill.
  */
 export async function spawnApp (opts = {}) {
+  const attachCdp = process.env.TODO_SHARED_CDP
+  if (attachCdp) {
+    let port = 0
+    try { port = Number(new URL(attachCdp).port) || 0 } catch { /* let connectCdp name the failure */ }
+    return { child: null, port, cdp: attachCdp, userDataDir: null, logFile: null, attached: true }
+  }
   const port = opts.port || await pickFreePort()
   const autoDir = !opts.userDataDir
   const userDataDir = opts.userDataDir || fs.mkdtempSync(path.join(os.tmpdir(), 'todo-test-'))
@@ -83,8 +94,14 @@ export async function spawnApp (opts = {}) {
   return { child, port, cdp: `http://127.0.0.1:${port}`, userDataDir, logFile }
 }
 
-/** 优雅退出（Browser.close 触发 before-quit/mirror flush）→ 超时 taskkill 整树（win32 必须防锁残留） */
+/** 优雅退出（Browser.close 触发 before-quit/mirror flush）→ 超时 taskkill 整树（win32 必须防锁残留）
+ *  attached ctx（TODO_SHARED_CDP 共享实例）只断 WS,绝不杀实例——生命周期归共享 runner 所有 */
 export async function stopApp (ctx) {
+  if (ctx.attached) {
+    try { ctx._ws && ctx._ws.close() } catch {}
+    ctx._ws = null
+    return
+  }
   let graceful = false
   if (ctx._ws) {
     try {

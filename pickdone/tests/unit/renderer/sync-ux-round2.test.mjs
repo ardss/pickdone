@@ -180,9 +180,15 @@ test('P1-4k: every Electron live (③) stage tuple carries an explicit named cei
   // EOL-agnostic (repo checkouts may be CRLF): strip \r before anchored matches
   const segLines = seg.split('\n').map(l => l.replace(/\r$/, ''))
   const stageLines = segLines.filter(l => l.trim().startsWith("['"))
-  assert.ok(stageLines.length >= 9, 'live stages found')
+  // 2026-10-23 speed wave: the six run-interactions-gated lanes were consolidated into ONE
+  // shared-instance stage (tests/run-interactions-shared.mjs) — live pool is 5 stages now.
+  // The floor stays a sanity check against silently emptying the pool, not a shape pin.
+  assert.ok(stageLines.length >= 5, 'live stages found')
   for (const l of stageLines) {
-    assert.match(l, /, 20\],$/, `stage lacks a 20min ceiling: ${l.slice(0, 60)}`)
+    // Intent (2026-09-19 doctrine): every live stage carries an EXPLICIT named minute ceiling,
+    // none rides the 15min default. The value itself may differ per stage (the shared pool runs
+    // 6 sequential targets -> 30), so the pin is on explicitness, not on the number 20.
+    assert.match(l, /, \d+\],$/, `stage lacks an explicit named ceiling: ${l.slice(0, 60)}`)
   }
 })
 
