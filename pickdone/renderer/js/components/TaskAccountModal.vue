@@ -1,12 +1,12 @@
 <template>
 
   <div v-if="taskId" class="modal-container" style="z-index: calc(var(--z-modal) + 20) !important; cursor: default;"
-       @click="e => { if (e.target.classList && (e.target.classList.contains('modal-container') || e.target.classList.contains('modal-tablecloth'))) close() }">
+       @click="e => { if (e.target.classList && (e.target.classList.contains('modal-container') || e.target.classList.contains('modal-tablecloth'))) requestClose() }">
     <div class="modal-tablecloth">
-      <div class="task-account" role="dialog" aria-modal="true" :aria-label="$t('statsK.TomatoAccount.title', { name: task ? task.taskContent : '' })" @keydown.esc="close">
+      <div class="task-account" role="dialog" aria-modal="true" :aria-label="$t('statsK.TomatoAccount.title', { name: task ? task.taskContent : '' })" @keydown.esc="requestClose">
         <div class="task-account__head">
           <b>{{ $t('statsK.TomatoAccount.title', { name: task ? task.taskContent : '' }) }}</b>
-          <button type="button" class="close-x close-x--sm ta-x" :aria-label="$t('statsK.TomatoAccount.close')" @click="close"></button>
+          <button type="button" class="close-x close-x--sm ta-x" :aria-label="$t('statsK.TomatoAccount.close')" @click="requestClose"></button>
         </div>
         <div class="task-account__sum">
           <span v-if="records.length">{{ $t('statsK.TomatoAccount.sumLine', { n: actualTotal }) }}</span>
@@ -136,6 +136,32 @@ export default {
     actualTotal () { return this.records.filter(r => !r.abandoned).length }
   },
   methods: {
+    // [w7] Esc/backdrop/X close now guards an unsaved draft: a dirty draft is confirmed before
+    // the modal closes instead of being silently dropped.
+    requestClose () {
+      if (!this.draftDirty()) { this.close(); return }
+      this.$confirm(this.$t('statsE.w7.accountDiscardConfirm'), this.$t('statsK.TomatoAccount.title', { name: this.task ? this.task.taskContent : '' }), { type: 'warning' })
+        .then(() => this.close())
+        .catch((e) => { if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || '')) })
+    },
+    // [w7] dirty contract for requestClose: a manual-add draft is always unsaved; an edit draft
+    // is compared to its live record with the same rounding the draft was seeded with.
+    draftDirty () {
+      const d = this.draft
+      if (!d) return false
+      if (d.create) return true
+      const orig = this.records.find(x => x.tomatoId === d.tomatoId)
+      if (!orig) return false
+      return !(Math.round(orig.startMin) === d.startMin && orig.dur === d.dur && orig.rest === d.rest && orig.abandoned === d.abandoned)
+    },
+    // [w7] overlap guard shared by the edit confirm and the manual-add path: two records of the
+    // same task anchored on the same day may not book the same minutes-of-day interval.
+    overlapsExisting (d, day0, selfId) {
+      const start = d.startMin
+      const end = d.startMin + d.dur
+      return this.records.some(r => r.day0 === day0 && r.tomatoId !== selfId &&
+        start < r.startMin + r.dur && r.startMin < end)
+    },
     close () { this.$store.commit('ui/openTaskAccount', '') },
     fmtRange (r) {
       const hm = ts => dayjs(ts).format('HH:mm')
@@ -205,6 +231,12 @@ export default {
         this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
         return false
       }
+      // [w7] ledger-integrity guard: two records of the same task on the same day may not book
+      // the same interval. Keep the editor open so the user can correct the time.
+      if (this.overlapsExisting(d, d.day0, d.tomatoId)) {
+        this.$message.error(this.$t('statsE.w7.accountTimeOverlap'))
+        return false
+      }
       const startTs = d.day0 + d.startMin * 60000
       this.$store.commit('tomato/updateRecord', { tomatoId: d.tomatoId, patch: { endTime: startTs + d.dur * 60000, focusDuration: d.dur, restDuration: d.abandoned ? 0 : d.rest, succeed: !d.abandoned } })
       // [fix 2026-10-09] the row-switch auto-commit announces more quietly ("已自动保存") than the
@@ -250,6 +282,13 @@ export default {
       // may not end in the future (was: silently bookable). Keep the form open for correction.
       if (endTime > Date.now()) {
         this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
+        return
+      }
+      // [w7] same overlap guard as the edit channel: a manual backfill may not stack onto an
+      // existing same-day record of this task. Keep the form open for correction.
+      const today0 = dayjs().startOf('day').valueOf()
+      if (this.overlapsExisting(d, today0, null)) {
+        this.$message.error(this.$t('statsE.w7.accountTimeOverlap'))
         return
       }
       this.$store.commit('tomato/addRecord', {
