@@ -24,7 +24,12 @@ import { sweepStaleTmpDirs } from './lib/tmp-dir.mjs'
 // kill) never reaches its own cleanup — the registry entry it leaves behind is what
 // `node tests/run-all.mjs --cleanup` reaps, after verifying the live command line still
 // matches (pid-reuse safety, see tests/lib/child-registry.mjs).
-import { registerChild, unregisterChild, cleanupRegisteredChildren } from './lib/child-registry.mjs'
+import { registerChild, unregisterChild, cleanupRegisteredChildren, reapAllRegisteredSync } from './lib/child-registry.mjs'
+
+// Symmetric with check-all's exit reap (2026-10-24): run-all is also invoked directly
+// (npm test / suite slices) — its own exit must best-effort reap whatever its spawn tree
+// left registered, not only the dedicated --cleanup pass.
+process.on('exit', () => { try { reapAllRegisteredSync() } catch { /* best-effort by contract */ } })
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 // --cleanup must short-circuit BEFORE any discovery/spawn: it is a maintenance mode that
