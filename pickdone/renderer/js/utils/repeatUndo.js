@@ -15,27 +15,12 @@
  *        rid (delete filtered out), sorted by dayStart ASCENDING by the caller
  * @returns {object|null} the renewed-next row to remove, or null when nothing should be removed
  */
-export function findRenewedNextInstance (undoneTodo, group) {
-  if (!undoneTodo || !(undoneTodo.dayStart > 0) || !group || !group.length) return null
-  const last = group[group.length - 1]
-  const renewedNext = group.find(x => x.dayStart > undoneTodo.dayStart)
-  if (renewedNext && !renewedNext.complete && renewedNext.dayStart === last.dayStart) {
-    // [P1 2026-10-09, ROOT fix of the 2026-10-08 timed-renewal propagation miss] the day-based
-    // heuristic above cannot distinguish a renewal-created instance from a legitimate
-    // PRE-GENERATED future instance (RepeatModal slices dates up-front and the CLI's repeatOn
-    // pre-generates too), so un-completing soft-deleted a pre-generated sibling and cascaded its
-    // chips. Sound discriminator: a renewal instance is minted AT completion time (createTime on
-    // the row, db-rows.js rowToTodo), while a pre-generated instance was created BEFORE the
-    // completion (undoneTodo.completedAt). Require createTime >= completedAt.
-    if (!(renewedNext.createTime > 0) || !(undoneTodo.completedAt > 0)) {
-      // Limitation: legacy rows without createTime/completedAt fall back to the old day-only
-      // heuristic (removal preserved) rather than skipping the cleanup for all old data.
-      return renewedNext
-    }
-    if (renewedNext.createTime >= undoneTodo.completedAt) return renewedNext
-  }
-  return null
-}
+// W7 P1 (2026-10-23): the decision body moved verbatim into shared/repeat-undo-core.mjs so the
+// CLI twin (cli/lib.js, require(esm)) stops carrying a diverging hand-copy — its day-only
+// heuristic was still deleting `repeat on` pre-generated future instances on undo (the exact
+// bug the 2026-10-09 P1 root fix closed renderer-side).
+export { findRenewedNextInstance } from '../../../shared/repeat-undo-core.mjs'
+import { findRenewedNextInstance as _findRenewedNextInstance } from '../../../shared/repeat-undo-core.mjs'
 
 /** Store-side wiring for the B2 undo: find the instance renewal created and soft-delete it the
  *  same way deleteTodo does (version reset to 0 so the soft delete re-enters the sync snapshot;
@@ -49,7 +34,7 @@ export async function removeRenewedInstance ({ todo, state, commit, dispatch, sa
     const group = state.todoList
       .filter(x => x.repeatId === rid && !x.delete && x.taskId !== todo.taskId && x.dayStart > 0)
       .sort((a, b) => a.dayStart - b.dayStart)
-    const renewedNext = findRenewedNextInstance(todo, group)
+    const renewedNext = _findRenewedNextInstance(todo, group)
     if (!renewedNext) return
     const now = Date.now()
     const merged = { ...renewedNext, delete: true, deleting: true, deletedAt: now, updateTime: now, status: 'delete', version: 0 }

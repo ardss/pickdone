@@ -45,6 +45,8 @@ const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
 const { nextSort, moveWithin, reorderScale } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm)); F2: reorderScale for the sortTask gap-exhaustion rewrite
+// W7 P1 (2026-10-23): undo renewal discriminator single-sourced with renderer/js/utils/repeatUndo.js via shared/repeat-undo-core.mjs — the hand-copied day-only heuristic below still soft-deleted `repeat on` PRE-GENERATED future instances on undo (the 2026-10-09 P1 renderer root fix never landed CLI-side). require(esm), same pattern as limits.mjs.
+const { findRenewedNextInstance } = require('../shared/repeat-undo-core.mjs')
 
 const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
 
@@ -357,9 +359,11 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
         const group = db.call('queryTodos', { deleted: 0, repeatId: t.repeatId })
           .filter(x => x.taskId !== t.taskId && x.dayStart > 0)
           .sort((a, b) => a.dayStart - b.dayStart)
-        const lastDay = group.length ? group[group.length - 1].dayStart : 0
-        const renewedNext = group.find(x => x.dayStart > t.dayStart)
-        if (renewedNext && !renewedNext.complete && renewedNext.dayStart === lastDay) {
+        // W7 P1 (2026-10-23): shared discriminator (renderer repeatUndo parity) — day heuristic plus
+        // the createTime >= completedAt check so a `repeat on` PRE-GENERATED future instance is NOT
+        // deleted; legacy rows without createTime/completedAt keep the old day-only behavior.
+        const renewedNext = findRenewedNextInstance(t, group)
+        if (renewedNext) {
           const now = Date.now()
           // version: 0 (deleteTodo parity) so the soft delete re-enters the sync snapshot
           commit('todo', 'put', Object.assign({}, renewedNext, { delete: true, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
@@ -544,6 +548,24 @@ function purgeRecycleBin () {
   // planChipsSnapshot:<id>, the CLI purge left the meta behind — a later task-id collision could
   // backfill a purged task with someone else's chips, and the meta rows just leaked.
   for (const r of rows) { try { commit('meta', 'delete', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } try { commit('meta', 'delete', ESTIMATE_KEY_PREFIX + r.taskId) } catch { /* M-11: estimate key dies with the row too */ } }
+  // W7 P3 (2026-10-23, computeMetaGc parity — src/main/handlers/shared.js): the purge snapshot also
+  // captures `repeatRule:<rid>` (maint/d23 P3) but the cleanup never deleted it — a fully-purged
+  // group's rule leaked forever (and the App-side rule lifecycle keys repeatRule to LIVE rows only,
+  // deliberate P1 decision 2026-09-19: a rule referenced only by recycle-bin rows is dead, so
+  // recycle-bin remnants do NOT keep the rule alive). For every repeatId on a purged row: delete
+  // the rule meta when no live (deleted:0) row still references it; keep it when a survivor exists.
+  try {
+    const purgedRids = [...new Set(rows.map(r => r.repeatId).filter(Boolean))]
+    for (const rid of purgedRids) {
+      const stillLive = open().call('queryTodos', { deleted: 0, repeatId: rid, limit: 1 })
+      if (!Array.isArray(stillLive) || !stillLive.length) {
+        try { commit('meta', 'delete', 'repeatRule:' + rid) } catch { /* absent is fine */ }
+      }
+    }
+  } catch (e) {
+    // Best-effort like the rest of the meta cleanup — a missed rule is orphaned garbage, never data loss
+    console.error(`warning: purge could not GC orphaned repeatRule meta (${e && e.message ? e.message : e})`)
+  }
   // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js scrubMilestonesForPurged, the renderer got
   // this fix on both purge paths while the CLI twin kept the bug): purge used to leave the purged
   // taskIds inside projectMilestones:<catId> blobs. A past milestone whose last link was purged then
