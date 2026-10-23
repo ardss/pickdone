@@ -170,18 +170,45 @@ async function setEnv (theme) {
   // ~0.6% pixel diff (main's old profile had the wizard already dismissed, so it never showed).
   // Order is now: dismiss onboarding FIRST, then write the locale keys LAST so nothing re-stamps
   // them before the reload.
-  ab(['--session', SESSION, 'eval', `(() => { const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
-  ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} return 'ok' })()`])
-  ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
-  // reload 同样断言纪元变化(未变则重试一次)
-  for (let i = 0; i < 2; i++) {
-    let changed = false
-    for (let t = 0; t < 8000; t += 400) {
-      await new Promise(r => setTimeout(r, 400))
-      try { if (readBoot() !== boot) { changed = true; break } } catch (e) { /* retry */ }
-    }
-    if (changed) break
+  // 2026-10-23 evening (second fix, same day): the pin was FIRE-AND-FORGET — when the boot
+  // readiness window expired (three-pool contention slows the app boot), the pin evals fired
+  // into a not-yet-live tab, swallowed their own failure, and the lane compared zh-CN captures
+  // against en-US baselines (final8: today 1.57%, calendar 6.55% — the first-day-of-week column
+  // also moves, so NOT the uniform ~0.6% of a pure string flip). The pin is now VERIFIED:
+  // after the reload, read appLocale back through the same eval channel (which doubles as the
+  // tab-liveness probe) and retry the pin+reload cycle up to 3 times; a still-unpinned lane
+  // reds NAMED here instead of ghost-diffing 14 scenes for 13 minutes.
+  let pinned = false
+  for (let attempt = 1; attempt <= 3 && !pinned; attempt++) {
+    ab(['--session', SESSION, 'eval', `(() => { const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
+    ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} return 'ok' })()`])
     ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
+    // reload 同样断言纪元变化(未变则重试一次)
+    for (let i = 0; i < 2; i++) {
+      let changed = false
+      for (let t = 0; t < 8000; t += 400) {
+        await new Promise(r => setTimeout(r, 400))
+        try { if (readBoot() !== boot) { changed = true; break } } catch (e) { /* retry */ }
+      }
+      if (changed) break
+      ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
+    }
+    // VERIFY: an unreadable locale means the tab still isn't live — keep polling.
+    // Read form is quote-free by necessity: abOnce JSON.stringify-wraps every arg,
+    // and inner double quotes terminate the outer quoting through cmd (first
+    // verify attempt kept erroring silently — property access has no quotes to break).
+    for (let t = 0; t < 8000 && !pinned; t += 400) {
+      await new Promise(r => setTimeout(r, 400))
+      try {
+        const v = ab(['--session', SESSION, 'eval', 'String(localStorage.appLocale)']).trim().replace(/"/g, '')
+        if (v === 'en-US') pinned = true
+      } catch (e) { /* retry */ }
+    }
+    if (!pinned) console.error(`  [visual] locale pin not verified after attempt ${attempt}/3 — re-pinning`)
+  }
+  if (!pinned) {
+    console.error('✗ [visual] appLocale pin failed after 3 attempts — captures would ghost-diff the en-US baselines; red NAMED instead of silent drift')
+    process.exit(1)
   }
 }
 
