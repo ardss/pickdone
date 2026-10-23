@@ -13,11 +13,11 @@
              :class="{ dragging: dragId===t.taskId }"
              @dragstart="dragStart(t,$event)" @dragend="endDrag"
              @click="openEdit(t)" @keydown.exact="onRowKey(t, $event)"
-             @keydown.ctrl.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.2.prevent="kbdQuadrant(t, 1)"
-             @keydown.ctrl.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.4.prevent="kbdQuadrant(t, 3)"
+             @keydown.ctrl.alt.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.alt.2.prevent="kbdQuadrant(t, 1)"
+             @keydown.ctrl.alt.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.alt.4.prevent="kbdQuadrant(t, 3)"
              @contextmenu="taskContextMenu(t, $event)"
              tabindex="0" role="button" :title="taskTip(t)" :aria-label="$t('statsA.MatrixGrid.taskPrefix')+(t.taskContent||$t('statsA.MatrixGrid.noTitle'))"
-             aria-keyshortcuts="Control+1 Control+2 Control+3 Control+4">
+             aria-keyshortcuts="Control+Alt+1 Control+Alt+2 Control+Alt+3 Control+Alt+4">
           <span class="td-check" :class="{on: isComplete(t)}" :style="isComplete(t) ? { background: chkColor(t), borderColor: chkColor(t) } : {}" role="checkbox"
                 :aria-checked="isComplete(t) ? 'true' : 'false'" :aria-label="$t('statsJ.TodoItem.markDone')"
                 tabindex="0" @click.stop="completeTask(t)" @keydown="onCheckKey(t, $event)">
