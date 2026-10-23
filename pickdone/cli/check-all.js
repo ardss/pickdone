@@ -23,6 +23,17 @@ import evtUtils from './event-utils.cjs'
 
 const WITH_A11Y = process.argv.includes('--a11y')
 const FAST = process.argv.includes('--fast')
+// Electron spawned by the live/visual pools must boot as the GUI runtime, never as plain
+// Node: agent/IDE host shells (DSH/VSCode) export ELECTRON_RUN_AS_NODE=1, which makes
+// electron.exe execute src/main/index.js as a plain CJS script and die at line 7
+// (TypeError: Cannot read properties of undefined (reading 'getVersion')) — the
+// 2026-10-23 09:15 full gate lost all 9 live lanes to exactly this when first run from a
+// harness shell (fast gates never saw it: --fast skips the live pool; the d2-crosscutting
+// audit had filed the two unstripped scripts, not applied). The gate itself never needs
+// electron-as-node, so the strip is safe to apply centrally: every stage child inherits
+// this process's env. Suite-level strips (journey-driver, e2e-exit-close, lan-sync-journey)
+// stay as belt-and-braces; this removes the host-shell dependency for the whole gate.
+delete process.env.ELECTRON_RUN_AS_NODE
 // CPU-aware lane count for the Electron live pool: scale down on small machines, never exceed 3
 // (known load-sensitive gates: dbMirror backoff, perf 5000-task, UI coverage walkthrough get WORSE
 // under contention, so the ceiling stays at 3 even on 16-core boxes)
