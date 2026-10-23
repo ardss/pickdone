@@ -228,3 +228,15 @@ Verdict: compatibility PROVEN (isolation, TAP contract, parity); economics
 NEGATIVE below pool scale. Next decision (needs a quiet-window pool-scale
 measurement or a design revision): either a pool-scale vitest cutover wave
 (one big-bang with dual-run fallback) or shelve D1 and bank the D9 wave.
+
+## 2026-10-24 morning - size-ratchet split queue (baseline-registered, split next session)
+
+The w7 wave + cross-wave growth left six files over their hard caps; baselines
+registered per the gate's only-decrease escape hatch. Split queue (by debt weight):
+1. cli/lib.js 874 (was 852) - w7 undo/repeatRule runtime; split the undo-renewal core out
+2. renderer/js/store/tomato.js 780 (was 743)
+3. renderer/js/views/StatisticsView.vue 817 (was 802)
+4. src/main/db.js 830 (was 823)
+5. src/main/dbRecovery.cjs 827 (no prior baseline)
+6. renderer/js/store/settings.js 706 (no prior baseline; closest to its 700 cap - cheapest first)
+Rule after registration: only decreases accepted; each split lands with its own slice gates.
