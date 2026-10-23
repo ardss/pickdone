@@ -237,16 +237,42 @@ test('#11 chipsSnapshotForDelete failure path warns with the task id', () => {
 })
 
 /* ---------- #12: undo-renewal removal row shape (delete:true + version 0) ---------- */
+// W7 discriminator re-anchor (2026-10-24): repeatOn PRE-GENERATES its future instances, and
+// completing the template then idempotently returns that pre-generated instance — whose
+// createTime (repeatOn moment) is EARLIER than completedAt, so the shared discriminator
+// correctly REFUSES to remove it on undo (that refusal is the entire point of the W7 P1
+// root fix: pre-generated siblings survive undo). The true renewal-mint scenario is
+// completing the LAST pre-generated instance: its undo removes the instance the completion
+// itself minted (createTime >= completedAt), with the renderer row shape.
 test('#12 undo of a renewed completion removes the instance with the renderer row shape', () => {
   const base = +dayjs().add(6, 'day').startOf('day')
   const tpl = seed({ taskContent: 'dom2撤销形状模板', todoTime: base })
   const r = lib.repeatOn(tpl.taskId, lib.buildRepeatRule({ type: 'daily', interval: 1 }), 1)
-  lib.toggleComplete(tpl.taskId, true)
-  const renewed = db.call('queryTodos', { deleted: 0, repeatId: r.rid }).sort((a, b) => a.dayStart - b.dayStart).pop()
-  assert.ok(renewed && renewed.dayStart === base + 864e5)
-  lib.toggleComplete(tpl.taskId, false) // undo → auto-renewed instance removed
-  const row = db.call('getById', renewed.taskId)
+  const pre = db.call('queryTodos', { deleted: 0, repeatId: r.rid }).find(x => x.taskId !== tpl.taskId)
+  assert.ok(pre && pre.dayStart === base + 864e5, 'repeatOn pre-generated the next day')
+  // complete the PRE-GENERATED instance → it is the group's last → the completion mints
+  // the true renewal at base+2d (createTime >= completedAt, a genuine renewal)
+  lib.toggleComplete(pre.taskId, true)
+  const minted = db.call('queryTodos', { deleted: 0, repeatId: r.rid })
+    .sort((a, b) => a.dayStart - b.dayStart).pop()
+  assert.ok(minted && minted.dayStart === base + 2 * 864e5, 'completion minted the next renewal')
+  lib.toggleComplete(pre.taskId, false) // undo → the minted renewal is removed
+  const row = db.call('getById', minted.taskId)
   assert.equal(row.delete, true, 'boolean delete:true (renderer deleteTodo/deleteTodosMany parity)')
   assert.equal(row.version, 0, 'version 0 so the soft delete re-enters the sync snapshot')
   assert.ok(row.deletedAt > 0)
+})
+
+// The discriminator's other half: undoing the TEMPLATE must leave the PRE-GENERATED
+// sibling alone (createTime < completedAt — the 2026-10-09 renderer root fix, CLI twin).
+test('#12b undo of the template does not soft-delete the pre-generated sibling', () => {
+  const base = +dayjs().add(7, 'day').startOf('day')
+  const tpl = seed({ taskContent: 'dom2撤销不误删预生成', todoTime: base })
+  const r = lib.repeatOn(tpl.taskId, lib.buildRepeatRule({ type: 'daily', interval: 1 }), 1)
+  const pre = db.call('queryTodos', { deleted: 0, repeatId: r.rid }).find(x => x.taskId !== tpl.taskId)
+  lib.toggleComplete(tpl.taskId, true)
+  lib.toggleComplete(tpl.taskId, false) // undo → pre-generated sibling must survive
+  const row = db.call('getById', pre.taskId)
+  assert.equal(row.delete, false, 'pre-generated instance is NOT a renewal — it survives undo')
+  assert.equal(row.deletedAt, 0, 'no tombstone on the surviving sibling')
 })
