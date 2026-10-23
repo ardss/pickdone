@@ -3,7 +3,7 @@
  * Single source for TodoItem drag / DayDeck card drop / TodoBoxView batch move-to-today.
  * Run: node --test tests/unit/utils/cross-day-move.test.mjs
  */
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import dayjs from 'dayjs'
 import { crossDayMovePatch, crossDayRevertPatch } from '../../../renderer/js/utils/crossDayMove.js'

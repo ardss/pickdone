@@ -16,7 +16,7 @@
  * Run: node --test tests/unit/utils/d7-utils-fixes.test.mjs
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'

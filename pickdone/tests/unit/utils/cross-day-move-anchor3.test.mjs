@@ -5,7 +5,7 @@
  * and the move reverted on the next re-hydration. Same root cause as the A1/A2 fixes.
  * Run: node --test tests/unit/utils/cross-day-move-anchor3.test.mjs
  */
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import dayjs from 'dayjs'
 import { crossDayMovePatch, crossDayRevertPatch } from '../../../renderer/js/utils/crossDayMove.js'

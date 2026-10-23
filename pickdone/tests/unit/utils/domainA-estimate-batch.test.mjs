@@ -14,7 +14,7 @@
  * Green after: 0 getMeta, exactly 1 getMetaMany batch per generation.
  * Run: node --test tests/unit/utils/domainA-estimate-batch.test.mjs
  */
-import { test, beforeEach } from 'node:test'
+import { test, beforeEach } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 
 const store = new Map()

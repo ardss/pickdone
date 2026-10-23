@@ -5,7 +5,7 @@
  * Run: node --test tests/unit/utils/h1-tomato-estimate-gc.test.mjs
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import { getEstimate, setEstimate, pruneEstimates } from '../../../renderer/js/utils/tomatoEstimate.js'
 
