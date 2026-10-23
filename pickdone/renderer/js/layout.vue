@@ -105,15 +105,22 @@ export default {
       // restore it when the panel closes (restore handler shrinks only if the window grew)
       if (v) {
         if (this._preEditWidth == null) this._preEditWidth = window.innerWidth
+        this._attachPreWidthResize()
         window.todoAPI.ensureWindowWidth(1225)
-      } else if (this._preEditWidth != null) {
-        const w = this._preEditWidth
-        this._preEditWidth = null
-        if (window.todoAPI.restoreWindowWidth) window.todoAPI.restoreWindowWidth(w)
+      } else {
+        this._detachPreWidthResize()
+        if (this._preEditWidth != null) {
+          const w = this._preEditWidth
+          this._preEditWidth = null
+          if (window.todoAPI.restoreWindowWidth) window.todoAPI.restoreWindowWidth(w)
+        }
       }
     }
   },
   mounted () {
+    // [w7] While the panel is open the user may manually resize the window; a snapshot taken at
+    // open time would restore a stale width on close. _attachPreWidthResize (methods) hooks a
+    // debounced resize listener so _preEditWidth tracks the LATEST pre-open width.
     // Click anywhere outside the panel auto-collapses the expanded edit panel.
     // The listener is attached only while the panel is visible (attached on the next tick, to avoid counting "the click that opened the panel" as an outside click)
     this._onDocClick = (e) => {
@@ -130,9 +137,29 @@ export default {
       else document.removeEventListener('mousedown', this._onDocClick)
     }, { immediate: true })
   },
+  // [w7] resize tracking is attached only while the panel is visible (same lifecycle contract
+  // as the outside-click listener below) and always cleaned up on unmount.
+  methods: {
+    _attachPreWidthResize () {
+      if (!this._onPreWidthResize) {
+        this._onPreWidthResize = () => {
+          clearTimeout(this._preWidthTimer)
+          this._preWidthTimer = setTimeout(() => {
+            if (this._preEditWidth != null) this._preEditWidth = window.innerWidth
+          }, 150)
+        }
+      }
+      window.addEventListener('resize', this._onPreWidthResize)
+    },
+    _detachPreWidthResize () {
+      clearTimeout(this._preWidthTimer)
+      if (this._onPreWidthResize) window.removeEventListener('resize', this._onPreWidthResize)
+    }
+  },
   beforeUnmount () {
     if (this._attachTimer) clearTimeout(this._attachTimer)
     document.removeEventListener('mousedown', this._onDocClick)
+    this._detachPreWidthResize()
   }
 }
 </script>
