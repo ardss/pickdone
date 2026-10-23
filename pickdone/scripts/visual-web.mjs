@@ -97,17 +97,23 @@ if (SPAWN) {
   viteChild = cpSpawn('npm', ['run', 'dev', '--', '--port', PORT, '--strictPort'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: ['ignore', viteLog, viteLog] })
   // 就绪判定须连续 3 次探活成功(2026-09-25 check:all 实锤:残留旧宿主垂死期间仍能应答 1 次,
   // 单次 OK 即判 up → preflight 时宿主已死,"宿主未启动"。连续探活+短间隔排除垂死宿主假信号)
+  // 2026-10-23: per-fetch timeout 2s -> 5s, window 40s -> 90s. In-gate the three pools race for
+  // CPU (live Electron boots + unit tier); vite's FIRST on-demand transform regularly blew the
+  // 2s budget, the abort re-triggered the transform, and the starve loop burned the whole 40s
+  // window — while the same lane passed standalone every time. A warmed vite answers in ms, so
+  // the streak completes quickly once the first fetch lands; true death still goes red (90s of
+  // consecutive failures inside a 30min stage budget).
   let upStreak = 0
-  for (let t = 0; t < 40000 && upStreak < 3; t += 500) {
+  for (let t = 0; t < 90000 && upStreak < 3; t += 500) {
     await new Promise(r => setTimeout(r, 500))
     let ok = false
-    try { ok = (await fetch(BASE, { signal: AbortSignal.timeout(2000) })).ok } catch { /* retry */ }
+    try { ok = (await fetch(BASE, { signal: AbortSignal.timeout(5000) })).ok } catch { /* retry */ }
     upStreak = ok ? upStreak + 1 : 0
   }
   const up = upStreak >= 3
   try { fs.closeSync(viteLog) } catch { /* already closed */ }
   if (!up) {
-    console.error('✗ visual-web --spawn: 40s 内 port '+PORT+' 宿主未就绪(vite 启动失败?日志: tests/.artifacts/visual-web/vite-spawn.log)')
+    console.error('✗ visual-web --spawn: 90s 内 port '+PORT+' 宿主未就绪(vite 启动失败?日志: tests/.artifacts/visual-web/vite-spawn.log)')
     killVite()
     process.exit(2)
   }
