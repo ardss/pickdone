@@ -452,7 +452,17 @@ export default {
       "intervalAria": "Interval days",
       "renameEmpty": "Habit name cannot be empty"
 
+    },
+
+    /* [w7 ux fixes 2026-10-23] cross-view UX batch */
+    "w7": {
+      "csvExportedSaved": "Exported — the CSV was saved to your browser's default download location",
+      "memorialFutureDate": "An anniversary date cannot be in the future",
+      "accountTimeOverlap": "This interval overlaps another record of the same task — adjust the start time or duration",
+      "accountDiscardConfirm": "The ledger has unsaved changes — discard them?",
+      "scClearHint": "Press Delete/Backspace while recording to clear this shortcut"
     }
+
 
   }
 }

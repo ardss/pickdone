@@ -452,7 +452,17 @@ export default {
       "intervalAria": "间隔天数",
       "renameEmpty": "习惯名不能为空"
 
+    },
+
+    /* [w7 ux fixes 2026-10-23] cross-view UX batch */
+    "w7": {
+      "csvExportedSaved": "数据表已导出，CSV 保存在浏览器默认下载位置",
+      "memorialFutureDate": "纪念日不能选择未来的日期",
+      "accountTimeOverlap": "该时段与同任务的其他记录重叠，请调整开始时间或时长",
+      "accountDiscardConfirm": "台账有未保存的修改，确定放弃吗？",
+      "scClearHint": "录制时按 Delete/Backspace 可清除该快捷键"
     }
+
 
   }
 }
