@@ -62,6 +62,11 @@ export function isMachineLocalMetaKey (id) {
     // never data — syncing them would replay stale commands on the peer).
     k.startsWith('cliTomato') || k.startsWith('cliSync') ||
     k === 'todosVersion' || // per-device dirty-row cursor
+    // [W7-R 2026-10-23 P3] one-time LS→DB category migration flag: it is per-device bookkeeping
+    // (marks "THIS device's empty category table was seeded from its LS cache"). A peer's flag
+    // row must not sync over — a device that has NOT migrated yet would read the peer's '1' and
+    // skip its own migration, silently dropping its entire cached category list forever.
+    k === 'categoryLsMigrated' ||
     k.startsWith('firedReminders:') || k === 'reminderLastSeenAt' || // scheduler dedup watermarks
     k.startsWith('settingsRows.src.') || // v6 migration snapshot markers
     k === 'db.tomatoState' || k === 'habitsState' || // retired ledger+habits blobs (migration bookkeeping)
