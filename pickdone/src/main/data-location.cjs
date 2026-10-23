@@ -43,10 +43,15 @@ function readBootRedirect () {
  *  (a truncated JSON reads back as null above, but atomicity keeps the previous good value). */
 function writeBootRedirect (dir) {
   if (!dir || typeof dir !== 'string' || !path.isAbsolute(dir)) throw new Error('boot redirect dir must be an absolute path')
-  const file = bootRedirectPath()
-  const tmp = file + '.tmp-' + process.pid
-  fs.writeFileSync(tmp, JSON.stringify({ userDataDir: dir }, null, 2) + '\n', 'utf8')
-  fs.renameSync(tmp, file)
+  // Durable write (M2a P1): tmp → fsync → rename via durable-fs (same contract as
+  // dbRecovery's markRecoveryPending / main-ipc-2 fix). The boot file decides WHERE every
+  // byte of user data lives — a power cut between OS cache and rename used to be able to
+  // publish the rename while the content was still only in cache. On any failure
+  // writeFileDurable removes the tmp residue and rethrows (err.dtmpPath carries the tmp).
+  require('./durable-fs').writeFileDurable(
+    bootRedirectPath(),
+    Buffer.from(JSON.stringify({ userDataDir: dir }, null, 2) + '\n', 'utf8')
+  )
 }
 
 /** Clear the boot file (back to the default userData). Missing file is already clear. */
@@ -62,7 +67,11 @@ function clearBootRedirect () {
  *  allowed-backup-dirs.json (external backup roots whitelist) — both were silently dropped. */
 function requiredFiles (srcDir) {
   const files = []
-  for (const name of ['todos.db', 'todos.db-wal', 'todos.db-shm', 'db.key', 'config.json', 'cli-audit.jsonl', 'allowed-backup-dirs.json']) {
+  // M2a (P3): recovery-pending.json (Sync-4/Sync-17 sentinel), renderer-crash-relaunch-count.json
+  // and the legacy root critical-state-backup.json are all recovery-critical state — a migration
+  // that dropped them lost the crash-recovery chain. Conditional like the rest: first launches
+  // without them must not mint empty copies.
+  for (const name of ['todos.db', 'todos.db-wal', 'todos.db-shm', 'db.key', 'config.json', 'cli-audit.jsonl', 'allowed-backup-dirs.json', 'recovery-pending.json', 'renderer-crash-relaunch-count.json', 'critical-state-backup.json']) {
     if (fs.existsSync(path.join(srcDir, name))) files.push(name)
   }
   for (const d of ['backups', 'files']) {
@@ -108,6 +117,22 @@ function validateTarget (targetDir, currentDir, opts) {
   let st = null
   try { st = fs.statSync(t) } catch (e) { /* not existing yet — fine */ }
   if (st && !st.isDirectory()) return { ok: false, reason: 'target exists and is not a directory' }
+  // M2a (P1) realpath containment re-check (protocol.js F3 shape): a junction/symlink target can
+  // pass every LEXICAL check above while RESOLVING into the source subtree (OneDrive placeholder
+  // dirs, user-created links). Migration would then copy the source INTO itself, and the failure
+  // cleanup's rmSync — which deletes everything the migration "wrote into the target" — would
+  // delete the user's real source data. Resolve both sides to their real paths (when resolvable)
+  // and re-run the bidirectional containment on those; a dangling link fails statSync above.
+  if (st) {
+    try {
+      const rt = fs.realpathSync(t)
+      let rc = cur
+      try { rc = fs.realpathSync(cur) } catch { /* current dir unreadable → compare against its lexical path */ }
+      if (foldCase(rt) === foldCase(rc)) return { ok: false, reason: 'target resolves to the current data directory through a link (junction/symlink)' }
+      if (isInside(foldCase(rt), foldCase(rc))) return { ok: false, reason: 'target resolves inside the current data directory through a link (junction/symlink)' }
+      if (isInside(foldCase(rc), foldCase(rt))) return { ok: false, reason: 'target resolves around (contains) the current data directory through a link (junction/symlink)' }
+    } catch (e) { /* realpath unavailable → the lexical checks above stand */ }
+  }
   if (st) {
     const empty = fs.readdirSync(t).length === 0
     if (!empty) {
@@ -250,7 +275,24 @@ let relocationPending = false // B#5: in-process gate for the migrate→relaunch
  * YIELD_EVERY objects; the event loop yields alongside, so progress IPC and window events keep
  * flowing) and { phase: 'verify' } / { phase: 'boot' } at the tail.
  */
+let migrationInFlight = false // M2a (P2): reentry gate — two overlapping migrations would race on the boot file and the copy
+
+/** Reentry gate + in-flight flag wrapper around the migration body (see below). A second
+ *  data:relocate while one is running (or while a finished one awaits relaunch —
+ *  getRelocationPending) is refused outright instead of racing it. */
 async function migrateData (srcDir, targetDir, opts = {}) {
+  if (migrationInFlight || getRelocationPending()) {
+    return { ok: false, error: 'migration already in progress' }
+  }
+  migrationInFlight = true
+  try {
+    return await migrateDataInner(srcDir, targetDir, opts)
+  } finally {
+    migrationInFlight = false // relocationPending (set on success) intentionally outlives this
+  }
+}
+
+async function migrateDataInner (srcDir, targetDir, opts = {}) {
   const onProgress = typeof opts.onProgress === 'function' ? opts.onProgress : null
   const report = p => { try { if (onProgress) onProgress(p) } catch (e) { /* progress is best-effort */ } }
   // Torn-DB defense #1: after a clean close the WAL/SHM are GONE. A resurrected NON-EMPTY one
