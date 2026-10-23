@@ -290,6 +290,11 @@ process.on('exit', () => { try { reapAllRegisteredSync() } catch { /* best-effor
 // every timing 2-3x — a red landing exactly on a stage budget is a KILL, not a product
 // failure, and timing flakes multiply (2026-10-22/23 evidence). Sampling once over 300ms via
 // os.cpus() deltas (os.loadavg is a stub on Windows).
+// 2026-10-23 architecture: the sample is now also a GATE INPUT — under burst the FRAGILE
+// pools (③ live Electron, ④ visual) are deferred LOUDLY (exit 3, named) instead of running
+// as a dice roll; --force-load overrides (release officers only). IMMUNE pools (① static,
+// ② unit at conc 4) run everywhere, every time.
+let ambientPct = -1
 try {
   const c0 = os.cpus()
   await new Promise(res => setTimeout(res, 300))
@@ -302,13 +307,38 @@ try {
     busy += (d.user - p.user) + (d.nice - p.nice) + (d.sys - p.sys) + (d.irq - p.irq)
     total += busy + (d.idle - p.idle)
   }
-  const pct = total > 0 ? Math.round(busy / total * 100) : 0
-  if (pct >= 80) {
-    console.warn(`  [check-all] ⚠ ambient CPU load ~${pct}% — timings inflated 2-3x under this load; a red landing exactly on a stage budget is a budget KILL (re-run in a quiet window before triaging it as product red)`)
+  ambientPct = total > 0 ? Math.round(busy / total * 100) : 0
+  if (ambientPct >= 80) {
+    console.warn(`  [check-all] ⚠ ambient CPU load ~${ambientPct}% — timings inflated 2-3x under this load; a red landing exactly on a stage budget is a budget KILL (re-run in a quiet window before triaging it as product red)`)
   } else {
-    console.log(`  [check-all] ambient CPU load ~${pct}% (within normal band)`)
+    console.log(`  [check-all] ambient CPU load ~${ambientPct}% (within normal band)`)
   }
 } catch { /* diagnostics only — never block the gate on its own label */ }
+// Gate doctor (2026-10-23 architecture): declared environment needs validated + auto-
+// provisioned BEFORE any pool starts. Scope: fast tier = structural only; local full gate
+// = + visual-lane machine-state (browser-dev deps, baselines, agent-browser). CI skips the
+// visual lane by design, so its needs are not blocking there. --no-doctor for emergencies;
+// a blocking miss exits 2 with the named fix — a 5-second preflight instead of a mid-gate
+// mystery red (2026-10-23: five-layer checkout-env onion, each layer misattributed once).
+if (!process.argv.includes('--no-doctor')) {
+  const { runDoctor } = await import('./gate-doctor.cjs')
+  const doctorScope = (!FAST && !ON_CI) ? 'full-local' : 'structural'
+  const doctor = await runDoctor({ scope: doctorScope, fix: true, silentBanner: false })
+  if (!doctor.ok) process.exit(2)
+}
+// Burst deferral (load-tier policy): FRAGILE pools under ≥80% ambient load are DEFERRED,
+// never silently skipped and never dice-rolled. Exit code 3 = "validated partially" —
+// distinct from 0 (all green) and 1 (red): CI/pre-commit semantics unchanged (they run
+// --fast or scoped tiers, which never defer); the nightly quiet-window job runs the FULL
+// set because its load sits below the threshold. --force-load is the release-officer
+// override and prints its own loud banner.
+const FORCE_LOAD = process.argv.includes('--force-load')
+const LOAD_DEFER_THRESHOLD = 80
+const deferred = []
+function deferGroup (g, reason) {
+  for (const st of g.stages) deferred.push(st[0])
+  console.log(`\n===== ${g.name} —— ⏸ DEFERRED (${reason};安静窗跑全量,或 --force-load 强制) =====`)
+}
 // ① 构建先行（产物依赖,唯一硬串行;构建失败后续全无意义,直接短路）——fast 档纯静态,无产物依赖,跳过
 if (FAST) {
   console.log('\n[check:fast] 跳过 ①构建（静态门禁不依赖 renderer-dist）')
@@ -374,13 +404,23 @@ if (FAST) {
   // 2026-09-21: 视觉池(④)并入同一波——它自拉起 6175 端口宿主(--strictPort,与活体池随机
   // CDP 端口+独立 userData 互不相干),此前排在整个 ③ 池之后纯串行,是墙钟最大的一块空闲串行段。
   // 代价是满载更高(dbMirror/5000-task/走查等时序敏感门禁有 retry 1 兜底;若实测抖动恶化再降道)。
-  console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name} × ${GROUPS[3].name}（三池同时起跑） =====`)
-  const [staticRs, liveRs, visualRs] = await Promise.all([
-    runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }),
-    runPool(GROUPS[2].stages, LANES, { retry: GROUPS[2].retry || 0 }),
-    runPool(GROUPS[3].stages, GROUPS[3].parallel, { retry: GROUPS[3].retry || 0 })
-  ])
-  results.push(...staticRs, ...liveRs, ...visualRs)
+  // 2026-10-23 burst deferral: ≥80% ambient 响亮顺延 ③④ 池(exit 3),掷骰子红从结构上退场。
+  const burst = ambientPct >= LOAD_DEFER_THRESHOLD && !FORCE_LOAD && !ON_CI
+  if (burst) {
+    console.warn(`  [check-all] ⏸ ambient load ~${ambientPct}% ≥ ${LOAD_DEFER_THRESHOLD}%:FRAGILE 池(③活体/④视觉)顺延至安静窗(--force-load 可强制)`)
+    deferGroup(GROUPS[2], `ambient ${ambientPct}%`)
+    deferGroup(GROUPS[3], `ambient ${ambientPct}%`)
+    results.push(...await runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }))
+  } else {
+    if (FORCE_LOAD && ambientPct >= LOAD_DEFER_THRESHOLD) console.warn('  [check-all] --force-load:burst 期强制全量(红一律按真回归分诊,预算 KILL 自担)')
+    console.log(`\n===== ${GROUPS[1].name} × ${GROUPS[2].name} × ${GROUPS[3].name}（三池同时起跑） =====`)
+    const [staticRs, liveRs, visualRs] = await Promise.all([
+      runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }),
+      runPool(GROUPS[2].stages, LANES, { retry: GROUPS[2].retry || 0 }),
+      runPool(GROUPS[3].stages, GROUPS[3].parallel, { retry: GROUPS[3].retry || 0 })
+    ])
+    results.push(...staticRs, ...liveRs, ...visualRs)
+  }
 }
 for (const g of GROUPS.slice(FAST ? GROUPS.length : 4)) {
   // 视觉回归(第4组)是本机门禁:基线为 gitignored 的机器本地文件,且依赖 agent-browser——
@@ -397,9 +437,10 @@ for (const g of GROUPS.slice(FAST ? GROUPS.length : 4)) {
 console.log('\n========== 体检汇总（按耗时降序） ==========')
 const flakeNames = new Set(FLAKE_EVENTS.map(e => e.stage))
 for (const r of [...results].sort((a, b) => b.ms - a.ms)) console.log(` ${r.ok ? '✓' : '✗'} ${fmtMs(r.ms).padStart(7)}  ${r.name}${flakeNames.has(r.name) ? '  ⚑flake(重试通过)' : ''}`)
+if (deferred.length) for (const n of deferred) console.log(` ⏸   DEFER  ${n}（顺延至安静窗;非失败,不参与红绿判定）`)
 const failed = results.filter(r => !r.ok)
 const total = Date.now() - T0
-console.log(`\n${failed.length ? `✗ ${failed.length} 项失败: ${failed.map(f => f.name).join(' / ')}` : '✓ 全部通过'}（共 ${results.length} 项,总耗时 ${fmtMs(total)},flake 重试通过 ${FLAKE_EVENTS.length} 条）`)
+console.log(`\n${failed.length ? `✗ ${failed.length} 项失败: ${failed.map(f => f.name).join(' / ')}` : deferred.length ? `⏸ 全部已跑项通过 + ${deferred.length} 项顺延（部分验证,exit 3;安静窗跑全量补钢印）` : '✓ 全部通过'}（共 ${results.length} 项+顺延 ${deferred.length} 项,总耗时 ${fmtMs(total)},flake 重试通过 ${FLAKE_EVENTS.length} 条）`)
 // flake 事件落盘:重试通过 stage 此前与一次通过同形,抖动率无从观测(D2 效率波新增)
 if (FLAKE_EVENTS.length) {
   try {
@@ -410,7 +451,12 @@ if (FLAKE_EVENTS.length) {
 const flakeVerdict = evaluateFlakeThreshold(FLAKE_EVENTS)
 if (flakeVerdict.level === 'warn') console.log(`⚠ [flake-gate] 单次 check:all 重试通过 stage 数 ${flakeVerdict.count} > 阈值 ${flakeVerdict.max} —— 活体池抖动超标,黄标警告(不红;连续超标再考虑降道/修时序)`)
 if (!WITH_A11Y) console.log('提示: a11y 实测需活应用,加 --a11y 追加(cli/a11y-scan.js)')
-process.exit(failed.length ? 1 : 0)
+// Exit contract: 0 = all ran green; 1 = red (real regression or budget kill);
+// 3 = validated PARTIALLY (burst deferral — never a silent green). CI and
+// pre-commit run --fast/scoped tiers which never defer, so their contract is
+// untouched; the nightly quiet-window job runs full and never hits the burst
+// branch.
+process.exit(failed.length ? 1 : deferred.length ? 3 : 0)
 }
 
 // 仅直接执行时跑主流程;被单测 import 时只暴露 runPool/flake 纯函数(tests/unit/cli/check-all-flake-metrics.test.mjs)

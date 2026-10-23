@@ -122,16 +122,20 @@ When a stage reds, IN ORDER — evidence before attribution:
 Rule: any budget change cites its measured worst path here. A budget that
 "passed once" is not calibrated.
 
-## 4. Load-tier policy (proposal, needs one quiet-window cycle to prove)
+## 4. Load-tier policy (IMPLEMENTED 2026-10-23, first live exercise pending a real burst)
 
-The gate's ambient-load label (S4) samples CPU at start. Extend it to
-SELECT, not just warn:
+The gate's ambient-load label (S4) samples CPU at start — and now SELECTS:
 
-- load < 50%: run everything (today's form).
-- load ≥ 50% (burst): run ① + ② IMMUNE/TOLERANT + ③; DEFER the FRAGILE
-  set (named loudly, never silently) to the nightly quiet-window job —
-  which already exists as a scheduled run. Development never blocks on
-  dice; validation truth never depends on load luck.
+- load < 80%: run everything (today's form).
+- load ≥ 80% (burst): run ① + ② IMMUNE/TOLERANT + nothing fragile; DEFER
+  the FRAGILE pools (③ live, ④ visual) LOUDLY — named in the summary,
+  exit code 3 ("validated partially", never a silent green). Override:
+  `--force-load` (release officers; reds then triage as real).
+- Preflight: cli/gate-doctor.cjs validates declared needs before any pool
+  (structural always; visual-lane machine-state on local full runs) and
+  auto-provisions what is unambiguous (browser-dev npm i, baseline copy
+  from the main checkout). `--no-doctor` is the emergency opt-out.
+  Exit contract: 0 green / 1 red / 2 doctor-blocking / 3 deferred.
 
 ## 5. Open debts that gate development velocity (ranked)
 
