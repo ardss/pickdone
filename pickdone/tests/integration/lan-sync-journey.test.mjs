@@ -50,7 +50,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // budget per lock-loss relaunch (deadline renewal fix) — then 120s pairing-intact + 60s
 // convergence. The old 175s ceiling could be outrun by exactly the legit relaunch path
 // this suite is designed to survive, so it is raised to 300s to cover the sum.
-const WATCHDOG_MS = 300_000
+// 600s (was 300s, 2026-10-23 evening): the real journeys each run ~60-90s under a
+// LOADED host (boot probes and convergence polls scale with ambient load), so the full
+// gate blew the 300s ceiling mid-J4 and the force-exit red'd the FILE with J1-J3 already
+// green - the budget-doesn't-cover-worst-path law again. Still a hard bound: a wedged run
+// dies named instead of hanging the tier.
+// 900s (same evening, after 600s also fired in-gate): IN-GATE (three pools racing) the
+// suite measured ~2-3x its solo wall, so 600s left no margin against a burst multiplier.
+// 900s covers ~3x the solo worst path while staying a hard named bound inside the 20min
+// stage budget. Note: run-all children carry --test-force-exit, so the post-suite handle
+// leak this watchdog also bounds only bites bare `node --test` invocations.
+const WATCHDOG_MS = 900_000
 const watchdog = setTimeout(() => {
   console.error(`[lan-sync-journey] GLOBAL WATCHDOG (${WATCHDOG_MS}ms) fired — force-exiting (1)`)
   if (process.env.JOURNEY_DIAG && process.report) {
