@@ -182,6 +182,12 @@ async function setEnv (theme) {
   for (let attempt = 1; attempt <= 3 && !pinned; attempt++) {
     ab(['--session', SESSION, 'eval', `(() => { const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
     ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} return 'ok' })()`])
+    // The LS write is only the BOOT CACHE — the locale's authority is the synced settings
+    // blob (Y1): first boot persists a zh-CN default into the DB, and every later boot's
+    // store hydration re-applies it over the LS pin (deterministic Chinese despite the
+    // pin - final8/final13 evidence). Commit through the app's own store channel so the
+    // DB truth flips too (same path setLocale itself uses).
+    ab(['--session', SESSION, 'eval', `(() => { try { const st = window.appUI && window.appUI.$store; if (st) { st.commit('settings/updateSettings', { appLocale: 'en-US' }); return 'ok' } return 'nostore' } catch (e) { return 'err' } })()`])
     ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
     // reload 同样断言纪元变化(未变则重试一次)
     for (let i = 0; i < 2; i++) {
