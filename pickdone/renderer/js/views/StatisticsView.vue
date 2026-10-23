@@ -88,7 +88,7 @@
             <div class="tl-card best-card">
               <div class="tl-head"><b>{{ $t('statsA.StatisticsView.bestsTitle') }}</b><span class="tl-sub">{{ $t('statsA.StatisticsView.bestsSub') }}</span></div>
               <div class="best-row">
-                <div v-for="b in periodBests"  :key="$t(b.titleKey || b.title)" class="best-item">
+                <div v-for="b in periodBests" :key="String(b.titleKey || b.title)" class="best-item">
                   <div class="best-item__title">{{ $t(b.titleKey || b.title) }}</div>
                   <div class="best-item__value">{{ b.value }}</div>
                   <div class="best-item__sub">{{ b.sub }}</div>
@@ -239,7 +239,7 @@
  *   2. KPI comparison bars (done/focus/completion rate/give-ups, all from a "vs personal baseline" perspective, no absolute-count bragging) *   3. Activity heatmap (half-year/full-year toggle) 4. 24-hour focus timeline *   5. Attention allocation (per-category focus bars) 6. Completion trend line (with baseline reference band) *   7. Export long image / CSV
  * Engine and metrics live in statistics/metrics.js + insights.js (pure functions, covered by unit tests).
  * All copy goes through vue-i18n (statsA.* namespace); internal state like period/heatmap range uses stable keys, * display text is resolved via $t (the insights/achievements pure-function layer returns key+params, resolved in computeds/methods). */
-import { dayjs, DAY_MS } from '../utils/core.js'
+import { dayjs, DAY_MS, FMT } from '../utils/core.js'
 import ChartCard from './statistics/ChartCard.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { roleButtonActivate, roleRadioActivate } from '../utils/roleButtonKey.js' // [A2/A6/A9] radiogroup + button activation
@@ -295,6 +295,10 @@ export default {
   beforeUnmount () {
     clearInterval(this._nowTimer)
   },
+  /* [w7] keep-alive re-entry also clears the error latch (same doctrine as the watchers above) */
+  activated () {
+    this.cardError = false
+  },
   computed: {
     todoList () { return this.$store.state.todo.todoList },
     tomatoRecordList () { return (this.$store.state.tomato && this.$store.state.tomato.tomatoRecordList) || [] },
@@ -322,7 +326,7 @@ export default {
       // 10.18), 上月 09.01-10.01 (real last day 09.30), a custom to=10.07 range showed 10.07.
       // One millisecond back lands on the last covered day; wall-clock ends (end=now) are
       // unaffected at MM.DD resolution.
-      return `${dayjs(start).format('MM.DD')} - ${dayjs(Math.min(end, +dayjs().endOf('day')) - 1).format('MM.DD')}`
+      return `${dayjs(start).format(FMT.cnDate)} - ${dayjs(Math.min(end, +dayjs().endOf('day')) - 1).format(FMT.cnDate)}`
     },
     customDraftDays () {
       if (!this.customDraft || !this.customDraft[0] || !this.customDraft[1]) return 0
@@ -342,7 +346,7 @@ export default {
     achievements () {
       return buildAchievements({ todos: this.todoList, records: this.tomatoRecordList })
     },
-    shareDate () { return dayjs().format('YYYY.MM.DD') },
+    shareDate () { return dayjs().format(FMT.cnFull) },
     /** Compact data shared by share cards */
     shareTopInsights () { return this.review.insights.slice(0, 3) },
     hasAnyData () { return this.todoList.length > 0 || this.tomatoRecordList.length > 0 },
@@ -410,6 +414,10 @@ export default {
       try { localStorage.setItem('tlHoverGrid', this.tlGrid ? '1' : '0') } catch {}
     },
     syncQuery () {
+      // [w7] cardError is an error-boundary latch: without a reset it permanently condemns the
+      // page after one transient card failure — clear it whenever the data shape changes
+      // (period/view switch both funnel through here)
+      this.cardError = false
       const q = { ...this.$route.query }
       if (this.view === 'stat') delete q.view; else q.view = this.view
       delete q.period; delete q.from; delete q.to
@@ -473,10 +481,17 @@ export default {
       const csv = '﻿' + rows.map(r => r.map(c => csvField(c)).join(',')).join('\n')
       const a = document.createElement('a')
       a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-      a.download = `${this.$t(T + 'fileDataReview')}_${this.period}_${dayjs().format('YYYYMMDD')}.csv`
+      // [w7] the filename used to embed the raw internal enum (`this.period`, e.g. "thisWeek"):
+      // use the localized period label instead (same source the pills render), with the
+      // custom-range case falling back to the visible date range; strip filesystem-illegal chars
+      const periodLabel = (this.periodOptions.find(p => p.key === this.period) || {}).label || this.periodRangeLabel
+      const safeLabel = String(periodLabel).replace(/[\\/:*?"<>|]/g, '-').trim() || 'custom'
+      a.download = `${this.$t(T + 'fileDataReview')}_${safeLabel}_${dayjs().format('YYYYMMDD')}.csv`
       a.click()
       setTimeout(() => URL.revokeObjectURL(a.href), 10000) // release the Blob URL
-      this.$message.success(this.$t(T + 'msgTableExported'))
+      // [w7] honest success copy: this export always lands in the browser's download location —
+      // the old unconditional "导出成功" implied a save dialog that never existed
+      this.$message.success(this.$t('statsE.w7.csvExportedSaved'))
     }
   },
 
