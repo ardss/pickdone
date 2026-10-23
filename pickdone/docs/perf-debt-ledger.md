@@ -198,3 +198,33 @@ Doctrine confirmed: full-gate reds under burst load are triaged by victim
 (green-in-isolation = load class, documented; red-in-isolation = RED-first
 fix). The 31/31 single-run stamp belongs to a quiet window, not a dice-roll
 rerun under burst.
+
+### D1 pilot results (2026-10-23 evening, main@725661fd)
+
+Scope: tests/unit/utils (6 files, 25 cases) behind tests/pilot/
+runner-shim.mjs — files re-point ONE import and run under BOTH runners;
+outside vitest the shim is a transparent node:test pass-through (slice
+25/25 green 7.2s through the shim, post-merge re-verified).
+
+- Acceptance 1 (parity) PASS: 3 consecutive vitest runs 6/6 files green,
+  same set as node --test. Required a runner-semantics alignment: vitest's
+  5s default per-test timeout vs node's none (testTimeout 120s) — the
+  5000-key capacity case needs >5s.
+- Acceptance 2 (wall <=50%) FAIL at this granularity: vitest 11.7-14.5s vs
+  node --test 7.4s on the same slice. Vitest's fixed worker-pool boot
+  (~10s) dominates a 6-file slice; the process-boot win only amortizes at
+  pool scale. CONSEQUENCE: the cutover is a pool-scale project (the
+  760-file target), not incremental per-directory waves — the design's
+  per-directory waves would each pay the fixed boot and lose.
+- Acceptance 3 (gate contract) PASS: vitest's nested TAP is normalized by
+  tests/run-pilot.mjs (adapter in the pilot, gate UNMODIFIED); the
+  plan-anchored summary parses green, injected-fail negative self-test
+  reds exit 1.
+- Acceptance 4 (coverage) PASS: @vitest/coverage-v8 emits a parsable
+  All-files line; compare-only — the ratchet's calibration stays on the
+  full node --test pool (numbers not comparable across runners).
+
+Verdict: compatibility PROVEN (isolation, TAP contract, parity); economics
+NEGATIVE below pool scale. Next decision (needs a quiet-window pool-scale
+measurement or a design revision): either a pool-scale vitest cutover wave
+(one big-bang with dual-run fallback) or shelve D1 and bank the D9 wave.
