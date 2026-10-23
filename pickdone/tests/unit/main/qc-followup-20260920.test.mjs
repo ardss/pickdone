@@ -70,7 +70,9 @@ test('M-1: key rename SUCCESS path — recovery proceeds, db.key is renamed asid
   const ud = isolatedUd('m1-ok-')
   fs.writeFileSync(path.join(ud, 'todos.db'), 'garbage-not-sqlite') // wrong header → recovery branch
   fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary')) // usable plaintext backup (SQLite header gate)
-  fs.writeFileSync(path.join(ud, 'db.key'), 'stale-key')
+  // M2a parity: the key must be 64-hex so the probe classifies the db as genuinely corrupt
+  // ('no'); a non-hex key reads as keyless-plaintext-parity and the recovery declines.
+  fs.writeFileSync(path.join(ud, 'db.key'), 'a'.repeat(64))
   const r = rec.attemptDbRecovery(ud, null)
   assert.equal(r.source, 'plain-bak')
   assert.ok(!fs.existsSync(path.join(ud, 'db.key')), 'stale key is OUT of the way before reopen')
@@ -82,7 +84,9 @@ test('M-1: key quarantine TOTAL failure — source:error, no false "recovery suc
   const ud = isolatedUd('m1-fail-')
   fs.writeFileSync(path.join(ud, 'todos.db'), 'garbage-not-sqlite')
   fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\x00' + '.'.repeat(32), 'binary')) // usable plaintext backup (SQLite header gate)
-  fs.writeFileSync(path.join(ud, 'db.key'), 'stale-key')
+  // M2a parity: 64-hex key so the probe answers 'no' (genuinely corrupt) and the quarantine
+  // strategies actually get exercised.
+  fs.writeFileSync(path.join(ud, 'db.key'), 'b'.repeat(64))
   // Inject failure of every quarantine strategy (rename×2 + delete): locked by AV/AV-like hold.
   const realRename = fs.renameSync
   const realRm = fs.rmSync

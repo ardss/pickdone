@@ -91,9 +91,13 @@ test('h8-2: restore pipeline is shared (applyRestoreDump), isolates segments, or
 /* ---- 3: shortcuts save closed loop through settings/update ---- */
 test('h8-3: settings/update commits the full patch (store+persist) and forwards it to the main config writer which re-applies shortcuts', () => {
   const store = readSrc('renderer/js/store/settings.js')
-  // update action commits updateSettings with the whole patch (shortcutKeySettings included -> persist LS + DB mirror)
-  assert.match(store, /async update \(\{ commit \}, patch\) \{\s*commit\('updateSettings', patch\)/)
-  assert.match(store, /await window\.todoAPI\.updateSettings\(patch\)/)
+  // update action: the W7-R locale-enum gate strips an illegal appLocale before commit, so the
+  // action commits `effective` (the sanitized patch) — the anchor asserts the gate AND the commit
+  // (shortcutKeySettings rides the same full-patch path; illegal appLocale never reaches it).
+  assert.match(store, /async update \(\{ commit \}, patch\) \{/)
+  assert.match(store, /!isLegalAppLocale\(patch\.appLocale\)/)
+  assert.match(store, /commit\('updateSettings', effective\)/)
+  assert.match(store, /await window\.todoAPI\.updateSettings\(effective\)/)
   const tab = readSrc('renderer/js/components/settings/SettingsShortcutsTab.vue')
   assert.match(tab, /dispatch\('settings\/update', \{ shortcutKeySettings: snap \}\)/)
   // main side: writeConfig merges the full patch (so shortcutKeySettings lands in config.json) and re-registers shortcuts

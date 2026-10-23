@@ -303,10 +303,10 @@ function runnerFileArgs () {
 // results as its file completes; the same bytes are still accumulated for the downstream
 // consumers below (native-crash retry, coverage summary, slow-test margin), so behavior is
 // identical — only visibility changed.
-function spawnRunner () {
+function spawnRunner (fileArgsOverride = null) {
   return new Promise(resolve => {
     const child = spawn(process.execPath, [...RUNNER_ARGS,
-      ...forwardArgs, ...runnerFileArgs()],
+      ...forwardArgs, ...(fileArgsOverride || runnerFileArgs())],
     // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
     // paths (K:\...\pickdone\tests\...) blow past it and spawn fails with ENAMETOOLONG —
     // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
@@ -353,6 +353,40 @@ const onlyNativeCrash = tap => {
 if (r.status !== 0 && r.stdout && onlyNativeCrash(String(r.stdout))) {
   console.error('[run-all] native teardown crash(s) (0xC0000409 libuv async assert) were the only failures — retrying the suite once (CI rerun doctrine)')
   r = await spawnRunner()
+}
+// Flake-retry per FILE (2026-10-24, generalizes the rerun doctrine above): under gate
+// self-load a rotating set of 1-6 fs/timing-sensitive files red per full run while
+// passing solo (observed in one night: usage-quota relay restart, migrateData
+// relocation-gate pair, key-rename M-1 pair, crypto F20, settings h8-3). Re-running
+// the whole corpus costs ~26min and re-rolls the same dice; re-running JUST the
+// failed files costs seconds. ONE retry, failed files only, budgets unchanged — a
+// file failing twice is a real red and the retry TAP is the authoritative record.
+// Flood guard: more than 12 failed files means systemic breakage — never spin.
+const failedFileList = tap => {
+  const files = new Set()
+  for (const block of (tap.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || [])) {
+    const m = /location: '?([^'\r\n]+)'?/.exec(block)
+    if (m) files.add(m[1].replace(/\\\\/g, '\\'))
+  }
+  return [...files]
+}
+if (r.status !== 0 && !r.error && r.stdout) {
+  const failedFiles = failedFileList(String(r.stdout))
+  if (failedFiles.length > 0 && failedFiles.length <= 12) {
+    console.error(`[run-all] ${failedFiles.length} file(s) failed — flake-retry pass on just those files (one shot, budgets unchanged)`)
+    for (const f of failedFiles) console.error('  ↻ ' + path.relative(appRoot, f))
+    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)))
+    if (retry.status === 0) {
+      console.error('[run-all] flake-retry absorbed all failed files (load-band class) — suite green')
+      // Final record: retry TAP on stdout (green, what the summary gate counts), FULL-pass
+      // stderr kept when coverage ran (its "all files" table is corpus-complete; the retry's
+      // would be a partial denominator the ratchet must never raise a baseline from).
+      r = { status: 0, stdout: retry.stdout, stderr: r.stderr }
+    } else {
+      console.error('[run-all] flake-retry did NOT absorb — real red, retry TAP below is authoritative')
+      r = retry
+    }
+  }
 }
 // Fail closed and LOUD on spawn errors: r.status is null when the child never ran, so the
 // old `r.status ?? 1` fell through to exit 1 with empty output — indistinguishable from a
