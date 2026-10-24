@@ -48,8 +48,12 @@
           </template>
           <span class="habit-freq-label">{{ freqLabel(h) }}</span>
           <!-- [W8] not scheduled today: the missing check circle used to read as a rendering gap —
-               say so explicitly (isDueToday = frequency says this weekday/interval hits today) -->
-          <span v-else-if="!isDueToday(h)" class="habit-not-due" role="note">{{ $t('statsE.HabitView.notDueToday') }}</span>
+               say so explicitly (isDueToday = frequency says this weekday/interval hits today).
+               [fix 2026-10-25] standalone v-if, NOT v-else-if: the adjacent v-if/v-else chain
+               belongs to the rename template above (an intervening span/comment breaks an
+               else-if chain = build failure); the condition is already the exact negative of
+               the check circle's v-if, so semantics are unchanged. -->
+          <span v-if="!isDueToday(h)" class="habit-not-due" role="note">{{ $t('statsE.HabitView.notDueToday') }}</span>
           <span class="habit-streak" :title="$t('statsB.HabitView.streakTip')"><app-icon name="flame" :size="12"/> {{ $t('statsB.HabitView.streak', { n: streakOf(h.id) }) }}</span>
           <button class="mini danger habit-del" @click.stop="delHabitConfirm(h)">{{ $t('statsB.HabitView.del') }}</button>
         </div>
