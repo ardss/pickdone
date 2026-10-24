@@ -65,7 +65,10 @@ export default {
     onGearKey: roleButtonActivate(function () { this.gear() }, { stop: true }),
     onRecompleteKey: roleButtonActivate(function () { this.recomplete() }, { stop: true }),
     toggle () { this.$emit('update:collapsed', !this.collapsed) },
-    gear () { this.$store.commit('ui/toggleSettings', true) },
+    /* [W8] the gear opens settings aimed at the tab holding the retention-range options
+       (expiredCompletedTodoRange/expiredUncompletedTodoRange live in the 'general' tab) —
+       plain toggleSettings left the modal on whatever tab the user last visited */
+    gear () { this.$store.commit('ui/openSettingsAt', 'general') },
     recomplete () { this.$emit('recomplete') }
   },
 

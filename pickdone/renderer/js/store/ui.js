@@ -109,6 +109,9 @@ export default {
     // Empty tags created by the user via "New Tag" in the sidebar (the tag itself is still derived from the body's #xxx; only the placeholder is stored here)
     userTags: [],
     showSettingsModal: false,
+    // W8: one-shot tab target for the next settings-modal open (group-header gear wants the
+    // retention-range tab, not wherever the user last browsed). null = keep the remembered tab.
+    settingsModalTargetTab: null,
     // [maint-0925 A2] FilterModal visibility lives here, not in FilterView local data: any overlay
     // that must be honored by the global Esc guard (EditPanel._onKeydown) has to be observable
     // from the store — component-local data is invisible to it and the guard used to close the
@@ -167,6 +170,13 @@ export default {
     openTaskAccount (s, taskId) { s.accountTaskId = taskId || '' },
     setDaySelected (s, ts) { s.daySelectedTs = ts },
     toggleSettings (s, v) { s.showSettingsModal = v == null ? !s.showSettingsModal : v },
+    // W8: open settings aimed at a specific tab (one-shot; consumed by SettingsModal on mount).
+    // Plain toggles never touch settingsModalTargetTab, so the last-visited memory stays intact.
+    openSettingsAt (s, tab) {
+      s.settingsModalTargetTab = tab || null
+      s.showSettingsModal = true
+    },
+    consumeSettingsTargetTab (s) { s.settingsModalTargetTab = null },
     toggleFilterModal (s, v) { s.showFilterModal = v == null ? !s.showFilterModal : v },
     closeFeedback (s) { s.showFeedbackModal = false },
     // P3-9 (maint/dw 2026-09-23): showFeedbackModal had no open mutation anywhere — the modal was

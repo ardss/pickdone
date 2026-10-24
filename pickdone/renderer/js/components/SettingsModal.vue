@@ -15,7 +15,8 @@
           <div class="settings-search">
             <app-icon name="search" :size="14"/>
             <input type="text" class="settings-search__input" :placeholder="$t('statsH.SettingsModal.searchSettings')"
-                   :aria-label="$t('statsH.SettingsModal.searchSettings')" v-model="searchQ" @input="applySearchFilter"/>
+                   :aria-label="$t('statsH.SettingsModal.searchSettings')" v-model="searchQ" @input="applySearchFilter"
+                   @keydown.esc.stop.prevent="onSearchEsc"/>
             <button v-if="searchQ" type="button" class="settings-search__clear close-x close-x--sm" :aria-label="$t('statsE.SettingsModal.clearSearch')" @click="clearSearch"></button>
           </div>
           <div v-if="searchEmpty" class="settings-search-empty">{{ $t('statsH.SettingsModal.searchEmpty') }}</div>
@@ -36,7 +37,7 @@
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.launchAtStartupLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.runWhenComputerStart" @change="v=>set({runWhenComputerStart:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.hideOnLaunchLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.hideMainWindowOnStartup" @change="v=>set({hideMainWindowOnStartup:v})"/></div></div>
               <div class="form-item"><span class="form-item__label" :title="$t('statsE.SettingsModal.closeToTrayHint')">{{ $t('statsE.SettingsModal.closeToTrayLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.closeActionMinimize !== false" :aria-label="$t('statsE.SettingsModal.closeToTrayLabel')" @change="v=>set({closeActionMinimize:v})"/></div></div>
-              <div class="form-item"><span class="form-item__label" :title="$t('statsE.SettingsModal.hwAccelRestartTip')">{{ $t('statsE.SettingsModal.hardwareAccelLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableHardwareAcceleration" @change="v=>set({enableHardwareAcceleration:v})"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.hardwareAccelLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableHardwareAcceleration" @change="setHwAccel"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.parentChecksSubtasksLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCompleteWithSubtasks" @change="v=>set({isCompleteWithSubtasks:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.languageLabel') }}</span>
                 <div class="form-item__control">
@@ -165,7 +166,7 @@
               <div class="form-label">{{ $t('statsE.SettingsModal.listDisplaySection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.colorModeLabel') }}</span>
                 <div class="form-item__control">
-                  <el-radio-group size="small" :model-value="st.colorMode||'light'" @change="v=>set({colorMode:v})">
+                  <el-radio-group size="small" :model-value="st.colorMode||'light'" @change="v=>set({colorMode:v})" :aria-label="$t('statsE.SettingsModal.colorModeLabel')">
                     <el-radio-button v-for="o in enumOptions('colorMode')" :key="o.v" :value="o.v">{{ $t(o.l) }}</el-radio-button>
                   </el-radio-group>
                 </div></div><div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.checkboxFollowColorLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCompleteCheckboxColorFollow" @change="v=>set({isCompleteCheckboxColorFollow:v})"/></div></div>
@@ -186,7 +187,7 @@
               <div class="form-label">{{ $t('statsE.SettingsModal.calendarDisplaySection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.weekStartLabel') }}</span>
                 <div class="form-item__control">
-                  <el-radio-group size="small" :model-value="st.weekStartDay" @change="v=>set({weekStartDay:v})">
+                  <el-radio-group size="small" :model-value="st.weekStartDay" @change="v=>set({weekStartDay:v})" :aria-label="$t('statsE.SettingsModal.weekStartLabel')">
                     <!-- value must be the stable enum mon/sun: it was once bound to the translated label itself, storing "Monday" under the English UI -->
                     <el-radio-button value="mon">{{ $t('statsE.SettingsModal.weekStartMonday') }}</el-radio-button><el-radio-button value="sun">{{ $t('statsE.SettingsModal.weekStartSunday') }}</el-radio-button>
                   </el-radio-group>
@@ -199,7 +200,7 @@
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dimUncompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCalendarDimUncompleted" @change="v=>{set({isCalendarDimUncompleted:v});$store.dispatch('todo/computeViews')}"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.fontSizeLabel') }}</span>
                 <div class="form-item__control">
-                  <el-radio-group size="small" :model-value="st.calendarFontSize" @change="v=>set({calendarFontSize:v})">
+                  <el-radio-group size="small" :model-value="st.calendarFontSize" @change="v=>set({calendarFontSize:v})" :aria-label="$t('statsE.SettingsModal.fontSizeLabel')">
                     <el-radio-button v-for="f in enumOptions('calendarFontSize')" :key="f.v" :value="f.v">{{ $t(f.l) }}</el-radio-button>
                   </el-radio-group>
                 </div></div>
@@ -420,6 +421,18 @@ export default {
       this.searching = false
       this.applySearchFilter()
     },
+    /* [W8] Esc in the settings search: a live query is cleared first (two-step exit), an empty
+       query closes the modal (the .stop keeps the dialog-level Esc handler from double-firing) */
+    onSearchEsc () {
+      if (this.searchQ) { this.clearSearch(); return }
+      this.close()
+    },
+    /* [W8] hardware-accel toggle needs a RESTART to apply — the old hover-only title tip never
+       reached switch/keyboard users; the toggle now announces the restart requirement itself */
+    setHwAccel (v) {
+      this.set({ enableHardwareAcceleration: v })
+      this.$message.info(this.$t('statsE.SettingsModal.hwAccelRestartToast'))
+    },
     close () {
       // Shortcut dirty-state lives in the child tab (always mounted via v-show, so the ref is stable after mount)
       const sc = this.$refs.shortcutsTab
@@ -533,6 +546,12 @@ export default {
       this.$store.commit('ui/toggleSettings', false)
       window.todoAPI.lockApp()
     },
+    /* [W8 exemption, verified] tomato/patch here is NOT a drift path: enableNotification is a
+       tomato-blob-owned preference (not a TOMATO_LEDGER_KEY, never read from settings state —
+       the row above binds sEnableNoti to state.tomato), and tomato/patch persists the whole
+       runtime blob on every write (store/tomato.js persistState), so LS blob + cross-window
+       storage sync + reload restore all agree. Routing it through settings/update like the J4
+       duration keys would be wrong: those keys are MIRRORED settings rows; this one is not. */
     async setTomatoNoti (v) { this.$store.commit('tomato/patch', { enableNotification: v }) },
     /** Desktop float window toggle: writes the setting and immediately opens/closes the independent window (browser debugging has no todoAPI, only the setting is stored) */
     async setTomatoFloat (v) {
@@ -573,6 +592,12 @@ export default {
     }
   },
   mounted () {
+    // [W8] one-shot tab target (ui/openSettingsAt, e.g. the group-header gear -> retention
+    // ranges): honor it over the remembered last tab, then clear it. No target = keep the
+    // last-visited memory exactly as before.
+    const target = this.$store.state.ui.settingsModalTargetTab
+    if (target && this.tabs.some(t => t[0] === target)) this.tab = target
+    if (target) this.$store.commit('ui/consumeSettingsTargetTab')
     this.bindMaskOnce()
     this.loadUpdStatus()
     if (window.todoAPI.onUpdaterEvent) this._updUn = window.todoAPI.onUpdaterEvent(d => this.applyUpdStatus({ status: d.status, info: d.info }))
