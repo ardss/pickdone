@@ -288,3 +288,17 @@ Queue for the next focused session (heaviest first):
 
 Operating note: daytime runs belong to the user; heavy verification outside
 slice gates needs explicit consent per the standing discipline.
+
+## 2026-10-24 split-queue CLOSE - 5 of 6 landed, gate re-stamped
+
+settings.js 706->385 (settings-schema.js), db.js 829->691 (db-schema.js),
+tomato.js 779->727 (tomato-pure.js), dbRecovery.cjs 826->489
+(db-recovery-restore.cjs), cli/lib.js 874->813 (lib-chips.cjs, baseline
+lowered to 813). StatisticsView.vue: no-action documented - the metrics
+already live in 9 satellite modules; further split = template surgery on
+a cohesive page, and CSS externalization violates the base.css/<style>
+only-exit rule. Six source anchors re-pointed to concatenated
+orchestrator+family reads. Re-stamped: full gate 31/31, 12.4min, zero
+flakes (final31 @ 2bc663b4). Lesson: mechanical line-surgery splits still
+need a lint+anchor sweep BEFORE the full gate - final30 caught 7 files of
+unused/undefined wiring and 5 stale anchors the per-suite slices missed.
