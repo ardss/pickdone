@@ -245,6 +245,12 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to, allowDele
       // UI flag at snapshot replay, otherwise a delete row inside a snapshot re-writes it back into
       // memory AND the durable store — the dirty field spreads forever via undo snapshots/sync.
       const clean = { ...row, status: 'update' }; delete clean.deleting
+      // [W8 fix] restore-wins re-stamp: the snapshot row still carries the updateTime of the state
+      // being restored TO (i.e. the PRE-edit stamp). Writing it verbatim let a LAN peer's newer
+      // LWW round (whose stamp postdates the snapshot) immediately roll the undo back. Re-stamp
+      // here — same discipline as the normal edit path (updateTodoFields' `updateTime: Date.now()`),
+      // so the restored row is the newest writer and wins the next arbitration round.
+      clean.updateTime = Date.now()
       commit('upsertLocal', clean)
       safeUpsert(clean)
       changedRows.push(clean)
