@@ -535,3 +535,17 @@ host MUST strip ELECTRON_RUN_AS_NODE first (DSH/IDE shells export it;
 electron.exe silently boots as plain Node and every live-app test reds with
 "app is undefined" — three solo reruns were invalidated by this before it
 was caught).
+
+### 2026-10-25 06:5x · Runner decision CLOSED: vitest migration rejected on measured economics
+
+The pilot acceptance (16 files / 116 tests, vitest 3.2.7, utils+dates)
+ran its four gates for real: same-set x3 PASS, TAP-gate compatibility
+PASS, coverage-line PASS — and the wall-time gate INVERTED (vitest
+16-23s vs node 15s quiet-host; fixed ~13-15s startup vs ~0.9s/file
+warm spawn). Full chapter in docs/test-runner-modernization-design.md
+(final decision section). Consequences: node --test + run-all stay;
+run-pilot.mjs stays as a one-command re-measurement instrument; the
+mainstream-alignment ship list is tests/lib/poll.mjs (expect.poll
+shape, d9 drill wired) + the fake-timers NOT-WORTH-IT verdict. No
+further runner waves — the objective is closed with data, not
+postponed.
