@@ -186,7 +186,11 @@ function restoreHabitsBlobFromCriticalBackup (raw, habitsPut) {
     const seg = parseSegment(raw.backup && raw.backup.habitsState, 'habitsState')
     if (seg === null || !Array.isArray(seg.habits)) return 0
     try {
-      habitsPut(['db.habitsState', JSON.stringify({ schemaV: SUPPORTED_SCHEMA_V, habits: seg.habits, moments: Array.isArray(seg.moments) ? seg.moments : [], savedAt: Number(seg.savedAt) || 0 })])
+      // W8 fix (2026-10-25): the habits persist shape grew top-level DELETION TOMBSTONE arrays
+      // (`deleted` / `deletedMoments`, see db-sync-schema.js HABITS_BLOB_OWNED). The restore used
+      // to drop them, so every habit/moment the user had deleted resurrected after a disaster
+      // recovery. Carry them through verbatim (absent in an old backup → empty arrays).
+      habitsPut(['db.habitsState', JSON.stringify({ schemaV: SUPPORTED_SCHEMA_V, habits: seg.habits, moments: Array.isArray(seg.moments) ? seg.moments : [], deleted: Array.isArray(seg.deleted) ? seg.deleted : [], deletedMoments: Array.isArray(seg.deletedMoments) ? seg.deletedMoments : [], savedAt: Number(seg.savedAt) || 0 })])
       return 1
     } catch { return 0 }
   } catch { return 0 }
