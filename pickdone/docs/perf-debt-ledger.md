@@ -413,3 +413,33 @@ electron whose CommandLine anchors at this worktree AND whose parent process
 is gone gets stopped — parent-dead orphans are invisible to taskkill /T).
 Verified: journey 4/4, teardown+5s leaves 1 late-exiter, +30s = zero
 (was: 7 alive minutes later). lint clean. Commit 96be5dba.
+
+### 2026-10-24 23:5x · Five-way parallel audit (Lead + 4 teammates + 1 subagent, read-only)
+
+User authorized a large agent team overnight. Results:
+- perf-auditor: ledger triage — 8 items already resolved (text lagging code),
+  6 still queued (D1/D2/D3/D5/migrateData/db.js-extract), 7 new debts
+  (N1 big-list no virtualization [only linear-degrading item] > N2 CLI watch
+  per-tick blob reparsing > N3 rowGet full-table scan > N4 boot double-getAll
+  > N5 journey-sync killInstance path-wide kill > N6 redundant re-init >
+  N7 multi-window full reload).
+- buswrite-auditor: J4 TRUE root cause — encryptedProbe catch{no} folded a
+  transient OPEN failure into "corrupt" -> quarantine renamed healthy db
+  (3 scenes .corrupt-* evidence) -> JSON restore carries no sync.* machine-local
+  rows -> factory state. FIXED in 94baedbb (open-vs-decrypt split + open inside
+  retry + 3-file handle wait). Red-herring cleared: materializing is a harmless
+  fold=create; WAL never lost committed writes.
+- coverage-auditor: 337 modules x 372 test files matrix — behavior 95/120 main,
+  87/148 renderer, 31/69 cli; soft ribs = anchor-only for src/main/index.js(860)
+  + renderer main.js(802); Top10 blind spots with per-item test recipes stored.
+- repo-auditor: db.js repository-ization plan — 80 ops total, remaining inline
+  families = todo/meta/purge; PR-0..5 sequence with differential-harness gate,
+  hard edges (OPS literal shape pinned by two gates, bumpSnow source anchor,
+  RATCHET=0) catalogued; ready for GPT adjudication.
+- security-auditor (subagent): no high-risk; M-1 update chain lacks publisherName
+  code-signing pin, M-2 cli-audit.jsonl zero tamper-evidence; 5 low
+  (preload redundant doors, db.key 0600, argv plaintext, console->log, doc drift).
+Full gate tonight (gate-j4fix-full.log): 29/31 — 2 reds (S1/S2 clock-skew,
+2875 v2 drill) are load artifacts (5-way audit parallel with the gate); both
+files pass solo. Clean收官 gate deferred to a quiet window.
+Commits: 94baedbb (recovery P0). Main merge follows.
