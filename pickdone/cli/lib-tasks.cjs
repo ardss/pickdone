@@ -44,10 +44,18 @@ function listTodos (opts = {}) {
   q.limit = cap + 1
   const rows = open().call('queryTodos', q)
   if (rows.length <= cap) return rows
-  return rows.slice(0, cap).concat([{
-    taskId: null, truncated: true, complete: false, todoTime: 0, dayStart: 0, taskDescribe: '',
-    taskContent: `(list truncated: more tasks matched than the ${cap}-row cap — pass a higher --limit to see all)`
-  }])
+  // W8 fix (2026-10-25): the sentinel's taskContent used to ride into `list --json` payloads as an
+  // enumerable field, so content-keyed JSON consumers (keyword matching, search indexing over
+  // taskContent) could false-positive on the hint text itself. The hint now lives in a
+  // NON-enumerable property: JSON.stringify omits it (the JSON sentinel is effectively
+  // { truncated: true, ...null-ish fields }) while the text renderer keeps reading it verbatim —
+  // `truncated: true` stays enumerable, so the existing JSON contract (c2 test #6) is intact.
+  const sentinel = { taskId: null, truncated: true, complete: false, todoTime: 0, dayStart: 0, taskDescribe: '' }
+  Object.defineProperty(sentinel, 'taskContent', {
+    value: `(list truncated: more tasks matched than the ${cap}-row cap — pass a higher --limit to see all)`,
+    enumerable: false
+  })
+  return rows.slice(0, cap).concat([sentinel])
 }
 
 function getCategories () { return open().call('getAllCategories') }
