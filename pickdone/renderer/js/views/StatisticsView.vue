@@ -9,7 +9,7 @@
             <div class="title__text"> {{ $t('statsA.StatisticsView.pageTitle') }} </div>
           </div>
           <div class="title__append">
-            <!-- [W8] the tablist honors the tab pattern's arrow gesture: Left/Right switch views -->
+            <!-- [W8] tablist arrow gesture: Left/Right switch views -->
             <div class="stat-view-tabs" role="tablist" :aria-label="$t('statsA.StatisticsView.ariaReviewViews')" @keydown="onStatTabKey">
               <button v-for="v in views" :key="v.key" class="stat-view-tab"
                       :class="{on: view===v.key}" role="tab" :aria-selected="view===v.key"
@@ -189,8 +189,7 @@
                 <div v-for="row in timelineRows" :key="row.dateKey" class="tl-row" :class="{'tl-row--empty': row.empty}">
                   <span class="tl-date">{{row.dateKey.slice(5)}}</span>
                   <div class="tl-track">
-                    <!-- [W8] bands/segments carry role="img" + their hover-title as aria-label, so the
-                         timeline is readable without a pointer -->
+                    <!-- [W8] bands/segments: role="img" + hover-title as aria-label (pointer-free reading) -->
                     <template v-for="(b, bi) in (row.bands || [])" :key="row.dateKey + '_' + bi">
                       <div class="tl-band" role="img" :aria-label="b.title" :style="{left:b.left+'%', width:b.width+'%'}"
                            @mouseenter="e => tlTip = { text: b.title, x: e.clientX, y: e.clientY }"
@@ -274,8 +273,7 @@ export default {
   },
   /* Period/view state goes to the route query (calendar page convention): refresh/back keeps the selection */
   watch: {
-    /* [W8] view/period/range switches rebuild the heatmap in place — a lingering hover tip from
-       the old grid used to stay pinned until the next mouseenter */
+    /* [W8] heatmap rebuilds on view/period/range switch — a stale hover tip used to stay pinned */
     view (v) { this.syncQuery(); this.hmTipHide() },
     period (v) { this.syncQuery(); this.hmTipHide() },
     heatRange () { this.hmTipHide() },
@@ -412,8 +410,7 @@ export default {
       const key = el.getAttribute && el.getAttribute('data-heat-key')
       if (key) this.heatRange = key
     }),
-    /* [W8] review-view tablist: ArrowLeft/ArrowRight switch (and wrap across) the two views,
-       focus follows the now-selected tab (tab pattern's arrow gesture) */
+    /* [W8] tablist: ArrowLeft/Right switch + wrap; focus follows the selected tab */
     onStatTabKey (e) {
       const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
       if (!dir) return
@@ -422,10 +419,7 @@ export default {
       const i = keys.indexOf(this.view)
       if (i < 0) return
       this.view = keys[(i + dir + keys.length) % keys.length]
-      this.$nextTick(() => {
-        const el = this.$el && this.$el.querySelector('.stat-view-tab.on')
-        if (el) el.focus()
-      })
+      this.$nextTick(() => { const el = this.$el && this.$el.querySelector('.stat-view-tab.on'); if (el) el.focus() })
     },
     /* [A9] custom-range trigger: Space joins Enter; the popover opens on click, so synthesize one */
     onRangeActivateKey: roleButtonActivate(function (e) { (e.currentTarget).click() }),

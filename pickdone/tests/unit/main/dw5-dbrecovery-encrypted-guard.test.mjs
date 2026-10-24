@@ -111,7 +111,7 @@ test('preflight: 无库+有bak+无key = 迁移两步 rename 崩溃现场 → pla
 test('preflight: 无库+有bak+有key(用户手删库)→ key 移为 superseded,bak 放回', () => {
   const ud = tmpUd()
   try {
-    fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), 'plaintext-bak')
+    fs.writeFileSync(path.join(ud, 'todos.db.plain-bak'), Buffer.from('SQLite format 3\0' + '.'.repeat(32), 'binary')) // M8B: preflight gates on the SQLite header
     fs.writeFileSync(path.join(ud, 'db.key'), KEY)
     dbRecovery.preflightMigrateResidue(ud)
     assert.ok(fs.existsSync(path.join(ud, 'todos.db')))

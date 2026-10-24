@@ -22,16 +22,20 @@ const settings = (await import(here('renderer/js/store/settings.js'))).default
 const dbMirror = await import(here('renderer/js/utils/dbMirror.js'))
 const watcherSrc = readFileSync(path.join(ROOT, 'src/main/external-db-watch.js'), 'utf8')
 
-test('isOwnMirrorStamp: watermark tracks mirrorToDb stamps; older/equal = own, newer = foreign', () => {
+test('isOwnMirrorStamp (re-anchored W8 b9ed3fec): EXACT own-stamp set — a real echo carries the very stamp we mirrored', () => {
   const key = 'db.echoProbe'
   assert.equal(dbMirror.isOwnMirrorStamp(key, 1000), false, 'no watermark yet -> foreign')
   dbMirror.mirrorToDb(key, { _savedAt: 1000, v: 1 })
   assert.equal(dbMirror.isOwnMirrorStamp(key, 1000), true, 'the queued generation is own')
-  assert.equal(dbMirror.isOwnMirrorStamp(key, 999), true, 'an older generation of our pipeline is own')
+  // W8 2026-10-24: `<=` watermark swallowed older-but-FOREIGN stamps (cross-machine clock skew /
+  // CLI write landing before our mirror) — suppression is now exact-match on a retained set of
+  // our own recent mirror stamps. A stale-generation echo still suppresses: it carries the very
+  // stamp we mirrored when that generation was queued (test 2), not an arbitrary older number.
+  assert.equal(dbMirror.isOwnMirrorStamp(key, 999), false, 'older-but-never-mirrored = foreign (clock-skew safety)')
   assert.equal(dbMirror.isOwnMirrorStamp(key, 1001), false, 'a NEWER stamp is foreign (CLI/peer)')
   assert.equal(dbMirror.isOwnMirrorStamp(key, null), false, 'falsy stamp = foreign (callers without origin)')
   dbMirror.mirrorToDb(key, { _savedAt: 2000, v: 2 })
-  assert.equal(dbMirror.isOwnMirrorStamp(key, 1000), true, 'stale generations stay own after a newer mirror')
+  assert.equal(dbMirror.isOwnMirrorStamp(key, 1000), true, 'previous own generation stays in the retained set')
   assert.equal(dbMirror.isOwnMirrorStamp(key, 2000), true)
   assert.equal(dbMirror.isOwnMirrorStamp(key, 2001), false)
 })
@@ -42,21 +46,23 @@ function makeCtx () {
   return { dispatched, state, ctx: { state, commit: () => {}, dispatch: (_type, patch) => { dispatched.push(patch) } } }
 }
 
-test('updateExternal suppresses a patch whose origin stamp is covered by our mirror watermark', async () => {
+test('updateExternal suppresses a patch whose origin stamp IS one of our mirror stamps (W8 exact-match)', async () => {
   const { dispatched, ctx } = makeCtx()
   const KEY = 'db.settingsState' // updateExternal pins the settings blob key for suppression
   dbMirror.mirrorToDb(KEY, { _savedAt: 5000, tomatoTime: 5 }) // our newest queued generation
-  // stale generation of our own pipeline lands late: suppressed
+  // the echo of THIS generation lands: suppressed (exact stamp)
   await settings.actions.updateExternal(ctx, { tomatoTime: 5 }, 5000)
+  // W8: an older-but-never-mirrored stamp is now FOREIGN (it used to be swallowed by `<=` —
+  // that was the cross-machine clock-skew vector). It applies.
   await settings.actions.updateExternal(ctx, { tomatoTime: 5 }, 4999)
-  assert.equal(dispatched.length, 0, 'own echoes (current and stale generations) never apply')
+  assert.equal(dispatched.length, 1, 'never-mirrored older stamp applies (W8)')
   // a genuinely newer external stamp (CLI/peer wrote after us): applies
   await settings.actions.updateExternal(ctx, { tomatoTime: 30 }, 5001)
-  assert.equal(dispatched.length, 1, 'foreign newer stamp applies')
-  assert.equal(dispatched[0].tomatoTime, 30)
+  assert.equal(dispatched.length, 2, 'foreign newer stamp applies')
+  assert.equal(dispatched[1].tomatoTime, 30)
   // no-origin callers (LAN sync / DB restore re-dispatch) are unaffected
   await settings.actions.updateExternal(ctx, { tomatoTime: 35 })
-  assert.equal(dispatched.length, 2, 'origin-less patches still apply')
+  assert.equal(dispatched.length, 3, 'origin-less patches still apply')
 })
 
 test('the real key works end to end: mirror the state, then the watcher echo of it is suppressed', async () => {
@@ -76,16 +82,17 @@ test('PACKED payload form works: store.dispatch drops a bare 3rd arg, so the ori
   // stamps must stay monotonic ACROSS tests in this module (lastOwnStamp is a running max)
   dbMirror.mirrorToDb('db.settingsState', { tomatoTime: 5, _savedAt: 9000000, schemaV: 1 })
   await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 5 }, originSavedAt: 9000000 })
+  assert.equal(dispatched.length, 0, 'packed own echo (exact stamp) suppressed')
   await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 5 }, originSavedAt: 8999999 })
-  assert.equal(dispatched.length, 0, 'packed own echo (current and stale) suppressed')
+  assert.equal(dispatched.length, 1, 'packed older-but-never-mirrored stamp applies (W8 clock-skew safety)')
   await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 30 }, originSavedAt: 9000001 })
-  assert.equal(dispatched.length, 1, 'packed foreign stamp applies')
-  assert.equal(dispatched[0].tomatoTime, 30)
+  assert.equal(dispatched.length, 2, 'packed foreign stamp applies')
+  assert.equal(dispatched[1].tomatoTime, 30)
   await settings.actions.updateExternal(ctx, { patch: { tomatoTime: 35 } })
-  assert.equal(dispatched.length, 2, 'packed payload without origin applies')
+  assert.equal(dispatched.length, 3, 'packed payload without origin applies')
   // legacy direct-call form stays supported for LAN-sync/DB-restore/tests
   await settings.actions.updateExternal(ctx, { tomatoTime: 5 }, 9000000)
-  assert.equal(dispatched.length, 2, 'legacy direct-call own echo still suppressed')
+  assert.equal(dispatched.length, 3, 'legacy direct-call own echo still suppressed')
 })
 
 test('the watcher sends the BLOB stamp as origin, never the folded watermark `at` (v3 regression pin)', () => {

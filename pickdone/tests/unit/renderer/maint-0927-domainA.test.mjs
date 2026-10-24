@@ -230,11 +230,14 @@ test('fix10 static anchor: openAdd builds its draft through manualDraft (no Math
 
 /* ================= Fix 13: calendar day cells carry an accessible name ================= */
 
-const StripComp = loadSFC('renderer/js/components/DayDateStrip.vue', { dayjs, DAY_MS: 86400000, roleButtonActivate: rbkMod.roleButtonActivate })
+const coreFmt = (await import('../../../renderer/js/utils/core.js')).FMT
+const StripComp = loadSFC('renderer/js/components/DayDateStrip.vue', { dayjs, FMT: coreFmt, DAY_MS: 86400000, roleButtonActivate: rbkMod.roleButtonActivate })
 
-test('fix13 calCellLabel: full YYYY-MM-DD accessible name with month context', () => {
+test('fix13 calCellLabel (re-anchored W8 4c14dede): localized accessible name via FMT', () => {
   const label = StripComp.methods.calCellLabel.call({ $t: k => k }, { key: +dayjs('2026-03-05'), hasTasks: false })
-  assert.equal(label, '2026-03-05')
+  // W8 replaced the raw ISO 'YYYY-MM-DD' with the localized FMT format — the accessible name
+  // keeps full month+day context, it just reads naturally per locale now
+  assert.ok(/3\s*月\s*5\s*日|Mar 5|03\/05/.test(label), 'localized month+day name, got: ' + label)
 })
 
 test('fix13 static anchor: ds-cal-cell buttons carry title + aria-label like the nav buttons', () => {

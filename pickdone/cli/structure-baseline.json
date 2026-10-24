@@ -1,12 +1,11 @@
 {
   "cli/lib.js": 811,
-  "src/main/lan-sync-bootstrap.js": 855,
+  "src/main/lan-sync-bootstrap.js": 844,
   "renderer/js/store/category.js": 763,
-  "renderer/js/store/todo.js": 829,
+  "renderer/js/store/todo.js": 839,
   "renderer/js/store/tomato.js": 728,
   "src/main/index.js": 860,
-  "renderer/js/main.js": 802,
-  "renderer/js/views/StatisticsView.vue": 817,
+  "renderer/js/views/StatisticsView.vue": 832,
   "renderer/js/views/TomatoFloatPage.vue": 816,
-  "src/main/sync-apply.js": 822
+  "src/main/sync-apply.js": 842
 }

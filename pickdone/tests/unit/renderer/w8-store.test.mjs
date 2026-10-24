@@ -149,7 +149,7 @@ test('F3: replaceAll refuses a future-version blob (state + LS untouched)', () =
   habits.mutations.replaceAll(s, { schemaV: 999, savedAt: 500, habits: [{ id: 'future', records: {} }], moments: [], deleted: [], deletedMoments: [] })
   assert.deepEqual(s.habits, [], 'the future blob was NOT applied')
   assert.equal(s.savedAt, 100, 'savedAt untouched')
-  const lsAfter = localStorage.getItem('habitsState')
+  const lsAfter = globalThis.localStorage.getItem('habitsState')
   // the guard must run before the LS rewrite — no mirror write-back of the future blob
   assert.ok(!lsAfter || !JSON.parse(lsAfter).habits.some(h => h.id === 'future'), 'LS was not rewritten with the future blob')
   void before
