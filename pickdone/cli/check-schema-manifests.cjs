@@ -30,11 +30,15 @@ const fs = require('fs')
 const path = require('path')
 
 const ROOT = path.join(__dirname, '..')
-const DB_JS = path.join(ROOT, 'src', 'main', 'db.js')
 const MIGRATIONS_JS = path.join(ROOT, 'src', 'main', 'db-migrations.js')
 const SELFTEST = !!process.env.SCHEMA_MANIFEST_SELFTEST
 
 // db-rows is pure (no db handle, no electron) — loadable under plain node
+
+// db schema + facade read through the shared anchor-set registry (tests/lib/source-anchors.mjs,
+// dbSchemaFamily): CJS requires the ESM lib (Node 22 require(esm), no top-level await) so the
+// gate and the test suites share ONE split-aware read instead of hand-rolled concatenations.
+const { readAnchorSet } = require(path.join(ROOT, 'tests', 'lib', 'source-anchors.mjs'))
 const { todoToRow } = require(path.join(ROOT, 'src', 'main', 'db-rows'))
 
 /** Parse the todos column list out of db.js's SCHEMA template literal */
@@ -55,10 +59,10 @@ function migrationAddCols (migSrc) {
 
 function main () {
   // The static core DDL lives in db-schema.js (size-ratchet split); db.js concatenates it
-  // with the sync-schema DDL at runtime. Scanning the concatenation of both sources keeps
+  // with the sync-schema DDL at runtime. Scanning the registry-joined set keeps
   // every check below intact (todos CREATE TABLE comes from db-schema.js, the no-self-heal
   // probe still sees db.js's full text).
-  const dbSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'db-schema.js'), 'utf8') + '\n' + fs.readFileSync(DB_JS, 'utf8')
+  const dbSrc = readAnchorSet('dbSchemaFamily')
   const migSrc = fs.readFileSync(MIGRATIONS_JS, 'utf8')
   const schemaCols = schemaTodosCols(dbSrc)
   const want = Object.keys(todoToRow({ taskId: '' }))

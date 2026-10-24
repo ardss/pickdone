@@ -16,6 +16,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { readAnchorSet } from '../../lib/source-anchors.mjs'
 
 const LEDGER_KEY = 'tomatoPendingLedger'
 const SNOW_KEY = 'tomatoPendingSnow'
@@ -124,8 +125,7 @@ test('d11r4[4]: anti-re-copy guard — the three components consume the single s
       f + ' no longer hand-writes the remaining-seconds formula')
   }
   // And the single source exists exactly once (tomato-pure split 2026-10-24: the formula
-  // lives in store/tomato-pure.js; scan store + pure concatenated — still exactly once).
-  const store = readFileSync(join(ROOT, 'renderer/js/store/tomato.js'), 'utf8') +
-    readFileSync(join(ROOT, 'renderer/js/store/tomato-pure.js'), 'utf8')
+  // lives in store/tomato-pure.js; the set anchor scans store + pure — still exactly once).
+  const store = readAnchorSet('tomatoStoreFamily')
   assert.equal((store.match(/restTime : s\.tomatoTime/g) || []).length, 1, 'the formula lives exactly once, in store/tomato.js(-pure.js)')
 })

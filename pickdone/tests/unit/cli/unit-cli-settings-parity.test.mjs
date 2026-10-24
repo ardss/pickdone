@@ -7,7 +7,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
-import { ANCHORS, REPO_ROOT } from '../../lib/source-anchors.mjs'
+import { REPO_ROOT, readAnchorSet } from '../../lib/source-anchors.mjs'
 
 const read = p => fs.readFileSync(path.join(REPO_ROOT, p), 'utf8')
 
@@ -28,7 +28,7 @@ function manifestKeys () {
 function defaultKeys () {
   // settings-schema split (2026-10-24): DEFAULT_SETTINGS lives in settings-schema.js now —
   // scan store + schema concatenated so the parity check follows the content wherever it sits.
-  const src = read(ANCHORS.settingsStore) + '\n' + read('renderer/js/store/settings-schema.js')
+  const src = readAnchorSet('settingsStoreFamily')
   const m = src.match(/export const DEFAULT_SETTINGS = \{[\s\S]*?\n\}/)
   assert.ok(m, 'DEFAULT_SETTINGS 必须存在于 renderer/js/store/settings.js(-schema.js)')
   const keys = new Set()

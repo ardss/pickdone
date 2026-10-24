@@ -19,6 +19,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { readAnchorSet } from '../../lib/source-anchors.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const src = fs.readFileSync(path.join(ROOT, 'renderer/js/components/TomatoPanel.vue'), 'utf8')
@@ -32,9 +33,8 @@ test('J4: panel duration steppers write through settings/update (canonical write
 
 test('J4: the settings/update action still mirrors duration keys down into the tomato ledger', () => {
   // settings-schema split (2026-10-24): the keys manifest moved to settings-schema.js —
-  // scan store + schema concatenated (mirror call site stays in the store).
-  const settings = fs.readFileSync(path.join(ROOT, 'renderer/js/store/settings.js'), 'utf8') +
-    fs.readFileSync(path.join(ROOT, 'renderer/js/store/settings-schema.js'), 'utf8')
+  // the set anchor scans store + schema (mirror call site stays in the store).
+  const settings = readAnchorSet('settingsStoreFamily')
   assert.ok(/mirrorTomatoLedger\s*\(commit,\s*patch\)/.test(settings),
     'settings/update must keep mirroring TOMATO_LEDGER_KEYS into tomato/patch')
   assert.ok(/TOMATO_LEDGER_KEYS = \['tomatoTime', 'restTime', 'dailyTomatoTarget'\]/.test(settings),

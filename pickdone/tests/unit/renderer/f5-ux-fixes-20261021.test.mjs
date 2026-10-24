@@ -25,6 +25,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { readAnchorSet } from '../../lib/source-anchors.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => readFileSync(path.join(ROOT, p), 'utf8')
@@ -92,7 +93,7 @@ test('F5-5 RepeatModal dead @keyframes modal-pop removed', () => {
 })
 
 test('F5-6 CSV export stays plain digits; dead view-side fmtCount pure block removed (2026-10-21: fmtCount was never wired to the template — thousands-separator wiring deferred to reviewRows buildKpis)', () => {
-  const flat = read('renderer/js/views/statistics/csv.js') + read('renderer/js/views/StatisticsView.vue')
+  const flat = readAnchorSet('statisticsViewFamily')
   assert.ok(!flat.includes('1,234') && !flat.includes('6,543.5'), 'CSV cells must never contain thousands separators')
   assert.ok(!/pure-start/.test(read('renderer/js/views/StatisticsView.vue')), 'dead fmtCount pure block is gone (lint no-unused-vars)')
 })

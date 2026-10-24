@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { readAnchorSet } from '../../lib/source-anchors.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
@@ -31,7 +32,7 @@ const importMod = p => import(pathToFileURL(path.join(ROOT, p)).href)
 test('[F1] TodoGroupBlock gear copy no longer claims a group-scoped settings surface', () => {
   assert.match(read('renderer/js/i18n/locales/en-US-E.js'), /"groupSettingsAria": "Open view settings"/)
   assert.match(read('renderer/js/i18n/locales/zh-CN-E.js'), /"groupSettingsAria": "打开视图设置"/)
-  assert.ok(!/this group's view settings|本组视图设置/.test(read('renderer/js/i18n/locales/en-US-E.js') + read('renderer/js/i18n/locales/zh-CN-E.js')),
+  assert.ok(!/this group's view settings|本组视图设置/.test(readAnchorSet('i18nLocaleE')),
     'the misleading group-scoped copy is gone')
 })
 
