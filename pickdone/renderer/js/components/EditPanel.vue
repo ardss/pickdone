@@ -9,7 +9,7 @@
           <span>{{ $t('statsJ.EditPanel.remoteUpdated') }}</span>
           <span class="ep-remote-refresh" role="button" tabindex="0"
                 :aria-label="$t('statsJ.EditPanel.remoteRefresh')"
-                @click="refreshFromStore" @keydown.enter.prevent="refreshFromStore">{{ $t('statsJ.EditPanel.remoteRefresh') }}</span>
+                @click="refreshFromStore" @keydown="onRemoteRefreshKey">{{ $t('statsJ.EditPanel.remoteRefresh') }}</span>
         </div>
       <div class="ep-title-row">
         <el-input type="textarea" :autosize="{minRows:1,maxRows:4}" :placeholder="$t('statsJ.EditPanel.addTitlePlaceholder')"
@@ -17,7 +17,7 @@
         <!-- Persistent equal-width placeholder (ghost): with v-if the title textarea's usable width would jump at the start/end of every autosave -->
         <span class="ep-saving" :class="{ghost: !saving}" aria-live="polite" :aria-hidden="!saving">…</span>
         <span class="ep-collapse-btn" :title="$t('statsJ.EditPanel.collapseEditor')" role="button" tabindex="0"
-              :aria-label="$t('statsJ.EditPanel.collapseEditor')" @click="collapse" @keydown.enter.prevent="collapse">
+              :aria-label="$t('statsJ.EditPanel.collapseEditor')" @click="collapse" @keydown="onCollapseKey">
           <svg viewBox="0 0 16 16"><path d="M6 3.5 L11 8 L6 12.5" fill="none" stroke="currentColor"
             stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </span>
@@ -57,7 +57,9 @@
           <span class="ml-auto"></span>
           <span class="ep-row-arrow" :class="{on: catOpen}">▾</span>
         </div>
-        <div v-if="catOpen" v-click-outside="onCatOutside" class="ep-cat-pop" role="listbox">
+        <!-- [W8] the listbox joins the shared dd-menu contract: ArrowUp/Down move focus across
+             the options (Escape close is NOT wanted here — the panel-level Esc handler owns it) -->
+        <div v-if="catOpen" v-click-outside="onCatOutside" class="ep-cat-pop" role="listbox" @keydown="onCatPopKey">
           <div class="ep-cat-opt" role="option" :class="{on: !e.categoryId}" :aria-selected="(!e.categoryId)?'true':'false'"
                tabindex="0" @click="pickCat(0)" @keydown.enter.prevent="pickCat(0)">
             <span class="ep-cat-dot" style="background:var(--text-4)"></span>{{ $t('statsJ.EditPanel.uncategorizedOption') }}</div>
@@ -110,7 +112,8 @@
         <img class="ep-ico" src="app://app/assets/img/icon-tune.svg" style="opacity:.6">
         <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" role="img" :title="$t('statsJ.EditPanel.urgencyHint')" :aria-label="$t('statsJ.EditPanel.urgencyHint')">?</span>
         <span class="ep-diff-btns ep-prio-btns">
-          <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
+          <!-- [W8] segmented priority buttons carry aria-pressed (toggle-button pattern) -->
+          <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" :aria-pressed="((task&&task.priority)||0)===pr.v ? 'true' : 'false'" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
         </span>
       </div>
       <ep-tomato :estimate="tomatoEstimateN" :actual="tomatoActual" @est-delta="estDelta" @open="openAccount"/>
@@ -178,6 +181,7 @@ import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
 import { $elOf } from '../utils/el.js'
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button/checkbox activation
+import { ddMenuKey } from '../utils/dd-menu.js' // [W8] shared dd-menu listbox keyboard contract
 import { TEXT_MAX_LEN as DESC_MAX } from '../../../shared/sanitize-text.mjs' // [F7 P3] same-source clamp as the DB describe column
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
@@ -387,6 +391,14 @@ export default {
      *  Review P1 (2026-09-22): the flush PROMISE is returned — ui/closeEditCleanup registers this method as window.__editPanelFlushSave and awaits it before the inline-created emptiness check; resolving undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
     flushSave () { return this._save ? this._save.flushSave() : undefined },
     retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
+    /* [W8] remote-refresh chip used to bind only @keydown.enter — it now rides the roleButtonActivate
+       contract; Space needs no local binding (main.js capture handler owns Space on role="button") */
+    onRemoteRefreshKey: roleButtonActivate(function () { this.refreshFromStore() }),
+    /* [W8] collapse chip: same contract as the other role="button" rows above */
+    onCollapseKey: roleButtonActivate(function () { this.collapse() }),
+    /* [W8] category listbox: ArrowUp/Down cycle focus across the options via the shared
+       dd-menu util (no onClose — Escape keeps belonging to the panel-level handler) */
+    onCatPopKey (e) { ddMenuKey(e) },
     /* [maint/d23 FIX-3b a11y sweep] role="button" rows/chips join Space with Enter (ARIA patterns,
        app-wide contract via utils/roleButtonKey.js); the done row uses the checkbox variant */
     onSaveRetryKey: roleButtonActivate(function () { this.retrySave() }),
