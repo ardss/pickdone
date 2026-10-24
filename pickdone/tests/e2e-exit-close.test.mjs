@@ -34,8 +34,18 @@ let electronMissing = null
 try { electronBin = require('electron') } catch (e) { electronMissing = 'electron binary unavailable: ' + (e && e.message) }
 if (electronBin && !existsSync(electronBin)) { electronMissing = 'electron binary path does not exist: ' + electronBin; electronBin = null }
 
-const CDP_PORT = 9377 // dedicated port: never overlaps the shared e2e instance on 9333
-const CDP = 'http://127.0.0.1:' + CDP_PORT
+// CDP port is per-boot EPHEMERAL (2026-10-24 night): the fixed 9377 collided with any
+// concurrent file's instance in the conc-4 pool — the boot then hung until the 5min
+// per-test timeout (final25/26 silent unit deaths). Allocate a free port per boot;
+// the CDP constant becomes a prefix for the boot-time URL.
+const CDP_PORT_BASE = null // documentation anchor: the fixed 9377 era is over
+let CDP_PORT = 9377
+let CDP = 'http://127.0.0.1:' + CDP_PORT // re-pointed per boot (ephemeral port below)
+const pickFreeCdpPort = () => new Promise((resolve, reject) => {
+  const srv = net.createServer()
+  srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)) })
+  srv.on('error', reject)
+})
 // 90s (was 45s, 2026-10-24 night): in-gate the renderer's interactive-ready hydration
 // measured past 45s under unit-tier self-load (final19: not ready within 45000ms at
 // 48.6s total). Quiet-host boots land in ~8-15s, so 90s only widens the load band.
@@ -144,6 +154,8 @@ async function bootInstance ({ exitMode }) {
   // plain Node and require('electron') resolves to the npm path-string shim (crash:
   // "Cannot read properties of undefined (reading 'getVersion')"). Strip it for the child.
   delete env.ELECTRON_RUN_AS_NODE
+  CDP_PORT = await pickFreeCdpPort() // per-boot ephemeral CDP (see the base anchor above)
+  CDP = 'http://127.0.0.1:' + CDP_PORT
   const child = spawn(electronBin, ['.', '--no-focus', '--remote-debugging-port=' + CDP_PORT], { cwd: appRoot, env, stdio: 'ignore' })
   // Boot-failure hygiene: if the CDP-wait/eval below throws, the spawned electron must not
   // outlive the test (a hung run once orphaned one holding the debug port for everyone).
