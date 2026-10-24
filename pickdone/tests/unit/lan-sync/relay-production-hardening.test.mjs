@@ -159,7 +159,7 @@ test('usage quota persists across a relay+gate restart — a restart no longer b
     // after the restart occasionally hit a one-off socket hiccup (fetch failed at
     // 105ms, final22) — poll until the relay answers, bounded, instead of reding
     // on a transient. A relay that never comes up still fails at the deadline.
-    for (let i = 0; i < 8; i++) {
+    for (let i = 0; i < 40; i++) {
       const ping = await fetch(h.url + '/v1/health', { method: 'GET' }).then(() => true, () => false)
       if (ping) break
       await new Promise(r => setTimeout(r, 250))

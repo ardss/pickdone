@@ -32,6 +32,18 @@ try {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
+// [signal-integrity 2026-10-25] positive-execution evidence: inside the shared pool the
+// instance is GUARANTEED booted and data-isolated by the lane itself — a whole-group skip
+// here means the environment handoff broke, and node:test would still exit 0 ("green with
+// zero assertions ran"). Outside the pool (manual `npm run e2e`) skipping stays legitimate.
+{
+  const inPool = process.env.TODO_SHARED_CDP || process.env.TODO_CDP
+  if (inPool && (!available || !isolated)) {
+    console.error(`[e2e] ran inside the shared pool but the precondition failed (available=${available}, isolated=${isolated}) — skip=green is NOT acceptable evidence, failing loud`)
+    process.exitCode = 1
+  }
+}
+
 // Watchdog: WS handles keep the event loop alive; force-exit after 120s no matter what (results are already on stderr/stdout)
 const watchdog = setTimeout(() => { console.error('E2E watchdog forced exit (counted as failure)'); try { ws?.close() } catch {} process.exit(1) }, 120000)
 watchdog.unref?.()

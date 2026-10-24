@@ -126,7 +126,17 @@ export async function stopApp (ctx) {
   } else if (!graceful && ctx.child) {
     try { ctx.child.kill('SIGKILL') } catch {}
   }
-  await sleep(2500) // 进程树退出 + SQLite WAL 落盘
+  // [load-budget 2026-10-25] wait for the tree to actually exit instead of a fixed
+  // sleep(2500) (idle-host figure): under load the tree can outlive 2.5s and the next
+  // step (dir deletion / port rebind) then trips over a dying process. Poll the OS for
+  // pid liveness; the fixed floor stays as the WAL-flush settle.
+  if (ctx.child && ctx.child.pid) {
+    const dl = Date.now() + 20000
+    while (Date.now() < dl) {
+      try { process.kill(ctx.child.pid, 0); await sleep(200) } catch { break }
+    }
+  }
+  await sleep(2500) // SQLite WAL settle floor (fs flush lag, not process lifetime)
 }
 
 /** 连接主窗 page（过滤浮窗 target；保留 index.html 兜底——冷启动 hash 可能为空） */
@@ -208,7 +218,23 @@ export async function waitBoot (ctx, { tries = 40, shellOnly = false } = {}) {
       const ok = shellOnly
         ? list.some(t => t.type === 'page')
         : list.some(t => t.type === 'page' && /#\/(todo-list|__widget\/list)/.test(t.url))
-      if (ok) { await sleep(1500); return true }
+      if (ok) {
+        // [load-budget 2026-10-25] post-boot settle is CONDITIONAL now: the old fixed
+        // sleep(1500) paid 1.5s on every fast boot AND still raced a slow renderer under
+        // load. Poll for the renderer actually answering evaluations, floor 300ms.
+        const settleDl = Date.now() + 8000
+        while (Date.now() < settleDl) {
+          await sleep(300)
+          try {
+            const probe = await Promise.race([
+              (await fetch(ctx.cdp + '/json/list', { signal: AbortSignal.timeout(1500) })).json(),
+              sleep(1200).then(() => null)
+            ])
+            if (probe && probe.some(t => t.type === 'page')) break
+          } catch { /* still settling — keep polling */ }
+        }
+        return true
+      }
     } catch { /* not ready */ }
     await sleep(500)
   }

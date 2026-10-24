@@ -66,9 +66,14 @@ export async function startSide (deviceId, absDir = fs.mkdtempSync(path.join(os.
 /** Bounded converge loop: rounds on `driver` until `pred` (a getAll read on `reader`) holds.
  *  [load-budget 2026-10-25] deadline 60s (was 12s, an idle-machine figure): the loop is a
  *  predicate poll — under a full gate the rounds converge slower but the PASS/FAIL semantics
- *  are untouched; a genuinely broken sync still exhausts the budget and throws. */
+ *  are untouched; a genuinely broken sync still exhausts the budget and throws.
+ *  [signal-integrity 2026-10-25] dual threshold: converging past the old 12s budget is
+ *  still a WORTHY signal (sync convergence-margin degradation) — it is recorded loudly on
+ *  stderr, but does not flip the verdict (a slow-but-correct sync is a perf-debt signal,
+ *  not a correctness red). */
 export async function waitFor (driver, reader, pred, label) {
   const deadline = Date.now() + 60000
+  const startedAt = Date.now()
   for (;;) {
     for (let i = 0; i < 3; i++) {
       await driver.send({ do: 'round' })
@@ -76,7 +81,11 @@ export async function waitFor (driver, reader, pred, label) {
     }
     const r = await reader.send({ do: 'read', op: 'getAll', params: { deleted: null } })
     const rows = r.result || []
-    if (pred(rows)) return rows
+    if (pred(rows)) {
+      const took = Date.now() - startedAt
+      if (took > 12000) console.error(`[d9-drill] ⚠ convergence margin: '${label}' took ${took}ms (past the 12s legacy budget — sync convergence slowdown; perf-debt signal, not a red)`)
+      return rows
+    }
     if (Date.now() > deadline) throw new Error('drill timeout waiting for: ' + label + ' — rows now: ' + JSON.stringify(rows).slice(0, 600))
   }
 }

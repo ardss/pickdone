@@ -28,7 +28,9 @@ const SESSION = 'vweb'
 // 专用浏览器 profile(每次 run 开跑前清空重建):--session 只隔离会话不隔离 profile,
 // 默认 profile 的 localStorage 跨运行持久——并行会话的探针标签页在同 profile 写 colorMode/showNoDate
 // 等设置,轻则主题翻转重则内容缺失(2026-09-10 实锤:早间并行会话把 6 张基线拍成同主题 + box 整列空)。
-const PROFILE_DIR = path.join(DIR, 'browser-profile')
+// [determinism 2026-10-25] profile 目录带 pid:两个 visual 进程并发(手动并行/双 worktree)
+// 会互踩 Chromium profile 锁;pid 隔离让每次运行拿到自己的 profile。
+const PROFILE_DIR = path.join(DIR, 'browser-profile-' + process.pid)
 const STAMP = 'v' + Date.now()
 // 冻结时刻(本地时区):宿主 index.html 的 ?pdFreeze 会把页面时钟钉死在此。
 // 2026-09-09 实锤:种子/视图全按真实「今天」渲染,本地过午夜必红 6 图(today/calendar/statistics)。

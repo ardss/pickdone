@@ -410,7 +410,12 @@ const recordFlake = async entries => {
     if (!Array.isArray(prior)) prior = []
     // keep the ledger bounded: recent 200 entries are the observability window
     const next = [...prior, ...entries].slice(-200)
-    fsx.writeFileSync(FLAKE_LEDGER, JSON.stringify(next, null, 2) + '\n')
+    // [determinism 2026-10-25] atomic write (tmp+rename): two concurrent gates must not
+    // tear the shared ledger mid-write (rename within the same dir is atomic on POSIX
+    // and effectively atomic on win32/NTFS).
+    const tmp = FLAKE_LEDGER + '.tmp-' + process.pid
+    fsx.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n')
+    fsx.renameSync(tmp, FLAKE_LEDGER)
     console.error(`[run-all] ⚑FLAKY ledger updated: ${path.relative(appRoot, FLAKE_LEDGER)} (${next.length} entries)`)
   } catch (e) { console.error(`[run-all] flake ledger write failed: ${e.message}`) }
 }
@@ -577,8 +582,12 @@ if (forwardArgs.includes('--experimental-test-coverage')) {
     // DIFFERENT instrument still (its file set is a strict subset/superset) — the tier rides
     // the tag so the ratchet treats it as compare-only, never as a raise source.
     const suiteTag = (suites.length ? suites.join('+') : 'all') + (tierArg ? `+${tierArg}` : '')
-    fs.writeFileSync(path.join(artifacts, 'coverage-summary.json'),
+    // [determinism 2026-10-25] atomic write (tmp+rename) — a concurrent gate must not read
+    // a torn summary (the ratchet must never raise a baseline from a half-written file).
+    const covTmp = path.join(artifacts, 'coverage-summary.json.tmp-' + process.pid)
+    fs.writeFileSync(covTmp,
       JSON.stringify({ ...all, failCount, suite: suiteTag, generatedAt: new Date().toISOString() }, null, 2) + '\n')
+    fs.renameSync(covTmp, path.join(artifacts, 'coverage-summary.json'))
     if (all) console.error(`[run-all] coverage summary written: ${all.lines}/${all.branches}/${all.functions}`)
     else console.error('[run-all] coverage requested but no all-files summary found — ratchet will fall back to its own run')
   } catch (e) { console.error(`[run-all] coverage summary write failed: ${e.message}`) }
