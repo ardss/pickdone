@@ -26,6 +26,12 @@ export function normalizeHabitRecords (habits) {
   for (const h of (Array.isArray(habits) ? habits : [])) {
     if (!h || typeof h !== 'object') continue
     if (!h.records || typeof h.records !== 'object') h.records = {}
+    // [W8 fix] per-day un-check tombstones + check-in stamps ride INSIDE the habit object (not new
+    // blob top-level keys — the main process's db-sync-schema HABITS_BLOB_OWNED only enumerates
+    // blob top-level keys, so anything nested in `habits` syncs verbatim with no main-process
+    // registration).
+    if (h.uncheckedAt !== undefined && (h.uncheckedAt === null || typeof h.uncheckedAt !== 'object' || Array.isArray(h.uncheckedAt))) h.uncheckedAt = {}
+    if (h.recordsAt !== undefined && (h.recordsAt === null || typeof h.recordsAt !== 'object' || Array.isArray(h.recordsAt))) h.recordsAt = {}
   }
   return habits
 }
@@ -57,10 +63,48 @@ export function unionMaxRecords (incoming, local) {
   return out
 }
 
+/** [W8 fix] per-day union-max over the un-check tombstone maps: an un-check (like a check-in) is a
+ *  per-day fact either device may record, so the LATEST tombstone per day survives the merge and
+ *  propagates to peers (otherwise the peer's stale blob union-max re-resurrects the check-in). */
+export function unionUncheckedAt (incoming, local) {
+  const a = (incoming && typeof incoming === 'object' && !Array.isArray(incoming)) ? incoming : {}
+  const b = (local && typeof local === 'object' && !Array.isArray(local)) ? local : {}
+  const out = Object.assign({}, a)
+  for (const day of Object.keys(b)) {
+    if ((Number(b[day]) || 0) > (Number(out[day]) || 0)) out[day] = b[day]
+  }
+  return out
+}
+
+/** [W8 fix] inbound-record filter for the un-check tombstones: a day's union-max'd check-in is
+ *  dropped when its tombstone is NEWER than the check-in's own write time (`recordsAt[day]`, a
+ *  per-day stamp written by toggleCheck/setCheck on every check-in — records values themselves
+ *  carry no timestamp). An un-check that happened after the check-in we know about cannot be
+ *  resurrected by the union-max; conversely a check-in written AFTER the un-check (a re-check on
+ *  another device) survives its stale tombstone. The tombstone keeps propagating
+ *  (unionUncheckedAt), so the peer's stale copy is suppressed there too. Legacy records without a
+ *  `recordsAt` stamp read as 0 → the tombstone wins (sticky default, same doctrine as the
+ *  habits `deleted` array). Same-stamp ties go to the un-check (the later op in sequence; the
+ *  D15-B9 "ties reject" doctrine). */
+function filterUncheckedDays (habit) {
+  if (!habit || !habit.uncheckedAt || typeof habit.uncheckedAt !== 'object') return habit
+  const at = (habit.recordsAt && typeof habit.recordsAt === 'object' && !Array.isArray(habit.recordsAt)) ? habit.recordsAt : {}
+  for (const day of Object.keys(habit.uncheckedAt)) {
+    if (habit.records && habit.records[day] !== undefined &&
+        (Number(habit.uncheckedAt[day]) || 0) >= (Number(at[day]) || 0)) {
+      delete habit.records[day]
+    }
+  }
+  return habit
+}
+
 /** Match incoming habits against the local array by id and fold the LOCAL check-ins that the
  *  incoming blob never saw into the incoming records (union-max). Config fields (name/color/
  *  frequency/deletion) still follow the blob-level savedAt LWW: habits absent from the incoming
- *  array stay absent, incoming config values win — only the records map is conservatively merged. */
+ *  array stay absent, incoming config values win — only the records map is conservatively merged.
+ *  [W8 fix] per-day un-check tombstones are union-max'd alongside (unionUncheckedAt) and then
+ *  filter the merged records (filterUncheckedDays) — an un-check on either side cannot be
+ *  resurrected by the union-max (sticky, same doctrine as the `deleted` array). */
 function mergeHabitRecords (incomingHabits, localHabits) {
   const localById = new Map((localHabits || []).filter(h => h && h.id != null).map(h => [h.id, h]))
   for (const h of incomingHabits) {
@@ -68,6 +112,13 @@ function mergeHabitRecords (incomingHabits, localHabits) {
     if (local && local.records && typeof local.records === 'object') {
       h.records = unionMaxRecords(h.records, local.records)
     }
+    if (local) {
+      // per-day max for BOTH timestamp maps (same semantics): the latest un-check and the latest
+      // check-in each survive the merge so the tombstone-vs-record arbitration stays global
+      h.uncheckedAt = unionUncheckedAt(h.uncheckedAt, local.uncheckedAt)
+      h.recordsAt = unionUncheckedAt(h.recordsAt, local.recordsAt)
+    }
+    filterUncheckedDays(h)
   }
   return incomingHabits
 }
@@ -323,6 +374,11 @@ export default {
      *  silently no-opped whenever local savedAt was newer and never reached DB/sync. */
     replaceAll (s, blob) {
       if (!blob || !Array.isArray(blob.habits)) return
+      // [W8 fix] downgrade protection, same caliber as settings.js initFromDb: a blob stamped by a
+      // FUTURE schema version must be refused outright (no state write, no LS rewrite, no mirror
+      // write-back) — old code misreading new-shape data can silently corrupt it; leave it for the
+      // upgraded version to consume.
+      if ((blob.schemaV || 1) > SCHEMA_V) return
       const force = blob.force === true
       if (!force && (blob.savedAt || 0) < (s.savedAt || 0)) return
       normalizeHabitRecords(blob.habits) // DB archive is the restore path for old backups — same missing-records guard as readLs
@@ -424,7 +480,9 @@ export default {
         color: PALETTE[s.habits.length % PALETTE.length],
         createdAt: Date.now(),
         frequency: frequency || { type: 'daily' },
-        records: {}
+        records: {},
+        uncheckedAt: {},
+        recordsAt: {}
       })
       // [F3 fix] defensive: a deliberately re-added id (import/restore with a fixed id) clears its
       // tombstone — addHabit always mints a fresh id in practice, so this is a no-op normally
@@ -444,8 +502,24 @@ export default {
     },
     toggleCheck (s, { id, day }) {
       const h = s.habits.find(x => x.id === id); if (!h) return
-      if (h.records[day]) delete h.records[day]
-      else h.records[day] = true
+      if (h.records[day]) {
+        delete h.records[day]
+        // [W8 fix] un-check tombstone: the union-max inbound merge would otherwise resurrect this
+        // day's check-in from a peer blob that still carries it — and the un-check itself (a pure
+        // key delete) can never propagate to re-suppress it there. The per-day timestamp records
+        // WHEN the un-check happened so the inbound filter (filterUncheckedDays) can arbitrate
+        // against the peer's blob stamp, and a later re-check clears it (see below).
+        if (!h.uncheckedAt || typeof h.uncheckedAt !== 'object') h.uncheckedAt = {}
+        h.uncheckedAt[day] = Date.now()
+      } else {
+        h.records[day] = true
+        // [W8 fix] check-in stamp: the per-day write time the tombstone arbitration compares
+        // against (filterUncheckedDays); a re-check clears the tombstone — the day's un-check is
+        // superseded by a newer check-in
+        if (!h.recordsAt || typeof h.recordsAt !== 'object') h.recordsAt = {}
+        h.recordsAt[day] = Date.now()
+        if (h.uncheckedAt && typeof h.uncheckedAt === 'object') delete h.uncheckedAt[day]
+      }
       persist(s)
     },
     /** [A6 fix] set a specific day to an explicit value (not a toggle): the check-in Undo must
@@ -453,8 +527,18 @@ export default {
      *  click or an interleaved action would corrupt the day's state). */
     setCheck (s, { id, day, on }) {
       const h = s.habits.find(x => x.id === id); if (!h) return
-      if (on) h.records[day] = true
-      else delete h.records[day]
+      // [W8 fix] tombstone/stamp parity with toggleCheck: un-check records the tombstone,
+      // check stamps recordsAt and clears it
+      if (on) {
+        h.records[day] = true
+        if (!h.recordsAt || typeof h.recordsAt !== 'object') h.recordsAt = {}
+        h.recordsAt[day] = Date.now()
+        if (h.uncheckedAt && typeof h.uncheckedAt === 'object') delete h.uncheckedAt[day]
+      } else {
+        delete h.records[day]
+        if (!h.uncheckedAt || typeof h.uncheckedAt !== 'object') h.uncheckedAt = {}
+        h.uncheckedAt[day] = Date.now()
+      }
       persist(s)
     },
     addMoment (s, { name, date, kind }) {
