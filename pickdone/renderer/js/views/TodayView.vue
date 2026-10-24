@@ -17,10 +17,12 @@
                  mounted at the right end of the date strip so the existing toolbar structure stays untouched.
                  Gated on the projects module switch (nav-gate authority: projects ride on their own switch alone) -->
             <div v-if="settings.showProjectsModule && projects.length" class="dropdown-select pd-proj-filter" :class="{ 'is-open': openDd === 'proj' }">
-              <el-popover placement="bottom-end" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'proj'" @hide="openDd = null">
-                <ul class="dd-menu">
-                  <li role="button" :class="{ on: !projFilter }" tabindex="0" @click="setProjFilter(0)" @keydown.enter.prevent="setProjFilter(0)">{{ $t('todayT.filterAll') }}</li>
-                  <li v-for="p in projects" :key="p.categoryId" role="button" tabindex="0"
+              <el-popover ref="popProj" placement="bottom-end" width="180" trigger="click" :hide-after="0" popper-class="dd-pop" @show="openDd = 'proj'" @hide="openDd = null">
+                <!-- [W8] listbox/option roles + the shared dd-menu keyboard contract (arrow cycling,
+                     Esc closes and refocuses the trigger) — same semantics as TodoBoxView's menus -->
+                <ul class="dd-menu" role="listbox" :aria-label="$t('todayT.filterLabel')" @keydown="onProjMenuKey">
+                  <li role="option" :aria-selected="!projFilter ? 'true' : 'false'" :class="{ on: !projFilter }" tabindex="0" @click="setProjFilter(0)" @keydown.enter.prevent="setProjFilter(0)">{{ $t('todayT.filterAll') }}</li>
+                  <li v-for="p in projects" :key="p.categoryId" role="option" :aria-selected="p.categoryId === projFilter ? 'true' : 'false'" tabindex="0"
                       :class="{ on: p.categoryId === projFilter }" @click="setProjFilter(p.categoryId)" @keydown.enter.prevent="setProjFilter(p.categoryId)">
                     <i class="pd-proj-opt-dot" :style="{ background: p.categoryColor }" aria-hidden="true"></i>{{ p.categoryName }}
                   </li>
@@ -36,7 +38,16 @@
         </day-date-strip>
         <!-- The timeline is shared by all three today-page views: planning context stays coherent across list/matrix/deck (finalized by user 2026-08-31) -->
         <div v-if="viewMode==='deps' && settings.developerMode && settings.showDepsModule" class="today-list"><pd-dep-view/></div>
-        <div v-else-if="viewMode==='matrix'" class="today-list"><pd-matrix-grid :tasks="matrixTasks"/></div>
+        <!-- [W8] an empty matrix must not render four empty drop quadrants (they read as broken
+             UI and invite drags that have nothing to drop): same empty-state + create entry as
+             the list view; MatrixGrid only mounts when there is something to quadrant -->
+        <div v-else-if="viewMode==='matrix'" class="today-list">
+          <empty-state v-if="!matrixTasks.length">
+            <template #text>{{ emptyText }}</template>
+            <template #action><button type="button" class="mini primary" @click="openQuickAdd">{{ $t('statsC.TodoBox.emptyCreate') }}</button></template>
+          </empty-state>
+          <pd-matrix-grid v-else :tasks="matrixTasks"/>
+        </div>
         <div v-else-if="viewMode==='deck'" class="today-list"><pd-day-deck :tasks="deckTasks"/></div>
         <div v-else class="today-list"><todo-groups :groups="groups" :empty-text="emptyText" :project-badge="!!settings.showProjectsModule"/></div>
       </div>
@@ -56,7 +67,9 @@ import MatrixGrid from '../components/MatrixGrid.vue'
 import DayDeck from '../components/DayDeck.vue'
 import DepView from '../components/DepView.vue'
 import DayRail from '../components/DayRail.vue'
+import EmptyState from '../components/EmptyState.vue'
 import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button activation
+import { ddMenuKey } from '../utils/dd-menu.js' // [W8] shared dd-menu listbox keyboard contract
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
 /** Restore the persisted today view mode: unknown/missing values fall back (matrix deep link
@@ -71,7 +84,7 @@ function pickViewMode (saved, wantsMatrix, depsAllowed) {
 
 export default {
   name: 'TodayView',
-  components: { TodoGroups, DayDateStrip, PdMatrixGrid: MatrixGrid, PdDayDeck: DayDeck, PdDepView: DepView, DayRail },
+  components: { TodoGroups, DayDateStrip, EmptyState, PdMatrixGrid: MatrixGrid, PdDayDeck: DayDeck, PdDepView: DepView, DayRail },
   data () {
     // View selection persistence: keep the last used view across refresh/restart (fall back to list on missing/invalid value)
     let saved = null
@@ -116,6 +129,27 @@ export default {
     projTriggerKey (e) { (e.currentTarget as HTMLElement).click() },
     /* [A9] dropdown trigger button: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
     onProjTriggerKey: roleButtonActivate(function (e) { this.projTriggerKey(e) }),
+    /* [W8] listbox keyboard contract for the project filter menu: shared util handles arrow
+       cycling; Esc hides the popover ref and returns focus to its trigger (popper content is
+       teleported to body, so the trigger is recovered inside the component tree) */
+    onProjMenuKey (e) {
+      ddMenuKey(e, { onClose: () => this.closeProjDd() })
+    },
+    closeProjDd () {
+      this.openDd = null
+      const pop = this.$refs.popProj
+      try { if (pop && typeof pop.hide === 'function') pop.hide() } catch (err) { /* popover already gone */ }
+      const trigger = this.$el && this.$el.querySelector('.pd-proj-filter .dropdown-select__label')
+      if (trigger) trigger.focus()
+    },
+    /* [W8] empty matrix view reuses the list view's create entry: same QuickAdd summon channel
+       as TodoBoxView.openQuickAdd (main.js focusQuickAdd) */
+    openQuickAdd () {
+      if (document.querySelector('.qa-wrap')) { window.dispatchEvent(new CustomEvent('todo:focus-quickadd')); return }
+      this.$router.push({ name: 'todo-list-today' }).then(() => {
+        setTimeout(() => window.dispatchEvent(new CustomEvent('todo:focus-quickadd')), 120)
+      })
+    },
   },
   watch: {
     viewMode (m) { try { localStorage.setItem('todayViewMode', m) } catch {} },
