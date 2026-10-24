@@ -49,7 +49,14 @@ function rankTs (name) {
 function selectPrunes (names, o = {}) {
   const { recent = 24, dailyDays = 14, weeklyWeeks = 8, eventKeep = 10 } = o
   const autos = names.filter(n => RE_AUTO.test(n)).sort((a, b) => rankTs(b) - rankTs(a)) // new → old (dup suffixes rank oldest)
-  const evts = names.filter(n => RE_EVT.test(n)).sort().reverse()
+  // M8B fix 4 (P2): the evt tier kept the raw lexicographic sort — the auto tier's D17 bug,
+  // unfixed here. A same-second collision (`evt-<reason>-...-dup<n>.json`) sorted AFTER its
+  // base name, filled the per-reason keep quota and evicted the REAL snapshot sharing the
+  // stamp. Rank by rankTs (dup → 0, sorts last/prunes first) like the auto tier. Tie-break by
+  // name descending so same-base-stamp epochMs suffixes (cli/lib-eventbackup.cjs shape
+  // `evt-<reason>-<stamp>-<epochMs>.json`, D20-B4) keep their newest-first order.
+  const evts = names.filter(n => RE_EVT.test(n))
+    .sort((a, b) => rankTs(b) - rankTs(a) || (a < b ? 1 : a > b ? -1 : 0))
   const keep = new Set()
   const prunes = []
 
