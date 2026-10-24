@@ -245,7 +245,12 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
     const ins = getDb().prepare('INSERT INTO sync_oplog (entity, entityId, ts) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM sync_oplog WHERE entity = ? AND entityId = ?)')
     let seeded = 0
     for (const r of rows || []) {
-      const ts = Number(r.ts) > 0 ? Number(r.ts) : now
+      // W8 fix (2026-10-25): the ts-less fallback was a blanket Date.now() for EVERY entity,
+      // contradicting the D13 doctrine right above (meta has no stored age → epoch-oldest 1).
+      // Discriminate by entity: meta keys seed at 1 (any genuine peer edit wins the next LWW
+      // round); row-table entities (todos/categories/plan/filter/tomato/settings) fall back to
+      // now — an unstamped legacy row there is genuinely fresh-on-this-device.
+      const ts = Number(r.ts) > 0 ? Number(r.ts) : (r.entity === 'meta' ? 1 : now)
       seeded += ins.run(r.entity, String(r.id), ts, r.entity, String(r.id)).changes
     }
     return { seeded }
