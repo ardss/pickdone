@@ -267,14 +267,17 @@ test('quick-add: a multi-line paste landing while a submit is in flight is queue
 
 /* ---- 5. TodayView filter chips are role=button (Space via the main.js contract) ---- */
 
-test('today view: filter chips carry role="button" so main.js Space activation reaches them', () => {
-  assert.match(TODAY_SRC, /<li role="button" :class="\{ on: !projFilter \}"/,
-    'the "all" chip must be role=button')
-  assert.match(TODAY_SRC, /<li v-for="p in projects" :key="p\.categoryId" role="button"/,
-    'the per-project chips must be role=button')
+test('today view: filter chips are a listbox with option roles (re-anchored W8 64943e74 — dd-menu keyboard contract)', () => {
+  // W8 moved the chips from role=button chips to a listbox/option menu with the shared dd-menu
+  // arrow-cycling contract; Enter activation stays bound and every focusable li keeps a role.
+  assert.match(TODAY_SRC, /<ul class="dd-menu" role="listbox"/, 'the filter menu is a listbox')
+  assert.match(TODAY_SRC, /<li role="option"[^>]*tabindex="0"[^>]*@click="setProjFilter\(0\)"/,
+    'the "all" chip is role=option')
+  assert.match(TODAY_SRC, /<li v-for="p in projects" :key="p\.categoryId" role="option"/,
+    'the per-project chips are role=option')
   assert.match(TODAY_SRC, /@keydown\.enter\.prevent="setProjFilter/,
     'Enter activation must stay bound on the chips')
-  // no unrole'd focusable filter chips left in the file
+  assert.match(TODAY_SRC, /@keydown="onProjMenuKey"/, 'arrow cycling rides the shared dd-menu util')
   const bare = [...TODAY_SRC.matchAll(/<li(?![^>]*role=)[^>]*tabindex/g)]
   assert.equal(bare.length, 0, 'every focusable li in TodayView must carry a role: ' + bare.map(m => m[0]).join(' | '))
 })

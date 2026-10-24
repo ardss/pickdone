@@ -533,12 +533,11 @@ function applyRowInner (state, incoming) {
     // W8 fix (2026-10-25): 840001-blind-fallback. The localUserId scan only reads LOCAL todos —
     // on a first-sync device whose own table is empty (fresh install, peer-push-first), every
     // landed todo was stamped with the 840001 OFFLINE-DEFAULT guess while the PEER's row carried
-    // the real account id. Learn from the inbound payload: when nothing has been discovered yet
-    // (no memo, no local row scan hit — i.e. localUserId is still null) and the incoming row
-    // carries a real userId, adopt it and persist it through the durable memo (persistLocalUserId
-    // never stores the 840001 guess, and 'sync.*' is machine-local). Later landings then take the
-    // peer-evidence id via localUserId() instead of the constant.
-    if (state.localUserId == null && winner.data && winner.data.userId != null) {
+    // W8 fix (re-anchored bootstrap-apply): LOCAL evidence outranks peer evidence — resolve
+    // localUserId() first (scan + durable memo); learn the peer id only when that produced the
+    // 840001 guess. Learning first let an early inbound row hijack a device with local todos.
+    const localId = localUserId(state)
+    if ((localId === 840001 || localId == null) && winner.data && winner.data.userId != null) {
       const peerId = Number(winner.data.userId)
       if (Number.isFinite(peerId) && peerId > 0 && peerId !== 840001) {
         state.localUserId = peerId

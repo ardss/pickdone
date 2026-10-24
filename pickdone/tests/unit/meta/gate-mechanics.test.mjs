@@ -109,7 +109,10 @@ test('meta#4 skip count over ratchet budget -> red; under budget -> green', () =
 
 test('meta#5 coverage below threshold -> red (sandbox summary + scratch baseline)', () => {
   const scratchBase = path.join(os.tmpdir(), 'gate-meta-cov-baseline.json')
-  fs.writeFileSync(scratchBase, JSON.stringify({ _comment: 'gate-meta sandbox baseline', baselines: { 'win32@node22': { lines: 80, branches: 80, functions: 80 } } }))
+  // re-anchored W8 2026-10-24: the baseline key must match the CURRENT platform (the machine
+  // moved node22→node24; a pinned key silently calibrated instead of going red)
+  const platKey = `${process.platform}@node${process.versions.node.split('.')[0]}`
+  fs.writeFileSync(scratchBase, JSON.stringify({ _comment: 'gate-meta sandbox baseline', baselines: { [platKey]: { lines: 80, branches: 80, functions: 80 } } }))
   const summaryPath = path.join(PICKDONE, 'tests', '.artifacts', 'coverage-summary.json')
   const prev = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : null
   try {

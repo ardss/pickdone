@@ -7,5 +7,5 @@
   "src/main/index.js": 860,
   "renderer/js/views/StatisticsView.vue": 832,
   "renderer/js/views/TomatoFloatPage.vue": 816,
-  "src/main/sync-apply.js": 842
+  "src/main/sync-apply.js": 841
 }

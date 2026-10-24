@@ -187,7 +187,7 @@ test('fix5: a huge dropped row set is stored as a bounded sample; the summary st
   const qkey = syncApply.META_FLUSH_QUARANTINE_PREFIX + 'upsertMany'
   const blob = stored[qkey]
   assert.ok(blob, 'quarantine blob stored')
-  assert.ok(blob.length < 64 * 1024, 'stored blob stays bounded (pre-fix: ~1MB+ full row set), got ' + blob.length)
+  assert.ok(blob.length < 256 * 1024, 'stored blob stays bounded (W8 59c73501 raised the sample 20→500 so recovery keeps real rows; ~500×220B rows ≈ 117KB is still an order under the old 1MB full set), got ' + blob.length)
   const parked = JSON.parse(blob)
   const entry = parked[parked.length - 1]
   assert.equal(entry.count, 5000, 'entry reports the TRUE dropped count')
