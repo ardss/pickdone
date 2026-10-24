@@ -386,3 +386,18 @@ Acceptance close for the anchors wave: full gate 31/31 twice post-meta
 afternoon load (zero contact surface, 89/89 migrated-consumer slice green,
 11/11 negative suite, schema gate hand-run green). Queued for next round:
 busWrite durability audit + J4 hardening.
+
+### 2026-10-24 21:0x · J4 SOLVED — root cause was DB init transient hold, not lost writes
+
+Evening rerun on an idle machine went 4/4 green, then the red-round dirB
+logs/main.log was opened: the restarted instance (B2) logged
+"[Init] DB init failed: 数据库文件读取遇到磁盘 I/O 错误——文件被其他程序占用"
+12s after the hard kill, and lived on in the db-less degraded shell — sync
+status factory-fresh, exactly the diag dump. So busWrite/WAL durability was
+never in question; the loss was the WHOLE db handle, transiently unopenable.
+
+Fix (b193b5f5): db.js initInner retries open+probe on I/O-class failures
+(4 backoff attempts); journey J4 waits for todos.db to become openable
+before booting B2. Journey 4/4 twice, main unit slice 1306/1306.
+Residual watch: the ~7-electron-per-journey-run leak is a separate teardown
+issue and stays queued.
