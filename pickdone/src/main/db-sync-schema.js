@@ -104,7 +104,14 @@ module.exports = ({ getDb, log }) => {
     // ordering between the blob save and the mirror; a genuinely stale echo is minutes behind,
     // so the Round-3 revert guard keeps its strength).
     const curTs = cur ? Math.min(Number(cur.updatedAt) || 0, Date.now()) : 0
-    if (Number.isFinite(gateTs) && cur && !cur.deleted && curTs - gateTs > 1000) return false // stale whole-blob echo: row wins
+    // W8 fix (2026-10-25): the gate applies to DELETED rows too. The old `!cur.deleted` guard
+    // exempted tombstones, so a stale whole-blob echo (snapshot authored before the deletion
+    // landed) re-inserted the row with deleted=0 / updatedAt=now — a stale mirror resurrecting a
+    // tombstone with a FRESH LWW age, unkillable by the next round. A stale echo (curTs more than
+    // 1s past the blob's _savedAt) must not resurrect the tombstone any more than it may
+    // re-stamp a live row; a FRESH mirror (same-tick, within the epsilon) is the legitimate
+    // resurrection path and still passes.
+    if (Number.isFinite(gateTs) && cur && curTs - gateTs > 1000) return false // stale whole-blob echo: row (or tombstone) wins
     getDb().prepare(`INSERT INTO settings_rows (key, value, updatedAt, deleted, deletedAt) VALUES (?, ?, ?, 0, 0)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt, deleted=0, deletedAt=0`)
       .run(key, value, now)
