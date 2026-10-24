@@ -73,6 +73,15 @@ const MESSAGES = {
     dbFailMessage: '数据库初始化失败',
     dbFailRecovered: '检测到本地备份数据（已回灌 {n} 条），可选择「尝试恢复数据并重启」。',
     dbFailRecoveredNone: '未找到可自动恢复的备份，如需保留现场请先「打开数据文件夹」备份文件。',
+    // [J4 follow-up 2026-10-25] transient init failure (header intact, retried OK, nothing
+    // was restored): the generic "restored {n} tasks" copy read as data loss (n=0) and
+    // pushed the user toward a needless recovery relaunch. Name what actually happened.
+    dbFailTransientRecovered: '数据库文件被短暂占用导致初始化失败，已自动重试成功——数据完好，没有丢失任何内容。建议重启应用以确保状态干净。',
+    // [H1 2026-10-25] boot-enable silent death: the toggle shows ON but the sync socket
+    // never came up and the whole session ran with sync off, silently. Degradation must be
+    // VISIBLE once (quarantine-notice contract): a system notification + a sync-degraded
+    // event for the settings card.
+    syncDegradedBody: '局域网同步未能启动（端口被占用），本会话同步已暂停——本机数据保存不受影响。可在设置中重新开启同步。',
     dbFailReinit: ' 重新初始化出错：{msg}',
     btnRecoverRelaunch: '尝试恢复数据并重启',
     btnOpenDataDir: '打开数据文件夹',
@@ -140,6 +149,10 @@ const MESSAGES = {
     dbFailMessage: 'Database failed to initialize',
     dbFailRecovered: 'Local backup detected ({n} tasks restored). You can "Recover data and restart".',
     dbFailRecoveredNone: 'No auto-recoverable backup found. Back up files via "Open data folder" first if needed.',
+    // [J4 follow-up 2026-10-25] transient copy: see the zh entry above.
+    dbFailTransientRecovered: 'The database file was briefly locked and init failed once — the automatic retry succeeded and your data is intact; nothing was lost. A restart is recommended to start clean.',
+    // [H1 2026-10-25] boot-enable silent death: see the zh entry above.
+    syncDegradedBody: 'LAN sync could not start (port occupied) and is paused for this session — local data saving is unaffected. You can re-enable sync in Settings.',
     dbFailReinit: ' Re-initialization failed: {msg}',
     btnRecoverRelaunch: 'Recover data and restart',
     btnOpenDataDir: 'Open data folder',

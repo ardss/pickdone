@@ -422,9 +422,14 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       }
       const detailMsg = String(e && e.message || e) + '.' + (recoveryFailed
         ? ' ' + recoveredFrom.label
-        : recoveredFrom
-          ? i18nM.mt('dbFailRecovered', { n: restoredN })
-          : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '') +
+        // [J4 follow-up 2026-10-25] transient (retried OK, nothing restored) gets its own
+        // copy: the generic "restored {n}" string showed "restored 0 tasks" for an intact
+        // database and steered users into a needless recovery relaunch.
+        : recoveredFrom && (recoveredFrom.source === 'retry-ok' || recoveredFrom.source === 'transient')
+          ? i18nM.mt('dbFailTransientRecovered')
+          : recoveredFrom
+            ? i18nM.mt('dbFailRecovered', { n: restoredN })
+            : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '') +
         // F4 #9: the dialog used to claim a clean recovery while the dump itself had been written
         // degraded — disclose exactly which segments the last snapshot was missing.
         (degradedNote ? '\n\n[degraded snapshot] segments missing from the recovered backup: ' + degradedNote : '')
