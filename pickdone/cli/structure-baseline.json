@@ -1,5 +1,5 @@
 {
-  "cli/lib.js": 874,
+  "cli/lib.js": 813,
   "src/main/lan-sync-bootstrap.js": 855,
   "renderer/js/store/category.js": 763,
   "renderer/js/store/todo.js": 829,

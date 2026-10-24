@@ -231,7 +231,10 @@ test('#9 purgeRecycleBin writes evt-purge-*.json into the backup dir before dele
 
 /* ---------- #11: chip-cascade failure warns to stderr (source anchor) ---------- */
 test('#11 chipsSnapshotForDelete failure path warns with the task id', () => {
-  const src = fs.readFileSync(new URL('../../../cli/lib.js', import.meta.url), 'utf8')
+  // lib-chips split (2026-10-24): the chip cascade lives in cli/lib-chips.cjs now — anchor
+// reads both files so the warn contract stays covered no matter which module carries it.
+const src = fs.readFileSync(new URL('../../../cli/lib.js', import.meta.url), 'utf8') +
+  fs.readFileSync(new URL('../../../cli/lib-chips.cjs', import.meta.url), 'utf8')
   assert.ok(/chip snapshot\/cascade failed for task \$\{taskId\}/.test(src), 'stderr warn names the task id')
   assert.ok(!/catch \{ \/\* snapshot failure must not block deletion \*\/ \}/.test(src), 'silent bare catch retired')
 })
