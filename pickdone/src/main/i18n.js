@@ -82,6 +82,13 @@ const MESSAGES = {
     // VISIBLE once (quarantine-notice contract): a system notification + a sync-degraded
     // event for the settings card.
     syncDegradedBody: '局域网同步未能启动（端口被占用），本会话同步已暂停——本机数据保存不受影响。可在设置中重新开启同步。',
+    // [H5 2026-10-25] one-time notice when the at-rest-encryption migration failed and the
+    // session runs on a plaintext db.
+    encMigrationDegradedBody: '数据库加密迁移未能完成，本次会话数据以未加密方式保存在本机。数据本身不受影响；重启应用将自动重试加密迁移。',
+    // [H4 2026-10-25] shown in the recovery dialog when the db was REBUILT from a backup
+    // (json/plain-bak): sync watermarks were invalidated and peers will re-push; pairing may
+    // need a manual re-pair on the device card.
+    dbFailSyncResetNote: '注意：数据库已从备份重建，局域网同步的推送水位已重置（各设备会重新推送近期数据）。若设备卡片状态异常，请在同步设置中重新配对。',
     dbFailReinit: ' 重新初始化出错：{msg}',
     btnRecoverRelaunch: '尝试恢复数据并重启',
     btnOpenDataDir: '打开数据文件夹',
@@ -153,6 +160,10 @@ const MESSAGES = {
     dbFailTransientRecovered: 'The database file was briefly locked and init failed once — the automatic retry succeeded and your data is intact; nothing was lost. A restart is recommended to start clean.',
     // [H1 2026-10-25] boot-enable silent death: see the zh entry above.
     syncDegradedBody: 'LAN sync could not start (port occupied) and is paused for this session — local data saving is unaffected. You can re-enable sync in Settings.',
+    // [H5 2026-10-25] see the zh entry above.
+    encMigrationDegradedBody: 'Database encryption migration did not complete, so this session stores data UNENCRYPTED on this machine. Your data itself is unaffected; restarting the app retries the migration automatically.',
+    // [H4 2026-10-25] see the zh entry above.
+    dbFailSyncResetNote: 'Note: the database was rebuilt from a backup, so LAN sync push watermarks were reset (devices will re-push recent data). If a device card looks wrong, re-pair it in sync settings.',
     dbFailReinit: ' Re-initialization failed: {msg}',
     btnRecoverRelaunch: 'Recover data and restart',
     btnOpenDataDir: 'Open data folder',

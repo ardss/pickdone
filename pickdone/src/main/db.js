@@ -99,6 +99,10 @@ function migratePlainToEncrypted (dir, file, key) {
     return true
   } catch (e) {
     log.error('[TodoDB] 明文→加密迁移失败，回退明文打开', e)
+    // [H5 2026-10-25, rootcause audit] silent-plaintext degradation: the session now runs
+    // UNENCRYPTED while the user believes their data is encrypted at rest. Flag it so the
+    // whenReady chain surfaces ONE visible notice (quarantine-notice contract).
+    encMigrationDegraded = true
     try { db.close() } catch {}
     try { fs.rmSync(encFile, { force: true }) } catch {}
     // 两步 rename 中途失败的自愈:第一步(file→plain-bak)已成功而第二步(enc→file)失败时, // todos.db 缺位,init 随后的无驱动重开会让 better-sqlite3 静默新建空库——本次会话跑在空库上, // 且下次启动"无 todos.db 才恢复"的预检被跳过,旧数据永不自愈(2026-09-05 终审 P1)。把明文库放回
@@ -115,6 +119,14 @@ function migratePlainToEncrypted (dir, file, key) {
 /** Test-only migration failure injection (C12, 2026-09-24): never set in production. */
 let migrateFailHook = null
 function __setMigrateFailHookForTests (fn) { migrateFailHook = typeof fn === 'function' ? fn : null }
+// [H5 2026-10-25] set when the plaintext->encrypted migration failed and the session fell
+// back to a PLAINTEXT db; consumed once by index.js's whenReady chain for the visible notice.
+let encMigrationDegraded = false
+function consumeEncMigrationDegraded () {
+  const had = encMigrationDegraded
+  encMigrationDegraded = false
+  return had
+}
 /** Test-only migration-list override (C2, 2026-09-24): never set in production. */
 let migrationsOverride = null
 function __setMigrationsForTests (list) { migrationsOverride = Array.isArray(list) ? list : null }
@@ -715,4 +727,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions, __connPragmasForTests: () => (db && db.open ? { journalMode: db.pragma('journal_mode', { simple: true }), synchronous: db.pragma('synchronous', { simple: true }), busyTimeout: db.pragma('busy_timeout', { simple: true }) } : null), __payloadCountForTests: () => db.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n, __currentRevisionIdForTests: entityId => { const r = db.prepare('SELECT revisionId FROM sync_revision_current WHERE entityId = ?').get(entityId); return r && r.revisionId } }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, consumeEncMigrationDegraded, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions, __connPragmasForTests: () => (db && db.open ? { journalMode: db.pragma('journal_mode', { simple: true }), synchronous: db.pragma('synchronous', { simple: true }), busyTimeout: db.pragma('busy_timeout', { simple: true }) } : null), __payloadCountForTests: () => db.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n, __currentRevisionIdForTests: entityId => { const r = db.prepare('SELECT revisionId FROM sync_revision_current WHERE entityId = ?').get(entityId); return r && r.revisionId } }
