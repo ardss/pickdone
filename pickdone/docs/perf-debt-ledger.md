@@ -253,3 +253,38 @@ Rule after registration: only decreases accepted; each split lands with its own 
   settings-schema.js with re-exports keeping consumer imports stable.
 - migrateData pool-only pair: unexplained but contained - the per-file flake
   retry absorbs it (file is solo-green); final28 ran without it failing at all.
+
+## 2026-10-24 wave close - gate stability night (23:00-10:00)
+
+Stamp: full gate 31/31, GATE_EXIT=0, 14.1min (final28 @ b36bffa4); core tier
+4874/0 green again through the S2 fail-wide path @ 79644017. 28 full-gate
+rounds total; every red was root-caused before the next run (no blind reruns).
+
+Mechanisms landed this wave (see git log 4c836c60..2eb5449c for the full set):
+- gate-doctor preflight + load-defer + exit contract (0/1/2/3)
+- per-instance TODO_SYNC_PORT on every gate-spawned electron (3442 collision class dead)
+- LanSync boot-enable bind retry (crash-restart sync-silently-dead product gap)
+- visual lane: daemon kill-wait, probe-tab close guard, orphan-chrome filter on the
+  real system-Chrome layout (the *agent-browser*browsers* filter was dead code here)
+- D4 child registry: per-pid files (concurrent lost-update fix) + owner=pid filtering
+  (a NESTED run-all must not reap its parent's children - the final25/26 corpus
+  aborts were exactly this) + run-all exit reap symmetric with check-all
+- run-all per-file flake retry (location extraction strips :line:col, 30s settle,
+  cap 12) - supersedes and retired the whole-suite --retry-once
+- F1 ephemeral CDP port (fixed 9377 hung the pool); e2e-exit-close boot budget 90s
+- five contract-drift suites re-anchored (d18 #12 discriminator, F20/M-1 probe
+  conservatism, h8-3 effective-commit, daily-0924 tombstone family sets)
+- six size baselines registered with an ordered split queue (below)
+
+Queue for the next focused session (heaviest first):
+1. cli/lib.js split - NOT a comment-compression job (118 comment lines < the 75+
+   needed); the chips family extraction threads ~6 module closures. 40 test files
+   watch cli/lib.js, 5 are source-readers.
+2. renderer/js/store/settings.js - 40 referencing files, several source anchors;
+   seam = pure block (lines ~98-310) into settings-schema.js + re-exports.
+3. migrateData pool-only pair - contained by the flake retry (solo-green file);
+   repro harness only if it ever reds a gate again.
+4. D1 vitest pooled-scale measure - needs a quiet machine window + user consent.
+
+Operating note: daytime runs belong to the user; heavy verification outside
+slice gates needs explicit consent per the standing discipline.
