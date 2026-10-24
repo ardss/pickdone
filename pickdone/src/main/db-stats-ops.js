@@ -19,6 +19,14 @@ exports._dayBounds = ({ from, to }) => {
     if (!(mo >= 1 && mo <= 12) || !(d >= 1 && d <= 31)) {
       throw new Error('[TodoDB] _dayBounds: ' + v + ' is not a parseable date (YYYYMMDD slices to month ' + mo + ', day ' + d + '), refusing to run BETWEEN a bogus range')
     }
+    // W8 fix (2026-10-25): the range check alone admits non-existent dates — 20260231 passes
+    // (month 2, day 31) but new Date(2026, 1, 31) silently rolls over to Mar 3, so stats for
+    // "February" quietly drifted into March. Round-trip validation (same approach as
+    // shared/repeat-core.mjs lunarToSolar): reject any (y, mo, d) that dayjs does not reproduce.
+    const cand = dayjs(new Date(y, mo - 1, d))
+    if (cand.date() !== d || cand.month() + 1 !== mo) {
+      throw new Error('[TodoDB] _dayBounds: ' + v + ' is not a valid calendar date (month ' + mo + ' day ' + d + ' does not exist), refusing to silently drift the range')
+    }
     return new Date(y, mo - 1, d).getTime()
   }
   const f = conv(from)
