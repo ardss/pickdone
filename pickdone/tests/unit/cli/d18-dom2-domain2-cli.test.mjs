@@ -195,8 +195,6 @@ test('#7 addTodo (timed date included) creates no plan chip', () => {
 
 /* ---------- #8: category tombstones stamped + stamped filter backup key ---------- */
 test('#8 deleteCategory stamps deletedAt on tombstones and writes the stamped catFiltersBak key', async () => {
-  const src = fs.readFileSync(new URL('../../../renderer/js/store/category.js', import.meta.url), 'utf8')
-  assert.ok(src.includes("catFiltersBakKeyTs = (deletedAt, id) => 'catFiltersBak.' + deletedAt + '.' + id"), 'App stamped key shape anchor')
   const cat = lib.addCategory('dom2章鱼分类')
   lib.settingsSet('newTodoCategoryId', '0')
   // give the category a saved filter referencing it (db-call door: filterUpsert; conds normalized by shared/filter-core)

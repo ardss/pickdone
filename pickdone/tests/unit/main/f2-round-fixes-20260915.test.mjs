@@ -106,7 +106,15 @@ test('F3: notification 入参 undefined/null/非对象/缺 title 均不抛 TypeE
   for (const n of seen) assert.equal(n.title, '默认标题', '缺 title 走 i18n 安全默认')
   // 合法入参仍按原样清洗透传（B4 2026-09-25: 构造选项附带 notifyTimeoutOptsForApp 的 timeout/timeoutType）
   h.notification(fakeE, { title: 'Hello', body: 'World', silent: true })
-  assert.deepEqual(seen[seen.length - 1], { title: 'Hello', body: 'World', silent: true, timeout: 300000, timeoutType: 'default' })
+  // [assertion-quality 2026-10-25] key-subset instead of whole-payload deepEqual: the
+  // CONTRACT is user-visible fields (title/body/silent) + the 5min cap; a future icon/
+  // channel field on the Notification object must not red this.
+  const last = seen[seen.length - 1]
+  assert.equal(last.title, 'Hello')
+  assert.equal(last.body, 'World')
+  assert.equal(last.silent, true)
+  assert.equal(last.timeout, 300000, 'the 5min notification cap is contract (stale-bar incident)')
+  assert.equal(last.timeoutType, 'default')
 })
 
 /* ---- F4: attachments 三通道 typeof 守卫(非字符串 url 不再 TypeError) ---- */

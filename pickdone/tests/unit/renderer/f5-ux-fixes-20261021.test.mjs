@@ -71,11 +71,14 @@ test('F5-3 transition durations use base.css --dur-fast/--dur-slow tokens (F5-ow
   assert.ok(!/transition:all \.3s cubic-bezier/.test(TODOBOX), 'TodoBoxView row still hard-codes .3s')
   assert.ok(!/transition:all \.2s/.test(RECYCLE), 'RecycleBin .row-btn still hard-codes .2s')
   assert.ok(!/transition: all \.12s/.test(HABIT), 'HabitView .habit-wd still hard-codes .12s')
-  // tokens exist in base.css (three tiers, exactly as consumed)
+  // tokens exist in base.css (three tiers). [assertion-quality 2026-10-25] the exact
+  // durations (.15/.25/.35) are design parameters, not contract — asserting their precise
+  // values made any re-tuning red. The contract is: the tokens EXIST and are CONSUMED
+  // via var(--dur-*) (the positive pins above already prove consumption).
   const BASE = read('assets/css/base.css')
-  assert.match(BASE, /--dur-fast: \.15s/)
-  assert.match(BASE, /--dur-mid: \.25s/)
-  assert.match(BASE, /--dur-slow: \.35s/)
+  assert.match(BASE, /--dur-fast:\s*\d?\.?\d+s/)
+  assert.match(BASE, /--dur-mid:\s*\d?\.?\d+s/)
+  assert.match(BASE, /--dur-slow:\s*\d?\.?\d+s/)
 })
 
 test('F5-4 MatrixGrid hover rules merged into one; box-shadow transitions with the background', () => {

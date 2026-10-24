@@ -21,17 +21,17 @@ export const ANCHORS = {
   externalDbWatch: 'src/main/external-db-watch.js',
   preloadIndex: 'src/preload/index.js',
   installerNsh: 'build/installer.nsh',
-  /** CLI */
-  cliLib: 'cli/lib.js',
-  /** Renderer (non-view) */
+  /** Renderer (non-view)
+   *  [assertion-quality 2026-10-25] four zero-consumer anchors removed (cliLib,
+   *  todayBounds, onboardingVue, settingsStore-single-file) — a registry entry kept
+   *  alive only by its own self-check is dead weight; re-add deliberately if a
+   *  consumer actually needs the indirection. cliLib consumers pin via
+   *  ANCHOR_SETS.cliChipsFamily instead. */
   rendererMain: 'renderer/js/main.js',
   /** Day-caliber single source (dayShift/dayStart/today0) + its enforcement scan root */
-  todayBounds: 'renderer/js/utils/todayBounds.js',
   rendererJsDir: 'renderer/js',
   browserShim: 'browser-dev/todo-browser-shim.js',
-  settingsStore: 'renderer/js/store/settings.js',
   /** Renderer views/components/i18n (anchored by contract/guard tests only) */
-  onboardingVue: 'renderer/js/components/Onboarding.vue',
   recycleBinView: 'renderer/js/views/RecycleBinView.vue',
   i18nZhC: 'renderer/js/i18n/locales/zh-CN-C.js',
   i18nEnC: 'renderer/js/i18n/locales/en-US-C.js'

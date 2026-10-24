@@ -13,8 +13,8 @@ import { ANCHORS, ANCHOR_SETS, REPO_ROOT, anchorPath } from '../lib/source-ancho
  *  也照绿。现与 ANCHORS 实际 keys 集合精确比对;增删 anchor 必须同步改这份清单,防注册表静默漂移。 */
 const EXPECTED_ANCHOR_KEYS = [
   'mainIndex', 'mainDir', 'handlersTodo', 'handlersBackup', 'externalDbWatch', 'preloadIndex', 'installerNsh',
-  'cliLib', 'rendererMain', 'todayBounds', 'rendererJsDir', 'browserShim', 'settingsStore',
-  'onboardingVue', 'recycleBinView', 'i18nZhC', 'i18nEnC'
+  'rendererMain', 'rendererJsDir', 'browserShim',
+  'recycleBinView', 'i18nZhC', 'i18nEnC'
 ].sort()
 
 test('ANCHORS registry matches the enumerated key set exactly (no silent drift, no depopulation)', () => {

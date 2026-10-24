@@ -145,7 +145,11 @@ test('i18n keys: the clear-recycle-bin keyword is symmetric between zh/en', () =
 })
 
 test('RecycleBinView.clearAll must check the list emptiness before confirm (prevents three popups on an empty bin)', () => {
-  // Static check: the first line of the source should be if (!list.length) return - avoiding a mock stand-in
+  // Static check: the first line of the source should be if (!list.length) return - avoiding a mock stand-in.
+  // [assertion-quality 2026-10-25 re-review] KEPT as a (b') wiring pin: the state-machine
+  // test above REPLAYS clearAll's decision from a hand-written copy — it cannot catch a
+  // regression in the real .vue function (which node can't require), so this shape pin is
+  // the only guard for the real empty-bin-first contract (three-popups incident class).
   const src = readAnchor('recycleBinView')
   const m = src.match(/clearAll\s*\(\s*\)\s*\{([\s\S]*?)\n\s{4}\}/)
   assert.ok(m, 'the clearAll function was not found')
