@@ -91,10 +91,13 @@ test('P1-3: external-settings-changed is routed through settings/updateExternal'
 /* ---------------- P2b: conflict toast singleton + rate limit ---------------- */
 
 test('P2b: conflict toast path reuses one instance and rate-limits to 30s', () => {
-  const src = read('renderer/js/main.js')
-  assert.match(src, /_conflictToast/, 'singleton toast handle exists')
-  assert.match(src, /_conflictToast\.close\(\)/, 'previous instance is closed, not stacked')
-  assert.match(src, /30 \* 1000/, '30s minimum interval between shows')})
+  // [H2 2026-10-25] the wiring moved to utils/syncDegradedToast.js (structure ratchet
+  // split) — same contract, new home: singleton handle, close-not-stack, 30s interval.
+  const src = read('renderer/js/utils/syncDegradedToast.js')
+  assert.match(src, /conflictToast/, 'singleton toast handle exists')
+  assert.match(src, /conflictToast\.close\(\)/, 'previous instance is closed, not stacked')
+  assert.match(src, /30 \* 1000/, '30s minimum interval between shows')
+})
 
 /* ---------------- P2c: unpaired-by-remote peer card ---------------- */
 
