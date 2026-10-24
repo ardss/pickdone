@@ -67,3 +67,38 @@ signature so a mixed pool can never cross-calibrate.
 - No full-pool cutover in one wave. No deep-tier migration. No gate semantics
   change. No unmeasured promises — every wave lands with before/after numbers
   appended to docs/perf-debt-ledger.md.
+
+## Pilot data 2026-10-25: node:test same-process mode measured and REJECTED
+
+Real numbers from the official zero-migration candidate
+(`node --test --experimental-test-isolation=none`, the runner-builtin answer
+to the spawn storm — tested first because it needs NO code changes):
+
+- Scope: full unit tier via glob (`tests/unit/**/*.test.mjs`), quiet host
+  (01:2x local), node v22.23.2.
+- Result: **4734 tests / 4732 failed / 237s wall**. Single files in the same
+  mode pass (billing slice: 8/8 in isolation) — the mass failure is
+  cross-FILE global pollution: one file's localStorage replacement leaks
+  into every later file in the shared process (failureType: hookFailed,
+  wipeLs -> `localStorage.key is not a function` propagating through the
+  shared module cache).
+- Verdict: process-per-file isolation is not ceremony — it is what the
+  suite's global-state discipline actually relies on. The official
+  same-process mode is **rejected**: fixing it would mean auditing ~760
+  files for global restore discipline, which costs more than the runner
+  migration itself and remains fragile forever after.
+
+Decision (stays DESIGN until the user approves the investment):
+1. The spawn storm (D1) is real and this pilot closes the "cheap way out"
+   branch — there is no zero-migration path to a pooled runner for this
+   suite.
+2. The viable route stays vitest with `pool: 'forks'` + `isolate: true`
+   (worker reuse WITH per-file isolation), per the pilot/cutover plan above.
+   Migration cost is measured in waves of weeks, not one session — the
+   runner-shim exists, the acceptance harness (`tests/run-pilot.mjs`,
+   `npm run test:pilot`) is the next concrete step when scheduled.
+3. Until then, the per-file spawn pool stays, and D1's load inflation is
+   managed by the (audited) load-budget wave — budgets are the anesthesia,
+   this document is the surgery plan. Freeze note: no new features on the
+   home-grown flake ledger / TAP composition while the runner decision is
+   open (avoid gold-plating a wheel the migration may delete).
