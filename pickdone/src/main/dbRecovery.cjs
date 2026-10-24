@@ -402,6 +402,15 @@ function preflightMigrateResidue (ud, log) {
     const mainDb = path.join(ud, 'todos.db')
     const bak = path.join(ud, 'todos.db.plain-bak')
     if (fs.existsSync(mainDb) || !fs.existsSync(bak)) return false
+    // M8B fix 6 (P3): the main recovery path gates plain-bak usability on sqliteHeaderOk
+    // (attemptDbRecovery's plainBakUsable) — this preflight copied on EXISTENCE only, so a torn
+    // plain-bak became todos.db and init landed in the same corrupt loop the gate exists to
+    // prevent. Gate symmetrically: a garbage-header bak is skipped (nothing copied, todos.db
+    // stays absent, no false "recovered" log); the file is never deleted (forensics doctrine).
+    if (!sqliteHeaderOk(bak)) {
+      warn('迁移中断残留:todos.db.plain-bak 缺少有效 SQLite 头(疑似 torn copy)——跳过恢复,todos.db 保持缺失,文件保留待人工排查')
+      return false
+    }
     const key = path.join(ud, 'db.key')
     if (!fs.existsSync(key)) {
       for (const suf of ['-wal', '-shm']) { try { fs.rmSync(mainDb + suf, { force: true }) } catch {} }
