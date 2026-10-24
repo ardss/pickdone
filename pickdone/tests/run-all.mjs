@@ -366,7 +366,10 @@ const failedFileList = tap => {
   const files = new Set()
   for (const block of (tap.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || [])) {
     const m = /location: '?([^'\r\n]+)'?/.exec(block)
-    if (m) files.add(m[1].replace(/\\\\/g, '\\'))
+    if (!m) continue
+    // location is 'file:line:col' for case-level failures — keep the file path only
+    const file = m[1].replace(/\\\\/g, '\\').replace(/:\d+:\d+$/, '')
+    if (/\.(?:test\.mjs|test\.js)$/.test(file)) files.add(file)
   }
   return [...files]
 }
@@ -375,6 +378,10 @@ if (r.status !== 0 && !r.error && r.stdout) {
   if (failedFiles.length > 0 && failedFiles.length <= 12) {
     console.error(`[run-all] ${failedFiles.length} file(s) failed — flake-retry pass on just those files (one shot, budgets unchanged)`)
     for (const f of failedFiles) console.error('  ↻ ' + path.relative(appRoot, f))
+    // 30s settle before the retry: the full pass leaves the host hot (concurrent-pool
+    // debris, fs flushing); retrying into the same heat re-loses the same races
+    // (check-test-scope-golden flunked the immediate retry twice before this delay).
+    await new Promise(r2 => setTimeout(r2, 30000))
     const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)))
     if (retry.status === 0) {
       console.error('[run-all] flake-retry absorbed all failed files (load-band class) — suite green')

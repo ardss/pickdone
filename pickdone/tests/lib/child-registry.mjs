@@ -68,7 +68,10 @@ export function registryPath () { return REGISTRY_DIR }
 export function registerChild (pid, meta = {}) {
   if (!pid) return
   const list = readAll().filter(e => e.pid !== pid)
-  list.push({ pid, match: meta.match || [], purpose: meta.purpose || '', bornAt: new Date().toISOString() })
+  // owner = the registering process: a NESTED run-all (check-test-scope-golden spawns one)
+  // must never reap its parent's children at its own exit — each process reaps only what
+  // it registered; --cleanup remains the deliberate sweep-everything path (2026-10-24).
+  list.push({ pid, match: meta.match || [], purpose: meta.purpose || '', owner: process.pid, bornAt: new Date().toISOString() })
   writeAll(list)
 }
 
@@ -151,14 +154,15 @@ export function cleanupRegisteredChildren () {
 
 /**
  * Sync variant for process 'exit' handlers (must not touch the event loop): reaps every
- * entry still live+matching, best-effort, then clears the registry.
+ * entry THIS PROCESS registered (owner filter — a nested run-all's exit must not reap its
+ * parent's children), best-effort, then clears the registry.
  */
 export function reapAllRegisteredSync () {
-  const list = readAll()
-  if (!list.length) return
-  const lines = liveCmdlines(list.map(e => e.pid))
-  for (const e of list) {
+  const mine = readAll().filter(e => e.owner === process.pid)
+  if (!mine.length) return
+  const lines = liveCmdlines(mine.map(e => e.pid))
+  for (const e of mine) {
     try { reapEntry(e, lines.get(e.pid)) } catch { /* best-effort by contract */ }
+    try { fs.rmSync(entryFile(e.pid), { force: true }) } catch { /* raced */ }
   }
-  writeAll([])
 }
