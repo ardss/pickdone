@@ -443,3 +443,12 @@ Full gate tonight (gate-j4fix-full.log): 29/31 — 2 reds (S1/S2 clock-skew,
 2875 v2 drill) are load artifacts (5-way audit parallel with the gate); both
 files pass solo. Clean收官 gate deferred to a quiet window.
 Commits: 94baedbb (recovery P0). Main merge follows.
+
+### 2026-10-25 00:2x · Load-false-red class fixed (user verdict: idle-only gates are broken)
+
+The two load reds in gate-j4fix-full.log were idle-tuned budgets: v2 drill
+waitFor deadline 12s + per-send 15s; relay outbox device() exec 30s + test
+120s; same-family CLI execFile 30s x4, gate-mechanics/log-isolation 120s.
+All raised (60s/45s/90s/240s) with semantics untouched (predicate polls and
+result-shape asserts still decide pass/fail). Verified under concurrent
+pressure: 6 files parallel incl. v2 drill x2 — all green (0d1cde05).
