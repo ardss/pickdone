@@ -296,7 +296,12 @@ function applyRowInner (state, incoming) {
   // S4: this keep used to be completely silent — record the explicit ruling + surface it
   // (flag-gated; flag off → byte-identical silence).
   if ((entity === 'plan' || entity === 'filter') && localRow && localRow.deleted &&
-      incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) {
+      incoming && !incoming.deleted && stampNum(localRow.deletedAt) >= stampNum(incoming.updatedAt)) {
+    // W8 fix (2026-10-25): the guard was strict `>`, so an EXACT-STAMP tie (deletedAt ==
+    // updatedAt — the peer edited at the same millisecond it (or a peer) deleted) fell through to
+    // the generic LWW, where the tiebreak (deviceId / seq) could hand the win to the inbound live
+    // edit and RESURRECT the deleted chip/filter with no conflict backup of the loser. Delete
+    // must hold ties: same tombstone-keep + backup surface as the strictly-fresher case.
     if (incoming.data != null) {
       writeMetaConflictBackup(state, `${entity}:${incoming.id}`, incoming.data)
       markConflict(state, entity, incoming.id, false)
@@ -525,6 +530,21 @@ function applyRowInner (state, incoming) {
       return true
     }
     if (!winner.data) return false
+    // W8 fix (2026-10-25): 840001-blind-fallback. The localUserId scan only reads LOCAL todos —
+    // on a first-sync device whose own table is empty (fresh install, peer-push-first), every
+    // landed todo was stamped with the 840001 OFFLINE-DEFAULT guess while the PEER's row carried
+    // the real account id. Learn from the inbound payload: when nothing has been discovered yet
+    // (no memo, no local row scan hit — i.e. localUserId is still null) and the incoming row
+    // carries a real userId, adopt it and persist it through the durable memo (persistLocalUserId
+    // never stores the 840001 guess, and 'sync.*' is machine-local). Later landings then take the
+    // peer-evidence id via localUserId() instead of the constant.
+    if (state.localUserId == null && winner.data && winner.data.userId != null) {
+      const peerId = Number(winner.data.userId)
+      if (Number.isFinite(peerId) && peerId > 0 && peerId !== 840001) {
+        state.localUserId = peerId
+        persistLocalUserId(state, peerId)
+      }
+    }
     // userId normalization at the sync boundary (round-3 review): the row lands with THIS
     // device's account id, never the peer's. Provenance: keep the ORIGINAL author — winner is
     // always `incoming` here (a local winner returned above), and re-stamping self would break
