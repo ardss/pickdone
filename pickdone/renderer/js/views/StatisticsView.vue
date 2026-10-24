@@ -9,7 +9,8 @@
             <div class="title__text"> {{ $t('statsA.StatisticsView.pageTitle') }} </div>
           </div>
           <div class="title__append">
-            <div class="stat-view-tabs" role="tablist" :aria-label="$t('statsA.StatisticsView.ariaReviewViews')">
+            <!-- [W8] the tablist honors the tab pattern's arrow gesture: Left/Right switch views -->
+            <div class="stat-view-tabs" role="tablist" :aria-label="$t('statsA.StatisticsView.ariaReviewViews')" @keydown="onStatTabKey">
               <button v-for="v in views" :key="v.key" class="stat-view-tab"
                       :class="{on: view===v.key}" role="tab" :aria-selected="view===v.key"
                       tabindex="0" @click="view=v.key" @keydown.enter.prevent="view=v.key"><app-icon :name="v.icon" :size="13"/>{{ v.text }}</button>
@@ -188,19 +189,21 @@
                 <div v-for="row in timelineRows" :key="row.dateKey" class="tl-row" :class="{'tl-row--empty': row.empty}">
                   <span class="tl-date">{{row.dateKey.slice(5)}}</span>
                   <div class="tl-track">
+                    <!-- [W8] bands/segments carry role="img" + their hover-title as aria-label, so the
+                         timeline is readable without a pointer -->
                     <template v-for="(b, bi) in (row.bands || [])" :key="row.dateKey + '_' + bi">
-                      <div class="tl-band" :style="{left:b.left+'%', width:b.width+'%'}"
+                      <div class="tl-band" role="img" :aria-label="b.title" :style="{left:b.left+'%', width:b.width+'%'}"
                            @mouseenter="e => tlTip = { text: b.title, x: e.clientX, y: e.clientY }"
                            @mousemove="e => { if (tlTip) { tlTip.x = e.clientX; tlTip.y = e.clientY } }"
                            @mouseleave="tlTip=null">
-                        <div v-for="seg in b.segs" :key="seg.key" class="tl-seg unit"
+                        <div v-for="seg in b.segs" :key="seg.key" class="tl-seg unit" role="img" :aria-label="seg.title"
                              :style="{ left: ((seg.left-b.left)/b.width*100)+'%', width: (seg.width/b.width*100)+'%', '--ff': seg.ff+'%' }"
                              @mouseenter.stop="e => tlTip = { text: seg.title, x: e.clientX, y: e.clientY }"
                              @mousemove="e => { if (tlTip) { tlTip.x = e.clientX; tlTip.y = e.clientY } }"
                              @mouseleave="tlTip=null"></div>
                       </div>
                     </template>
-                    <div v-for="seg in row.segments.filter(x => x.kind==='rest')" :key="seg.key" class="tl-seg rest"
+                    <div v-for="seg in row.segments.filter(x => x.kind==='rest')" :key="seg.key" class="tl-seg rest" role="img" :aria-label="seg.title"
                          :style="{left:seg.left+'%', width:seg.width+'%'}"
                          @mouseenter="e => tlTip = { text: seg.title, x: e.clientX, y: e.clientY }"
                          @mousemove="e => { if (tlTip) { tlTip.x = e.clientX; tlTip.y = e.clientY } }"
@@ -271,8 +274,11 @@ export default {
   },
   /* Period/view state goes to the route query (calendar page convention): refresh/back keeps the selection */
   watch: {
-    view (v) { this.syncQuery() },
-    period (v) { this.syncQuery() },
+    /* [W8] view/period/range switches rebuild the heatmap in place — a lingering hover tip from
+       the old grid used to stay pinned until the next mouseenter */
+    view (v) { this.syncQuery(); this.hmTipHide() },
+    period (v) { this.syncQuery(); this.hmTipHide() },
+    heatRange () { this.hmTipHide() },
     /* After tooltip text/position changes, clamp into the viewport by measured size: near the right edge flip to the mouse's left, past the bottom edge flip back above */
     tlTip () { this.$nextTick(() => this.clampTip('tlTip', 'tlTip')) },
     hmTip () { this.$nextTick(() => this.clampHmTip()) }
@@ -406,6 +412,21 @@ export default {
       const key = el.getAttribute && el.getAttribute('data-heat-key')
       if (key) this.heatRange = key
     }),
+    /* [W8] review-view tablist: ArrowLeft/ArrowRight switch (and wrap across) the two views,
+       focus follows the now-selected tab (tab pattern's arrow gesture) */
+    onStatTabKey (e) {
+      const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+      if (!dir) return
+      e.preventDefault()
+      const keys = this.views.map(v => v.key)
+      const i = keys.indexOf(this.view)
+      if (i < 0) return
+      this.view = keys[(i + dir + keys.length) % keys.length]
+      this.$nextTick(() => {
+        const el = this.$el && this.$el.querySelector('.stat-view-tab.on')
+        if (el) el.focus()
+      })
+    },
     /* [A9] custom-range trigger: Space joins Enter; the popover opens on click, so synthesize one */
     onRangeActivateKey: roleButtonActivate(function (e) { (e.currentTarget).click() }),
     /** Hover 3-hour dashed-grid toggle: state persisted to localStorage('tlHoverGrid'), on by default */
