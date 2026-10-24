@@ -75,7 +75,11 @@ const META_FLUSH_QUARANTINE_PREFIX = 'sync.flushQuarantine.'
 // Cap parked entries per op: quarantine is a crash-inspection surface, not a data store; the
 // oplog/snapshot remains the authoritative recovery for large segments.
 const META_FLUSH_QUARANTINE_CAP = 50
-const QUARANTINE_ROW_SAMPLE = 20
+// W8 fix (2026-10-25): 20 lost every row past #20 of a poison batch — a segment-sized poison
+// batch (PENDING_WRITES_CAP allows up to 5000 buffered rows) parked 4980 rows log-only with no
+// recoverable copy. Match the buffer cap's order of magnitude (500 rows sampled, ~0.5MB worst
+// case per entry), and the existing `truncated`/`omitted` marker keeps oversize batches honest.
+const QUARANTINE_ROW_SAMPLE = 500
 
 /** Safely encode one buffered row for the quarantine blob (a poison row may itself be
  *  un-JSON-able — BigInt, circular — so fall back to a string rendering). */
