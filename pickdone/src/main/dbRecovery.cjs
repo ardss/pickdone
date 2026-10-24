@@ -149,14 +149,24 @@ function encryptedProbe (file, keyFile) {
   // no rename, no rollback) exactly like an unreadable key.
   if (!/^[0-9a-fA-F]{64}$/.test(key)) return 'unknown'
   let db
+  // [J4 2026-10-24] open-vs-decrypt split. Evidence: three red-round scenes (dWcIg3/YZPQpk/
+  // RzKpwu) show a HEALTHY encrypted db renamed to .corrupt-* here — `new Database(file)`
+  // threw a TRANSIENT open error (hard-killed predecessor's handles / AV hold: disk I/O error)
+  // and the old catch folded it into 'no' = genuinely corrupt, triggering quarantine of a
+  // healthy library plus a JSON restore that carries no sync.* machine-local rows (pairing
+  // state permanently evaporated). A failed OPEN carries no decryption verdict → 'unknown'
+  // (conservative: no rename). Only "open succeeded, key accepted, page read failed" is 'no'.
   try {
     db = new Database(file, { readonly: true })
-    try {
-      db.pragma(`key='${key}'`)
-      db.prepare('SELECT count(*) FROM sqlite_master').get()
-      return 'yes'
-    } finally { try { db.close() } catch { /* already closed on probe failure */ } }
-  } catch { return 'no' }
+  } catch (e) {
+    if (/disk i\/o|sqlite_ioerr|can'?t open|unable to open|database is locked|database table is locked|EBUSY|EPERM/i.test(String(e && e.message))) return 'unknown'
+    return 'no'
+  }
+  try {
+    db.pragma(`key='${key}'`)
+    db.prepare('SELECT count(*) FROM sqlite_master').get()
+    return 'yes'
+  } catch { /* open succeeded + key accepted at pragma time + page read failed = genuine decrypt failure */ return 'no' } finally { try { db.close() } catch { /* already closed on probe failure */ } }
 }
 
 /** M-1 (2026-09-20): make sure a stale db.key is OUT of the way before the restored (plaintext)
