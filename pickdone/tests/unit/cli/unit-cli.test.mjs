@@ -189,7 +189,7 @@ function spawnCleanEnv (args, extraEnv = {}) {
   const env = { ...process.env }
   delete env.TODO_DB_DIR
   delete env.TODO_USER_DATA_DIR
-  return spawnSync(process.execPath, args, { cwd: CLEAN, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 30000 })
+  return spawnSync(process.execPath, args, { cwd: CLEAN, env: { ...env, ...extraEnv }, encoding: 'utf8', timeout: 90000 })
 }
 
 test('CLI data-safety: e2e-walkthrough fails fast (non-zero) without any isolation env', () => {

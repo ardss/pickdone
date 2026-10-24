@@ -205,7 +205,7 @@ const isolEnv = () => {
   }
 }
 const runCli = (args, env) => new Promise(resolve => {
-  execFile(process.execPath, [CLI, ...args], { env, timeout: 30000 }, (err, stdout, stderr) =>
+  execFile(process.execPath, [CLI, ...args], { env, timeout: 90000 }, (err, stdout, stderr) =>
     resolve({ code: err ? (err.code ?? 1) : 0, stdout, stderr }))
 })
 

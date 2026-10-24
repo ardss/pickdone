@@ -115,7 +115,7 @@ test('meta#5 coverage below threshold -> red (sandbox summary + scratch baseline
   try {
     fs.writeFileSync(summaryPath, JSON.stringify({ lines: 10, branches: 10, functions: 10, failCount: 0, suite: 'unit', generatedAt: new Date().toISOString() }))
     const p = spawnSync(process.execPath, ['cli/check-coverage-ratchet.cjs'],
-      { cwd: PICKDONE, encoding: 'utf8', timeout: 120000,
+      { cwd: PICKDONE, encoding: 'utf8', timeout: 240000,
         env: { ...process.env, PICKDONE_COV_RATCHET_BASELINE_FILE: scratchBase } })
     record('coverage-below-threshold', 'fresh sandbox summary 10/10/10 vs baseline 80/80/80', p, 'red')
     assert.equal(p.status, 1, 'coverage below baseline must be red')

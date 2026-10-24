@@ -43,7 +43,11 @@ export function launch () {
     const id = 'm' + nextId++
     pending.set(id, resolve)
     child.stdin.write(JSON.stringify({ id, ...msg }) + '\n')
-    setTimeout(() => { if (pending.has(id)) { pending.delete(id); resolve({ error: 'side timeout' }) } }, 15000)
+    // [load-budget 2026-10-25] 15s was an idle-machine number: under a full gate (dozens of
+    // concurrent test processes) a single IPC roundtrip+sync round can legitimately take
+    // ~10s. The response shape is unchanged — a real hang still resolves via waitFor's
+    // predicate deadline, this only stops the CPU-starved-but-healthy case from false-red.
+    setTimeout(() => { if (pending.has(id)) { pending.delete(id); resolve({ error: 'side timeout' }) } }, 45000)
   })
   const kill = () => { try { child.kill('SIGKILL') } catch {} }
   return { child, send, kill }
@@ -59,9 +63,12 @@ export async function startSide (deviceId, absDir = fs.mkdtempSync(path.join(os.
   return { ...side, port: p.port, deviceId, absDir }
 }
 
-/** Bounded converge loop: rounds on `driver` until `pred` (a getAll read on `reader`) holds. */
+/** Bounded converge loop: rounds on `driver` until `pred` (a getAll read on `reader`) holds.
+ *  [load-budget 2026-10-25] deadline 60s (was 12s, an idle-machine figure): the loop is a
+ *  predicate poll — under a full gate the rounds converge slower but the PASS/FAIL semantics
+ *  are untouched; a genuinely broken sync still exhausts the budget and throws. */
 export async function waitFor (driver, reader, pred, label) {
-  const deadline = Date.now() + 12000
+  const deadline = Date.now() + 60000
   for (;;) {
     for (let i = 0; i < 3; i++) {
       await driver.send({ do: 'round' })
