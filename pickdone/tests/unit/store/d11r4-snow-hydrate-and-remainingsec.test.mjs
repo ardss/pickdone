@@ -123,7 +123,9 @@ test('d11r4[4]: anti-re-copy guard — the three components consume the single s
     assert.ok(!src.includes("s.status === 'startRestTime' ? s.restTime : s.tomatoTime) * 60"),
       f + ' no longer hand-writes the remaining-seconds formula')
   }
-  // And the single source exists exactly once, in the store
-  const store = readFileSync(join(ROOT, 'renderer/js/store/tomato.js'), 'utf8')
-  assert.equal((store.match(/restTime : s\.tomatoTime/g) || []).length, 1, 'the formula lives exactly once, in store/tomato.js')
+  // And the single source exists exactly once (tomato-pure split 2026-10-24: the formula
+  // lives in store/tomato-pure.js; scan store + pure concatenated — still exactly once).
+  const store = readFileSync(join(ROOT, 'renderer/js/store/tomato.js'), 'utf8') +
+    readFileSync(join(ROOT, 'renderer/js/store/tomato-pure.js'), 'utf8')
+  assert.equal((store.match(/restTime : s\.tomatoTime/g) || []).length, 1, 'the formula lives exactly once, in store/tomato.js(-pure.js)')
 })

@@ -26,9 +26,11 @@ function manifestKeys () {
 }
 
 function defaultKeys () {
-  const src = read(ANCHORS.settingsStore)
+  // settings-schema split (2026-10-24): DEFAULT_SETTINGS lives in settings-schema.js now —
+  // scan store + schema concatenated so the parity check follows the content wherever it sits.
+  const src = read(ANCHORS.settingsStore) + '\n' + read('renderer/js/store/settings-schema.js')
   const m = src.match(/export const DEFAULT_SETTINGS = \{[\s\S]*?\n\}/)
-  assert.ok(m, 'DEFAULT_SETTINGS 必须存在于 renderer/js/store/settings.js')
+  assert.ok(m, 'DEFAULT_SETTINGS 必须存在于 renderer/js/store/settings.js(-schema.js)')
   const keys = new Set()
   for (const line of m[0].split('\n')) {
     const k = line.match(/^ {2}(\w+):/)

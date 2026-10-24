@@ -441,7 +441,7 @@ test('[chipsnapshot-backup] collectMetaState gathers planChipsSnapshot and both 
   // without the restore whitelists the collector fix is dead code
   const tab = read('renderer/js/components/settings/SettingsDataTab.vue')
   assert.match(tab, /'planChipsSnapshot:',/, 'SettingsDataTab META_RESTORE_PREFIXES accepts planChipsSnapshot')
-  const rec = read('src/main/dbRecovery.cjs')
+  const rec = read('src/main/dbRecovery.cjs') + read('src/main/db-recovery-restore.cjs') // restore-family split 2026-10-24
   assert.match(rec, /'planChipsSnapshot:',/, 'dbRecovery META_RESTORE_PREFIXES accepts planChipsSnapshot')
 })
 

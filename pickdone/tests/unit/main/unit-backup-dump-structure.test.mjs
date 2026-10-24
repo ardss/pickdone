@@ -52,7 +52,9 @@ test('两套恢复路径消费必含段(写入面↔消费面对账)', () => {
   for (const seg of ['settingsState', 'categoryState', 'habitsState', 'todoState', 'tomatoRecords', 'planState', 'filterState']) {
     assert.ok(uiRestore.includes('b.' + seg), `SettingsModal UI 恢复未消费备份段 ${seg}——恢复后该数据会"消失"`)
   }
-  const mainRecovery = read('src/main/dbRecovery.cjs')
+  // db-recovery-restore split (2026-10-24): the consumed-segment registry lives in the
+  // restore family module — scan orchestrator + family concatenated.
+  const mainRecovery = read('src/main/dbRecovery.cjs') + read('src/main/db-recovery-restore.cjs')
   for (const seg of ['todoState', 'categoryState', 'tomatoRecords']) {
     assert.ok(mainRecovery.includes(seg), `dbRecovery 启动灾备未消费备份段 ${seg}`)
   }
