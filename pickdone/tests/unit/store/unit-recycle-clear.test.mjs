@@ -139,10 +139,9 @@ test('i18n keys: the clear-recycle-bin keyword is symmetric between zh/en', () =
   assert.ok(/clearKeyword:\s*'empty recycle bin'/.test(enText), 'en clearKeyword should equal "empty recycle bin"')
   assert.ok(/clearKeywordMismatch:/.test(zhText) && /clearKeywordMismatch:/.test(enText), 'clearKeywordMismatch exists on both sides')
   assert.ok(/clearFinalConfirm:/.test(zhText) && /clearFinalConfirm:/.test(enText), 'clearFinalConfirm exists on both sides')
-  // The keyword and undo prompts must have the same literal on both sides
-  const zhKw = zhText.match(/clearKeyword:\s*'([^']+)'/)[1]
-  const enKw = enText.match(/clearKeyword:\s*'([^']+)'/)[1]
-  assert.ok(zhKw && enKw && zhKw.length > 0 && enKw.length > 0, 'the keyword is non-empty on both sides')
+  // [assertion-quality 2026-10-25] removed the tautology re-checking non-emptiness of
+  // capture groups already precisely pinned above (zh/en exact literals) — zero
+  // additional signal behind strong asserts.
 })
 
 test('RecycleBinView.clearAll must check the list emptiness before confirm (prevents three popups on an empty bin)', () => {

@@ -98,7 +98,10 @@ test('m1[1b]: crash while NOT quitting still rebuilds (guard does not over-block
   })
   lock.lockAppNow()
   constructed[0].webContents.emit('render-process-gone', null, { reason: 'crashed', exitCode: 1 })
-  await new Promise(r => setTimeout(r, 400))
+  // [load-budget 2026-10-25] predicate poll (was sleep(400) = 1.33x on the 300ms arm window):
+  // timer inflation under load made the rebuild land after the check. Budget 3s, predicate
+  // decides — a genuinely missing rebuild still exhausts and fails.
+  { const dl = Date.now() + 3000; while (constructed.length < 2 && Date.now() < dl) await new Promise(r => setTimeout(r, 50)) }
   assert.equal(constructed.length, 2, 'rebuild happened when the app is not quitting')
   assert.equal(configWrites.length, 0)
 })

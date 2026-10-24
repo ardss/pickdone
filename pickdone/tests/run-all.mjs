@@ -391,6 +391,70 @@ const failedFileList = tap => {
   }
   return [...files]
 }
+// --- flake-retry observability (2026-10-25, signal-integrity audit) ---
+// The audit verdict was blunt: absorbing a first red into a silent green is the
+// mechanized version of "blame the load and move on" — pass1's TAP got REPLACED
+// by the retry's (so the skip ratchet saw only the retried few files = partial
+// corpus blindness), nothing was persisted, and DEEP_FILES (the deliberately
+// load-sensitive two-machine family) could be silently absorbed like any other
+// file. The retry stays (it is a legitimate anti-jitter boundary under gate
+// self-load) but from now on every absorbed red is: counted, persisted, loud,
+// and impossible for the deep pool.
+const FLAKE_LEDGER = path.join(appRoot, 'tests', '.artifacts', 'flake-files.json')
+const recordFlake = async entries => {
+  try {
+    const fsx = await import('node:fs')
+    fsx.mkdirSync(path.dirname(FLAKE_LEDGER), { recursive: true })
+    let prior = []
+    try { prior = JSON.parse(fsx.readFileSync(FLAKE_LEDGER, 'utf8')) } catch { /* first entry or unreadable prior */ }
+    if (!Array.isArray(prior)) prior = []
+    // keep the ledger bounded: recent 200 entries are the observability window
+    const next = [...prior, ...entries].slice(-200)
+    fsx.writeFileSync(FLAKE_LEDGER, JSON.stringify(next, null, 2) + '\n')
+    console.error(`[run-all] ⚑FLAKY ledger updated: ${path.relative(appRoot, FLAKE_LEDGER)} (${next.length} entries)`)
+  } catch (e) { console.error(`[run-all] flake ledger write failed: ${e.message}`) }
+}
+
+// Split a TAP stream into { head, blocks, tail }: head = leading version line(s),
+// blocks = top-level `ok N`/`not ok N` test blocks (indented continuation lines
+// and their `# Subtest` prologue ride along), tail = the plan + summary comment lines.
+const splitTapBlocks = tap => {
+  const lines = String(tap).split(/\r?\n/)
+  const head = []; const blocks = []; const tail = []
+  let cur = null
+  let prologue = []
+  for (const line of lines) {
+    if (/^(?:not )?ok \d+/.test(line)) {
+      if (cur) blocks.push(cur)
+      cur = [...prologue, line]
+      prologue = []
+    } else if (/^# Subtest/.test(line) && !/^\s/.test(line)) {
+      prologue = [line]
+    } else if (/^1\.\.\d+/.test(line) || (/^# (pass|fail|cancel|skip|tests|suites|cancelled|skipped|todo|duration_ms)/.test(line))) {
+      if (cur) { blocks.push(cur); cur = null }
+      prologue = []
+      tail.push(line)
+    } else if (cur && (/^\s/.test(line) || line === '')) {
+      cur.push(line)
+    } else if (cur) {
+      cur.push(line)
+    } else {
+      head.push(line)
+    }
+  }
+  if (cur) blocks.push(cur)
+  return { head, blocks, tail }
+}
+const blockFile = block => {
+  const m = /(?:^|\n)\s*location: '?([^'\r\n]+)'?/.exec(block.join('\n'))
+  return m ? m[1].replace(/\\\\/g, '\\').replace(/:\d+:\d+$/, '') : null
+}
+const renumber = blocks => blocks.map((b, i) => {
+  const lines = [...b]
+  lines[0] = lines[0].replace(/^(ok|not ok) \d+/, (m0, kw) => `${kw} ${i + 1}`)
+  return lines
+})
+
 if (r.status !== 0 && !r.error && r.stdout) {
   const failedFiles = failedFileList(String(r.stdout))
   if (failedFiles.length > 0 && failedFiles.length <= 12) {
@@ -402,11 +466,73 @@ if (r.status !== 0 && !r.error && r.stdout) {
     await new Promise(r2 => setTimeout(r2, 30000))
     const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)))
     if (retry.status === 0) {
-      console.error('[run-all] flake-retry absorbed all failed files (load-band class) — suite green')
-      // Final record: retry TAP on stdout (green, what the summary gate counts), FULL-pass
-      // stderr kept when coverage ran (its "all files" table is corpus-complete; the retry's
-      // would be a partial denominator the ratchet must never raise a baseline from).
-      r = { status: 0, stdout: retry.stdout, stderr: r.stderr }
+      const deepHit = failedFiles.filter(f => DEEP_FILES.has(path.basename(f)))
+      if (deepHit.length > 0) {
+        // [signal-integrity 2026-10-25] the deep pool IS the deliberate load-sensitivity
+        // probe — a first red there is the signal we built this suite to catch. The retry
+        // run stays on record, but it must never flip the exit: pass1 red stays red.
+        console.error('[run-all] ⚑FLAKY retry GREEN but DEEP_FILES hit (' + deepHit.map(f => path.basename(f)).join(', ') + ') — NOT absorbed: pass1 red stands, retry recorded as evidence')
+        await recordFlake([{
+          at: new Date().toISOString(), absorbed: false, deepPool: true,
+          files: failedFiles.map(f => path.relative(appRoot, f)),
+          note: 'deep-pool load-sensitivity: retry green, pass1 red stands'
+        }])
+        console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
+        console.error(String(retry.stdout || ''))
+      } else {
+        // Compose a FULL-corpus TAP for the summary gate: pass1 blocks minus the
+        // retried files' blocks, then the retry's own blocks — the skip ratchet
+        // sees every file of this run again (partial-corpus blindness closed).
+        // Fail-closed: if pass1/retry cannot be parsed confidently, keep the raw
+        // retry TAP and say so loudly.
+        const pass1 = String(r.stdout || '')
+        const retryTap = String(retry.stdout || '')
+        const p1 = splitTapBlocks(pass1)
+        const rt = splitTapBlocks(retryTap)
+        const retriedSet = new Set(failedFiles)
+        const kept = []
+        let unattributableNotOk = 0
+        for (const b of p1.blocks) {
+          const file = blockFile(b)
+          const isNotOk = /^not ok \d+/.test(b[b.length - 1] === undefined ? b[0] : b[0])
+          if (file && retriedSet.has(file)) continue // retry's verdict is authoritative
+          if (!file && isNotOk) unattributableNotOk++
+          kept.push(b)
+        }
+        const planOk = /^1\.\.\d+/.test(p1.tail.find(l => /^1\.\.\d+/.test(l)) || '')
+        const notOkInRetry = rt.blocks.filter(b => /^not ok \d+/.test(b[0])).length
+        if (planOk && unattributableNotOk === 0 && notOkInRetry === 0 && rt.blocks.length > 0) {
+          const all = renumber([...kept, ...rt.blocks])
+          const skips = all.filter(b => /# (SKIP|skip)/.test(b.join('\n'))).length
+          const composed = [
+            ...p1.head,
+            ...all.map(b => b.join('\n')),
+            `1..${all.length}`,
+            `# pass ${all.length - skips}`,
+            `# skip ${skips}`,
+            '# cancelled 0',
+            `# COMPOSED after flake-retry absorption (${failedFiles.length} file(s) re-ran green; pass1 blocks for those files replaced by retry blocks)`,
+            `# flake-absorbed-at ${new Date().toISOString()}`
+          ].join('\n')
+          console.error(`[run-all] ⚑FLAKY absorbed ${failedFiles.length} file(s) (load-band class) — suite green, composed full-corpus TAP, ledger updated`)
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: true, deepPool: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            pass1Blocks: String(pass1.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || []).length,
+            note: 'first red re-ran green under lighter load (retried files only + 30s settle)'
+          }])
+          r = { status: 0, stdout: composed, stderr: r.stderr }
+        } else {
+          console.error(`[run-all] ⚑FLAKY absorbed but TAP composition skipped (parse confidence low: plan=${planOk} unattributable=${unattributableNotOk} retryNotOk=${notOkInRetry}) — retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
+          console.error('[run-all] ⚑FLAKY ledger still records this absorption')
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: true, deepPool: false, composed: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            note: 'absorbed; ratchet saw partial corpus (composition guard failed)'
+          }])
+          r = { status: 0, stdout: retry.stdout, stderr: r.stderr }
+        }
+      }
     } else {
       console.error('[run-all] flake-retry did NOT absorb — real red, retry TAP below is authoritative')
       r = retry

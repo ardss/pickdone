@@ -75,10 +75,25 @@ if (SPAWN) {
   try {
     const out = execSync('netstat -ano | findstr :' + PORT + ' | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
     for (const pid of [...new Set(out.split(/\r?\n/).map(l => l.trim().split(/\s+/).pop()).filter(p => /^\d+$/.test(p)))]) {
+      // [safety 2026-10-25, determinism audit #10] fingerprint BEFORE killing: only a host
+      // anchored at THIS repo (vite serving our ROOT) may be shot. 5175 is also the
+      // browser-dev host's legal port — the user's own dev server must never die to a gate.
+      // An unidentified occupier fails the gate loudly with the pid instead.
+      let cmd = ''
+      try {
+        cmd = String(execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`, { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })).trim()
+      } catch { /* gone between netstat and query */ }
+      const ours = cmd && cmd.toLowerCase().includes(ROOT.toLowerCase()) && /vite|node/i.test(cmd)
+      if (!ours) {
+        console.error(`[visual-web] port ${PORT} held by pid ${pid} which is NOT this repo's vite host (cmd: ${cmd.slice(0, 140) || 'unreadable'}) — refusing to kill; free the port or pass --port`)
+        process.exit(1)
+      }
       execSync(`taskkill /pid ${pid} /T /F`, { shell: true, stdio: 'ignore' })
     }
     await new Promise(r => setTimeout(r, 1000))
-  } catch { /* 端口空闲 */ }
+  } catch (e) {
+    if (e && e.__handled) throw e
+    /* 端口空闲 */ }
   // 等端口真正释放(2026-09-25 check:all 实锤):taskkill 返回后旧宿主的子进程树可能还要几秒才退净,
   // 新 vite 立即 EADDRINUSE 静默退场,而轮询却短暂探到垂死的旧宿主"就绪"——随后 preflight 报
   // "宿主未启动"。杀完必须轮询到 LISTENING 彻底消失再 spawn。

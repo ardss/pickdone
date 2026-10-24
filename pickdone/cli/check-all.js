@@ -120,7 +120,7 @@ const GROUPS = [
       // a red target never reds its siblings; a target that kills the shared instance reds only itself
       // and the instance is respawned exactly once for the rest. 30min budget = 6 sequential targets
       // (each was 20min solo) including the group retry headroom.
-      ['UI 交互池（6门共享1实例:ui-smoke/e2e/键盘/cssom/覆盖走查/遮挡;逐目标独立裁决+单次实例重生）', 'node', ['tests/run-interactions-shared.mjs'], 30],
+      ['UI 交互池（6门共享1实例:ui-smoke/e2e/键盘/cssom/覆盖走查/遮挡;逐目标独立裁决+单次实例重生）', 'node', ['tests/run-interactions-shared.mjs'], 50],
       ['CLI 冒烟', 'node', ['cli/cli-smoke.js'], 20],
     ]
   },

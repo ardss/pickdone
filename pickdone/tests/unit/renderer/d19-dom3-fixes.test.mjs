@@ -99,7 +99,9 @@ test('[F6] dayShift keeps every stepped timestamp on local midnight across the w
     assert.equal(d.getMinutes(), 0)
     assert.equal(d.getSeconds(), 0)
     // one calendar day apart from its neighbor (date-of-month normalized, no hour drift)
-    assert.equal(dayShift(ts, 1) - ts !== 86400000 || true, true)
+    // [assertion-quality 2026-10-25] removed `assert.equal(dayShift(ts,1)-ts!==86400000 || true, true)`
+    // — literally always green (zero signal); DST semantics are owned by day-caliber-dst.test.mjs
+    // with real notEqual asserts.
     assert.equal(dayStart(dayShift(t0, i)), ts, 'stepped ts IS its own day start (bucketing-safe)')
   }
 })

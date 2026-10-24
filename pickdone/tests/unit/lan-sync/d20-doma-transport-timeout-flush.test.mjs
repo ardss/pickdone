@@ -66,13 +66,20 @@ function stalledSocket () {
 test('C13: flushThenDestroy honors a short per-call cap (pair-control 250ms window)', async () => {
   const a = stalledSocket()
   transport.flushThenDestroy(a, 250)
-  await new Promise((r) => setTimeout(r, 600))
+  // [load-budget 2026-10-25] predicate polling replaces the sleep(600) double-trap:
+  // the old fixed waits sat BETWEEN the 250ms cap and the 1000ms cap — either direction
+  // of timer inflation under load flipped an assertion. The destroyed flag is observable.
+  const deadline = Date.now() + 5000
+  while (!a.destroyed && Date.now() < deadline) await new Promise(r => setTimeout(r, 50))
   assert.equal(a.destroyed, true, 'the 250ms pair-control cap fires well inside the old 1s window')
 
   const b = stalledSocket()
   transport.flushThenDestroy(b) // default data-path cap: 1000ms
-  await new Promise((r) => setTimeout(r, 600))
-  assert.equal(b.destroyed, false, 'the default 1s cap is untouched (no early destroy of data paths)')
-  await new Promise((r) => setTimeout(r, 700))
+  const t0 = Date.now()
+  // negative direction: sample at ~500ms (mid-gap, safely under the 1s cap) — a wrong
+  // early destroy is caught even if timers inflate (we check elapsed, not the sleep).
+  while (!b.destroyed && Date.now() - t0 < 500) await new Promise(r => setTimeout(r, 50))
+  assert.equal(b.destroyed, false, 'the default 1s cap is untouched at mid-gap (no early destroy of data paths)')
+  while (!b.destroyed && Date.now() - t0 < 5000) await new Promise(r => setTimeout(r, 50))
   assert.equal(b.destroyed, true, 'the default cap still fires at 1s')
 })

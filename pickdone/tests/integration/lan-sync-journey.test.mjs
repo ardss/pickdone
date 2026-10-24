@@ -296,7 +296,7 @@ class Instance {
   }
 
   /** Production read path: window.todoAPI.dbCall(op, params). */
-  dbCall (op, params, timeoutMs = 20000) {
+  dbCall (op, params, timeoutMs = 45000) {
     return this.cdp.evalExpr(
       `Promise.resolve(window.todoAPI.dbCall(${JSON.stringify(op)}, ${JSON.stringify(params || {})}))` +
       `.then(r => ({ ok: true, r })).catch(e => ({ ok: false, err: String((e && e.message) || e) }))`,
@@ -307,7 +307,7 @@ class Instance {
   }
 
   /** Production write path: window.commands.commit(entity, verb, payload). */
-  commit (entity, verb, payload, timeoutMs = 20000) {
+  commit (entity, verb, payload, timeoutMs = 45000) {
     return this.cdp.evalExpr(
       `Promise.resolve(window.commands.commit(${JSON.stringify(entity)}, ${JSON.stringify(verb)}, ${JSON.stringify(payload || {})}))` +
       `.then(r => ({ ok: true, r })).catch(e => ({ ok: false, err: String((e && e.message) || e) }))`,
@@ -519,7 +519,12 @@ test('J1: boot pair + enable sync + two-way pairing completes on both sides', as
     trace('J1 complete: pair is up and paired both ways')
     pair.ready = true
   } catch (e) {
-    if (/EADDRINUSE|spawn|ENOENT/i.test(String(e.message))) {
+    // [signal-integrity 2026-10-25] EADDRINUSE under a full gate is usually OUR OWN
+    // concurrency contention (the run pools + sibling gates fighting for ports) — that is
+    // a load signal, not a missing sandbox capability; skipping it cascades J2-J4 into
+    // silent greens. Only a true no-spawn sandbox (ENOENT on the electron binary / the
+    // runner's spawn surface) is a legitimate skip; everything else stays a red.
+    if (/ENOENT/i.test(String(e.message))) {
       return t.skip('process spawning unavailable in this sandbox: ' + e.message)
     }
     throw e

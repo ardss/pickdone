@@ -181,13 +181,18 @@ export async function connectCdp (ctx, tries = 40) {
 
 export async function send (ctx, method, params = {}) { return ctx._send(method, params) }
 
-/** 页面内求值（JSON 序列化往返；12s 超时=页面僵死或 WS 断连） */
+/** 页面内求值（JSON 序列化往返）
+ *  [load-budget 2026-10-25] 60s (was 12s, idle-host figure): this is THE shared evaluation
+ *  channel for every live target (ui-smoke/ui-coverage/cssom/overlay/integration-ui), and
+ *  caller-side seeds chain multiple 1s-class sleeps inside one expression — under a full
+ *  gate the whole IIFE legitimately ran past 12s and read as "page wedged". A truly wedged
+ *  page still times out at the budget; the timeout message keeps the old shape. */
 export async function evalJson (ctx, expression) {
   const r = await Promise.race([
     ctx._send('Runtime.evaluate', { expression: `(async () => JSON.stringify(await (${expression})))()`, returnByValue: true, awaitPromise: true }),
-    sleep(12000).then(() => null)
+    sleep(60000).then(() => null)
   ])
-  if (r === null) throw new Error('Runtime.evaluate timed out after 12s (page wedged or WS disconnected)')
+  if (r === null) throw new Error('Runtime.evaluate timed out after 60s (page wedged or WS disconnected)')
   const raw = r.result?.result?.value
   if (raw !== undefined && raw !== null && typeof raw !== 'string') {
     throw new Error('evalJson: non-string value | expr: ' + (expression && expression.slice ? expression.slice(0, 140) : String(expression)) + ' | got: ' + String(JSON.stringify(r.result && r.result.result)).slice(0, 80))

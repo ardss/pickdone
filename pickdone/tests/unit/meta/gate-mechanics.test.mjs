@@ -152,6 +152,11 @@ test('meta#7 first-run fail, retry pass -> green BUT retry evidence retained', (
   assert.equal(p.status, 0, 'an absorbed retry is ultimately green')
   assert.match(stderr, /flake-retry/, 'the retry event must be recorded, never disguised as a clean pass')
   assert.match(stderr, /↻/, 'the retried file must be named')
+  assert.match(stderr, /⚑FLAKY/, 'the absorption must be loud (signal-integrity contract 2026-10-25)')
+  // observability contract: the absorption lands in the ledger inside the sandbox appRoot
+  const ledger = path.join(dir, 'tests', '.artifacts', 'flake-files.json')
+  assert.ok(fs.existsSync(ledger), 'flake ledger must exist after an absorption')
+  assert.match(fs.readFileSync(ledger, 'utf8'), /flaky\.test\.mjs/, 'the ledger names the absorbed file')
 })
 
 test('meta#8 nested runner ownership: exit-reap spares other runners\' children', () => {

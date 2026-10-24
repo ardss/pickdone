@@ -57,9 +57,12 @@ const TRAY_ALIVE_MS = 5000
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
-// Watchdog: a leftover electron/CDP socket can hold the event loop; force-exit after 150s
-// (node --test already counted the failures to stderr by then).
-const watchdog = setTimeout(() => { console.error('[e2e-exit-close] watchdog forced exit'); process.exit(1) }, 150000)
+// Watchdog: a leftover electron/CDP socket can hold the event loop; force-exit after 400s.
+// [load-budget 2026-10-25] 400s (was 150s): the component budgets sum to ~320s at their
+// worst (2×BOOT 90s + 2×EXIT 60s + tray probes) — the old 150s watchdog killed
+// budget-legal slow paths before the per-step budgets could judge them (internal
+// contradiction flagged by the determinism audit). Still bounded, still loud.
+const watchdog = setTimeout(() => { console.error('[e2e-exit-close] watchdog forced exit'); process.exit(1) }, 400000)
 watchdog.unref?.()
 
 async function ensureRendererDist () {

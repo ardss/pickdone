@@ -25,7 +25,7 @@ const require_ = createRequire(import.meta.url)
 const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
 const { listFiles } = require_('../../../cli/lib-filescan.cjs')
-const { getJSON, sleep, killSpawnedChild, cdpConnect } = require_('../../../cli/lib-cdp-client.cjs')
+const { getJSON, killSpawnedChild, cdpConnect } = require_('../../../cli/lib-cdp-client.cjs')
 
 db.init(process.env.TODO_DB_DIR)
 
@@ -105,7 +105,8 @@ test('r4-6: lib-cdp-client getJSON parses a JSON body (regression on the shared 
 
 test('r4-7: killSpawnedChild is a no-op with no adopted child (never throws on bare exit)', () => {
   assert.doesNotThrow(() => killSpawnedChild())
-  assert.equal(typeof sleep(1).then, 'function')
+  // [assertion-quality 2026-10-25] removed `assert.equal(typeof sleep(1).then, 'function')`
+  // — asserted "a Promise is a Promise": literally always true, zero signal.
   // cdpConnect signature sanity: returns the four members the scripts destructure.
   // Flake fix (2026-10-09): cdpConnect's `open` Promise rejects when the connection is
   // refused; nobody awaits it here, so if the refusal lands before close() the unhandled

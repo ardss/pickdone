@@ -86,7 +86,14 @@ test('S6: the stopSync security flush also aborts while degraded; a successful r
     const seeded = bootstrap.__test.loadSecurityLog()
     assert.equal(seeded.length, 1, 'a healthy read seeds the persisted ring')
     bootstrap.__test.scheduleSecurityPersist()
-    await new Promise(r => setTimeout(r, 1200))
+    // [load-budget 2026-10-25] poll instead of sleep(1200) past the 1s throttle — 1.2x was
+    // the thinnest margin in the suite; under load the throttled write lands later than
+    // 1200ms and the positive direction false-opped. Predicate decides, budget is roomy.
+    for (let i = 0; i < 40; i++) {
+      const cur = healthy.get(K_SECURITY_LOG)
+      if (cur && cur !== CORRUPT && JSON.parse(cur).length >= 2) break
+      await new Promise(r => setTimeout(r, 250))
+    }
     const persisted = JSON.parse(healthy.get(K_SECURITY_LOG))
     assert.equal(persisted.length, 2, 'after a successful read the throttled persist writes through again')
     assert.equal(persisted[1].at, 7)

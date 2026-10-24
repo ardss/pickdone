@@ -40,8 +40,6 @@ async function bootWithBlob (blob, state, lsAt) {
   // it out below.
   const settings = (await importSrc('renderer/js/store/settings.js')).default
   const mirrored = []
-  let resolveFlush
-  const flushed = new Promise(r => { resolveFlush = r })
   resetLs()
   if (lsAt != null) LS_MIRROR.set(MIRROR_AT_KEY, String(lsAt))
   globalThis.window.todoAPI = {
@@ -49,7 +47,6 @@ async function bootWithBlob (blob, state, lsAt) {
       if (op === 'getMeta') return blob == null ? null : JSON.stringify(blob)
       if (op === 'setMeta' && params[0] === 'db.settingsState') {
         mirrored.push(JSON.parse(params[1]))
-        resolveFlush()
         return 'ok'
       }
       return null
@@ -63,7 +60,10 @@ async function bootWithBlob (blob, state, lsAt) {
     dispatch: async (a, p) => { Object.assign(state, p); if (a === 'update') await globalThis.window.todoAPI.updateSettings(p) }
   }
   await settings.actions.initFromDb(ctx)
-  await Promise.race([flushed, new Promise(r => setTimeout(r, 2400))]) // out-wait the 2000ms mirror debounce
+  // [load-budget 2026-10-25] poll the mirror's observable state instead of racing a
+  // 2400ms out-wait against the 2000ms debounce (1.2x — under load the debounce fires
+  // later than the race budget and the caller saw an empty mirror = false red).
+  for (let i = 0; i < 40 && mirrored.length === 0; i++) await new Promise(r => setTimeout(r, 250))
   return mirrored
 }
 

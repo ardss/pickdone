@@ -24,7 +24,9 @@ test('settings: updateSettings merges the patch and writes localStorage', async 
   assert.equal(state.weatherEnabled, true)
   assert.equal(state.weatherCity, '上海')
   // persist is a 150ms debounced write
-  await new Promise(r => setTimeout(r, 250))
+  // [load-budget 2026-10-25] predicate poll (was sleep(250) = 1.67x on the 150ms debounce):
+  // under load the debounce lands later than 250ms and the assert false-opped. Budget 3s.
+  { const dl = Date.now() + 3000; while (!(globalThis.localStorage.getItem('settingsState') || '').includes('上海') && Date.now() < dl) await new Promise(r => setTimeout(r, 50)) }
   const saved = JSON.parse(globalThis.localStorage.getItem('settingsState'))
   assert.equal(saved.weatherCity, '上海')
 })

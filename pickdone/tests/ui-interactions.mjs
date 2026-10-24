@@ -364,7 +364,11 @@ if (d0) {
     if (await frontSig() === d0) break
   }
 } else {
-  console.log('  - card deck absent; skipping the drag check')
+  // [signal-integrity 2026-10-25] deck absent used to be a silent console.log: a render
+  // regression deleting the day-deck would make this check evaporate (0 signals, still
+  // "green"). Count it as a failure — the drag check was supposed to run here.
+  failed++
+  console.log('  ✗ card deck absent — the drag check could not run (was the deck removed from the renderer?)')
 }
 // Restore: switch back to list view + clean up the seeded task (do not pollute the real instance / the next assertion baseline)
 await realClickAt(segBtn(0))
