@@ -90,7 +90,10 @@ const GROUPS = [
       // passes. The 2026-10-23 02:40 acceptance run proved the miss: pass1 red at 25min +
       // pass2 budget-killed at 15min mid-flight (stage total 40.1min) with pass2 heading green.
       // Coverage poller must still exceed it (85 > 80).
-      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage', '--retry-once'], null, 80],
+      // --retry-once retired (2026-10-24): run-all now retries surgically per FILE
+      // (failed-file extraction + 30s settle); the outer whole-suite rerun only ever
+      // fired on real reds and doubled the worst-case red time (8-26min x2).
+      ['单元测试（run-all 自动发现,fail=0+skip棘轮,勿手写清单）', 'node', ['cli/check-test-summary.cjs', '--with-coverage'], null, 80],
       // D4 覆盖率棘轮(只升不降,回退即红);--await-summary 复用上一 stage 的 coverage 摘要,
       // 不再并发重跑全量单测(4vCPU CI 上双份套件并发=互相拖到超时红,2026-09-26 实锤)
       // Budget must EXCEED the unit stage's: it runs in a parallel lane and polls until the
