@@ -477,3 +477,43 @@ Queued next waves: B = product silent-degradation notices (H1-H5, needs the
 cleanup + tautology-family + e2e sleep-chain polling. Deep debt acknowledged
 open: D1 spawn storm is the true root of full-load 10x slowdown (0d1cde05
 budgets mask it; pool-level decision pending).
+
+### 2026-10-25 01:5x · Goal wave complete: C-batch + determinism + B-batch + runner decision (main-bound)
+
+User directive "solve ALL of it, no leftovers" + "use industry best practice,
+stop reinventing wheels" executed to completion state:
+
+- C-batch (assertion-quality, 1a0ef030): 4 dead anchors removed, stamped-key
+  literal pin dropped, installer Sleep band, CSS token existence+consumption,
+  3 snapshot asserts narrowed to contract keys / calendar semantics,
+  ipc-op ~zero-signal assert replaced with real OPS-literal check.
+- 2-batch (determinism, acba9c4a): tmp-dir sweeper prefix registry now
+  EXTRACTED from sources (30+ drifted families join the sweep; smoke
+  scanned 1295 / removed 62), stopApp polls pid liveness, waitBoot
+  conditional settle, visual profile pid, relay readiness 10s, e2e lane
+  skip=green fails loud inside the pool, atomic tmp+rename for shared
+  artifacts, d9 dual threshold margin signal.
+- B-batch (product silent degradation, f72fd9bd/a27915a6/7b6d078c/a058ef0c):
+  H1 boot-enable late-retry arm + one visible notice; J4 transient dialog
+  gets its own honest copy; H4 recovery dialog discloses the sync reset;
+  H5 plaintext-fallback session surfaces one notice; H3 auto-backup failure
+  toasts once per session; H2 increment-loss syncEvents toast once per type;
+  H7 dbHealthy in the status payload + contract pin.
+- Runner decision (docs/test-runner-modernization-design.md): official
+  same-process mode MEASURED and REJECTED (4734 tests / 4732 fail / 237s —
+  cross-file global pollution; single files pass in the same mode). The
+  spawn-storm cheap way out is closed; vitest pool:forks + isolate stays the
+  route (waves of weeks, needs user-approved investment). Home-grown flake
+  ledger frozen (no gold-plating a wheel the migration may delete).
+- Terminology converged to industry vocabulary (flaky retry, worker pool,
+  test sharding) in commits and docs; ledger codes stay as internal
+  addressing.
+
+OPEN (recorded, not silently dropped):
+- R1 three-layer retry stack: needs the dual-instance journey-sync drill as
+  its safety net before any rework (heavy supervised exercise).
+- ui-smoke fixed UI waits (P2 slow-not-wrong): largely mitigated by evalJson
+  60s + conditional waitBoot; full predicate conversion is a P2 follow-up.
+- D1 vitest waves, M-1 signing pin (external CI secrets), N1 list
+  virtualization (product perf, separate project), repo-auditor #1 splits
+  (queued via GPT adjudication).
