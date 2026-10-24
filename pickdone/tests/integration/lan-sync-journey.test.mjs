@@ -601,6 +601,13 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
   const bSyncPort = b.syncPort
   trace('J4: hard-killing B (pid ' + b.pid + ')')
   await b.killHard()
+  // [J4 2026-10-24] Wait out the dead predecessor's file handles before B2 boots: a boot
+  // that opens the fresh db mid-release fails init ("file held by another process") and the
+  // app degrades into the db-less shell — sync status reads factory-fresh and the pairing
+  // wait below burns out red. Mirror of the db.js open-retry fix, at test pacing level.
+  await until(() => {
+    try { const fd = fs.openSync(path.join(dirB, 'todos.db'), 'r+'); fs.closeSync(fd); return true } catch { return null }
+  }, 30000, 'todos.db still held after the hard kill (predecessor handles never released)')
   trace('J4: B dead, restarting on the same data dir + sync port')
 
   const b2 = new Instance({ name: 'B2', cdpPort: bCdpPort, syncPort: bSyncPort, userDir: dirB })

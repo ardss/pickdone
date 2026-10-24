@@ -181,17 +181,35 @@ function initInner (userDataPath) {
       log.error('[TodoDB] db.key 降级改名失败,按带钥路径继续(预期解密探针失败)', e)
     }
   }
-  db = new loadDriver()(file)
-  if (hadKeyFile) db.pragma(`key='${key}'`)
-  // Protection: explicit read probe (journal_mode does not necessarily throw on a wrong key — actual decryption happens on the first page read)
-  try { db.prepare('SELECT count(*) FROM sqlite_master').get() } catch (e) {
-    // Close the half-open handle before surfacing the error: the reset-data flow closes+unlinks the DB files; an open handle made unlink fail with EPERM on Windows, silently skipping the data destruction (2026-09-09)
-    try { db.close() } catch {}
-    db = null
-    if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
-    // [UX 2026-10-21] SQLITE_IOERR at the probe is NOT a key mismatch - the old copy offered reset-data for a healthy db. Name the I/O cause instead.
-    if (/disk i\/o|sqlite_ioerr|i\/o error/i.test(String(e.message))) throw new Error(i18nM.mt('dbDiskIoError', { msg: e.message }))
-    throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
+  // [J4 2026-10-24] Transient-hold bounded retry around open+probe. Evidence: a hard-killed
+  // predecessor (or an AV/indexer having the fresh db in hand) can hold the file for seconds;
+  // one busy failure used to degrade the app into the db-less shell (sync status reads
+  // factory-fresh) for the WHOLE session. I/O-class failures back off and reopen; key-mismatch
+  // class keeps its immediate throw (retrying a wrong key is meaningless).
+  const PROBE_RETRIES = 4
+  for (let attempt = 0; ; attempt++) {
+    db = new loadDriver()(file)
+    if (hadKeyFile) db.pragma(`key='${key}'`)
+    // Protection: explicit read probe (journal_mode does not necessarily throw on a wrong key — actual decryption happens on the first page read)
+    try {
+      db.prepare('SELECT count(*) FROM sqlite_master').get()
+      break // healthy open
+    } catch (e) {
+      // Close the half-open handle before surfacing the error: the reset-data flow closes+unlinks the DB files; an open handle made unlink fail with EPERM on Windows, silently skipping the data destruction (2026-09-09)
+      try { db.close() } catch {}
+      db = null
+      const msg = String(e.message)
+      const ioLike = /disk i\/o|sqlite_ioerr|i\/o error|database is locked|database table is locked|EBUSY|EPERM|ENOENT/i.test(msg)
+      if (!ioLike || attempt >= PROBE_RETRIES) {
+        if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
+        // [UX 2026-10-21] SQLITE_IOERR at the probe is NOT a key mismatch - the old copy offered reset-data for a healthy db. Name the I/O cause instead.
+        if (/disk i\/o|sqlite_ioerr|i\/o error/i.test(msg)) throw new Error(i18nM.mt('dbDiskIoError', { msg: e.message }))
+        throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
+      }
+      const waitMs = 1500 * (attempt + 1)
+      log.warn(`[TodoDB] db open hit a transient hold (attempt ${attempt + 1}/${PROBE_RETRIES + 1}) — reopening in ${waitMs}ms: ${msg}`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs)
+    }
   }
   // Connection pragmas (ES1): synchronous/busy_timeout are per-connection state and journal_mode
   // must be re-asserted on a fresh handle — the encryption-finalization block below closes and
