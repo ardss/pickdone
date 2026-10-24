@@ -302,3 +302,32 @@ orchestrator+family reads. Re-stamped: full gate 31/31, 12.4min, zero
 flakes (final31 @ 2bc663b4). Lesson: mechanical line-surgery splits still
 need a lint+anchor sweep BEFORE the full gate - final30 caught 7 files of
 unused/undefined wiring and 5 stale anchors the per-suite slices missed.
+
+## 2026-10-24 architecture review - the split-wave modules audited
+
+Scope: the 5 new modules + 6 anchor migrations from the split queue.
+Clean: dependency direction strictly one-way (orchestrator -> family, zero
+back-refs), no circular requires, naming/placement follows each layer's
+existing precedent (db-* in src/main, lib-* in cli, *-schema/-pure beside
+their stores), one-shot splitter scripts are gitignored. One self-
+correction: "new modules unregistered in the baseline" is NOT a hole -
+the ratchet locks a file only after it crosses its hard limit (to-peak
+locking by design; --update-baseline already pruned 4 dead entries and
+tightened lib.js to 811).
+
+Codified here (was tribal knowledge):
+- Split pattern is dual-track BY LANGUAGE SHAPE, not by taste: ESM stores
+  extract a pure block and re-export every name (settings-schema.js,
+  tomato-pure.js); CJS families take a factory injecting their closures
+  (db-recovery-restore.cjs, lib-chips.cjs - precedent lib-tags/lib-repeat/
+  lib-subs/lib-channels). Do not mix: CJS circular requires would deadlock,
+  ESM factories would fight the import graph.
+- Source-anchor reads that survived a split are a TEMPORARY shape: the
+  concatenated orchestrator+family read (6 sites) keeps protection whole,
+  but if a family splits again, upgrade ANCHORS (tests/lib/source-anchors
+  .mjs) to ordered arrays instead of growing more local concatenations.
+
+Observation, not a finding: lib.js sits at 811 - above the 800 comfort
+line, below its 852 historical cap. The next natural cut there is the
+task-resolution family (resolveTask/compareVersions/parsePredecessors),
+same factory pattern; no red drives it, queue on merit.
