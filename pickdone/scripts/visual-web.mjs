@@ -240,9 +240,11 @@ for (let i = 0; i < 20; i++) {
   await new Promise(r => setTimeout(r, 750))
 }
 // 孤儿托管 chrome(crashpad/gpu 子进程靠继承句柄锁 profile,命令行里没有 profile 字样,/T 也可能
-// 因父已死够不着)——按 .agent-browser 自带浏览器路径特征补杀;用户 Chrome 装在别处,绝不误伤
+// 因父已死够不着)——按本脚本的专用 profile 路径特征补杀(2026-10-24 实勘:agent-browser 在本机用
+// 系统 Chrome,根本没有 '*agent-browser*browsers*' 布局,旧过滤器是死码;且宽匹配 --remote-debugging
+// 会误伤用户的 BrowserOS 会话)。visual-web 路径串只存在于本脚本拉起的 chrome,零误伤面。
 {
-  const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*agent-browser*browsers*' } | ForEach-Object { taskkill /pid $($_.ProcessId) /T /F }`
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*visual-web*' } | ForEach-Object { taskkill /pid $($_.ProcessId) /T /F }`
   const enc = Buffer.from(ps, 'utf16le').toString('base64')
   try { execSync(`powershell -NoProfile -EncodedCommand ${enc}`, { shell: true, stdio: 'ignore', timeout: 60000 }) } catch { /* 无实例 */ }
 }
