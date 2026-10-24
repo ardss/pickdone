@@ -232,8 +232,36 @@ module.exports = ({ open, commit, audit, CliError, dayjs, core, resolveTask, liv
       }
     }
   }
-  function repeatOff (input, all) {
-    const t = resolveRepeatEntry(input)
+  /* W8 fix (2026-10-25): the single-instance scope must not delete an arbitrary hits[0] when a
+   * keyword matches several repeat instances. resolveRepeatEntry stays lenient (group ops like
+   * repeatRuleInfo and repeatOff --all treat the group as a unit, so AMBIGUOUS is meaningless
+   * there); only repeatOff's single scope disambiguates: multiple keyword hits throw
+   * AMBIGUOUS_MATCH listing every candidate (taskId + instance date) and demand a taskId (or a
+   * --day date, passed through as the third `day` argument: YYYYMMDD or any dayjs-parseable
+   * date). A unique hit keeps the legacy behavior. */
+  function resolveRepeatOffEntry (input, all, day) {
+    const list = liveTasks()
+    const byId = list.find(t => t.taskId === input)
+    if (byId) return byId
+    const kw = normKey(input)
+    const hits = list.filter(t => normKey(t.taskContent || '').includes(kw) && String(t.repeatId || '').startsWith('repeat_'))
+    if (hits.length > 1 && !all) {
+      if (day != null && day !== '') {
+        // --day disambiguation: match the instance whose local day start equals the given date
+        const s = String(day)
+        const target = +(/^\d{8}$/.test(s) ? dayjs(s.slice(0, 4) + '-' + s.slice(4, 6) + '-' + s.slice(6, 8)).startOf('day') : dayjs(s).startOf('day'))
+        const dated = hits.filter(x => (x.dayStart || (x.todoTime ? +dayjs(x.todoTime).startOf('day') : 0)) === target)
+        if (dated.length === 1) return dated[0]
+        throw new CliError('--day ' + s + (dated.length ? ' matches ' + dated.length + ' instances under keyword "' + input + '"' : ' matches no instance under keyword "' + input + '"') + ' — pass the taskId instead', 'AMBIGUOUS_MATCH')
+      }
+      const cands = hits.map(h => h.taskId + ' (' + dayjs(h.dayStart || h.todoTime).format('YYYY-MM-DD') + ')').join(', ')
+      throw new CliError('keyword "' + input + '" matches ' + hits.length + ' repeat instances — pass the taskId or a day (YYYYMMDD). Candidates: ' + cands, 'AMBIGUOUS_MATCH')
+    }
+    if (hits.length) return hits[0]
+    return resolveTask(input, list)
+  }
+  function repeatOff (input, all, day) {
+    const t = resolveRepeatOffEntry(input, all, day)
     const rid = t.repeatId
     if (!rid || !String(rid).startsWith('repeat_')) throw new CliError('task is not in a repeat group', 'NOT_REPEAT')
     let removed = 0
