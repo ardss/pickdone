@@ -420,25 +420,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       if (recovered && (recoveredFrom.source === 'json' || recoveredFrom.source === 'plain-bak')) {
         try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery:' + recoveredFrom.source) } catch { /* sync lazy-not-init */ }
       }
-      const detailMsg = String(e && e.message || e) + '.' + (recoveryFailed
-        ? ' ' + recoveredFrom.label
-        // [J4 follow-up 2026-10-25] transient (retried OK, nothing restored) gets its own
-        // copy: the generic "restored {n}" string showed "restored 0 tasks" for an intact
-        // database and steered users into a needless recovery relaunch.
-        : recoveredFrom && (recoveredFrom.source === 'retry-ok' || recoveredFrom.source === 'transient')
-          ? i18nM.mt('dbFailTransientRecovered')
-          : recoveredFrom
-            ? i18nM.mt('dbFailRecovered', { n: restoredN })
-            : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '') +
-        // F4 #9: the dialog used to claim a clean recovery while the dump itself had been written
-        // degraded — disclose exactly which segments the last snapshot was missing.
-        (degradedNote ? '\n\n[degraded snapshot] segments missing from the recovered backup: ' + degradedNote : '') +
-        // [H4 2026-10-25, rootcause audit] the db was REBUILT from a backup — sync watermarks
-        // were invalidated (peers re-push) and pairing may need manual attention, but the
-        // dialog used to say nothing about it: the user discovered a "vanished" sync later.
-        (recovered && recoveredFrom && (recoveredFrom.source === 'json' || recoveredFrom.source === 'plain-bak')
-          ? '\n\n' + i18nM.mt('dbFailSyncResetNote')
-          : '')
+      // [structure-ratchet 2026-10-25] detail assembly moved into dbRecovery.recoveryDetailText
+      // (J4 transient copy + H4 sync-reset disclosure live there now).
+      const detailMsg = dbRecovery.recoveryDetailText({
+        errText: (e && e.message) || e, recoveryFailed, recoveredFrom, restoredN, reinitErr, degradedNote, mt: (k, p) => i18nM.mt(k, p),
+      })
       const buttons = recovered
         ? [i18nM.mt('btnRecoverRelaunch'), i18nM.mt('btnOpenDataDir'), i18nM.mt('btnQuit')]
         : [i18nM.mt('btnOpenDataDirBackup'), i18nM.mt('btnResetRelaunch'), i18nM.mt('btnQuit')]
@@ -612,27 +598,8 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // Round-3 stability (2026-09-26): surface a quarantined corrupt config.json to the user (notice-only)
     require('./quarantine-notice').showQuarantineNotice(win, log)
 
-    // [H5 2026-10-25] the plaintext->encrypted migration failed at init and this session runs
-    // UNENCRYPTED while the user believes data is at-rest encrypted — surface it once
-    // (quarantine-notice contract: degradation = one visible notice; Notification first,
-    // non-modal dialog fallback, same shape as showQuarantineNotice).
-    if (dbm.consumeEncMigrationDegraded()) {
-      try {
-        const { Notification, dialog } = require('electron')
-        const m = { title: i18nM.mt('appName'), body: i18nM.mt('encMigrationDegradedBody') }
-        log.warn('[App] plaintext->encrypted migration failed earlier: this session runs on a PLAINTEXT db — surfacing one notice')
-        let shown = false
-        try {
-          if (Notification.isSupported()) {
-            const n = new Notification({ title: m.title, body: m.body })
-            n.on('failed', () => {})
-            n.show()
-            shown = true
-          }
-        } catch { /* fall through to the non-modal dialog */ }
-        if (!shown) dialog.showMessageBox(win, { type: 'warning', title: m.title, message: m.body, buttons: ['OK'] }).catch(() => {})
-      } catch (e) { log.warn('[App] enc-migration degraded notice failed:', e && e.message) }
-    }
+    // [H5 2026-10-25] plaintext-fallback session: surface the degradation once (see enc-migration-notice.js).
+    require('./enc-migration-notice').showEncMigrationNotice(win, log)
 
     // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
     if (readConfig().enableSecurityLock) {

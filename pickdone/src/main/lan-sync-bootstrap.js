@@ -507,7 +507,7 @@ function notifyRenderers (reason) {
  * peer-online, peer-offline, peer-unauthorized, peer-unpaired, pair-request, pair-accepted,
  * pair-rejected, pair-throttled, snapshot-sync, round-done, round-error, server-error,
  * sync-conflict, flush-quarantined, tomato-announce, attachments-arrived,
- * egress-hydration-failed, oplog-append-failed.
+ * egress-hydration-failed, oplog-append-failed, sync-degraded.
  * (r4 2026-09-28: that list is set-equality-gated against the actual emit sites —
  * tests/unit/main/fix-20260928-r4-main.test.mjs greps every emitSyncEvent('<type>') and fails
  * on any drift in either direction.)
@@ -780,52 +780,11 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
       // D2-c: startSync is async and fail-closed now — a bind failure at boot must be logged,
       // not become an unhandled rejection. K_ENABLED stays true so the toggle reflects the
       // user's intent, but getStatus().listening=false shows the device card the truth.
-      // 2026-10-24 (crash-restart robustness): after a SIGKILL/crash, the predecessor's sync
-      // socket teardown can lag the successor's boot by seconds — the first bind then hits
-      // EADDRINUSE and sync silently stayed OFF until the user toggled manually. Boot-time
-      // enable now retries the transient bind window (3 attempts, 5s apart) before accepting
-      // the failure; interactive toggles keep the immediate fail-closed feedback.
-      // [H1 2026-10-25, rootcause audit] the accept-failure arm used to just log.error — the
-      // toggle showed ON while sync was silently dead for the WHOLE session. Now: after the
-      // fast boot retries, one LATE retry round (60s — storm-window stragglers) runs; if that
-      // also fails, the degradation becomes VISIBLE once (system notification + sync-degraded
-      // event; the quarantine-notice "degradation = one visible notice" contract).
-      const BOOT_ENABLE_ATTEMPTS = 3
-      const BOOT_ENABLE_RETRY_MS = 5000
-      const BOOT_ENABLE_LATE_RETRY_MS = 60000
-      const syncDegradedNotice = () => {
-        try {
-          const { Notification } = require('electron')
-          const { mt } = require('./i18n')
-          if (Notification.isSupported()) {
-            const n = new Notification({ title: mt('appName'), body: mt('syncDegradedBody') })
-            n.on('failed', err => { try { log.warn('[LanSync] degraded notification failed:', err && (err.message || err)) } catch { /* noop */ } })
-            n.show()
-          }
-        } catch { /* best effort — the syncEvent below still carries the signal */ }
-        try { emitSyncEvent('sync-degraded', { reason: 'boot-enable-failed' }) } catch { /* no window yet */ }
-      }
-      const bootEnable = async () => {
-        for (let attempt = 1; attempt <= BOOT_ENABLE_ATTEMPTS; attempt++) {
-          try { await startSync(); return } catch (e) {
-            const transient = /EADDRINUSE|failed to bind/i.test(String((e && e.message) || e))
-            if (attempt === BOOT_ENABLE_ATTEMPTS || !transient) {
-              log.error('[LanSync] startup enable failed:', e.message)
-              // Late retry arm: one more round after the storm window, then go visible.
-              setTimeout(() => {
-                startSync().then(
-                  () => log.info('[LanSync] late startup enable succeeded after the storm window'),
-                  e2 => { log.error('[LanSync] startup enable failed for good:', e2.message); syncDegradedNotice() }
-                ).catch(e3 => { log.error('[LanSync] startup enable failed for good:', e3.message); syncDegradedNotice() })
-              }, BOOT_ENABLE_LATE_RETRY_MS).unref?.()
-              return
-            }
-            log.warn(`[LanSync] startup enable attempt ${attempt}/${BOOT_ENABLE_ATTEMPTS} failed (${e.message}) — retrying in ${BOOT_ENABLE_RETRY_MS}ms`)
-            await new Promise(r => setTimeout(r, BOOT_ENABLE_RETRY_MS))
-          }
-        }
-      }
-      bootEnable()
+      // [H1 2026-10-25] the retry ladder + visible degradation live in lan-sync/boot-enable.js
+      // (structure ratchet: this module splits instead of growing): fast arm 3x5s for the
+      // crash-storm window, one late arm at 60s, then ONE visible notice (Notification +
+      // sync-degraded syncEvent) if sync is still down.
+      require('./lan-sync/boot-enable').bootEnableWithRetry({ startSync, log, emitSyncEvent })
     }
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }

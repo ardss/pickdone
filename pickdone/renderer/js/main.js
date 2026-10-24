@@ -214,6 +214,7 @@ window.appUI = null
 // F18 (2026-09-24): both hand-copied hash regexes here (isMainShell / isFloatShell) route through
 // utils/auxWindow.js now — one copy had drifted to miss __quick-add.
 import { isAuxWindow, isFloatWindow } from './utils/auxWindow.js'
+import { installSyncEventToasts } from './utils/syncDegradedToast.js'
 const isMainShell = !isAuxWindow()
 
 async function bootstrap () {
@@ -339,40 +340,10 @@ async function bootstrap () {
   // peer's version was applied). Aux windows (float/quick-add) do not own user notifications.
   // P2b (round 2): under edit-war a toast per round piles up — keep at most ONE visible conflict
   // toast (replace the previous instance) with a 30s minimum interval between shows.
-  let _conflictToast = null
-  let _conflictShownAt = 0
+  // [H2 2026-10-25] conflict (30s rate-limit) + increment-loss (once per type per session)
+  // syncEvent toasts: wired in utils/syncDegradedToast.js (structure ratchet split).
   if (window.todoAPI.onSyncEvent && isMainShell) {
-    // [H2 2026-10-25, rootcause audit] the three "increments may be lost" faces
-    // (oplog-append-failed / flush-quarantined / sync-degraded) used to be log-only on the
-    // main side — the user saw a quiet settings badge at best while their changes silently
-    // stopped flowing. One toast PER TYPE per session (no storm; the settings card keeps
-    // the full history), same shape as the conflict toast below.
-    const _degradedShown = new Set()
-    window.todoAPI.onSyncEvent(evt => {
-      if (!evt || evt.type !== 'sync-conflict') return
-      try {
-        const EP = window.ElementPlus
-        if (!EP || !EP.ElMessage) return
-        if (Date.now() - _conflictShownAt < 30 * 1000) return // rate-limit: one conflict notice per 30s window
-        if (_conflictToast) { try { _conflictToast.close() } catch (e) { /* already gone */ } _conflictToast = null }
-        const key = evt.applied ? 'sync.conflictApplied' : 'sync.conflictKept'
-        _conflictToast = toastBelowChrome({ type: 'warning', message: i18n.global.t(key, { name: evt.name || '' }), duration: 6000, showClose: true })
-        _conflictShownAt = Date.now()
-      } catch (e) { console.warn('[lan-sync] conflict toast failed', e) }
-    })
-    window.todoAPI.onSyncEvent(evt => {
-      if (!evt) return
-      const degradedKey = evt.type === 'oplog-append-failed' ? 'sync.degradedOplog'
-        : evt.type === 'flush-quarantined' ? 'sync.degradedFlush'
-        : evt.type === 'sync-degraded' ? 'sync.degradedOplog' : null
-      if (!degradedKey || _degradedShown.has(degradedKey)) return
-      _degradedShown.add(degradedKey)
-      try {
-        const EP = window.ElementPlus
-        if (!EP || !EP.ElMessage) return
-        toastBelowChrome({ type: 'warning', message: i18n.global.t(degradedKey), duration: 8000, showClose: true })
-      } catch (e) { console.warn('[lan-sync] degraded toast failed', e) }
-    })
+    installSyncEventToasts({ onSyncEvent: window.todoAPI.onSyncEvent, i18n, toast: toastBelowChrome, EP: window.ElementPlus })
   }
 
   // Quit-flush ack handshake (main waits for this before closing the DB, ≤2s cap): dbMirror/store flush

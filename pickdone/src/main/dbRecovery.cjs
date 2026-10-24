@@ -493,4 +493,28 @@ function jsonRestoreAllowed (recoveredFrom, reinitErr) {
   return !!(recoveredFrom && recoveredFrom.source === 'json' && !reinitErr)
 }
 
-module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, criticalBackupRowCount, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, sweepEmptyCriticalBackups, recoveryDialogAction, jsonRestoreAllowed, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore, ...attLoss }
+/** [structure-ratchet 2026-10-25] the recovery dialog's detail paragraph, extracted from
+ *  index.js (that file sits ON its 860-line baseline — this copy lived here by domain
+ *  anyway). Pure string assembly over the recovery outcome fields; mt is injected.
+ *  [J4 follow-up 2026-10-25] the transient branch (retried OK, nothing restored) gets its
+ *  own honest copy instead of "restored 0 tasks".
+ *  [H4 2026-10-25] a rebuilt-from-backup db discloses the sync consequence. */
+function recoveryDetailText ({ errText, recoveryFailed, recoveredFrom, restoredN, reinitErr, degradedNote, mt }) {
+  const transientOk = !!(recoveredFrom && (recoveredFrom.source === 'retry-ok' || recoveredFrom.source === 'transient'))
+  const body = recoveryFailed
+    ? ' ' + recoveredFrom.label
+    : transientOk
+      ? mt('dbFailTransientRecovered')
+      : recoveredFrom
+        ? mt('dbFailRecovered', { n: restoredN })
+        : mt('dbFailRecoveredNone')
+  const syncNote = !recoveryFailed && recoveredFrom && (recoveredFrom.source === 'json' || recoveredFrom.source === 'plain-bak')
+    ? '\n\n' + mt('dbFailSyncResetNote')
+    : ''
+  return String(errText) + '.' + body +
+    (reinitErr ? mt('dbFailReinit', { msg: reinitErr.message }) : '') +
+    (degradedNote ? '\n\n[degraded snapshot] segments missing from the recovered backup: ' + degradedNote : '') +
+    syncNote
+}
+
+module.exports = { attemptDbRecovery, cleanInitReplayDecision, SUPPORTED_SCHEMA_V, restoreTasksFromCriticalBackup, restoreSegmentsFromCriticalBackup, writeCriticalStateBackupAtomic, criticalBackupPath, criticalBackupRowCount, backupJsonParseable, restoreCategoriesFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup, restoreMetaEntriesFromCriticalBackup, quarantineKey, sqliteHeaderOk, encryptedProbe, preflightMigrateResidue, sweepPendingDeletes, sweepEmptyCriticalBackups, recoveryDialogAction, jsonRestoreAllowed, recoveryDetailText, loadVendorDriver, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES, recoveryPendingPath, markRecoveryPending, clearRecoveryPending, hasRecoveryPending, copyFileAtomicRestore, ...attLoss }

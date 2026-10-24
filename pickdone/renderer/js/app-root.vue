@@ -29,10 +29,11 @@ export default {
     // A persistent failure fires this once, not on every failed timer tick (no storm);
     // the full history stays in Settings→Data's status line + runtimeState.
     let backupDegradedShown = false
-    window.addEventListener('pd:backup-degraded', (e) => {
+    window.addEventListener('pd:backup-degraded', (e: Event) => {
       if (backupDegradedShown) return
       backupDegradedShown = true
-      const err = (e && e.detail && e.detail.error) || ''
+      const detail = (e as CustomEvent).detail as { error?: string } | null
+      const err = (detail && detail.error) || ''
       try {
         this.$message.warning(this.$i18n.global.t('backupDegradedToast', { err }))
       } catch { /* toast must never throw from an event handler */ }
