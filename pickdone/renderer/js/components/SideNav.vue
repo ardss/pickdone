@@ -22,7 +22,7 @@
          :aria-label="collapsed ? $t('statsG.SideNav.searchAria') : null"
          :title="collapsed ? $t('statsG.SideNav.searchAria') : ''"
          @click="onSearchClick"
-         @keydown.enter.prevent="expandAndFocusSearch">
+         @keydown="onCollapsedSearchKey">
       <app-icon name="search" :size="14"/>
       <input ref="searchInput" :value="$store.state.todo.search" :placeholder="$t('statsG.SideNav.searchPlaceholder')" spellcheck="false" autocomplete="off"
              :aria-label="$t('statsG.SideNav.searchAria')"
@@ -307,6 +307,9 @@ export default {
        (ARIA button pattern, app-wide contract via utils/roleButtonKey.js) */
     onBrandKey: roleButtonActivate(function () { this.toggleCollapse() }),
     onSearchClearKey: roleButtonActivate(function () { this.clearSearch() }),
+    /* [W8] collapsed search pill used to bind only @keydown.enter — same roleButtonActivate
+       contract as onBrandKey above (Space covered app-wide by the main.js capture handler) */
+    onCollapsedSearchKey: roleButtonActivate(function () { this.expandAndFocusSearch() }),
     onFilterSaved (id) {
       this.filterEditVisible = false
       if (id) this.$router.push({ name: 'todo-list-filter', params: { id: String(id) } }).catch(() => {})
