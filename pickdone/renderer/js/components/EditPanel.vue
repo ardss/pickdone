@@ -58,7 +58,6 @@
           <span class="ep-row-arrow" :class="{on: catOpen}">▾</span>
         </div>
         <!-- [W8] listbox: dd-menu ArrowUp/Down; Escape stays with the panel-level handler -->
-             the options (Escape close is NOT wanted here — the panel-level Esc handler owns it) -->
         <div v-if="catOpen" v-click-outside="onCatOutside" class="ep-cat-pop" role="listbox" @keydown="onCatPopKey">
           <div class="ep-cat-opt" role="option" :class="{on: !e.categoryId}" :aria-selected="(!e.categoryId)?'true':'false'"
                tabindex="0" @click="pickCat(0)" @keydown.enter.prevent="pickCat(0)">
@@ -390,7 +389,6 @@ export default {
     flushSave () { return this._save ? this._save.flushSave() : undefined },
     retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
     /* [W8] remote-refresh chip: roleButtonActivate contract (Space owned by main.js capture) */
-       contract; Space needs no local binding (main.js capture handler owns Space on role="button") */
     onRemoteRefreshKey: roleButtonActivate(function () { this.refreshFromStore() }),
     onCollapseKey: roleButtonActivate(function () { this.collapse() }), // [W8]
     onCatPopKey (e) { ddMenuKey(e) }, // [W8] shared dd-menu util; no onClose (panel-level Esc owns it)
