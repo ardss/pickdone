@@ -129,7 +129,7 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
       async function tryUnlock () {
         err.textContent = ''
         const ok = await window.todoAPI.verifyLockPassword(pw.value)
-        if (ok) { await window.todoAPI.unlockApp() } else { err.textContent = ${JSON.stringify(i18n.mt('lockWrongPassword'))} }
+        if (ok) { await window.todoAPI.unlockApp() } else { err.textContent = ${jsStr(i18n.mt('lockWrongPassword'))} }
       }
       document.getElementById('go').onclick = tryUnlock
       pw.addEventListener('keydown', e => { if (e.key === 'Enter') tryUnlock() })
@@ -261,4 +261,11 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   return { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow, focusLock }
 }
 
-module.exports = { createSecurityLock, crashSelfHealAction, allowWithinRate }
+// M8B fix 7 (P3): JSON.stringify alone is NOT safe inside an inline <script> — a copy string
+// containing `</script>` closes the script block mid-literal (and `<!--` opens an HTML comment
+// trick). Escape `<`, `>`, `/`, `&` and line separators as \uXXXX AFTER stringify: the JSON
+// literal survives intact while the raw sequence never appears in the document. Module-level
+// so the escaping contract is directly unit-testable (lockWin build needs Electron).
+const jsStr = s => JSON.stringify(String(s)).replace(/[<>/&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
+
+module.exports = { createSecurityLock, crashSelfHealAction, allowWithinRate, jsStr }
