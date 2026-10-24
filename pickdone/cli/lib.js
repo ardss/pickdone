@@ -48,18 +48,9 @@ const { nextSort, moveWithin, reorderScale } = require('../shared/sort-core.mjs'
 // W7 P1 (2026-10-23): undo renewal discriminator single-sourced with renderer/js/utils/repeatUndo.js via shared/repeat-undo-core.mjs — the hand-copied day-only heuristic below still soft-deleted `repeat on` PRE-GENERATED future instances on undo (the 2026-10-09 P1 renderer root fix never landed CLI-side). require(esm), same pattern as limits.mjs.
 const { findRenewedNextInstance } = require('../shared/repeat-undo-core.mjs')
 
-const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
-
 let opened = false
 // P3-9 (dw wave): the userData directory has ONE source — src/main/user-dir.js (no third copy; // audit.js defaultDirResolver reads the same module). Env priority: TODO_DB_DIR > TODO_USER_DATA_DIR > platform default.
 const { userDataDir, hasIsolationEnv } = require('../src/main/user-dir.js')
-/** Chips/focus snapshot family — split to lib-chips.cjs (size-ratchet); factory-injected
- *  with the db facade, same pattern as the other lib-* family modules. */
-const {
-  focusBoundTo, detachFocusedTomato, chipsSnapshotForDelete, migrateChipsOnDayChange, chipsRestoreSnapshot,
-} = require('./lib-chips.cjs')({ commit, open })
-
-
 /* ================= data-safety isolation gate (P0, single point) =================
  * Structural rule: without an explicitly declared isolation dir, no CLI entry may touch the real
  * user database (%APPDATA%/pickdone). Path resolution is single-sourced in src/main/user-dir.js;
@@ -563,6 +554,13 @@ const {
   writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec,
   writeSyncCmd, readSyncState, waitForSyncAck,
 } = require('./lib-channels.cjs')({ open, commit, audit })
+
+/** Chips/focus snapshot family — split to lib-chips.cjs (size-ratchet); factory-injected
+ *  with the db facade AND the tomato state probes (this block must stay AFTER the
+ *  lib-channels destructure above — focusBoundTo reads readTomatoState at call time). */
+const {
+  detachFocusedTomato, chipsSnapshotForDelete, migrateChipsOnDayChange, chipsRestoreSnapshot,
+} = require('./lib-chips.cjs')({ commit, open, readTomatoState, writeTomatoCmd })
 
 /* Categories write: extracted verbatim to lib-categories.cjs (2026-09-27 size-ratchet split) */
 const {

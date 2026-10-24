@@ -4,7 +4,6 @@
  * otherwise re-import the task list from the disaster-backup JSON (critical-state-backup.json).
  */
 const fs = require('fs')
-const { isBlankishName } = require('./blankish-name.cjs')
 const { pruneCorruptScenes } = require('./corrupt-scene.cjs') // F1 size-cap trim: pure fs helper extracted (2026-10-17); F4 attLoss wired below (db-recovery-attachments.cjs)
 const path = require('path')
 
@@ -55,9 +54,8 @@ function criticalBackupPath (ud) {
 /** Critical-backup restore family — split to db-recovery-restore.cjs (size-ratchet);
  *  factory-injected with the shared probes, exactly like the attachments module above. */
 const {
-  RESTORE_SEGMENTS, RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES,
-  restoreMetaEntriesFromCriticalBackup, restoreTodoRowsFromCriticalBackup, backupRepeatRuleIds,
-  restoreFilterRowsFromCriticalBackup, restorePlanChipsFromCriticalBackup, restoreHabitsBlobFromCriticalBackup,
+  RESTORE_SEGMENT_NAMES, META_RESTORE_PREFIXES,
+  restoreMetaEntriesFromCriticalBackup,
   restoreSegmentsFromCriticalBackup, restoreTasksFromCriticalBackup, restoreTomatoRecordsFromCriticalBackup,
   restoreCategoriesFromCriticalBackup, criticalBackupRowCount, writeCriticalStateBackupAtomic,
 } = require('./db-recovery-restore.cjs')({ parseSegment, criticalBackupPath, logWarn, SUPPORTED_SCHEMA_V, attLoss })

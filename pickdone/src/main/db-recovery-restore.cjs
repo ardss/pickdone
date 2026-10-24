@@ -6,6 +6,7 @@
  */
 const fs = require('fs')
 const path = require('path')
+const { isBlankishName } = require('./blankish-name.cjs') // pure util: blank-name filter for restore rows
 
 module.exports = ({ parseSegment, criticalBackupPath, logWarn, SUPPORTED_SCHEMA_V, attLoss }) => {
 /** F11 + registry refactor (dw wave6 2026-09-24): the single RESTORE-SEGMENT REGISTRY — segment

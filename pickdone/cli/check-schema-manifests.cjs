@@ -54,7 +54,11 @@ function migrationAddCols (migSrc) {
 }
 
 function main () {
-  const dbSrc = fs.readFileSync(DB_JS, 'utf8')
+  // The static core DDL lives in db-schema.js (size-ratchet split); db.js concatenates it
+  // with the sync-schema DDL at runtime. Scanning the concatenation of both sources keeps
+  // every check below intact (todos CREATE TABLE comes from db-schema.js, the no-self-heal
+  // probe still sees db.js's full text).
+  const dbSrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'db-schema.js'), 'utf8') + '\n' + fs.readFileSync(DB_JS, 'utf8')
   const migSrc = fs.readFileSync(MIGRATIONS_JS, 'utf8')
   const schemaCols = schemaTodosCols(dbSrc)
   const want = Object.keys(todoToRow({ taskId: '' }))

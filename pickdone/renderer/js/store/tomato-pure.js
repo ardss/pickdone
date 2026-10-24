@@ -4,6 +4,8 @@
  * arguments (the same property that made them unit-tested exports). The store
  * imports what it uses and re-exports every name so consumers stay stable.
  */
+import { dayjs, FMT } from '../utils/core.js'
+import { remainSecOf } from '../utils/tomatoShared.js'
 
 /** U-11 (2026-09-20): idempotent today-counter bump for completeFocus. The counter patch sits in the
  *  same try block as later side effects (sound/notification); a mid-way failure releases the phase

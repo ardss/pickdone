@@ -9,10 +9,10 @@ const LS_KEY = 'settingsState'
 // Pure schema + helpers live in settings-schema.js (size-ratchet split); the store
 // imports what it uses and re-exports everything so consumer imports stay stable.
 import {
-  SETTINGS_SCHEMA_V, DEFAULT_SETTINGS, SETTING_ENUMS, coerceNumericSettings,
-  sanitizeSettingsPatch, SETTING_RANGES, isLegalAppLocale, clampNumericSettings,
+  SETTINGS_SCHEMA_V, DEFAULT_SETTINGS, coerceNumericSettings,
+  sanitizeSettingsPatch, isLegalAppLocale, clampNumericSettings,
   mergeTourMap, canonicalJson, MAIN_CONSUMED_SETTINGS, mainConsumedSettingsDiff,
-  TOMATO_LEDGER_KEYS, tomatoLedgerPatch,
+  tomatoLedgerPatch,
 } from './settings-schema.js'
 export {
   SETTINGS_SCHEMA_V, DEFAULT_SETTINGS, SETTING_ENUMS, coerceNumericSettings,

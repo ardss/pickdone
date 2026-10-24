@@ -140,7 +140,7 @@ function releasePhaseClaim (claim) {
  *  missing target resolves to null = the focus is accounted as free (no task association, no bumpSnow),
  *  removing any dependency on the main process's bumpSnow return value. */
 import {
-  todayCountPatch, recountToday, resolveFocusedTask, focusStartedAtOf, remainingSecOfState,
+  todayCountPatch, recountToday, resolveFocusedTask, focusStartedAtOf,
 } from './tomato-pure.js'
 export {
   todayCountPatch, recountToday, resolveFocusedTask, focusStartedAtOf, remainingSecOfState,

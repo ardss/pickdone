@@ -1,9 +1,11 @@
 /**
  * lib-chips — the chips/focus snapshot family, split from cli/lib.js (2026-10-24
- * size-ratchet split queue). Factory-injected with the db facade (commit/open), the
- * same pattern as lib-tags/lib-repeat/lib-subs. No dispatch, no isolation policy.
+ * size-ratchet split queue). Factory-injected with the db facade (commit/open) plus the
+ * tomato state probes (readTomatoState/writeTomatoCmd, themselves provided to lib.js by
+ * lib-tomato.cjs); localDayKey is a pure util required directly. No dispatch, no policy.
  */
-module.exports = ({ commit, open }) => {
+const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local-day key
+module.exports = ({ commit, open, readTomatoState, writeTomatoCmd }) => {
 /** [F2 2026-10-17] Is a RUNNING focus currently bound to this taskId (durable session row first, last command receipt as fallback)? Only a FRESH receipt counts — cliTomatoState is a single slot that survives App death, so without the freshness bound a long-gone session would still trigger the detach write. 15s mirrors the renderer's receipt write cadence with generous slack. */
 function focusBoundTo (taskId) {
   try {
