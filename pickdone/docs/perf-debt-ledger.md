@@ -517,3 +517,21 @@ OPEN (recorded, not silently dropped):
 - D1 vitest waves, M-1 signing pin (external CI secrets), N1 list
   virtualization (product perf, separate project), repo-auditor #1 splits
   (queued via GPT adjudication).
+
+### 2026-10-25 06:3x · Gate convergence record (cross-agent wave)
+
+Final full-gate (main@d8d56269) surfaced 3 reds, all attributed and closed:
+- cache-stamp: W8 wave's own omission — W8 bumped it (036a08a7).
+- unit x4 (chips role / bootstrap-apply userId / fix5 bounded sample /
+  day-caliber ratchet 131>128): W8 wave follow-ups — verified 54/54 green on
+  main tip (4655f336+); the day-caliber inline sites were additionally
+  routed through todayBounds.dayStart from this session (todo.js, ratchet
+  green 15/15).
+- coverage ratchet: cascade of the unit stage, not independent.
+Two cross-agent lessons recorded: (1) git is the only coordination bus
+between independent agent waves on one main — ff-only rebase + solo-verify
+before touching another wave's files; (2) solo reproductions from an agent
+host MUST strip ELECTRON_RUN_AS_NODE first (DSH/IDE shells export it;
+electron.exe silently boots as plain Node and every live-app test reds with
+"app is undefined" — three solo reruns were invalidated by this before it
+was caught).
