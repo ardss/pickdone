@@ -159,10 +159,14 @@ export function cleanupRegisteredChildren () {
  */
 export function reapAllRegisteredSync () {
   const mine = readAll().filter(e => e.owner === process.pid)
+  if (process.env.GATE_META_DEBUG) console.error('[dbg reap] pid=' + process.pid + ' mine=' + JSON.stringify(mine))
   if (!mine.length) return
   const lines = liveCmdlines(mine.map(e => e.pid))
+  if (process.env.GATE_META_DEBUG) console.error('[dbg reap] lines=' + JSON.stringify([...lines]))
   for (const e of mine) {
-    try { reapEntry(e, lines.get(e.pid)) } catch { /* best-effort by contract */ }
-    try { fs.rmSync(entryFile(e.pid), { force: true }) } catch { /* raced */ }
+    let v = 'threw'
+    try { v = reapEntry(e, lines.get(e.pid)) } catch (err) { v = 'threw: ' + err.message }
+    if (process.env.GATE_META_DEBUG) console.error('[dbg reap] verdict ' + e.pid + ' = ' + v)
+    try { fs.rmSync(entryFile(e.pid), { force: true }) } catch (err) { if (process.env.GATE_META_DEBUG) console.error('[dbg reap] rm failed: ' + err.message) }
   }
 }

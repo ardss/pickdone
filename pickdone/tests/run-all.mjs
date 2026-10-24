@@ -9,7 +9,7 @@
  *   Suite membership is directory-level: tests/unit/**, tests/integration/**, tests/visual/**;
  *   files kept at the tests/ root (npm-script / check-all entrypoints) count as integration.
  */
-import { readdirSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -47,7 +47,11 @@ if (process.argv.includes('--cleanup')) {
 }
 // App root (pickdone/): the runner anchors its child spawn here and passes repo-relative
 // test paths — see the argv-length comment at the spawnSync call below.
-const appRoot = path.join(dir, '..')
+// GATE_META_APP_ROOT (2026-10-24): meta-test injection point — lets the gate-mechanics
+// suite anchor run-all at a sandbox fixture dir. Default (unset) behavior is unchanged.
+const appRoot = process.env.GATE_META_APP_ROOT
+  ? path.resolve(process.env.GATE_META_APP_ROOT)
+  : path.join(dir, '..')
 // Live-Electron tests spawn their own instance (~30-60s each) and depend on the shared 5175
 // host's runtime state — they stay out of the quick regression (and out of pre-commit, which
 // must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
@@ -126,8 +130,10 @@ function discover(root, acc = [], exts = TEST_EXTS) {
 }
 
 function topOf(file) {
-  const rel = path.relative(dir, file).split(path.sep)
-  return rel.length > 1 ? rel[0] : 'integration' // tests/ root entrypoints = integration-flavored
+  // anchored at appRoot (not the script dir) so GATE_META_APP_ROOT sandbox runs classify
+  // their own fixture files instead of computing `..\..` garbage against the real repo
+  const rel = path.relative(path.join(appRoot, 'tests'), file).split(path.sep)
+  return rel.length > 1 && !rel[0].startsWith('..') ? rel[0] : 'integration' // tests/ root entrypoints = integration-flavored
 }
 
 // Fail-closed classification (H6 2026-09-12): a test file under an unknown top-level directory
@@ -151,10 +157,16 @@ if (tierArg && !['core', 'deep'].includes(tierArg)) {
 }
 // drop the --suite/--tier/--dirs args before forwarding the rest to node --test
 const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=') || a.startsWith('--dirs=')))
-const all = discover(dir).concat(discover(SIBLING_DIR, [], TEST_EXTS))
+// discovery follows appRoot too (GATE_META_APP_ROOT sandboxing): scanning the script's own
+// tests/ would drag the real corpus into a meta-test sandbox run. The sibling dir is
+// tolerated missing — sandbox fixtures don't carry it.
+const siblingDir = path.join(appRoot, 'test')
+const all = discover(path.join(appRoot, 'tests'))
+  .concat(existsSync(siblingDir) ? discover(siblingDir, [], TEST_EXTS) : [])
 // Every DEEP_FILES entry must match a discovered file — a stale name would silently shrink the
-// deep pool (and silently GROW the core pool) with nobody the wiser.
-{
+// deep pool (and silently GROW the core pool) with nobody the wiser. Sandbox runs
+// (GATE_META_APP_ROOT, gate-mechanics meta-tests only) carry no deep files by construction.
+if (!process.env.GATE_META_APP_ROOT) {
   const discovered = new Set(all.map(f => path.basename(f)))
   const missing = [...DEEP_FILES].filter(n => !discovered.has(n))
   if (missing.length) {
@@ -305,6 +317,12 @@ function runnerFileArgs () {
 // identical — only visibility changed.
 function spawnRunner (fileArgsOverride = null) {
   return new Promise(resolve => {
+    // NODE_TEST_CONTEXT must NOT leak into the runner: when run-all itself is spawned from a
+    // node:test process (the gate-mechanics meta-suite), the marker inherits down the chain and
+    // the runner's run() recursion guard silently SKIPS every file — exit 0 with zero TAP, the
+    // worst possible false green. Runner env is therefore scrubbed clean of it.
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
     const child = spawn(process.execPath, [...RUNNER_ARGS,
       ...forwardArgs, ...(fileArgsOverride || runnerFileArgs())],
     // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
@@ -315,7 +333,7 @@ function spawnRunner (fileArgsOverride = null) {
     // structure pins) for a ~4k-char saving — not worth it. The argv-cap guard margin instead
     // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
     // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
-    { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'] })
+    { cwd: appRoot, env, stdio: ['inherit', 'pipe', 'pipe'] })
     // D4: registry write at spawn, prune on close — a hard-killed run-all leaves its runner
     // child discoverable by `run-all --cleanup` instead of orphaned forever.
     if (child.pid) {
