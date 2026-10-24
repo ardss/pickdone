@@ -294,7 +294,18 @@ module.exports = function systemHandlers (ctx) {
         // Source untouched by contract (data-location.cjs never deletes/modifies the source) —
         // re-init on the old dir restores the running state and the user gets an honest error.
         try { if (ctx.dbm && ctx.dbm.init) ctx.dbm.init(ud) } catch (e2) { log.error('[IPC] data:relocate re-init after failed migration also failed', e2) }
-        log.error('[IPC] data:relocate migration failed:', r.error)
+        // M8B fix 1 (P1): the watch was stopped before close(); after a successful re-init the
+        // poll must be re-armed, or CLI direct-write detection stays blind for the whole session.
+        // Only when re-init succeeded (probe the handle with a getMeta) — restarting the poll
+        // over a dead handle would just warn-loop on every tick.
+        let watchRestarted = false
+        try {
+          if (ctx.dbm && ctx.dbm.init) { // re-init above threw → handle dead → do not re-arm
+            require('../external-db-watch').restartLatestDbWatch()
+            watchRestarted = true
+          }
+        } catch (e3) { log.warn('[IPC] data:relocate restart external db watch after failed migration failed', e3) }
+        log.error('[IPC] data:relocate migration failed:', r.error, watchRestarted ? '(external db watch re-armed)' : '(external db watch NOT re-armed — re-init failed)')
         return { ok: false, error: r.error }
       }
       log.info('[IPC] data:relocate migrated to', r.target, '— relaunching')

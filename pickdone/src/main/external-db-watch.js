@@ -19,10 +19,22 @@ const { CLI_SLOT_ABANDON_TTL_MS, seedSlotWatermark } = require('./cli-slot-polic
 // poll BEFORE closing the DB (a tick firing mid-migration would read a half-moved tree);
 // index.js is not touched, so handlers reach the hook through this module export instead.
 let latestStopDbWatch = null
+// M8B fix 1 (P1): the data:relocate failure branch stops the watch, closes the DB and re-inits
+// on the old dir — but the watch was never restarted, so CLI direct-write detection stayed blind
+// for the rest of the session. Keep a restart hook alongside the stop hook (set at factory time;
+// watchDbForExternalWrites is idempotent-to-recreate: it rebuilds baseline/seed/channel closures
+// from scratch) so the failure branch can re-arm the poll after a successful re-init.
+let latestRestartDbWatch = null
 
 /** Stop the most recently created watcher's poll (no-op when none ever started). */
 function stopLatestDbWatch () {
   try { if (latestStopDbWatch) latestStopDbWatch() } catch { /* best-effort, same as stopForQuit */ }
+}
+
+/** Restart (re-create) the most recently created watcher's poll after a stop + re-init cycle
+ *  (no-op when none ever started). Fresh baseline is built inside watchDbForExternalWrites. */
+function restartLatestDbWatch () {
+  try { if (latestRestartDbWatch) latestRestartDbWatch() } catch { /* best-effort */ }
 }
 
 /** Seed the tomato command watermark at startup. Returns the initial lastTomatoSeq.
@@ -361,7 +373,8 @@ function createExternalDbWatch (deps) {
     __pollChangeForTests: () => { try { if (changeHook) changeHook() } catch { /* onChange swallows its own */ } }
   }
   latestStopDbWatch = () => { try { if (stopDbWatch) stopDbWatch() } catch {} }
+  latestRestartDbWatch = () => { try { watchDbForExternalWrites() } catch {} }
   return api
 }
 
-module.exports = { createExternalDbWatch, seedTomatoWatermark, CLI_SLOT_ABANDON_TTL_MS, stopLatestDbWatch }
+module.exports = { createExternalDbWatch, seedTomatoWatermark, CLI_SLOT_ABANDON_TTL_MS, stopLatestDbWatch, restartLatestDbWatch }
