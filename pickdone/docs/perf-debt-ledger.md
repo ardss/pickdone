@@ -331,3 +331,26 @@ Observation, not a finding: lib.js sits at 811 - above the 800 comfort
 line, below its 852 historical cap. The next natural cut there is the
 task-resolution family (resolveTask/compareVersions/parsePredecessors),
 same factory pattern; no red drives it, queue on merit.
+
+## 2026-10-24 · Gate mechanics meta-suite (GPT-adjudicated P0, priority 2->3->1)
+
+External adjudication (ChatGPT, web-researched) ruled on the maintainability
+three-tier list: agreed with all findings, reordered to 2->3->1 (gate
+self-proof BEFORE refactoring what the gate protects), approved ONLY #2 for
+this round. Delivered: tests/unit/meta/gate-mechanics.test.mjs — 10 fault
+injections (nonzero exit, crash+cleanup, zero-executed fail-closed, skip
+ratchet over/under, coverage below scratch baseline, size tier, flaky
+first-fail absorbed WITH retry evidence, nested runner ownership, port
+collision, all-green) + evidence persistence. Sandboxed via a new
+GATE_META_APP_ROOT injection point in run-all (discovery, topOf,
+classification and DEEP_FILES check all re-anchored from script dir to
+appRoot); NODE_TEST_CONTEXT scrubbed from runner env — found the worst false
+green class: a node:test parent silently skipped every runner file with exit
+0. Nested-ownership case is zero-side-effect by construction (foreign =
+alive pid + non-matching fragment -> 'foreign'; own = absent pid -> 'gone').
+
+Two consecutive full gates 31/31 (13.3min, 14.8min), zero flakes. Evidence:
+tests/.artifacts/gate-meta-evidence/*.json, gate-meta-full2/3.log.
+Queued per adjudication: P1 anchor-registry arrayification (green-light
+criteria already specified), P2 db.js per-entity extraction via Parallel
+Change (per-PR, diff-compared, line-count explicitly NOT a metric).
