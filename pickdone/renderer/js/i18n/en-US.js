@@ -173,6 +173,8 @@ export default {
     "repairWarning": "Pairing adopts a new shared secret — existing paired devices will be disconnected and must be paired again.",
     "conflictKept": "Sync conflict: \"{name}\" — the other device's version was kept; your earlier copy is in the recycle bin",
     "conflictApplied": "Sync conflict: \"{name}\" — the other device's version was applied",
+    "degradedOplog": "Failed to queue a local change for sync — this session's increments may not have reached other devices; a restart recovers automatically",
+    "degradedFlush": "A sync segment could not be applied and was quarantined to the conflict-backup area — no data is lost; see sync settings for details",
     "unpairedByRemote": "Unpaired by the other device — pair again",
     "conflictSection": "Sync conflict backups",
     "conflictHint": "Data overwritten by a sync conflict is backed up here automatically — nothing is truly lost until you confirm, and you can restore anytime.",

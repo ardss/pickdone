@@ -655,10 +655,15 @@ function getStatusPayload () {
   const s = getSettingsPayload()
   const pendingPair = pendingPairPayload()
   const flushQuarantine = flushQuarantineSummary(state.db)
+  // [H7 2026-10-25, rootcause audit] the J4 db-less-shell shape (db init failed, the app
+  // keeps running) used to be invisible in the status payload: every field read as "sync
+  // simply off" while writes went nowhere durable. Expose the db health flag (additive —
+  // old consumers keep parsing; the settings card / CLI can now surface it).
+  const dbHealthy = !!(state.db && typeof state.db.call === 'function')
   if (!state.node) {
     return {
       ...s, listening: false, port: null, peers: [], recent: [], security: [], discovered: [],
-      lastRoundAt: null, lastError: null, pendingPair, flushQuarantine,
+      lastRoundAt: null, lastError: null, pendingPair, flushQuarantine, dbHealthy,
       self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
     }
   }
@@ -674,7 +679,7 @@ function getStatusPayload () {
     discovered: st.discovered || [],
     recent: st.recent, security: st.security,
     // Read-only flush-quarantine summary (Device Center; re-apply op is a registered follow-up).
-    flushQuarantine,
+    flushQuarantine, dbHealthy,
     lastRoundAt: st.lastRoundAt, lastError: st.lastError, pendingPair,
     self: st.self || { deviceId: s.deviceId, deviceName: s.deviceName, port: st.port },
   }

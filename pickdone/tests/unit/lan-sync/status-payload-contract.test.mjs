@@ -54,6 +54,7 @@ test('contract: getStatusPayload provides every REQUIRED field (both node-less a
     ['peers', 'peers: (st.peers ||'],
     ['flushQuarantine', 'flushQuarantine,'],
     ['pendingPair', 'pendingPair,'],
+    ['dbHealthy', 'dbHealthy,'],
     ['self', 'self: st.self'],
     ['listening', 'listening: st.listening'],
     ['lastRoundAt', 'lastRoundAt: st.lastRoundAt'],
