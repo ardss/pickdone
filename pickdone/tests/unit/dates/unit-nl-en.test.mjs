@@ -1,6 +1,6 @@
 /** Real tests of English NL date parsing - covers today/tomorrow/in N days/Jan 15/+Nd/time-of-day etc.
  *  Run: npm test */
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import '../../setup.mjs'
 import { parseNaturalDate } from '../../../renderer/js/utils/nlDate.js'

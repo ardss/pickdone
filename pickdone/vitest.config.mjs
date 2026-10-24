@@ -11,7 +11,9 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   test: {
     environment: 'node',
-    include: ['tests/unit/utils/*.test.mjs'],
+    // [wave-1 2026-10-25] utils + dates (16 files) — the 6-file pilot could not amortize
+    // vitest's ~15s fixed startup (measured cross-over vs per-file spawn at ~8-10 files).
+    include: ['tests/unit/utils/*.test.mjs', 'tests/unit/dates/*.test.mjs'],
     isolate: true, // per-file worker isolation — the pilot's hard compatibility point
     globals: false,
     // node:test has NO per-test timeout (budget lives at the file/pool level);

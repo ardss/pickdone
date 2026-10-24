@@ -10,7 +10,7 @@
  * Run: node --test tests/unit/dates/dw-repeat-core-single-source.test.mjs
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'module'
 

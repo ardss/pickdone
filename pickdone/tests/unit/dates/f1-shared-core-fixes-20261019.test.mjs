@@ -13,7 +13,7 @@
  * Run: node --test tests/unit/dates/f1-shared-core-fixes-20261019.test.mjs
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import { expandRepeatDates } from '../../../shared/repeat-core.mjs'
 import { parseDateCore, parseChineseNaturalDate, cnToNum } from '../../../shared/nl-date-core.mjs'

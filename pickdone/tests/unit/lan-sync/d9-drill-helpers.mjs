@@ -15,6 +15,7 @@ import path from 'node:path'
 import os from 'node:os'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import { pollUntil } from '../../lib/poll.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 export const SIDE = path.join(here, 'd9-drill-side.mjs')
@@ -72,22 +73,27 @@ export async function startSide (deviceId, absDir = fs.mkdtempSync(path.join(os.
  *  stderr, but does not flip the verdict (a slow-but-correct sync is a perf-debt signal,
  *  not a correctness red). */
 export async function waitFor (driver, reader, pred, label) {
-  const deadline = Date.now() + 60000
   const startedAt = Date.now()
-  for (;;) {
+  const deadline = Date.now() + 60000
+  // [mainstream-alignment 2026-10-25] the polling loop now rides the shared
+  // tests/lib/poll.mjs primitive (expect.poll shape) — the drill-specific parts
+  // (3 sync kicks between probes, the convergence-margin margin signal) stay here.
+  const rows = await pollUntil(async () => {
     for (let i = 0; i < 3; i++) {
       await driver.send({ do: 'round' })
       await sleep(150)
     }
     const r = await reader.send({ do: 'read', op: 'getAll', params: { deleted: null } })
-    const rows = r.result || []
-    if (pred(rows)) {
-      const took = Date.now() - startedAt
-      if (took > 12000) console.error(`[d9-drill] ⚠ convergence margin: '${label}' took ${took}ms (past the 12s legacy budget — sync convergence slowdown; perf-debt signal, not a red)`)
-      return rows
+    const rowsNow = r.result || []
+    if (!pred(rowsNow)) {
+      if (Date.now() > deadline) throw new Error('rows now: ' + JSON.stringify(rowsNow).slice(0, 600))
+      return null
     }
-    if (Date.now() > deadline) throw new Error('drill timeout waiting for: ' + label + ' — rows now: ' + JSON.stringify(rows).slice(0, 600))
-  }
+    return rowsNow
+  }, { timeoutMs: 60000, intervalMs: 50, label: 'drill: ' + label })
+  const took = Date.now() - startedAt
+  if (took > 12000) console.error(`[d9-drill] ⚠ convergence margin: '${label}' took ${took}ms (past the 12s legacy budget — sync convergence slowdown; perf-debt signal, not a red)`)
+  return rows
 }
 
 export const write = (side, ops) => side.send({ do: 'write', ops })

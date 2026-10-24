@@ -8,7 +8,7 @@
  * with its own same-day occurrence and re-mint today's completed instance).
  * Run: node --test tests/unit/dates/maint-d26-repeat-renewal-timed.test.mjs
  */
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'module'
 

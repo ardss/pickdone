@@ -102,3 +102,49 @@ Decision (stays DESIGN until the user approves the investment):
    this document is the surgery plan. Freeze note: no new features on the
    home-grown flake ledger / TAP composition while the runner decision is
    open (avoid gold-plating a wheel the migration may delete).
+
+## FINAL DECISION 2026-10-25 morning: vitest migration REJECTED on measured economics
+
+The pilot harness was completed and the four acceptance gates were actually
+run (utils + dates, 16 files / 116 tests, quiet host, vitest 3.2.7):
+
+| Gate | Result |
+|---|---|
+| 1. same pass/fail set ×3 | PASS — 16 files / fail=0 three consecutive runs; node --test same-set 116/116 |
+| 2. wall time ≤50% of node --test | **FAIL — direction inverted**: vitest 16-23s vs node 15s (vitest LOSES ~27%) |
+| 3. summary gate parses pilot TAP | PASS — run-pilot's flat-TAP adapter feeds check-test-summary unmodified |
+| 4. coverage parity line | PASS — v8 coverage `All files` line emitted, parsable |
+
+Why gate 2 inverted: the modeled cross-over (~8-10 files) assumed ~2.5s
+spawn overhead per file. Measured on the quiet dev host the spawn pool pays
+only ~0.9s/file (warm FS cache, fast module graph), while vitest carries a
+~13-15s fixed startup (config + forks-pool bootstrap) no matter how small
+the slice. **The pool's economics only pay under load** (the full-gate
+spawn-storm inflation, 20.9min → 60.3min measured 2026-10-25 night), and
+under load a fixed-worker fork pool inflates with the same CPU contention —
+what it saves is process creation, a fraction of the inflation, not the
+inflation itself.
+
+Cost side unchanged: ~750 files × node:test-specific APIs (t.skip / t.test
+subtests, per-file process semantics) = weeks of migration waves with
+regression risk on the ONLY gate the repo has.
+
+Verdict: **migration rejected on measured economics**. Consequences:
+1. node --test + the run-all pool stays the production runner (quiet-host
+   and loaded-host numbers above are its honest bounds; the load-budget
+   wave already manages the loaded-host face).
+2. `tests/run-pilot.mjs` + `vitest.config.mjs` + the runner-shim STAY in
+   the tree as a maintained instrument (16 files dual-green, TAP-adapted) —
+   re-run the acceptance in one command (`npm run test:pilot`) whenever the
+   economics premise changes (node --test gains a pooled mode, the suite
+   shrinks, or a future node version ships worker-reuse isolation).
+3. The pilot files (utils/ + dates/, 26 tests dual-green on both runners)
+   remain on the shim — harmless (the shim resolves to node:test in the
+   gate) and they keep the dual-run instrument honest.
+4. What ACTUALLY ships from the mainstream-alignment goal (the parts with
+   positive economics): `tests/lib/poll.mjs` (the expect.poll-style
+   predicate helper, replacing per-file hand-rolled polling loops), and the
+   fake-timers verdict below — clock.mjs timing bets are already closed by
+   the predicate-polling wave (no misjudgment face remains), so a
+   fake-timers migration would be margin-golfing a solved problem:
+   recorded as NOT WORTH IT, not as deferred.

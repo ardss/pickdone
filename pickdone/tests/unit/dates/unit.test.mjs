@@ -4,7 +4,7 @@
  * Run: npm test (node --test, zero third-party test dependencies)
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 
 import { parseNaturalDate } from '../../../renderer/js/utils/nlDate.js'

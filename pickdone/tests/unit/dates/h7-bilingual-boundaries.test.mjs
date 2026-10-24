@@ -3,7 +3,7 @@
  *  - Bare "Jan 15" already past rolls to next year (parity with "1月15日")
  *  - Mixed CJK+Latin input ("明天3pm") keeps the English time phrase instead of dropping it
  *  Run: node --test tests/unit/dates/h7-bilingual-boundaries.test.mjs */
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import '../../setup.mjs'
 import { parseNaturalDate } from '../../../renderer/js/utils/nlDate.js'

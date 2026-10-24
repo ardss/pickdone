@@ -4,7 +4,7 @@
  * If the logic later moves into a shared layer, this test remains as a behavioral regression.
  */
 import '../../setup.mjs'
-import test from 'node:test'
+import test from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 
