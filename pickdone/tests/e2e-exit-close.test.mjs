@@ -36,9 +36,7 @@ if (electronBin && !existsSync(electronBin)) { electronMissing = 'electron binar
 
 // CDP port is per-boot EPHEMERAL (2026-10-24 night): the fixed 9377 collided with any
 // concurrent file's instance in the conc-4 pool — the boot then hung until the 5min
-// per-test timeout (final25/26 silent unit deaths). Allocate a free port per boot;
-// the CDP constant becomes a prefix for the boot-time URL.
-const CDP_PORT_BASE = null // documentation anchor: the fixed 9377 era is over
+// per-test timeout (final25/26 silent unit deaths). Allocate a free port per boot.
 let CDP_PORT = 9377
 let CDP = 'http://127.0.0.1:' + CDP_PORT // re-pointed per boot (ephemeral port below)
 const pickFreeCdpPort = () => new Promise((resolve, reject) => {
