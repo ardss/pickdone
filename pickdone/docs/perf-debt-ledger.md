@@ -354,3 +354,19 @@ tests/.artifacts/gate-meta-evidence/*.json, gate-meta-full2/3.log.
 Queued per adjudication: P1 anchor-registry arrayification (green-light
 criteria already specified), P2 db.js per-entity extraction via Parallel
 Change (per-PR, diff-compared, line-count explicitly NOT a metric).
+
+### 2026-10-24 15:3x · J4 reconnect intermittent red under afternoon load (queued, not this round)
+
+Observed during anchors-wave acceptance: lan-sync-journey J4 (hard-kill B +
+restart) began failing intermittently ~14:53 — B2 boots with sync state at
+factory defaults (enabled=false, hasPairingSecret=false, peers=[] per the
+built-in diag dump), i.e. the pairing writes never became durable before the
+hard kill. Same code passed two full gates this morning (13:3x, 14.4x);
+sync recovery path untouched today; failure window coincides with user-side
+toolchain load (WorkBuddy 14:23+, ZCode MCP swarm 15:15+). Verdict: the
+pendingWrites flush window vs ungraceful kill is the standing fragility —
+J4's hard-kill semantic amplifies it under disk pressure. ALSO observed:
+every journey run leaks ~7 electron processes (teardown does not reap the
+pair). Queued: (a) flush-before-kill or durable pairing write in J4 setup,
+(b) journey teardown reaping, (c) consider a load guard for live-sync tests.
+Not an anchors-wave regression: zero contact surface, morning doubles green.
