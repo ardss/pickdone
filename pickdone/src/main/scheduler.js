@@ -40,11 +40,15 @@ function markFired (key) {
       // entry here used to drop that watermark on the floor and re-fire it after restart.
       // D21 (P3 2026-10-02): coalesce the flush. flushFiredNow() is a synchronous SQLite write;
       // inside markFired it ran PER EVICTION, so a catch-up burst (every reminder past-due after
-      // sleep) with an all-unwritten map did one SQLite commit per markFired call. Now: flush
-      // directly only when no persist is already pending; if one is (_persistTimer armed), the
-      // pending 60s debounce / 30s retry timer consumes the flush and this admission just evicts
-      // (the existing C9 log above already covers the evicted-unwritten re-fire tradeoff).
+      // sleep) with an all-unwritten map did one SQLite commit per markFired call.
+      // M8B fix 5 (P3): D21 went too far — with a pending 60s/30s timer the eviction deleted an
+      // UNWRITTEN watermark that the pending timer would only persist a minute later, and that
+      // entry re-fired after a crash inside the window (exactly the loss the flush-first order
+      // exists to prevent). flushFiredNow() already coalesces (clears the timer, single commit,
+      // marks written); BOTH arms flush now — one extra SQLite commit per all-unwritten eviction
+      // is the cost of not dropping the watermark on the floor.
       if (!_persistTimer) flushFiredNow()
+      else flushFiredNow() // M8B fix 5: the pending timer must not defer the evicted watermark
       // C9 (P3 2026-10-02): the bound must hold PER ADMISSION. The old code skipped the eviction
       // when the flush failed ("let the map exceed FIRED_MAX by one; it self-heals") — under a
       // SUSTAINED persist failure every further markFired repeated that path and the map grew
