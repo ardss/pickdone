@@ -349,12 +349,23 @@ class Instance {
   async stop () {
     this.cdp && this.cdp.close()
     this.cdp = null
-    if (this.proc && this.exitCode === undefined) {
-      try { this.proc.kill() } catch { /* already gone */ }
-      await until(() => this.exitCode !== undefined, 8000, `[${this.name}] graceful exit`).catch(() => {
-        try { this.proc.kill('SIGKILL') } catch { /* best effort */ }
-      })
+    if (!this.proc || !this.pid) return
+    // Windows: tree-kill UNCONDITIONALLY. exitCode set only proves the MAIN pid exited —
+    // renderer/GPU children can outlive it (2026-10-24: two orphans survived a mid-J4 main
+    // death because the exitCode guard skipped the kill). POSIX keeps graceful→SIGKILL.
+    if (process.platform === 'win32') {
+      try {
+        const { execSync } = await import('node:child_process')
+        execSync(`taskkill /T /F /PID ${this.pid}`, { stdio: 'ignore' })
+      } catch { /* tree already gone */ }
+      await until(() => this.exitCode !== undefined, 8000, `[${this.name}] exit after tree kill`).catch(() => { /* best effort */ })
+      return
     }
+    if (this.exitCode !== undefined) return
+    try { this.proc.kill() } catch { /* already gone */ }
+    await until(() => this.exitCode !== undefined, 8000, `[${this.name}] graceful exit`).catch(() => {
+      try { this.proc.kill('SIGKILL') } catch { /* best effort */ }
+    })
   }
 }
 
@@ -367,7 +378,18 @@ const dirB = path.join(scratchRoot, 'instance-b')
 const liveInstances = new Set()
 
 test.after(async () => {
-  for (const inst of liveInstances) await inst.stop()
+  // each-catch: one stuck instance must never stop the reap of the others
+  for (const inst of liveInstances) { try { await inst.stop() } catch { /* keep reaping */ } }
+  // Final orphan sweep: a main process that died MID-run leaves children whose parent link
+  // is already dead — taskkill /T (and the stop() above) cannot see them. Kill every
+  // electron whose command line anchors at THIS worktree and whose parent is gone.
+  // Path-scoped on purpose: never touch electrons outside the worktree by name alone.
+  try {
+    const { execSync } = await import('node:child_process')
+    execSync(
+      `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'electron.exe' -and $_.CommandLine -match 'journey-audit' -and -not (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"`,
+      { stdio: 'ignore', timeout: 60000 })
+  } catch { /* best effort */ }
   try { fs.rmSync(scratchRoot, { recursive: true, force: true }) } catch { /* locked files left to the OS */ }
 })
 
