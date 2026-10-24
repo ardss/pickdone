@@ -223,8 +223,8 @@ test('[W8-12] moment row Enter submits; not-due habits show a today-off note (zh
   const sec = src.slice(iSec, src.indexOf('</div>', iSec) + 2000)
   const nInputs = (sec.match(/@keydown\.enter\.prevent="e => \{ if \(e\.isComposing \|\| e\.keyCode === 229\) return; addMoment\(\) \}"/g) || []).length
   assert.ok(nInputs >= 2, 'name/date (and kind) inputs submit the moment row on Enter')
-  const iElse = src.indexOf('v-else-if="!isDueToday(h)"')
-  assert.ok(iElse > -1, 'not-due note keyed off isDueToday')
+  const iElse = src.indexOf('v-if="!isDueToday(h)"')
+  assert.ok(iElse > -1, 'not-due note keyed off isDueToday (v-if, the check span owns the v-if arm)')
   assert.ok(src.slice(iElse, iElse + 200).includes('statsE.HabitView.notDueToday'))
   const zh = read('renderer/js/i18n/locales/zh-CN-E.js')
   const en = read('renderer/js/i18n/locales/en-US-E.js')

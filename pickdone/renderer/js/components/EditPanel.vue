@@ -112,6 +112,7 @@
         <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" role="img" :title="$t('statsJ.EditPanel.urgencyHint')" :aria-label="$t('statsJ.EditPanel.urgencyHint')">?</span>
         <span class="ep-diff-btns ep-prio-btns">
           <!-- [W8] priority buttons: aria-pressed (toggle-button pattern) -->
+          <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" :aria-pressed="((task&&task.priority)||0)===pr.v ? 'true' : 'false'" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
         </span>
       </div>
       <ep-tomato :estimate="tomatoEstimateN" :actual="tomatoActual" @est-delta="estDelta" @open="openAccount"/>
