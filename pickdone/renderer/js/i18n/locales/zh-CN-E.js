@@ -452,7 +452,8 @@ export default {
       "freqIntervalClamped": "间隔天数需在 {min} 到 {max} 之间",
       "renameTip": "点击重命名",
       "intervalAria": "间隔天数",
-      "renameEmpty": "习惯名不能为空"
+      "renameEmpty": "习惯名不能为空",
+      "notDueToday": "Not scheduled today"
 
     },
 

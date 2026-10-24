@@ -452,7 +452,8 @@ export default {
       "freqIntervalClamped": "Interval must be between {min} and {max} days",
       "renameTip": "Click to rename",
       "intervalAria": "Interval days",
-      "renameEmpty": "Habit name cannot be empty"
+      "renameEmpty": "Habit name cannot be empty",
+      "notDueToday": "Not scheduled today"
 
     },
 

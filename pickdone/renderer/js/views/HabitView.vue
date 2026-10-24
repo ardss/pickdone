@@ -47,6 +47,9 @@
             <span class="habit-name" role="button" tabindex="0" :title="$t('statsE.HabitView.renameTip')" :aria-label="$t('statsE.HabitView.renameTip')" @click="startRename(h)" @keydown="onRenameKey(h, $event)">{{ h.name }}</span>
           </template>
           <span class="habit-freq-label">{{ freqLabel(h) }}</span>
+          <!-- [W8] not scheduled today: the missing check circle used to read as a rendering gap —
+               say so explicitly (isDueToday = frequency says this weekday/interval hits today) -->
+          <span v-else-if="!isDueToday(h)" class="habit-not-due" role="note">{{ $t('statsE.HabitView.notDueToday') }}</span>
           <span class="habit-streak" :title="$t('statsB.HabitView.streakTip')"><app-icon name="flame" :size="12"/> {{ $t('statsB.HabitView.streak', { n: streakOf(h.id) }) }}</span>
           <button class="mini danger habit-del" @click.stop="delHabitConfirm(h)">{{ $t('statsB.HabitView.del') }}</button>
         </div>
@@ -90,9 +93,12 @@
       <div class="moment-sec">
         <div class="habit-add moment-add">
           <span class="moment-sec-title">{{ $t('statsB.HabitView.momentTitle') }}</span>
-          <input v-model="newMoment" class="habit-add-input" :placeholder="$t('statsB.HabitView.momentNamePlaceholder')" :aria-label="$t('statsB.HabitView.momentNameAria')"/>
-          <input v-model="newMomentDate" type="date" class="habit-add-input" :aria-label="$t('statsB.HabitView.dateAria')" :max="newMomentKind === 'memorial' ? todayKey : null"/>
-          <select v-model="newMomentKind" class="habit-add-input" :aria-label="$t('statsB.HabitView.kindAria')">
+          <input v-model="newMoment" class="habit-add-input" :placeholder="$t('statsB.HabitView.momentNamePlaceholder')" :aria-label="$t('statsB.HabitView.momentNameAria')"
+                 @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; addMoment() }"/>
+          <input v-model="newMomentDate" type="date" class="habit-add-input" :aria-label="$t('statsB.HabitView.dateAria')" :max="newMomentKind === 'memorial' ? todayKey : null"
+                 @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; addMoment() }"/>
+          <select v-model="newMomentKind" class="habit-add-input" :aria-label="$t('statsB.HabitView.kindAria')"
+                  @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; addMoment() }">
             <option value="countdown">{{ $t('statsB.HabitView.countdown') }}</option>
             <option value="memorial">{{ $t('statsB.HabitView.memorial') }}</option>
           </select>
@@ -375,6 +381,8 @@ export default {
 
 
 .habit-freq-label { font-size: var(--fs-xs); color: var(--text-3); flex-shrink: 0; }
+/* [W8] "not scheduled today" note for non-due habits (sits where the check circle would be) */
+.habit-not-due { font-size: var(--fs-xs); color: var(--text-3); flex-shrink: 0; }
 
 
 
