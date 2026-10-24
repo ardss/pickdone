@@ -203,7 +203,21 @@ export default {
         }
       }
       // [F2 2026-10-13] sort pool follows the EFFECTIVE day: a todoTime-only add lands in the todoTime-derived day group, not the no-date pool
-      const effectiveDay = todoDate ? +dayjs(todoDate).startOf('day') : (Number(todoTime) > 0 ? +dayjs(Number(todoTime)).startOf('day') : 0)
+      // [W8 fix] effectiveDay prefers an explicit dayOverride (the caller's day is authoritative even
+      // when todoDate/todoTime still point elsewhere), and a dayOverride-only add gets todoTime set to
+      // that day's LOCAL midnight: the DB row writer (db-rows.js todoToRow) only keeps a caller-carried
+      // scheduledDay when todoTime is truthy, otherwise it writes scheduledDay=0 — so a dayOverride-only
+      // row used to fork (memory dayStart=dayOverride, DB scheduledDay=0 → the task jumped back to the
+      // todo box after restart). Midnight-of-day makes todoTime truthy with a startOf('day') value, so
+      // the DB's own fallback derivation (+dayjs(todoTime).startOf('day')) converges on the same day.
+      const effectiveDay = dayOverride != null && Number(dayOverride) > 0
+        ? Number(dayOverride)
+        : (todoDate ? +dayjs(todoDate).startOf('day') : (Number(todoTime) > 0 ? +dayjs(Number(todoTime)).startOf('day') : 0))
+      // dayOverride-only (no todoTime, no todoDate): derive the converging todoTime
+      let effTodoTime = Number(todoTime) || 0
+      if (!effTodoTime && dayOverride != null && Number(dayOverride) > 0) {
+        effTodoTime = +dayjs(Number(dayOverride)).startOf('day')
+      }
       const sameDay = state.todoList.filter(t =>
         !t.delete && t.dayStart && effectiveDay && dayjs(t.dayStart).isSame(dayjs(effectiveDay).startOf('day'), 'ms'))
       let sort
@@ -232,7 +246,7 @@ export default {
         // design) -- recorded on the skip list. Mitigation: jitter well below the nextSort step (100), so
         // it only keeps collision-identical values distinct, ordered by actual arrival.
         taskId: genTaskId(userId), taskSort: Math.fround(sort + (Math.random() - 0.5) * 64),
-        todoTime: Number(todoTime) || Number(todoDate) || 0,
+        todoTime: effTodoTime || Number(todoDate) || 0,
         userId, status: 'add', version: 0,
         // dayStart derivation mirrors the DB rule (db.js re-derives unconditionally from todoTime): when only
         // todoTime is given (time-block cell without an explicit date), todoTime>0 while todoDate is missing —
