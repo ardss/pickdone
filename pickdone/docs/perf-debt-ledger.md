@@ -370,3 +370,19 @@ every journey run leaks ~7 electron processes (teardown does not reap the
 pair). Queued: (a) flush-before-kill or durable pairing write in J4 setup,
 (b) journey teardown reaping, (c) consider a load guard for live-sync tests.
 Not an anchors-wave regression: zero contact surface, morning doubles green.
+
+### 2026-10-24 15:5x · J4 root-cause correction + acceptance close
+
+Correction to the note above: pairing writes do NOT ride the ingest
+pendingWrites buffer — settingPut -> busWrite('settingsRowPut') hits SQLite
+directly (WAL), and a committed WAL write survives hard-kill via recovery on
+reopen. Yet B2's runtime reads back enabled=false/hasPairingSecret=false
+from the SAME userDir. So the open question is busWrite persistence
+semantics (async queue? gate ordering?), not flush timing. Evidence kept:
+j4-solo-debug.log (diag dump), tests/.artifacts/inspect-sync-rows.mjs
+(db is multiple-ciphers encrypted — node:sqlite cannot read it directly).
+Acceptance close for the anchors wave: full gate 31/31 twice post-meta
+(13.3/14.8min) and 30/31 post-anchors with the single red = J4 under
+afternoon load (zero contact surface, 89/89 migrated-consumer slice green,
+11/11 negative suite, schema gate hand-run green). Queued for next round:
+busWrite durability audit + J4 hardening.
