@@ -191,7 +191,14 @@ export async function writeAutoBackupCore (ctx, { state, rootState }) {
     if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now(), autoBackupLastFailAt: 0, autoBackupLastError: '' })
     // Failure must stay visible (autoBackupLastAt:0 alone made a persistently failing backup read as
     // "never ran" in Settings→Data): keep the fail timestamp + reason for the honest status line.
-    else saveRuntime({ autoBackupLastAt: 0, autoBackupLastFailAt: Date.now(), autoBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) }) // retry next time on failure
+    // [H3 2026-10-25] ALSO surface it actively ONCE per session: the settings-page status line is
+    // passive — a user who never opens Settings never learns backups stopped. The pd:backup-degraded
+    // window event is consumed by app-root.vue (first failure only — a persistent failure must not
+    // become a toast storm).
+    else {
+      saveRuntime({ autoBackupLastAt: 0, autoBackupLastFailAt: Date.now(), autoBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) }) // retry next time on failure
+      try { window.dispatchEvent(new CustomEvent('pd:backup-degraded', { detail: { error: String((r && r.error) || 'backup failed').slice(0, 120) } })) } catch { /* non-browser env */ }
+    }
     return !!r && !!(r.ok)
   } catch (e) {
     console.error('[auto-backup] failed:', e && e.message)

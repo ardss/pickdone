@@ -54,6 +54,7 @@ export default {
       "shortcutSavedMsg": "快捷键已保存",
       "backupLocationUpdatedMsg": "备份位置已更新",
       "autoBackupWrittenMsg": "已写入自动备份",
+      "backupDegradedToast": "自动备份写入失败：{err}。数据不受影响，但请注意近期没有新的备份点；详情见 设置→数据。",
       "noDataYet": "暂无数据",
       "yesLabel": "是",
       "exportedPrefix": "已导出：",

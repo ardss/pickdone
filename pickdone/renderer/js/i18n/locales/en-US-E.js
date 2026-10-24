@@ -54,6 +54,7 @@ export default {
       "shortcutSavedMsg": "Shortcut saved",
       "backupLocationUpdatedMsg": "Backup location updated",
       "autoBackupWrittenMsg": "Auto backup written",
+      "backupDegradedToast": "Auto backup failed: {err}. Your data is fine, but no fresh backup point has been written recently; see Settings → Data.",
       "noDataYet": "No data yet",
       "yesLabel": "Yes",
       "exportedPrefix": "Exported: ",
