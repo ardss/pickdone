@@ -37,7 +37,7 @@
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.launchAtStartupLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.runWhenComputerStart" @change="v=>set({runWhenComputerStart:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.hideOnLaunchLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.hideMainWindowOnStartup" @change="v=>set({hideMainWindowOnStartup:v})"/></div></div>
               <div class="form-item"><span class="form-item__label" :title="$t('statsE.SettingsModal.closeToTrayHint')">{{ $t('statsE.SettingsModal.closeToTrayLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.closeActionMinimize !== false" :aria-label="$t('statsE.SettingsModal.closeToTrayLabel')" @change="v=>set({closeActionMinimize:v})"/></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.hardwareAccelLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableHardwareAcceleration" @change="setHwAccel"/></div></div>
+              <div class="form-item"><span class="form-item__label" :title="$t('statsE.SettingsModal.hwAccelRestartTip')">{{ $t('statsE.SettingsModal.hardwareAccelLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableHardwareAcceleration" @change="setHwAccel"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.parentChecksSubtasksLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCompleteWithSubtasks" @change="v=>set({isCompleteWithSubtasks:v})"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.languageLabel') }}</span>
                 <div class="form-item__control">
@@ -421,14 +421,14 @@ export default {
       this.searching = false
       this.applySearchFilter()
     },
-    /* [W8] Esc in the settings search: a live query is cleared first (two-step exit), an empty
-       query closes the modal (the .stop keeps the dialog-level Esc handler from double-firing) */
+    /* [W8] Esc in the settings search: clear a live query first, close only when empty
+       (the .stop keeps the dialog-level Esc handler from double-firing) */
     onSearchEsc () {
       if (this.searchQ) { this.clearSearch(); return }
       this.close()
     },
-    /* [W8] hardware-accel toggle needs a RESTART to apply — the old hover-only title tip never
-       reached switch/keyboard users; the toggle now announces the restart requirement itself */
+    /* [W8] hardware-accel needs a RESTART to apply — announce it on toggle (the title tip alone
+       never reached switch/keyboard users; kept as the hover hint) */
     setHwAccel (v) {
       this.set({ enableHardwareAcceleration: v })
       this.$message.info(this.$t('statsE.SettingsModal.hwAccelRestartToast'))
@@ -546,12 +546,9 @@ export default {
       this.$store.commit('ui/toggleSettings', false)
       window.todoAPI.lockApp()
     },
-    /* [W8 exemption, verified] tomato/patch here is NOT a drift path: enableNotification is a
-       tomato-blob-owned preference (not a TOMATO_LEDGER_KEY, never read from settings state —
-       the row above binds sEnableNoti to state.tomato), and tomato/patch persists the whole
-       runtime blob on every write (store/tomato.js persistState), so LS blob + cross-window
-       storage sync + reload restore all agree. Routing it through settings/update like the J4
-       duration keys would be wrong: those keys are MIRRORED settings rows; this one is not. */
+    /* [W8 exemption, verified] tomato/patch is NOT a drift path: enableNotification is tomato-blob
+       owned (not a TOMATO_LEDGER_KEY, never read from settings state) and tomato/patch persists the
+       whole runtime blob every write — no J4-style mirrored-settings drift possible here. */
     async setTomatoNoti (v) { this.$store.commit('tomato/patch', { enableNotification: v }) },
     /** Desktop float window toggle: writes the setting and immediately opens/closes the independent window (browser debugging has no todoAPI, only the setting is stored) */
     async setTomatoFloat (v) {
@@ -592,9 +589,8 @@ export default {
     }
   },
   mounted () {
-    // [W8] one-shot tab target (ui/openSettingsAt, e.g. the group-header gear -> retention
-    // ranges): honor it over the remembered last tab, then clear it. No target = keep the
-    // last-visited memory exactly as before.
+    // [W8] one-shot tab target (ui/openSettingsAt): honor it over the remembered last tab, then
+    // clear it. No target = keep the last-visited memory exactly as before.
     const target = this.$store.state.ui.settingsModalTargetTab
     if (target && this.tabs.some(t => t[0] === target)) this.tab = target
     if (target) this.$store.commit('ui/consumeSettingsTargetTab')

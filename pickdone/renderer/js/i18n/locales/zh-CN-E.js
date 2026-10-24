@@ -453,7 +453,7 @@ export default {
       "renameTip": "点击重命名",
       "intervalAria": "间隔天数",
       "renameEmpty": "习惯名不能为空",
-      "notDueToday": "Not scheduled today"
+      "notDueToday": "今日不打卡"
 
     },
 
