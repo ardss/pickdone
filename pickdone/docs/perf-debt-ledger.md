@@ -401,3 +401,15 @@ Fix (b193b5f5): db.js initInner retries open+probe on I/O-class failures
 before booting B2. Journey 4/4 twice, main unit slice 1306/1306.
 Residual watch: the ~7-electron-per-journey-run leak is a separate teardown
 issue and stays queued.
+
+### 2026-10-24 22:0x · Journey electron leak SOLVED (tree-kill + orphan sweep)
+
+stop() on Windows used proc.kill() = TerminateProcess on the MAIN pid only —
+renderer/GPU/utility children orphaned out every run (~7 electrons, some
+alive tens of minutes, holding scratch dirs). Fixed two layers:
+stop() now tree-kills unconditionally on win32 (exitCode proves only the main
+pid exited), and test.after ends with a worktree-scoped orphan sweep (any
+electron whose CommandLine anchors at this worktree AND whose parent process
+is gone gets stopped — parent-dead orphans are invisible to taskkill /T).
+Verified: journey 4/4, teardown+5s leaves 1 late-exiter, +30s = zero
+(was: 7 alive minutes later). lint clean. Commit 96be5dba.
