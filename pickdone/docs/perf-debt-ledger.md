@@ -240,3 +240,16 @@ registered per the gate's only-decrease escape hatch. Split queue (by debt weigh
 5. src/main/dbRecovery.cjs 827 (no prior baseline)
 6. renderer/js/store/settings.js 706 (no prior baseline; closest to its 700 cap - cheapest first)
 Rule after registration: only decreases accepted; each split lands with its own slice gates.
+'## 2026-10-24 morning addendum - split-queue field notes
+
+- Port census (post-F1 fix): no fixed-CDP stragglers remain. 9333 x8 are all the
+  shared-pool family or inert references; unit-tier files do not spawn it. The
+  F1 collision class is extinct, not just patched.
+- settings.js (706) is NOT the cheap split the queue implied: 40 test files
+  reference the store, several as SOURCE ANCHORS greping definition text
+  (h8-3/daily-0924 style). Moving definitions breaks anchors one missed grep
+  at a time. Split it only with a dedicated pass that re-points each anchor;
+  suggested seam: lines ~98-310 (pure schema/helpers block) into
+  settings-schema.js with re-exports keeping consumer imports stable.
+- migrateData pool-only pair: unexplained but contained - the per-file flake
+  retry absorbs it (file is solo-green); final28 ran without it failing at all.
