@@ -28,14 +28,28 @@ const attempts = {} // Consecutive failure count per key (drives the backoff and
 // whose origin stamp is not newer than this watermark originated from this window's own mirror
 // pipeline and must never be applied back (store/settings.js updateExternal).
 const lastOwnStamp = {}
-/** True when `stamp` identifies a blob this window itself queued (any generation up to the newest).
- *  Foreign stamps (CLI / peer, stamped at their write time) are never "own" unless the clock says
- *  they predate our watermark — the only accepted loss is a same-instant CLI/echo race, which the
- *  next external change re-syncs. */
+/** [W8 fix] own-stamp recall window: the most recent N `_savedAt` values THIS window itself queued
+ *  per key (a Set — generations are distinct Date.now() stamps). The old `s <= watermark` check
+ *  suppressed EVERYTHING at or below the watermark, so a genuinely EXTERNAL blob whose author
+ *  stamped it before our latest mirror (a slow CLI write, a peer that started editing earlier) was
+ *  swallowed forever instead of applied. Exact-set matching keeps the same-stamp echo suppressed
+ *  (the echo's stamp IS one we queued) while foreign stamps — even old ones — pass through.
+ *  Bounded at 8: beyond that window a stale echo is stale beyond any realistic debounce bounce,
+ *  and the set must not grow without bound. */
+const OWN_STAMP_RECALL = 8
+/** True when `stamp` identifies a blob this window itself queued (any generation within the recent
+ *  recall window). Foreign stamps (CLI / peer, stamped at their write time) are never "own". */
 export function isOwnMirrorStamp (metaKey, stamp) {
   const s = Number(stamp)
   if (!s) return false
-  return s <= (lastOwnStamp[metaKey] || 0)
+  const own = lastOwnStamp[metaKey]
+  return own instanceof Set ? own.has(s) : false
+}
+function rememberOwnStamp (metaKey, stamp) {
+  let own = lastOwnStamp[metaKey]
+  if (!(own instanceof Set)) { own = new Set(); lastOwnStamp[metaKey] = own }
+  own.add(stamp)
+  while (own.size > OWN_STAMP_RECALL) own.delete(own.values().next().value)
 }
 
 function scheduleTimer (metaKey, delay) {
@@ -170,7 +184,7 @@ function writeNow (metaKey, blob) {
 export function mirrorToDb (metaKey, blob, immediate = false) {
   pendings[metaKey] = blob
   newest[metaKey] = blob
-  if (blob && blob._savedAt) lastOwnStamp[metaKey] = Math.max(lastOwnStamp[metaKey] || 0, Number(blob._savedAt))
+  if (blob && blob._savedAt) rememberOwnStamp(metaKey, Number(blob._savedAt))
   attempts[metaKey] = 0 // a fresh user write gets a fresh retry budget
   clearUnflushed(metaKey) // a fresh blob supersedes any parked copy of this key
   if (immediate) {
