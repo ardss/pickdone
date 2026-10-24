@@ -61,7 +61,7 @@
  * ‹ 25 26 27 [Today] 29 30 31 ›  📅  Aug 28, 2026 Today  ☀
  * 📅 Click to open the calendar popover: days with tasks show a green dot
  */
-import { dayjs } from '../utils/core.js'
+import { dayjs, FMT } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import store from '../store/index.js'
 import { calGridOffset, weekHeaderOrder } from '../utils/weekGrid.js'
@@ -169,8 +169,10 @@ export default {
       }
     },
     // Day cells announce the full date — a bare number gives screen-reader users no month context
-    // (the adjacent nav buttons already carry title + aria-label)
-    calCellLabel (c) { return dayjs(c.key).format('YYYY-MM-DD') },
+    // (the adjacent nav buttons already carry title + aria-label).
+    // [W8] the ISO 'YYYY-MM-DD' read as "two zero two six..." with no words at all; announce the
+    // localized FMT.cnDate form instead (same convention as DayRail/HabitView grid tooltips)
+    calCellLabel (c) { return dayjs(c.key).format(FMT.cnDate) },
     pickDay (ts) {
       store.commit('ui/setDaySelected', ts)
       this.showCal = false
@@ -258,6 +260,10 @@ export default {
 .ds-cal-cell.out { color: var(--text-4); }
 .ds-cal-cell.today { border: 1px solid var(--brand); }
 .ds-cal-cell.sel { background: var(--brand); color: #fff; }
+/* [W8] keyboard parity: popover date cells and header nav buttons are focusable but had no
+   visible focus ring (mouse-only hover feedback) */
+.ds-cal-cell:focus-visible,
+.ds-cal-head button:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 .ds-cal-dot {
   position: absolute; bottom: 2px; left: 50%; transform: translateX(-50%);
   width: 5px; height: 5px; border-radius: 50%; background: var(--brand);
