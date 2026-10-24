@@ -452,3 +452,28 @@ waitFor deadline 12s + per-send 15s; relay outbox device() exec 30s + test
 All raised (60s/45s/90s/240s) with semantics untouched (predicate polls and
 result-shape asserts still decide pass/fail). Verified under concurrent
 pressure: 6 files parallel incl. v2 drill x2 — all green (0d1cde05).
+
+### 2026-10-25 00:5x · Four-way defect-pattern audit + wave A fixes (c57b8a78)
+
+User challenge "similar problems remain" validated by 4 read-only audits:
+- signal-integrity: run-all flake-retry = mechanized "blame the load" (silent
+  absorb, partial-corpus ratchet blindness, no ledger) -> FIXED in this wave;
+  J1 EADDRINUSE->skip cascade + deck-absent evaporation -> fixed.
+- rootcause: ledger half of "resolved" items are window-narrowing only; J4
+  collateral lives on in real-corruption restores (sync config evaporates
+  silently, H4); 10+ silent-degradation faces in src/main (H1 boot-enable
+  silent death is the heaviest - same shape as J4).
+- determinism: 5 P0 idle-host bets remain beyond 0d1cde05 (C13 double-trap,
+  d16/d13 1.2x, C14 spin bound, evalJson 12s single point) -> all fixed;
+  visual sweep kills user's own 5175 dev server -> fingerprint guard added;
+  e2e watchdog 150s < component budgets 320s -> 400s; tmp-dir sweeper FAMILY
+  drifted (30+ prefix families never swept) -> QUEUED.
+- assertion-quality: 3 tautologies -> removed; maint-dw3 60ms negative window
+  vs 150ms debounce = structural false-green -> 300ms; 8 thin sleep bets ->
+  predicate-polled (d16/d13/C13/m1/unit-store); anchor layering ~50% contract
+  / 40% over-pinned / 8% tautology; dead anchors 4/17 -> QUEUED.
+Queued next waves: B = product silent-degradation notices (H1-H5, needs the
+"degradation = visible notice + persistent badge" contract); C = anchor
+cleanup + tautology-family + e2e sleep-chain polling. Deep debt acknowledged
+open: D1 spawn storm is the true root of full-load 10x slowdown (0d1cde05
+budgets mask it; pool-level decision pending).
