@@ -333,6 +333,18 @@ module.exports = function backupHandlers (ctx) {
             if (!fs.existsSync(path.join(dir, base))) { try { fs.unlinkSync(path.join(dir, f)) } catch {} }
           }
         } catch { /* sweep is best-effort */ }
+        // M8B fix 2 (P2): empty-quarantine-*.json side files (the F1 empty-snapshot guard above)
+        // had no cleanup side and accumulated forever. Keep the newest 5 by mtime, sweep the rest
+        // (same keep-N doctrine as dbRecovery.sweepEmptyCriticalBackups).
+        try {
+          const qEntries = fs.readdirSync(dir).map(f => {
+            if (!f.startsWith('empty-quarantine-')) return null
+            try { return { name: f, mtimeMs: fs.statSync(path.join(dir, f)).mtimeMs } } catch { return null }
+          })
+          for (const dead of autoBackup.selectEmptyQuarantinePrunes(qEntries, { keep: 5 })) {
+            try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {}
+          }
+        } catch { /* sweep is best-effort */ }
         // Both tiers, regardless of this run's tag — the two tiers age on ONE shared directory.
         // D18 (2026-10-02) write-then-prune: the prune UNLINKS used to run BEFORE the new
         // snapshot write, so a failed write left the tier strictly thinner with nothing added.

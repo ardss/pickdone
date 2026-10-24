@@ -109,6 +109,19 @@ function selectStaleTmp (entries, { now = Date.now(), maxAgeMs = 60 * 60 * 1000 
     .map(e => e.name)
 }
 
+/** M8B fix 2 (P2): empty-quarantine-*.json side files (handlers/backup.js empty-snapshot guard)
+ *  accumulated forever — the housekeeping sweep covered .tmp-* and .dtmp side files plus
+ *  att-manifest orphans only. Pure picker aligned with dbRecovery.sweepEmptyCriticalBackups:
+ *  keep the newest KEEP (default 5) by mtime, return the names to sweep. Caller supplies mtimes
+ *  (like selectStaleTmp). Exported for direct unit coverage. */
+function selectEmptyQuarantinePrunes (entries, { keep = 5 } = {}) {
+  const n = Number(keep) > 0 ? Number(keep) : 5
+  const qs = (entries || [])
+    .filter(e => e && typeof e.name === 'string' && e.name.startsWith('empty-quarantine-') && Number.isFinite(e.mtimeMs))
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return qs.slice(n).map(e => e.name)
+}
+
 /** Retention floor for renderer-supplied tier numbers (2026-10-10 backup audit): the `= default`
  *  destructure in selectPrunes only fires on ABSENT fields — a caller passing {recent:0} (renderer
  *  bug or hostile IPC) used to classify the ENTIRE snapshot dir as prunable in one pass. Retention
@@ -125,4 +138,4 @@ function floorRetention (o) {
   return o
 }
 
-module.exports = { selectPrunes, selectStaleTmp, nameToTs, floorRetention, RE_AUTO, RE_EVT }
+module.exports = { selectPrunes, selectStaleTmp, selectEmptyQuarantinePrunes, nameToTs, floorRetention, RE_AUTO, RE_EVT }
