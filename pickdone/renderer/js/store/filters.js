@@ -2,12 +2,14 @@ import { commit as commitCommand } from "../utils/commandBus.js"
 /** Saved filters (smart lists) — condition sets persisted in the local DB filters table, entered via the sidebar group */
 
 /** [D18-DOM3] Pure duplicate-name check for FilterModal.save: true when ANOTHER filter (different
- *  id) already carries the same trimmed name. Names are compared trimmed; ids compared loosely so
- *  numeric ids from the DB never fork from string route params. */
+ *  id) already carries the same trimmed name. Names are compared trimmed; ids compared via String()
+ *  [W8 fix] so a numeric DB id never forks from a string route param — the old strict `!==` let a
+ *  filter "rename itself" fail with duplicate-name when the caller passed the id in the other type
+ *  (e.g. the row id is the number 5 but the modal hands back "5" from the route). */
 export function filterNameTaken (list, name, exceptId) {
   const n = String(name || '').trim()
   if (!n) return false
-  return (list || []).some(f => f && f.id !== exceptId && String(f.name || '').trim() === n)
+  return (list || []).some(f => f && String(f.id) !== String(exceptId) && String(f.name || '').trim() === n)
 }
 export default {
   namespaced: true,
