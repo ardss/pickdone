@@ -174,14 +174,34 @@ function main () {
   let files
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
-    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], { cwd: ROOT, encoding: 'utf8' })
+    const gitOpts = { cwd: ROOT, encoding: 'utf8' }
+    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], gitOpts)
+    // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
+    // inside the repo root): the raw toplevel-relative paths never matched the src/main regex
+    // and --staged scanned ZERO files for its whole life while exiting green. Resolve every
+    // staged name against the toplevel, then re-express it relative to ROOT before matching
+    // (mirrors the 2026-10-10 check-file-size.cjs toplevel fix).
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], gitOpts).trim()
+    const names = out.split('\n').filter(Boolean)
+    const stagedMain = names
+      .filter(f => /\.(?:js|cjs|mjs)$/.test(f))
+      .map(f => path.relative(ROOT, path.join(top, f)))
+      .filter(rel => !rel.startsWith('..') && /^src[\\/]main[\\/]/.test(rel))
     // diff-filter=ACM only yields added/copied/modified paths, so every listed file MUST exist on
     // disk; silently dropping a missing one would shrink the scan surface to a fake-green.
-    const stagedMain = out.split('\n').filter(Boolean).filter(f => /^src[\\/]main[\\/]/.test(f))
     const missing = stagedMain.filter(f => !fs.existsSync(path.join(ROOT, f)))
     if (missing.length) {
       console.error('✗ boot-order --staged: staged src/main file(s) not found on disk — scan surface would silently shrink, refusing to fake-green:\n  ' + missing.join('\n  '))
       process.exit(1)
+    }
+    if (!stagedMain.length) {
+      // 假绿防线: toplevel 里确实 staged 了 src/main 的 js,但映射到 ROOT 后一个都没匹配上
+      // (路径归一化/前缀剥离失效) — 扫描面塌缩,拒绝静默放行 (与 check-file-size.cjs 同款)。
+      const anyMainStaged = names.some(f => /\.(?:js|cjs|mjs)$/.test(f) && /[\\/]src[\\/]main[\\/]/.test(f))
+      if (anyMainStaged) {
+        console.error('✗ boot-order --staged: 存在 staged 的 src/main js 文件但扫描清单为空（路径归一化失效），拒绝假绿')
+        process.exit(1)
+      }
     }
     files = stagedMain.map(f => path.join(ROOT, f))
   } else {

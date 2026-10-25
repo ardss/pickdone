@@ -31,6 +31,10 @@ const IGNORE_FILES = new RegExp([
   'src[/\\\\]main[/\\\\]db\\.js$',
   'src[/\\\\]main[/\\\\]scheduler\\.js$',
   'browser-dev[/\\\\]todo-browser-shim\\.js$',
+  // 2026-10-26: gate-must-fail-golden.test.mjs deliberately carries hardcoded Chinese fixtures —
+  // they are the RED INPUTS proving detection works ("who checks the checks"), never shipped UI
+  // copy. Editing that file makes it dirty → incremental scan → self-inflicted red otherwise.
+  'tests[/\\\\]unit[/\\\\]cli[/\\\\]gate-must-fail-golden\\.test\\.mjs$',
 ].join('|'))
 
 function scanFile (p, text, ignoreDebt) {
@@ -82,12 +86,17 @@ if (process.argv.includes('--all')) {
   // paths (pickdone/...) while `git ls-files --others` printed pickdone-RELATIVE ones. `--relative=.`
   // was tried as the pin, but on git 2.53 it returns an EMPTY diff from a subdirectory (the scan
   // surface silently collapsed to zero). Bare `--relative` yields pickdone-relative paths correctly.
-  const diff = execFileSync('git', ['diff', '--name-only', '--relative', 'HEAD'], gitOpts)
+  // 2026-10-26 P3 fix: `git diff --name-only HEAD` DOES list deleted paths (the old comment
+  // claimed otherwise — it was wrong); a deletion reached statSync, tripped the fail-closed
+  // guard below and made any file deletion a false red. --diff-filter=d (lowercase = exclude
+  // deletions) keeps deleted paths out of the scan list while added/copied/modified/renamed
+  // ones (which all exist on disk) still get scanned.
+  const diff = execFileSync('git', ['diff', '--name-only', '--relative', '--diff-filter=d', 'HEAD'], gitOpts)
     + '\n' + execFileSync('git', ['ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
   files = diff.split('\n').map(f => f.trim().replace(/\\/g, '/'))
     .filter(f => SCAN_EXT(f) && !f.startsWith('../'))
   // 假绿防线: stat 失败的文件被静默剔除 = 扫描面静默缩水。diff 里的 js/vue 路径必然在盘上
-  // (git diff --name-only HEAD 不含已删除路径), stat 失败只可能是环境/路径归一化问题 → 红。
+  // (--diff-filter=d 已剔除删除路径,剩余 A/C/M/R 均存在),stat 失败只可能是环境/路径归一化问题 → 红。
   const statFailed = files.filter(f => { try { return !require('fs').statSync(path.join(ROOT, f)).isFile() } catch { return true } })
   if (statFailed.length) {
     console.error('✗ 增量扫描面塌缩:' + statFailed.length + ' 个 diff 中的 js/vue 文件 stat 失败,拒绝静默剔除:\n  ' + statFailed.join('\n  '))
@@ -100,7 +109,9 @@ if (process.argv.includes('--all')) {
     // Same extension set as the scan filter, so dirty shared/*.mjs files count here too.
     const dirtyJs = execFileSync('git', ['status', '--porcelain'], gitOpts).split('\n').filter(l => {
       const f = l.slice(3).trim().replace(/\\/g, '/')
-      return SCAN_EXT(f) && !f.endsWith('/')
+      // Deletions (status X/Y = D) are legitimately unscannable — --diff-filter=d already
+      // dropped them above; counting them here would false-red a deletion-only worktree.
+      return SCAN_EXT(f) && !f.endsWith('/') && !l.slice(0, 2).includes('D')
     })
     if (dirtyJs.length) {
       console.error('✗ 增量扫描面塌缩：工作树有 ' + dirtyJs.length + ' 个 js/vue 脏文件却一个都没进扫描（路径归一化失效），拒绝假绿')

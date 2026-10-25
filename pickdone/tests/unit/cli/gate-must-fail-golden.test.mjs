@@ -173,3 +173,49 @@ test('GOLDEN css-freeze: a grown frozen global css is red; a shrunk/equal one is
   const rg = runGate('check-css-freeze.mjs', good)
   assert.equal(rg.code, 0, 'equal/shrunk frozen file must pass: ' + rg.out)
 })
+
+test('GOLDEN boot-order --staged: pickdone/-prefixed staged paths resolve (toplevel-prefix pin); empty scan list fail-closes', () => {
+  // 2026-10-26 pin: git emits REPO-ROOT-relative paths (pickdone/src/main/...) while --staged
+  // matched /^src[\/]/ against them raw — the staged tier scanned ZERO files and exited green
+  // for its whole life (same shape as the 2026-10-10 check-file-size bug). Fixtures mirror the
+  // real nested layout: repo toplevel with a pickdone/ dir, gate pointed at pickdone.
+  const mk = (name) => {
+    const { root, write } = mkTree(name)
+    write('pickdone/src/main/ok.js', 'let init = () => {}\ninit()\n')
+    execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+    return root
+  }
+  const good = mk('bo-staged-good')
+  fs.writeFileSync(path.join(good, 'pickdone/src/main/ok2.js'), 'let i2 = () => {}\ni2()\n')
+  execSync('git add pickdone/src/main/ok2.js', { cwd: good, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  const rg = runGate('check-boot-order.cjs', path.join(good, 'pickdone'), ['--staged'])
+  assert.equal(rg.code, 0, 'staged pickdone/src/main file must be scanned and pass: ' + rg.out)
+  assert.match(rg.out, /1 个文件/, 'must scan exactly 1 staged file (0 = the zero-scan fake-green): ' + rg.out)
+
+  // Fail-closed: src/main js staged at toplevel but NONE of it resolves under pickdone —
+  // the scan list would be empty while real staged work exists; refuse to fake-green.
+  const bad = mk('bo-staged-fc')
+  fs.mkdirSync(path.join(bad, 'other/src/main'), { recursive: true })
+  fs.writeFileSync(path.join(bad, 'other/src/main/outside.js'), 'x = 1\n')
+  execSync('git add other/src/main/outside.js', { cwd: bad, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  const rb = runGate('check-boot-order.cjs', path.join(bad, 'pickdone'), ['--staged'])
+  assert.equal(rb.code, 1, 'staged src/main js resolving to an empty scan list must fail closed: ' + rb.out)
+})
+
+test('GOLDEN i18n incremental: a committed-file deletion is green (diff-filter=d pin); dirty hardcoded CN stays red', () => {
+  // 2026-10-26 pin: `git diff --name-only HEAD` DOES list deleted paths (the old comment claimed
+  // otherwise); deletions hit statSync and tripped the scan-surface guard — a false red on any
+  // file deletion. With --diff-filter=d a deletion-only worktree must pass; detection stays red.
+  const { root, write } = mkTree('i18n-del')
+  const vue = cn => `<template><div/></template>\n<script>export default { mounted () { this.$message(${cn}) } }</script>\n`
+  write('pickdone/renderer/js/deleteme.vue', vue('this.$t("common.ok")'))
+  write('pickdone/renderer/js/kept.vue', vue('this.$t("common.ok")'))
+  execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  fs.rmSync(path.join(root, 'pickdone/renderer/js/deleteme.vue')) // uncommitted deletion
+  const rg = runGate('check-i18n.js', path.join(root, 'pickdone'))
+  assert.equal(rg.code, 0, 'deletion-only worktree must be green (was false-red via statSync): ' + rg.out)
+
+  fs.writeFileSync(path.join(root, 'pickdone/renderer/js/kept.vue'), vue('"硬编码中文bad"'))
+  const rb = runGate('check-i18n.js', path.join(root, 'pickdone'))
+  assert.equal(rb.code, 1, 'dirty hardcoded CN must stay red after the deletion fix: ' + rb.out)
+})

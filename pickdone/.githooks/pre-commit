@@ -9,16 +9,32 @@ echo "[pre-commit] 1/4 语法校验（node --check 变更的 .js/.mjs/.cjs）"
 fail=0
 # while-read 逐行处理而非 for 循环分词:for 会按空白切分,路径带空格的变更文件被静默跳过。
 # 过滤器 .[cm]?js 覆盖 .js/.cjs/.mjs(旧 '\.m?js$' 漏 .cjs);tr -d '\r' 容忍 CRLF 名单行。
-git diff --cached --name-only --diff-filter=ACM | grep -E '\.[cm]?js$' | tr -d '\r' | while IFS= read -r f; do
+# 2026-10-26 堵假绿:git 打印的是仓库根相对路径(pickdone/...),而钩子已 cd 进 pickdone/,
+# 旧的 [ -f "$f" ] 对每个文件都判"不存在",本阶段整个生命周期里实际检查了 0 个文件却一直绿。
+# 剥掉 pickdone/ 前缀后再做存在性判断(与 cli/lint-staged.mjs / check-file-size.cjs 同款),
+# 并在"有 staged js 却 0 个被检查"时拒绝放行。列表落盘再 while<file:管道子 shell 里改
+# checked 计数传不出来,重定向方式让循环跑在当前 shell。
+jslist=/tmp/hook-staged-js.$$
+git diff --cached --name-only --diff-filter=ACM | tr -d '\r' | grep -E '\.[cm]?js$' > "$jslist" || true
+checked=0
+while IFS= read -r f; do
+  case "$f" in pickdone/*) f="${f#pickdone/}" ;; esac
   [ -f "$f" ] || continue
   if ! node --check "$f" 2>/tmp/hook-check.err; then
     echo "  ✗ 语法错误: $f"
     cat /tmp/hook-check.err
-    exit 1
+    fail=1
+    break
   fi
-done || fail=1
+  checked=$((checked + 1))
+done < "$jslist"
+rm -f "$jslist"
 [ $fail -eq 1 ] && exit 1
-echo "  ✓ 通过"
+if [ "$checked" -eq 0 ]; then
+  echo "  ✗ 有 staged 的 js/cjs/mjs 文件但 0 个通过了语法检查（路径归一化失效）——拒绝假绿（参照 check-file-size.cjs 2026-10-10 修复）"
+  exit 1
+fi
+echo "  ✓ 通过（检查 $checked 个文件）"
 
 echo "[pre-commit] 2/4 token 纪律（写死浅色背景=深色白块元凶）"
 node cli/check-tokens.js || exit 1
