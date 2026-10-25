@@ -575,3 +575,21 @@ sensitive (TAP shape, isolation flags) and gate-mechanics already
 self-adapts, but any FUTURE pinned-to-a-version gate inherits this
 drift. If a version-dependent gate ever reds inexplicably, check
 `node -v` in THAT shell first.
+
+### 2026-10-25 22:1x · v0.4.0-beta.20 released AND installed on this machine (new standing rule)
+
+User rule (critical, standing): every maintenance cycle that ships a
+release MUST install it on this machine — the user runs the installed
+build, not the repo; equal version STRINGS do not mean equal content
+(beta.19 was numbered the same but missed 6 functional commits: the sync
+account-identity fix, HabitView/EditPanel repairs, day-caliber routing).
+Release flow fixed as: bump + bilingual CHANGELOG -> npm run dist ->
+verify:packaged -> silent install -> registry check -> only then "shipped".
+
+beta.20 contents: the pending stack (wave-8 round, data-location UX,
+configurable storage, boot honesty) + the silent-failure sweep (degradation
+notices, sync account-identity hardening, habit card honesty, recovery
+quarantine evidence). CHANGELOG repaired (heading + stray "og" splice
+wreck cleaned in both locales). Gate-integrity audit of the 31-stage
+orchestration passed clean (no ghost baselines / orphans / double-run);
+the one real drift it found (stale smoke:interact comment) is fixed.
