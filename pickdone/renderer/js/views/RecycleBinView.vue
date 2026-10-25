@@ -119,7 +119,10 @@ export default {
       if (inp && e.target !== inp) inp.click()
     },
     isOverdue (t) {
-      return t.dayStart && dayjs(t.dayStart).startOf('day').valueOf() < dayjs().startOf('day').valueOf()
+      // W9 (2026-10-26): the "today" side of the comparison reads the reactive store owner
+      // (todo.todayTimestamp, maintained by the store's setTodayTs across midnight) instead of
+      // wall-clock dayjs() — comparison semantics unchanged (day-granular, same <
+      return t.dayStart && dayjs(t.dayStart).startOf('day').valueOf() < this.$store.state.todo.todayTimestamp
     },
     /** Reference prepend copy: "no date" / "overdue M/D weekX" / "M/D weekX" */
     prependDate (t) {

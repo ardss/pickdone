@@ -208,7 +208,7 @@ export default {
     },
     noiseCurrent () { return (this.$store.state.settings.whiteNoiseAudio || '') },
     /* Today's todo candidates (same pool as TomatoBar.attachCandidates). D14-A7: shared builder so
-    the slice cap and the truncation notice read the same pool */
+    the slice cap and the truncation notice read the same pool. W9 (2026-10-26): the pool is a computed Array — tasks/tasksTruncated below read it as a property; a method-style call crashed the ⋮ task menu render with "not a function". */
     taskPool () {
       const root = this.$store.state.todo || {}
       let list = (root.views && root.views.todayTodoList) || []
@@ -220,11 +220,11 @@ export default {
       return list.filter(t => t && !t.complete)
     },
     tasks () {
-      return this.taskPool().slice(0, 30)
+      return this.taskPool.slice(0, 30)
     },
-    /* D14-A7: was the pool bigger than the 30-item render cap? Drives the truncation notice */
+    /* D14-A7: was the pool bigger than the 30-item render cap? Drives the truncation notice. W9: property access, same mis-invocation trap as tasks() above */
     tasksTruncated () {
-      return this.taskPool().length > 30
+      return this.taskPool.length > 30
     }
   },
   methods: {
