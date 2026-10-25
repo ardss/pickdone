@@ -67,6 +67,10 @@ test('[D3-2] today0 equals the former inline dayjs().startOf("day"); dayStart no
   const noon = +dayjs('2026-09-23').hour(15).minute(42).second(13)
   assert.equal(todayBounds.dayStart(noon), +dayjs('2026-09-23').startOf('day'))
   assert.equal(todayBounds.today0(+dayjs('2026-01-01').hour(10).valueOf()), +dayjs('2026-01-01').startOf('day'), 'injected now is honored')
+  // [day-caliber 2026-10-25] date-only STRINGS parse as LOCAL wall time, not UTC — the routed
+  // todo.js call sites may hand a raw 'YYYY-MM-DD' through, and `new Date(str)` would read UTC
+  // midnight (previous local day on UTC-negative zones; silent row-drop by the equality filters).
+  assert.equal(todayBounds.dayStart('2026-09-23'), +dayjs('2026-09-23').startOf('day'), 'date-only string stays on the LOCAL day')
 })
 
 test('[D3-2] domain-3 files consume todayBounds (partial convergence; out-of-domain files untouched)', () => {

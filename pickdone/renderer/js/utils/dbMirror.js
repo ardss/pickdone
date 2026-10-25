@@ -19,14 +19,11 @@ const timers = {}
 const pendings = {} // Blobs pending within the debounce window (used by quit flush)
 const newest = {} // Newest blob ever queued per key — a late rejection of an older write must never clobber it
 const attempts = {} // Consecutive failure count per key (drives the backoff and the give-up)
-// [J-audit P2 fix 2026-10-22] Echo-suppression watermark: the newest _savedAt THIS window has
-// queued per key. The main-process external-db-watch hot-applies db.settingsState changes for CLI
-// coexistence, but the renderer's OWN debounced mirror lands in that same channel — and its
-// two-layer debounce (persist 2s + dbMirror 2s) lets a STALE generation land AFTER a newer user
-// write, which the watcher then treats as a fresh external change and hot-applies over it
-// (measured: 专注时长 5→10 double write bounced to 5 at +4.3s, config.json included). A patch
-// whose origin stamp is not newer than this watermark originated from this window's own mirror
-// pipeline and must never be applied back (store/settings.js updateExternal).
+// [J-audit P2 fix 2026-10-22, superseded by the W8 exact-set contract below] the renderer's OWN
+// debounced mirror lands in the same channel the external-db-watch hot-applies from, so its own
+// echoes must be suppressed. The original `<= watermark` check over-suppressed (it swallowed
+// genuinely external stamps that merely predate our latest mirror — the cross-machine clock-skew
+// vector); the exact-set contract below replaces it.
 const lastOwnStamp = {}
 /** [W8 fix] own-stamp recall window: the most recent N `_savedAt` values THIS window itself queued
  *  per key (a Set — generations are distinct Date.now() stamps). The old `s <= watermark` check

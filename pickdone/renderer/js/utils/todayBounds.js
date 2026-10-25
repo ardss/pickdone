@@ -21,8 +21,17 @@
 /** Day-start ts of today (or of the injected `now`), non-reactive */
 export function today0 (now = Date.now()) { return dayStart(now) }
 
-/** Day-start ts of an arbitrary ts (normalizes any moment to its own day's midnight) */
+/** Day-start ts of an arbitrary ts (normalizes any moment to its own day's midnight).
+ *  [day-caliber 2026-10-25] date-only STRING input ('YYYY-MM-DD') is parsed as LOCAL wall time,
+ *  not UTC: `new Date('2026-10-25')` reads UTC midnight, so a UTC-negative timezone would land
+ *  on the previous local day and the dayStart equality filters would silently drop the row.
+ *  dayjs (the pre-routing inline form) parsed such strings locally — this keeps the routed
+ *  behavior identical. Numbers and Date objects are unaffected. */
 export function dayStart (ts) {
+  if (typeof ts === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(ts)) {
+    const [y, m, d] = ts.split('-').map(Number)
+    return new Date(y, m - 1, d).getTime()
+  }
   const d = new Date(ts)
   return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
 }
