@@ -3,6 +3,7 @@
  * status: add/update/delete -> sync; local meta.todosVersion acts as the sync cursor
  */
 import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
+import { dayStart } from '../utils/todayBounds.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
 import { removeRenewedInstance } from '../utils/repeatUndo.js'
@@ -184,7 +185,9 @@ export default {
       // Renewal instance idempotency: skip when the same rid + same dayStart already exists (prevents concurrent multi-window + CLI double-triggering creating two renewals at the same moment)
       let targetDay = 0
       if (repeatId) {
-        targetDay = dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : 0)
+        // [day-caliber 2026-10-25] inline startOf('day') routed through todayBounds.dayStart
+        // (the counted ratchet: renderer inline sites shrink, never grow).
+        targetDay = dayOverride != null ? dayOverride : (todoDate ? dayStart(todoDate) : 0)
         if (targetDay) {
           try {
             const existing = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
@@ -208,11 +211,11 @@ export default {
       // to fork and the task jumped back to the box after restart.
       const effectiveDay = dayOverride != null && Number(dayOverride) > 0
         ? Number(dayOverride)
-        : (todoDate ? +dayjs(todoDate).startOf('day') : (Number(todoTime) > 0 ? +dayjs(Number(todoTime)).startOf('day') : 0))
+        : (todoDate ? dayStart(todoDate) : (Number(todoTime) > 0 ? dayStart(Number(todoTime)) : 0))
       // dayOverride-only (no todoTime, no todoDate): derive the converging todoTime
       let effTodoTime = Number(todoTime) || 0
       if (!effTodoTime && dayOverride != null && Number(dayOverride) > 0) {
-        effTodoTime = +dayjs(Number(dayOverride)).startOf('day')
+        effTodoTime = dayStart(Number(dayOverride))
       }
       const sameDay = state.todoList.filter(t =>
         !t.delete && t.dayStart && effectiveDay && dayjs(t.dayStart).isSame(dayjs(effectiveDay).startOf('day'), 'ms'))
