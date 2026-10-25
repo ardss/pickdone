@@ -298,9 +298,14 @@ module.exports = function systemHandlers (ctx) {
         // poll must be re-armed, or CLI direct-write detection stays blind for the whole session.
         // Only when re-init succeeded (probe the handle with a getMeta) — restarting the poll
         // over a dead handle would just warn-loop on every tick.
+        // W9 fix 2 (2026-10-26): `ctx.dbm && ctx.dbm.init` is always true — the probe replaces
+        // that vacuous gate. The re-init above is best-effort and may have been swallowed by its
+        // own try/catch; only a live getMeta round-trip proves the handle actually works.
         let watchRestarted = false
         try {
-          if (ctx.dbm && ctx.dbm.init) { // re-init above threw → handle dead → do not re-arm
+          let probeOk = false
+          try { probeOk = !!ctx.dbm && ctx.dbm.call('getMeta', 'schemaVersion') != null } catch { /* dead handle: no restart */ }
+          if (probeOk) {
             require('../external-db-watch').restartLatestDbWatch()
             watchRestarted = true
           }

@@ -47,8 +47,9 @@ function markFired (key) {
       // exists to prevent). flushFiredNow() already coalesces (clears the timer, single commit,
       // marks written); BOTH arms flush now — one extra SQLite commit per all-unwritten eviction
       // is the cost of not dropping the watermark on the floor.
-      if (!_persistTimer) flushFiredNow()
-      else flushFiredNow() // M8B fix 5: the pending timer must not defer the evicted watermark
+      // M8B fix 5 intent kept: the pending timer must not defer the evicted watermark — both
+      // cases flush, so the vacuous conditional collapses to a single unconditional call.
+      flushFiredNow()
       // C9 (P3 2026-10-02): the bound must hold PER ADMISSION. The old code skipped the eviction
       // when the flush failed ("let the map exceed FIRED_MAX by one; it self-heals") — under a
       // SUSTAINED persist failure every further markFired repeated that path and the map grew
