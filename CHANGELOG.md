@@ -5,6 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/). The 0.x series is the initial-development band: from 0.4.0 on, any user-visible new feature bumps MINOR; PATCH is fixes/internal hardening only. 1.0.0 marks stable data format + sync. Historical versions (≤0.3.7) are not retro-renumbered.
 
 ## [Unreleased]
+- Wave-9 daily loop (3-domain mining, 8 fixed): Renderer - the float window's task menu no longer crashes on open (a computed was invoked as a function in tasks/tasksTruncated); the recycle bin's overdue classification now reads the store's reactive today timestamp instead of a cached wall clock (stale across midnight). Main - a tomato ledger update whose patch carried its own id can no longer hijack the UPDATE's WHERE binding and rewrite a different ledger row; a failed data relocation only re-arms the external-write watcher after a real getMeta probe of the reopened handle (dead handles no longer warn-loop all session); a vacuous identical-arms flush conditional in the scheduler was collapsed. Gates - the pre-commit syntax stage and the boot-order staged gate had checked ZERO files since the repo layout change (git emits toplevel-relative paths; both now strip the prefix and fail closed when staged js exists but none was scanned); the i18n incremental scan no longer false-reds on legitimate file deletions.
 
 ## [0.4.0-beta.20] - 2026-10-25
 

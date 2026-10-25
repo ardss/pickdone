@@ -28,9 +28,13 @@ while IFS= read -r f; do
   fi
   checked=$((checked + 1))
 done < "$jslist"
-rm -f "$jslist"
 [ $fail -eq 1 ] && exit 1
-if [ "$checked" -eq 0 ]; then
+# 熔断只对"确实存在 staged js"生效:列表为空(如纯文档提交)检查 0 个是正常绿;
+# 列表非空却 0 个通过存在性判断 = 路径归一化失效,拒绝假绿(参照 check-file-size.cjs 2026-10-10 修复)。
+# 判断必须发生在 rm 之前。
+jslist_nonempty=0; [ -s "$jslist" ] && jslist_nonempty=1
+rm -f "$jslist"
+if [ "$jslist_nonempty" -eq 1 ] && [ "$checked" -eq 0 ]; then
   echo "  ✗ 有 staged 的 js/cjs/mjs 文件但 0 个通过了语法检查（路径归一化失效）——拒绝假绿（参照 check-file-size.cjs 2026-10-10 修复）"
   exit 1
 fi

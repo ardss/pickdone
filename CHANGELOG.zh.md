@@ -3,6 +3,7 @@
 System.Object[]
 
 ## [Unreleased]
+- 第九波每日循环（三域挖掘，修复 8 项）：渲染端——浮窗任务菜单打开即崩溃修复（tasks/tasksTruncated 把 computed 当函数调用）；回收站过期判定改读 store 响应式今日戳（原墙钟缓存跨午夜失真）。主进程——番茄账本更新的 patch 自带 id 不再劫持 WHERE 绑定写穿另一条账本行；数据迁移失败后仅在对重开句柄探活（getMeta）成功才重挂外部写监视（死句柄不再整会话 warn 循环）；scheduler 同臂空条件收敛。门禁——pre-commit 语法门与 boot-order staged 门自仓布局变更起一直检查 0 个文件（git 输出仓根相对路径；两者现在剥前缀并在 staged 有 js 却 0 检查时熔断红）；i18n 增量扫描不再对合法删文件假红。
 
 ## [0.4.0-beta.20] - 2026-10-25
 
