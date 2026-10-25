@@ -549,3 +549,29 @@ mainstream-alignment ship list is tests/lib/poll.mjs (expect.poll
 shape, d9 drill wired) + the fake-timers NOT-WORTH-IT verdict. No
 further runner waves — the objective is closed with data, not
 postponed.
+
+### 2026-10-25 14:5x · Day audit: night-wave leftovers landed + node-version split risk
+
+Morning audit of the overnight waves found and fixed:
+1. The day-caliber ratchet repair (todo.js inline startOf routing) was
+   slice-verified but never committed — W8's "all solo green" silently
+   depended on an uncommitted diff. Landed (55f585dc); baseline stays 128.
+2. pickdone/pickdone/cli/check-all.js (stray 10-22 copy) formalized out of
+   the index — filesystem-deleting a tracked file is not enough.
+
+W8's 37f833a9 five repairs audited, all sound: userId learning now runs
+AFTER the local-evidence scan (bootstrap-apply contract semantics
+correct); fix5 quarantine sample 20→500 / bound 256KB is a deliberate
+"poison batches park fully" trade (59c73501, still 4x under the 1MB
+pre-fix blob); chips re-anchored to a listbox/option menu (WAI-ARIA
+upgrade, arrow-cycling via the shared dd-menu util); gate-mechanics
+baseline key is now computed from process.versions.node (robust).
+
+NEW RISK (recorded, not yet actionable): node version split on this host —
+fnm multishell shells pin different node majors per session (22.23.2 in
+the audit shell; W8 logs claim node24 in its own session; F:\nodejs and a
+codex runtime node also sit on PATH). Gate results are runner-version
+sensitive (TAP shape, isolation flags) and gate-mechanics already
+self-adapts, but any FUTURE pinned-to-a-version gate inherits this
+drift. If a version-dependent gate ever reds inexplicably, check
+`node -v` in THAT shell first.
