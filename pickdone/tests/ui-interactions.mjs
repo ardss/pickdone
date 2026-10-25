@@ -2,7 +2,7 @@
  * UI interaction smoke - covers "click -> visible effect" interaction regressions (systematic coverage strengthening, 2026-08-29).
  * Background: the broken calendar ‹/› pagination clicks exposed a coverage gap - views had a render matrix, but interactions had no defense line.
  * This script adds ten high-value interaction chains, each = action + visible-effect assertion; any failure turns the release gate red.
- * Zero dependencies (Node 22 built-in fetch/WebSocket). Usage: npm run smoke:interact
+ * Zero dependencies (Node 22 built-in fetch/WebSocket). Run by the gate stage run-interactions-gated (cli/check-all.js); manual: node tests/ui-interactions.mjs against a TODO_CDP instance.
  */
 const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
 
