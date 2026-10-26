@@ -40,6 +40,10 @@ const ELECTRON = process.platform === 'win32'
 const DEFAULT_TARGETS = [
   'tests/ui-smoke.mjs',
   'tests/e2e.test.mjs',
+  // 核心用户旅程回归 2026-10-27
+  'tests/e2e-journeys/j-todo-core.test.mjs',
+  'tests/e2e-journeys/j-habit-moment.test.mjs',
+  'tests/e2e-journeys/j-rail-stats-settings.test.mjs',
   'tests/keyboard-e2e.mjs',
   'tests/cssom-integrity.mjs',
   'tests/ui-coverage.mjs',

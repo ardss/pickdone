@@ -57,6 +57,10 @@ const appRoot = process.env.GATE_META_APP_ROOT
 // must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
 // NOTE: exclusion is by bare FILENAME across all suites — never reuse these names elsewhere.
 const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-visibility.test.mjs',
+  // 2026-10-27 core-journey E2E regressions (tests/e2e-journeys/): live-Electron pool targets
+  // run by run-interactions-shared.mjs as dedicated check:all ③ live stages — same class as
+  // e2e.test.mjs, never in the quick/pre-commit regression (boots + dev-host state).
+  'j-todo-core.test.mjs', 'j-habit-moment.test.mjs', 'j-rail-stats-settings.test.mjs',
   // 2026-09-28 un-excluded: the --test-force-exit + 2min-ceiling harness added after that wave
   // contains exactly the runaway-test scenario the flake feared, so the file re-joins the
   // default pool — an orphaned integration spec is a regression nobody sees.
