@@ -465,12 +465,11 @@ export default {
       for (const t of this.$store.state.todo.todoList) m.set(t.taskId, t)
       return m
     },
-    /* Schedule-load warning (v0.2 loadWarn util): planned = estimated tomatoes of today's + overdue incomplete tasks (views.todayTodoList + views.recent.expiredUncompleted — the same selection the Today groups and the capacity band concept use). Level 'warn' only when planned is strictly above the threshold; threshold 0 ('off') or browsing another day renders no warning UI at all. */
+    /* Schedule-load warning (v0.2 loadWarn util): planned = estimated tomatoes of TODAY's scheduled tasks only (views.todayTodoList). 2026-10-26 root fix (user-reported): the old input also concat'd views.recent.expiredUncompleted, so up-to-30d of overdue backlog made the badge scream 过载 132/10 forever even on a lightly-planned day — alert fatigue, and it disagreed with ProjectOverviewView's load badge which already counts today-only (t.dayStart === today0). Overdue backlog stays visible as the Today page's expired groups; it just no longer counts as today's plan. Level 'warn' only when planned is strictly above the threshold; threshold 0 ('off') or browsing another day renders no warning UI at all. */
     loadWarn () {
       if (!this.isViewingToday) return { active: false, badge: '', tip: '' }
       const v = this.$store.state.todo.views || {}
-      const todos = [].concat(v.todayTodoList || [], (v.recent && v.recent.expiredUncompleted) || [])
-      const planned = dayPlannedLoad(todos, t => getEstimate(t.taskId))
+      const planned = dayPlannedLoad(v.todayTodoList || [], t => getEstimate(t.taskId))
       const th = Math.round(Number(this.$store.state.settings.dailyLoadWarnThreshold) || 0)
       if (loadLevel(planned, th) !== 'warn') return { active: false, badge: '', tip: '' }
       return {
