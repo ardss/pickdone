@@ -3,6 +3,7 @@
 System.Object[]
 
 ## [Unreleased]
+- 第十波每日循环（三域挖掘，修复 8 项）：渲染端——习惯/倒数日删除的「撤销」真正恢复了（快照 savedAt 早于删除 persist 的重打戳，LWW 守卫静默丢弃恢复，按钮点了没反应而记录已丢）；英文自然语言日期任意位置匹配（"meeting tomorrow 3pm" 不再静默排到今天 15:00 且标题残留 tomorrow）。主进程——备份名排序恢复解析同秒碰撞名（auto-…-dup<n>.json）与 CLI 事件名（evt-…-<epochMs>.json），两份正则副本分叉后它们被判为最旧、去重可能选到陈旧孪生；数据迁移成功提示改为阻塞等确认，不再被 400ms 重启定时器销毁。门禁——flake 吸收后的组合全量 TAP 真正发出（恰好一次、单一连贯 plan；此前消费方解析的是原始双 plan 流、skip 棘轮只看到重试子集），重试集之外的 pass1 失败拒绝吸收，fail/cancelled 用真实计数；flake 台账写时合并，并发门禁不再丢条目；lint-staged 在界 staged 源归一化后选择为空时熔断红；skip 棘轮基线环境变量覆盖仅自测模式生效。
 - 第九波每日循环（三域挖掘，修复 8 项）：渲染端——浮窗任务菜单打开即崩溃修复（tasks/tasksTruncated 把 computed 当函数调用）；回收站过期判定改读 store 响应式今日戳（原墙钟缓存跨午夜失真）。主进程——番茄账本更新的 patch 自带 id 不再劫持 WHERE 绑定写穿另一条账本行；数据迁移失败后仅在对重开句柄探活（getMeta）成功才重挂外部写监视（死句柄不再整会话 warn 循环）；scheduler 同臂空条件收敛。门禁——pre-commit 语法门与 boot-order staged 门自仓布局变更起一直检查 0 个文件（git 输出仓根相对路径；两者现在剥前缀并在 staged 有 js 却 0 检查时熔断红）；i18n 增量扫描不再对合法删文件假红。
 
 ## [0.4.0-beta.20] - 2026-10-25
