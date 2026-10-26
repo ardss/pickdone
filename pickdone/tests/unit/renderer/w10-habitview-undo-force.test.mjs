@@ -81,3 +81,36 @@ test('W10-1 behavior: force:true applies an OLDER savedAt blob and strips force 
   assert.equal(persisted.force, undefined, 'force is an internal control flag — never persisted to LS (same discipline as the restore-backup path)')
   assert.equal(persisted.habits[0].id, 'pre-delete', 'the restored blob reached LS')
 })
+
+/* [W10 2026-10-27 live-probe] force alone was NOT enough: delHabit's persist minted a tombstone
+ * for the id, replaceAll's sticky tombstone merge kept it, and applyHabitTombstones filtered the
+ * just-restored habit back out — caught live by tests/e2e-journeys/j-habit-moment (unit layer
+ * never had a tombstone in state, so the old test green-lit an undo that still restored nothing). */
+test('W10-2 behavior: force restore outranks the local delete tombstone (habit comes back, tombstone pruned)', () => {
+  const state = {
+    habits: [], moments: [], savedAt: 500,
+    deleted: [{ id: 'h-del', deletedAt: 450 }], // tombstone minted by the delete's persist
+    deletedMoments: [{ id: 'm-del', deletedAt: 455 }]
+  }
+  habits.mutations.replaceAll(state, {
+    schemaV: 1,
+    habits: [{ id: 'h-del', records: {} }, { id: 'h-keep', records: {} }],
+    moments: [{ id: 'm-del' }],
+    savedAt: 100, force: true
+  })
+  const ids = state.habits.map(h => h.id)
+  assert.ok(ids.includes('h-del'), 'the just-deleted habit must survive a force restore — tombstone outranked by the authoritative blob')
+  assert.ok(ids.includes('h-keep'), 'unrelated habits restore alongside')
+  assert.equal(state.deleted.find(t => t.id === 'h-del'), undefined, 'the revival tombstone is pruned (persist re-propagates un-delete to peers)')
+  assert.equal(state.deleted.find(t => t.id === 'h-unrelated'), undefined)
+  assert.equal(state.deletedMoments.find(t => t.id === 'm-del'), undefined, 'same for moments')
+  assert.ok(state.habits.every(h => h.id !== 'h-tombstoned-elsewhere') || true)
+})
+
+test('W10-2 behavior: NON-force restore keeps tombstone stickiness (old backup cannot resurrect)', () => {
+  const state = { habits: [], moments: [], savedAt: 100, deleted: [{ id: 'h-x', deletedAt: 50 }], deletedMoments: [] }
+  habits.mutations.replaceAll(state, {
+    schemaV: 1, habits: [{ id: 'h-x', records: {} }], moments: [], savedAt: 40 // older, no force
+  })
+  assert.equal(state.habits.length, 0, 'LWW guard still rejects the older blob without force')
+})

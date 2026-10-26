@@ -385,12 +385,28 @@ export default {
       // [F3 fix] deletion is sticky across restores too: merge the blob's tombstones with the
       // local ones, then drop tombstoned ids from the incoming array (an old backup without the
       // `deleted` field cannot resurrect a habit deleted after it was taken).
-      s.deleted = mergeHabitTombstones(s.deleted, blob.deleted)
+      // [W10 2026-10-27 live-probe fix] the UNDO path (force restore) previously resurrected
+      // NOTHING: delHabit's persist had just minted a tombstone for the id, the merge below kept
+      // it, and applyHabitTombstones then filtered the just-restored habit back out — force:true
+      // alone was not enough (caught by the e2e-journeys habit-undo trip, not by unit tests,
+      // which never had a tombstone in state). A FORCE restore is the user saying "this state is
+      // authoritative", so habits/moments present in the incoming blob outrank local tombstones:
+      // prune those tombstones (sync follows — the pruned tombstone + present habit re-propagates
+      // via the next persist, un-deleting on peers). Non-force restores keep full stickiness.
+      const incomingHabitIds = new Set(blob.habits.map(h => h && h.id).filter(Boolean))
+      const incomingMomentIds = new Set((blob.moments || []).map(m => m && m.id).filter(Boolean))
+      const pruneRevived = list => (Array.isArray(list) ? list : []).filter(t => !(t && (incomingHabitIds.has(t.id) || incomingMomentIds.has(t.id))))
+      if (force) {
+        s.deleted = pruneRevived(s.deleted)
+        s.deletedMoments = pruneRevived(s.deletedMoments)
+      }
+      // force 时 blob 自带的墓碑同样不得含复活 id（旧快照理论上不含，防御性对齐）
+      s.deleted = mergeHabitTombstones(s.deleted, force ? pruneRevived(blob.deleted) : blob.deleted)
       s.habits = applyHabitTombstones(blob.habits, s.deleted)
       // [W7-R P2] sticky tombstone merge for moments too (same caliber as the `deleted` line
       // above): an old backup without `deletedMoments` cannot resurrect a moment deleted after
       // the backup was taken; the inbound array is filtered before it lands.
-      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, blob.deletedMoments)
+      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, force ? pruneRevived(blob.deletedMoments) : blob.deletedMoments)
       s.moments = applyMomentTombstones(blob.moments || [], s.deletedMoments)
       s.savedAt = blob.savedAt || 0
       // 2026-10-09 P3: `force` is an INTERNAL control flag (restore-backup override), not blob
