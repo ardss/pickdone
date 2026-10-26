@@ -10,7 +10,8 @@
  * 用法:
  *   node cli/check-test-summary.cjs             # 自跑 node tests/run-all.mjs,TAP 写临时文件,exit code + 摘要双重校验
  *   node cli/check-test-summary.cjs <tapfile>   # 校验已有 TAP 输出文件(离线/测试复用同一套逻辑)
- * 环境变量 CHECK_TEST_SUMMARY_SKIP_BASELINE 可覆盖 skip 基线(仅供本脚本自测,门禁调用方不得设置)
+ * 环境变量 CHECK_TEST_SUMMARY_SKIP_BASELINE 可覆盖 skip 基线——仅当 CHECK_TEST_SUMMARY_SELFTEST=1
+ * 同时设置时生效(本脚本自测);单独出现时判定为环境泄漏,大声告警并忽略(见下方 SKIP_BASELINE 计算)。
  */
 const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -25,9 +26,21 @@ const path = require('node:path')
 //   win32:0 = windows 实测 0 skip
 // 新增 skip 会被棘轮拦下并打印用例名;确属平台性合理 skip 时,在此处带注释给对应平台加基线。
 const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 2, darwin: 1 }
-const SKIP_BASELINE = Number(
-  process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE ?? PLATFORM_SKIP_BASELINE[process.platform] ?? 0
-)
+// [fail-closed 2026-10-26] the raw env override voided the skip ratchet from ANY stray
+// exported env var (CI job env, a dev shell rc file) — a silent ratchet bypass. It is now
+// gated: honored only alongside CHECK_TEST_SUMMARY_SELFTEST=1 (the script's own self-test);
+// an override without the self-test flag prints a loud warning and is IGNORED.
+const SKIP_BASELINE_OVERRIDE = process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE
+const SELFTEST_ENABLED = process.env.CHECK_TEST_SUMMARY_SELFTEST === '1'
+let SKIP_BASELINE
+if (SKIP_BASELINE_OVERRIDE !== undefined && SELFTEST_ENABLED) {
+  SKIP_BASELINE = Number(SKIP_BASELINE_OVERRIDE)
+} else {
+  if (SKIP_BASELINE_OVERRIDE !== undefined) {
+    console.error(`⚠ [check-test-summary] CHECK_TEST_SUMMARY_SKIP_BASELINE=${SKIP_BASELINE_OVERRIDE} 已设置但未同时设置 CHECK_TEST_SUMMARY_SELFTEST=1 —— 判定为环境泄漏,覆盖被忽略,使用平台基线(棘轮不被绕过)`)
+  }
+  SKIP_BASELINE = PLATFORM_SKIP_BASELINE[process.platform] ?? 0
+}
 const TAIL_LINES = 30
 
 function parseSummary (tap) {

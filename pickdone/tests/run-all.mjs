@@ -9,7 +9,7 @@
  *   Suite membership is directory-level: tests/unit/**, tests/integration/**, tests/visual/**;
  *   files kept at the tests/ root (npm-script / check-all entrypoints) count as integration.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, writeSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -315,7 +315,21 @@ function runnerFileArgs () {
 // results as its file completes; the same bytes are still accumulated for the downstream
 // consumers below (native-crash retry, coverage summary, slow-test margin), so behavior is
 // identical — only visibility changed.
-function spawnRunner (fileArgsOverride = null) {
+// Synchronous stdout write (2026-10-26 composed-TAP contract): buffered end-of-run emission
+// must land BEFORE process.exit() — async process.stdout.write can be truncated by an
+// immediate exit when stdout is a pipe (pipeline mode redirects run-all's stdout into the
+// gate's tap file), which would truncate the composed plan mid-stream.
+const emitSync = buf => { try { writeSync(1, buf) } catch { /* stdout already closed */ } }
+// `live:false` buffers the stdout pipe-through (bytes still accumulate in `out` for the
+// downstream consumers) — used for passes whose TAP may be REBUILT (the composed
+// full-corpus stream after flake-retry absorption), so the final stdout carries exactly
+// ONE coherent plan instead of pass1 raw + composed concatenated (double-plan bug
+// 2026-10-26: the composed stream was assigned to r.stdout but never emitted at all,
+// while pass1+retry bytes had already been piped through live).
+// Tradeoff, accepted deliberately: during a buffered pass the stdout/tap-file stays empty
+// (no live growth) — stderr diagnostics and the failure-path emissions below keep every
+// terminal state named.
+function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
   return new Promise(resolve => {
     // NODE_TEST_CONTEXT must NOT leak into the runner: when run-all itself is spawned from a
     // node:test process (the gate-mechanics meta-suite), the marker inherits down the chain and
@@ -342,14 +356,17 @@ function spawnRunner (fileArgsOverride = null) {
     }
     const out = []
     const err = []
-    child.stdout.on('data', d => { out.push(d); process.stdout.write(d) })
+    child.stdout.on('data', d => { out.push(d); if (live) process.stdout.write(d) })
     child.stderr.on('data', d => { err.push(d); process.stderr.write(d) })
-    child.on('error', e => resolve({ status: null, stdout: Buffer.concat(out), stderr: Buffer.concat(err), error: e }))
-    child.on('close', code => resolve({ status: code, stdout: Buffer.concat(out), stderr: Buffer.concat(err) }))
+    child.on('error', e => resolve({ status: null, stdout: Buffer.concat(out), stderr: Buffer.concat(err), error: e, streamed: live }))
+    child.on('close', code => resolve({ status: code, stdout: Buffer.concat(out), stderr: Buffer.concat(err), streamed: live }))
   })
 }
 
-let r = await spawnRunner()
+// Pass 1 is spawned BUFFERED (live:false): if the flake-retry path composes a full-corpus
+// TAP, that composed stream must be the only thing on stdout (exactly-once, one coherent
+// plan). Every non-composing terminal path below emits the buffered bytes exactly once.
+let r = await spawnRunner(null, { live: false })
 // Native-crash retry (2026-10-10 nightly R2b): on Windows, per-file child processes die at
 // teardown to a libuv assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c)
 // surfacing as exitCode 3221226505 (0xC0000409) — a Node bug, NOT a test failure, and the
@@ -370,6 +387,7 @@ const onlyNativeCrash = tap => {
 }
 if (r.status !== 0 && r.stdout && onlyNativeCrash(String(r.stdout))) {
   console.error('[run-all] native teardown crash(s) (0xC0000409 libuv async assert) were the only failures — retrying the suite once (CI rerun doctrine)')
+  emitSync(r.stdout) // pass1 raw TAP goes out first — the rerun streams live after it (no composition here)
   r = await spawnRunner()
 }
 // Flake-retry per FILE (2026-10-24, generalizes the rerun doctrine above): under gate
@@ -405,11 +423,28 @@ const recordFlake = async entries => {
   try {
     const fsx = await import('node:fs')
     fsx.mkdirSync(path.dirname(FLAKE_LEDGER), { recursive: true })
-    let prior = []
-    try { prior = JSON.parse(fsx.readFileSync(FLAKE_LEDGER, 'utf8')) } catch { /* first entry or unreadable prior */ }
-    if (!Array.isArray(prior)) prior = []
-    // keep the ledger bounded: recent 200 entries are the observability window
-    const next = [...prior, ...entries].slice(-200)
+    const readLedger = () => {
+      try {
+        const v = JSON.parse(fsx.readFileSync(FLAKE_LEDGER, 'utf8'))
+        return Array.isArray(v) ? v : []
+      } catch { return [] } // first entry or unreadable prior
+    }
+    const prior = readLedger()
+    // [merge-on-write 2026-10-26] plain read-modify-write LOST entries when two gates ran
+    // concurrently (pre-commit lane + check:all lane): the second writer serialized from its
+    // own stale snapshot and clobbered the first lane's entries on rename. Re-read the
+    // ledger immediately BEFORE the tmp+rename and UNION the entry lists, deduped by the
+    // entry's (at, files) pair — a same-instant same-file entry from both lanes is one
+    // flake, not two. slice(-200) keeps the observability window as before.
+    const fresh = readLedger()
+    const seen = new Set()
+    const dedupe = e => {
+      const k = JSON.stringify([e && e.at, e && e.files])
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    }
+    const next = [...prior, ...entries, ...fresh].filter(dedupe).slice(-200)
     // [determinism 2026-10-25] atomic write (tmp+rename): two concurrent gates must not
     // tear the shared ledger mid-write (rename within the same dir is atomic on POSIX
     // and effectively atomic on win32/NTFS).
@@ -469,7 +504,9 @@ if (r.status !== 0 && !r.error && r.stdout) {
     // debris, fs flushing); retrying into the same heat re-loses the same races
     // (check-test-scope-golden flunked the immediate retry twice before this delay).
     await new Promise(r2 => setTimeout(r2, 30000))
-    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)))
+    // The retry pass is buffered too (live:false): its bytes may be folded into the composed
+    // full-corpus stream, and every terminal branch below emits its buffers exactly once.
+    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)), { live: false })
     if (retry.status === 0) {
       const deepHit = failedFiles.filter(f => DEEP_FILES.has(path.basename(f)))
       if (deepHit.length > 0) {
@@ -482,31 +519,36 @@ if (r.status !== 0 && !r.error && r.stdout) {
           files: failedFiles.map(f => path.relative(appRoot, f)),
           note: 'deep-pool load-sensitivity: retry green, pass1 red stands'
         }])
+        // pass1 TAP stays in r.stdout (final exactly-once emission) — the suite verdict.
         console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
-        console.error(String(retry.stdout || ''))
+        emitSync(retry.stdout || '')
       } else {
         // Compose a FULL-corpus TAP for the summary gate: pass1 blocks minus the
         // retried files' blocks, then the retry's own blocks — the skip ratchet
         // sees every file of this run again (partial-corpus blindness closed).
-        // Fail-closed: if pass1/retry cannot be parsed confidently, keep the raw
-        // retry TAP and say so loudly.
+        // Fail-closed twice over (2026-10-26): composition is refused BOTH on parse
+        // low-confidence AND when the kept corpus still carries not-ok blocks —
+        // blockFile()-null-located failures (shared helpers, tests/lib/*.mjs) are
+        // neither retried nor absorbable, and counting them as zero was a fake green.
         const pass1 = String(r.stdout || '')
         const retryTap = String(retry.stdout || '')
         const p1 = splitTapBlocks(pass1)
         const rt = splitTapBlocks(retryTap)
         const retriedSet = new Set(failedFiles)
         const kept = []
-        let unattributableNotOk = 0
+        let keptNotOk = 0
         for (const b of p1.blocks) {
           const file = blockFile(b)
-          const isNotOk = /^not ok \d+/.test(b[b.length - 1] === undefined ? b[0] : b[0])
           if (file && retriedSet.has(file)) continue // retry's verdict is authoritative
-          if (!file && isNotOk) unattributableNotOk++
+          if (/^not ok \d+/.test(b[0])) keptNotOk++
           kept.push(b)
         }
         const planOk = /^1\.\.\d+/.test(p1.tail.find(l => /^1\.\.\d+/.test(l)) || '')
         const notOkInRetry = rt.blocks.filter(b => /^not ok \d+/.test(b[0])).length
-        if (planOk && unattributableNotOk === 0 && notOkInRetry === 0 && rt.blocks.length > 0) {
+        // pass1's cancel count rides the kept corpus (retried files' cancels cannot be
+        // separated block-wise; the gate reds on any nonzero cancelled either way)
+        const cancelled1 = Number((/# cancelled\s+(\d+)/.exec(p1.tail.join('\n')) || [])[1] || 0)
+        if (planOk && keptNotOk === 0 && notOkInRetry === 0 && rt.blocks.length > 0) {
           const all = renumber([...kept, ...rt.blocks])
           const skips = all.filter(b => /# (SKIP|skip)/.test(b.join('\n'))).length
           const composed = [
@@ -514,8 +556,14 @@ if (r.status !== 0 && !r.error && r.stdout) {
             ...all.map(b => b.join('\n')),
             `1..${all.length}`,
             `# pass ${all.length - skips}`,
+            // fail line is MANDATORY (2026-10-26): the composed summary previously omitted it
+            // entirely — parseSummary returns fail=undefined without it and the gate fail-closed
+            // on "摘要解析失败". Here both counts are provably 0 (the branch guard above).
+            `# fail ${keptNotOk + notOkInRetry}`,
             `# skip ${skips}`,
-            '# cancelled 0',
+            // REAL counts (2026-10-26): the hardcoded `# cancelled 0` masked kept cancel
+            // blocks; pass1's summary count is carried through so the gate sees truth.
+            `# cancelled ${cancelled1}`,
             `# COMPOSED after flake-retry absorption (${failedFiles.length} file(s) re-ran green; pass1 blocks for those files replaced by retry blocks)`,
             `# flake-absorbed-at ${new Date().toISOString()}`
           ].join('\n')
@@ -526,20 +574,35 @@ if (r.status !== 0 && !r.error && r.stdout) {
             pass1Blocks: String(pass1.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || []).length,
             note: 'first red re-ran green under lighter load (retried files only + 30s settle)'
           }])
-          r = { status: 0, stdout: composed, stderr: r.stderr }
+          // r.stdout = the ONE coherent composed stream; final emission below writes it once.
+          r = { status: 0, stdout: composed, stderr: r.stderr, streamed: false }
+        } else if (keptNotOk > 0) {
+          // Kept not-ok outside the retried file set: real failures the retry never covered.
+          // Refuse composition and fall through to the RED path — pass1's exit stands.
+          console.error(`[run-all] ⚑FLAKY absorption REFUSED: ${keptNotOk} pass1 not-ok block(s) OUTSIDE the retried file set (failures in shared helpers / unattributable blocks are neither retried nor absorbable) — real red stands`)
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: false, deepPool: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            keptNotOk,
+            note: 'kept pass1 not-ok outside retried set — absorption refused, composition skipped'
+          }])
+          console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
+          emitSync(retry.stdout || '')
+          // r stays pass1 (status !== 0) → red exit via the final emission + status
         } else {
-          console.error(`[run-all] ⚑FLAKY absorbed but TAP composition skipped (parse confidence low: plan=${planOk} unattributable=${unattributableNotOk} retryNotOk=${notOkInRetry}) — retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
+          console.error(`[run-all] ⚑FLAKY absorbed but TAP composition skipped (parse confidence low: plan=${planOk} keptNotOk=${keptNotOk} retryNotOk=${notOkInRetry}) — raw pass1+retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
           console.error('[run-all] ⚑FLAKY ledger still records this absorption')
           await recordFlake([{
             at: new Date().toISOString(), absorbed: true, deepPool: false, composed: false,
             files: failedFiles.map(f => path.relative(appRoot, f)),
             note: 'absorbed; ratchet saw partial corpus (composition guard failed)'
           }])
-          r = { status: 0, stdout: retry.stdout, stderr: r.stderr }
+          r = { status: 0, stdout: Buffer.concat([r.stdout, retry.stdout]), stderr: r.stderr, streamed: false }
         }
       }
     } else {
       console.error('[run-all] flake-retry did NOT absorb — real red, retry TAP below is authoritative')
+      emitSync(r.stdout) // pass1 raw TAP precedes the authoritative retry TAP
       r = retry
     }
   }
@@ -601,4 +664,9 @@ try {
     console.error(`[run-all] per-test timeout ceiling: ${TEST_TIMEOUT_MS}ms; slowest observed test: ${max.toFixed(0)}ms (${(TEST_TIMEOUT_MS / max).toFixed(1)}x margin)`)
   }
 } catch { /* diagnostics only — never mask the runner's real exit status */ }
+// Exactly-once stdout emission (2026-10-26 composed-TAP contract): passes that may be
+// composed are spawned buffered (live:false), so r.stdout here is the ONE authoritative
+// stream — the raw TAP for non-composing runs, the composed full-corpus TAP after
+// absorption. Emit it synchronously (flush before process.exit truncates a pipe).
+if (!r.streamed && r.stdout && r.stdout.length) emitSync(r.stdout)
 process.exit(r.status ?? 1)

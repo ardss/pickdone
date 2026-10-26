@@ -98,7 +98,10 @@ test('meta#4 skip count over ratchet budget -> red; under budget -> green', () =
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-meta-skip-'))
   const over = path.join(dir, 'over.tap'); fs.writeFileSync(over, tap(5))
   const under = path.join(dir, 'under.tap'); fs.writeFileSync(under, tap(1))
-  const env = { ...process.env, CHECK_TEST_SUMMARY_SKIP_BASELINE: '2' }
+  // [w10-gates 2026-10-26] the baseline override is now gated on CHECK_TEST_SUMMARY_SELFTEST=1
+  // (a bare override from any stray exported env var silently voided the ratchet) — this fixture
+  // IS the self-test, so it must set both flags.
+  const env = { ...process.env, CHECK_TEST_SUMMARY_SELFTEST: '1', CHECK_TEST_SUMMARY_SKIP_BASELINE: '2' }
   const red = spawnSync(process.execPath, ['cli/check-test-summary.cjs', over], { cwd: PICKDONE, encoding: 'utf8', timeout: 60000, env })
   const green = spawnSync(process.execPath, ['cli/check-test-summary.cjs', under], { cwd: PICKDONE, encoding: 'utf8', timeout: 60000, env })
   record('skip-over-budget', 'TAP # skip 5 vs budget 2', red, 'red')
