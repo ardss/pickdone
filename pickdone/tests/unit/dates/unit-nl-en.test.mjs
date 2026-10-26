@@ -121,10 +121,13 @@ test('English restText: the date words are stripped from the content (shared con
   // d26 fix: the pure-date path used to return the whole raw text as restText, so QuickAdd
   // saved the content "friday meeting" WITH the Friday chip set (duplicate phrase)
   assert.equal(parseNaturalDate('friday meeting', base).restText, 'meeting')
-  assert.equal(parseNaturalDate('meeting friday', base).restText, 'meeting friday', 'a trailing date phrase does not match (patterns anchor at ^) — no chip, text untouched')
-  assert.equal(parseNaturalDate('pay rent on monday', base).restText, 'pay rent on monday')
+  // W10 2026-10-26: date phrases now match ANYWHERE in the text (mirroring the Chinese core's
+  // unanchored relative loop) — the old assertions here pinned the ^-anchored misses
+  // ("meeting friday" returned the raw text with the Friday chip set)
+  assert.equal(parseNaturalDate('meeting friday', base).restText, 'meeting', 'trailing date phrase is matched and stripped')
+  assert.equal(parseNaturalDate('pay rent on monday', base).restText, 'pay rent')
   assert.equal(parseNaturalDate('on monday pay rent', base).restText, 'pay rent')
-  assert.equal(parseNaturalDate('finish report in 3 days', base).restText, 'finish report in 3 days')
+  assert.equal(parseNaturalDate('finish report in 3 days', base).restText, 'finish report')
   assert.equal(parseNaturalDate('in 3 days finish report', base).restText, 'finish report')
   assert.equal(parseNaturalDate('+3d', base).restText, '', '+Nd is only recognized as the whole text (anchored patterns)')
   assert.equal(parseNaturalDate('Jan 15 ship it', base).restText, 'ship it')
@@ -134,8 +137,9 @@ test('English restText: the date words are stripped from the content (shared con
   // pure date input yields '' (same as the Chinese core; QuickAdd falls back to the raw text)
   assert.equal(parseNaturalDate('tomorrow', base).restText, '')
   assert.equal(parseNaturalDate('next friday', base).restText, '')
-  // the time-strip path keeps its existing behavior (time words removed, date phrase intact for step 2)
-  assert.equal(parseNaturalDate('tomorrow 3pm', base).restText, 'tomorrow')
+  // W10 2026-10-26: the combined date+time path strips BOTH phrases (was 'tomorrow' — the
+  // date words survived in the title while the chip carried them too)
+  assert.equal(parseNaturalDate('tomorrow 3pm', base).restText, '')
 })
 
 test('English casing: Today / TOMORROW / monday', () => {

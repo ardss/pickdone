@@ -282,13 +282,18 @@ export default {
     // [D15-A10] habit/moment deletes now ride the app-wide undo-toast contract (same as the
     // check-in toggle above): snapshot the whole blob, restore it on Undo via the store's
     // replaceAll mutation (the same restore path backups use — no parallel undo channel invented)
+    // [W10 2026-10-26] undo snapshots carry force:true: the snapshot's savedAt is stamped BEFORE
+    // the delete commit, but the delete's persist() re-stamps state.savedAt afterwards, so
+    // replaceAll's LWW guard (`blob.savedAt < s.savedAt → return`) made the Undo button a silent
+    // no-op (restore blob was always older than post-delete state). force is replaceAll's
+    // restore-backup override; it strips `force` before persisting, so it never reaches LS/DB/sync.
     delHabitWithUndo (h) {
-      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(m => ({ ...m })), savedAt: Date.now() }
+      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(m => ({ ...m })), savedAt: Date.now(), force: true }
       this.$store.commit('habits/delHabit', h.id)
       this.undoToastFor(this.$t('statsB.HabitView.deletedToast', { n: h.name }), snap)
     },
     delMomentWithUndo (m) {
-      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(x => ({ ...x })), savedAt: Date.now() }
+      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(x => ({ ...x })), savedAt: Date.now(), force: true }
       this.$store.commit('habits/delMoment', m.id)
       this.undoToastFor(this.$t('statsB.HabitView.momentDeletedToast', { n: m.name }), snap)
     },

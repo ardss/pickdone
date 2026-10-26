@@ -51,72 +51,77 @@ function parseEnglishDate (text, base) {
     }
   }
 
-  // Step 2: parse the date from datePart (time already stripped)
+  // [W10 2026-10-26] Step 2: parse the date from datePart (time already stripped). Every date
+  // phrase now matches UNANCHORED within datePart and records its start index — previously all
+  // patterns anchored at ^, so "meeting tomorrow" parsed no date at all and "meeting tomorrow
+  // 3pm" fell into the time-only fallback: silently scheduled TODAY at 15:00 with the full text
+  // (date words included) left in the title. The Chinese single-source (shared/nl-date-core.mjs
+  // relative loop) already matches date words anywhere — this mirrors that asymmetry fix.
   const lc = datePart.toLowerCase()
   // Relative days (before week, avoiding conflict between today and thursday)
+  let dateStart = -1
   let m
-  if ((m = lc.match(/^today$|^\btonight\b/))) { date = base.startOf('day'); label = 'today'; dateLen = m[0].length }
-  else if ((m = lc.match(/^tomorrow$/))) { date = base.add(1, 'day').startOf('day'); label = 'tomorrow'; dateLen = m[0].length }
-  else if ((m = lc.match(/^yesterday$/))) { date = base.subtract(1, 'day').startOf('day'); label = 'yesterday'; dateLen = m[0].length }
+  if ((m = lc.match(/\btoday\b|\btonight\b/))) { date = base.startOf('day'); label = 'today' }
+  else if ((m = lc.match(/\btomorrow\b/))) { date = base.add(1, 'day').startOf('day'); label = 'tomorrow' }
+  else if ((m = lc.match(/\byesterday\b/))) { date = base.subtract(1, 'day').startOf('day'); label = 'yesterday' }
   // +Nd compact syntax (CLI-friendly)
-  else if (/^[+-]\d+[dwm]$/.test(lc)) {
-    const sign = lc[0] === '-' ? -1 : 1
-    const absN = Math.abs(parseInt(lc, 10))
-    const u = lc.slice(-1)
+  else if ((m = lc.match(/(?<=^|\s)[+-]\d+[dwm](?=\s|$)/))) {
+    const sign = m[0][0] === '-' ? -1 : 1
+    const absN = Math.abs(parseInt(m[0], 10))
+    const u = m[0].slice(-1)
     const n = sign * absN
     if (u === 'd') date = base.add(n, 'day').startOf('day')
     else if (u === 'w') date = base.add(n, 'week').startOf('day')
     else if (u === 'm') date = base.add(n, 'month').startOf('day')
-    label = lc
-    dateLen = lc.length
+    label = m[0]
   }
   // in N days/weeks/months/years
   else {
-    let m = lc.match(/^in\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)\b/)
+    m = lc.match(/\bin\s+(\d+)\s+(day|days|week|weeks|month|months|year|years)\b/)
     if (m) {
       const n = parseInt(m[1], 10)
       const u = m[2].toLowerCase()
       const unit = u.startsWith('day') ? 'day' : u.startsWith('week') ? 'week' : u.startsWith('month') ? 'month' : 'year'
       date = base.add(n, unit).startOf('day')
       label = m[0]
-      dateLen = m[0].length
     } else {
-      // Full numeric dates YYYY-MM-DD / YYYY/M/D / YYYY.M.D
-      m = text.match(/^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?=\b|$)/)
+      // Full numeric dates YYYY-MM-DD / YYYY/M/D / YYYY.M.D (matches datePart, not the raw text
+      // that still holds the stripped time phrase, and unanchored)
+      m = datePart.match(/(?<!\d)(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})(?=\b|$)/)
       if (m) {
         const y = +m[1]; const mo = +m[2]; const d = +m[3]
         if (mo >= 1 && mo <= 12 && d >= 1 && d <= base.year(y).month(mo - 1).daysInMonth()) {
           date = base.year(y).month(mo - 1).date(d).startOf('day')
           label = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-          dateLen = m[0].length
         }
       } else {
         // Jan 15 / January 15 / Jan 15 2026 / Jan 15, 2026
-        m = lc.match(/^([a-z]+)\s+(\d{1,2})(?:[,\s]+(\d{4}))?/)
-        if (m) {
+        m = lc.match(/\b([a-z]+)\s+(\d{1,2})(?:[,\s]+(\d{4}))?/)
+        if (m && EN_MONTHS[m[1]] != null) {
           const mo = EN_MONTHS[m[1]]
           const d = +m[2]
           const explicitYear = m[3] != null
           const y = explicitYear ? +m[3] : base.year()
-          if (mo != null && d >= 1 && d <= base.year(y).month(mo).daysInMonth()) {
+          if (d >= 1 && d <= base.year(y).month(mo).daysInMonth()) {
             date = base.year(y).month(mo).date(d).startOf('day')
             // A bare "Jan 15" (no year) that already passed this year rolls to next year,
             // same as the Chinese core's M月D日 rule
             if (!explicitYear && date.isBefore(base, 'day')) date = date.add(1, 'year')
             label = `${m[1]} ${d}${m[3] ? ' ' + m[3] : ''}`
-            dateLen = m[0].length
           }
-        } else {
+        }
+        if (!date) {
           // on/this/next <weekday>
-          m = lc.match(/^(?:on\s+|this\s+|next\s+)?(sun|sunday|mon|monday|tue|tues|tuesday|wed|weds|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday)\b/)
+          m = lc.match(/\b(?:(on|this|next)\s+)?(sun|sunday|mon|monday|tue|tues|tuesday|wed|weds|wednesday|thu|thur|thurs|thursday|fri|friday|sat|saturday)\b/)
           if (m) {
-            const targetDow = EN_WEEK[m[1]]
+            const targetDow = EN_WEEK[m[2]]
             const baseDow = base.day() // 0=Sun
             let diff = (targetDow - baseDow + 7) % 7
-            // on <weekday> defaults to next week; this <weekday> this week (next week if already past); next <weekday> always next week
-            const isNext = lc.startsWith('next ')
-            const isOn = lc.startsWith('on ')
-            const isThis = lc.startsWith('this ')
+            // on <weekday> defaults to next week; this <weekday> this week (next week if already past); next <weekday> always next week.
+            // The prefix is read from the MATCHED span (m[1]) — the phrase may sit mid-text.
+            const isNext = m[1] === 'next'
+            const isOn = m[1] === 'on'
+            const isThis = m[1] === 'this'
             // Bare weekday (no prefix) defaults to on = next occurrence
             if (isOn || (!isThis && !isNext)) diff = diff === 0 ? 7 : diff
             else if (isThis) { if (diff === 0) diff = 7 } else if (isNext) {
@@ -129,28 +134,29 @@ function parseEnglishDate (text, base) {
             }
             date = base.add(diff, 'day').startOf('day')
             label = m[0]
-            dateLen = m[0].length
-          } else if ((m = lc.match(/^this\s+weekend$|^weekend$/))) {
+          } else if ((m = lc.match(/\bthis\s+weekend\b|\bweekend\b/))) {
             // This Saturday (0-6 days from now)
             const baseDow = base.day()
             const diff = (6 - baseDow + 7) % 7
             date = base.add(diff || 7, 'day').startOf('day')
             label = 'weekend'
-            dateLen = m[0].length
           }
         }
       }
     }
   }
+  if (date && m) { dateStart = m.index; dateLen = m[0].length }
 
   // Shared contract (shared/nl-date-core.mjs): restText = the input with the date words removed.
-  // The step-1 time-strip branches already build restText; the pure-date path used to leave the
-  // whole raw text, so "meeting friday" saved the content "meeting friday" WITH the Friday chip
-  // set (duplicate phrase). Strip the matched date phrase (a prefix of datePart) and trim the
-  // junction whitespace/punctuation. Pure-date input yields '' — same as the Chinese core
-  // (QuickAdd falls back to the raw text when restText is empty).
-  if (date && restText === text && dateLen) {
-    restText = datePart.slice(dateLen).replace(/^[\s,、.]+/, '').trim()
+  // At this point restText is always datePart (the step-1 time-strip branches built it from
+  // datePart; the pure-date path used to leave the whole raw text, so "meeting friday" saved the
+  // content "meeting friday" WITH the Friday chip set — duplicate phrase). Strip the matched
+  // date phrase (anywhere in datePart since the W10 unanchor fix) and trim the junction
+  // whitespace/punctuation. Pure-date input yields '' — same as the Chinese core (QuickAdd
+  // falls back to the raw text when restText is empty).
+  if (date && dateLen) {
+    restText = (datePart.slice(0, dateStart) + ' ' + datePart.slice(dateStart + dateLen))
+      .replace(/^[\s,、.]+/, '').replace(/\s{2,}/g, ' ').trim() // mid-text removal collapses the junction gap
   }
 
   // Time was already extracted in step 1; below only applies h/min onto date.
