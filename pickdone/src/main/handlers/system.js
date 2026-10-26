@@ -314,10 +314,13 @@ module.exports = function systemHandlers (ctx) {
         return { ok: false, error: r.error }
       }
       log.info('[IPC] data:relocate migrated to', r.target, '— relaunching')
-      // Success: inform (best-effort — the process is about to exit), then relaunch into the
-      // new location via the boot file written by migrateData. exit() skips the quit-flush chain,
-      // which is correct here: the DB handle is already closed and the source dir is intact.
-      try { dialog.showMessageBox({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg', { old: ud }) }).catch(() => {}) } catch { /* best-effort */ }
+      // Success: inform the user synchronously (showMessageBoxSync BLOCKS until OK, so the
+      // "migration done, old location preserved" notice is actually seen — the async
+      // showMessageBox promise resolved into a modal that the relaunch timer destroyed after
+      // 400ms, i.e. effectively never read), THEN relaunch into the new location via the boot
+      // file written by migrateData. exit() skips the quit-flush chain, which is correct here:
+      // the DB handle is already closed and the source dir is intact.
+      try { dialog.showMessageBoxSync({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg', { old: ud }) }) } catch { /* best-effort */ }
       setTimeout(() => { try { app.relaunch(); app.exit(0) } catch { /* dying anyway */ } }, 400)
       return { ok: true, target: r.target }
     }
