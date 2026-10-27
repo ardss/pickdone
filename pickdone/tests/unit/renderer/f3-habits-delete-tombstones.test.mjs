@@ -49,37 +49,43 @@ test('T1 delHabit records a tombstone and persists it in the blob', () => {
   assert.ok(Array.isArray(blob.deleted) && blob.deleted[0].id === 'h1', 'tombstone reaches the durable blob')
 })
 
-test('T2 applyExternal: a newer peer blob still carrying the deleted habit cannot resurrect it; peer habits merge; peer tombstones merge', () => {
+test('T2 applyExternal: a tombstone SUPERSEDED by a newer alive inbound row is pruned; sticky for ids absent inbound; peer tombstones merge', () => {
   const s = mkState([{ id: 'h9', name: 'Keep', records: { '2026-10-01': true } }], 500, [{ id: 'h1', deletedAt: 400 }])
   habits.mutations.applyExternal(s, {
     savedAt: 900,
     habits: [
-      { id: 'h1', name: 'DeletedOnPeer', records: { '2026-10-02': true } },
+      { id: 'h1', name: 'UndoneUpstream', records: { '2026-10-02': true } },
       { id: 'h9', name: 'Keep', records: {} }
     ],
     moments: [],
     deleted: [{ id: 'h2', deletedAt: 800 }]
   })
-  assert.ok(!s.habits.some(h => h.id === 'h1'), 'tombstoned id filtered from the inbound array (delete is sticky even vs a NEWER savedAt)')
+  // [W11 2026-10-26] recalibrated: an inbound round POSTDATING the delete (deletedAt 400 <
+  // savedAt 900) that still carries h1 ALIVE proves the delete was undone upstream — the alive
+  // row wins and the stale tombstone is pruned (otherwise the merged tombstone re-deleted the
+  // just-undone habit on every multi-device fold round). h2 is NOT present in the inbound
+  // habits array → its tombstone keeps full stickiness.
+  assert.ok(s.habits.some(h => h.id === 'h1'), 'W11: superseded tombstone pruned — the alive inbound row survives')
   assert.ok(s.habits.some(h => h.id === 'h9'), 'non-deleted peer habit merged')
   assert.deepEqual(s.habits.find(h => h.id === 'h9').records, { '2026-10-01': true }, 'union-max kept the local check-in (d846a3e3 intact)')
-  const ids = s.deleted.map(t => t.id).sort()
-  assert.deepEqual(ids, ['h1', 'h2'], 'peer tombstones merged with local ones')
+  assert.deepEqual(s.deleted.map(t => t.id), ['h2'], 'h1 tombstone pruned (superseded); h2 absent inbound → sticky')
 })
 
-test('T3 applyExternalPatch: same tombstone gate on the LAN fold channel (fields.deleted and bare-blob shape)', () => {
+test('T3 applyExternalPatch: superseded tombstones pruned on the LAN fold channel; newer tombstones still filter (fields.deleted and bare-blob shape)', () => {
   const s = mkState([], 500, [{ id: 'h1', deletedAt: 400 }])
   habits.mutations.applyExternalPatch(s, {
     savedAt: 900,
-    fields: { habits: [{ id: 'h1', name: 'zombie', records: {} }, { id: 'h3', name: 'ok', records: {} }] }
+    fields: { habits: [{ id: 'h1', name: 'undone upstream', records: {} }, { id: 'h3', name: 'ok', records: {} }] }
   })
-  assert.ok(!s.habits.some(h => h.id === 'h1'), 'local tombstone filters the patch even without peer tombstones')
+  // [W11 2026-10-26] the fold round postdates the delete and still carries h1 alive → pruned,
+  // h1 survives (the pre-W11 prune was local-only and this round re-infected the tombstone)
+  assert.ok(s.habits.some(h => h.id === 'h1'), 'W11: superseded tombstone pruned — fold round cannot re-delete the undone habit')
   assert.ok(s.habits.some(h => h.id === 'h3'))
   habits.mutations.applyExternalPatch(s, {
     savedAt: 1000,
-    fields: { habits: [{ id: 'h4', records: {} }], deleted: [{ id: 'h4', deletedAt: 950 }] }
+    fields: { habits: [{ id: 'h4', records: {} }], deleted: [{ id: 'h4', deletedAt: 1100 }] }
   })
-  assert.ok(!s.habits.some(h => h.id === 'h4'), 'peer tombstone in the same round filters its own habit immediately')
+  assert.ok(!s.habits.some(h => h.id === 'h4'), 'a tombstone NEWER than the patch still filters its habit (delete wins)')
   assert.ok(s.deleted.some(t => t.id === 'h4'), 'peer tombstone recorded locally (sticky for later rounds too)')
 })
 

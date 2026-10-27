@@ -280,30 +280,34 @@ export default {
     prevMonth () { if (this.calOffset > CAL_MIN_OFFSET) this.calOffset-- },
     nextMonth () { if (this.calOffset < 0) this.calOffset++ },
     // [D15-A10] habit/moment deletes now ride the app-wide undo-toast contract (same as the
-    // check-in toggle above): snapshot the whole blob, restore it on Undo via the store's
-    // replaceAll mutation (the same restore path backups use — no parallel undo channel invented)
-    // [W10 2026-10-26] undo snapshots carry force:true: the snapshot's savedAt is stamped BEFORE
-    // the delete commit, but the delete's persist() re-stamps state.savedAt afterwards, so
-    // replaceAll's LWW guard (`blob.savedAt < s.savedAt → return`) made the Undo button a silent
-    // no-op (restore blob was always older than post-delete state). force is replaceAll's
-    // restore-backup override; it strips `force` before persisting, so it never reaches LS/DB/sync.
+    // check-in toggle above): snapshot, restore on Undo via a store mutation.
+    // [W10 2026-10-26] undo snapshots carried force:true + the WHOLE blob (replaceAll restore
+    // path). [W11 2026-10-26 P2] that wholesale force-restore rolled back AND re-persisted every
+    // interleaved edit made during the toast window (a check-in on another habit, an added
+    // moment, a rename) — silent data loss. The undo now snapshots ONLY the deleted entry and
+    // revives it via the targeted habits/reviveHabit / habits/reviveMoment mutations, which
+    // splice just that entry back and clear its tombstone; everything else in state is untouched.
     delHabitWithUndo (h) {
-      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(m => ({ ...m })), savedAt: Date.now(), force: true }
+      const snap = { habit: { ...h, records: { ...(h.records || {}) } }, savedAt: Date.now() }
       this.$store.commit('habits/delHabit', h.id)
-      this.undoToastFor(this.$t('statsB.HabitView.deletedToast', { n: h.name }), snap)
+      this.undoToastFor(this.$t('statsB.HabitView.deletedToast', { n: h.name }),
+        { mutation: 'habits/reviveHabit', payload: { habit: snap.habit } })
     },
     delMomentWithUndo (m) {
-      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(x => ({ ...x })), savedAt: Date.now(), force: true }
+      const snap = { moment: { ...m }, savedAt: Date.now() }
       this.$store.commit('habits/delMoment', m.id)
-      this.undoToastFor(this.$t('statsB.HabitView.momentDeletedToast', { n: m.name }), snap)
+      this.undoToastFor(this.$t('statsB.HabitView.momentDeletedToast', { n: m.name }),
+        { mutation: 'habits/reviveMoment', payload: { moment: snap.moment } })
     },
-    undoToastFor (text, snap) {
+    undoToastFor (text, revive) {
       showUndoToast(this.$message.bind(this), [
         text + '　',
         window.Vue.h('a', {
           style: { color: 'var(--brand)', cursor: 'pointer' },
           onClick: () => {
-            this.$store.commit('habits/replaceAll', snap)
+            // [W11] targeted revive (habits/reviveHabit | habits/reviveMoment) — replaces the W10
+            // wholesale habits/replaceAll force-restore that rolled back interleaved edits
+            this.$store.commit(revive.mutation, revive.payload)
             this.$message.closeAll()
           }
         }, this.$t('statsA.core.undo'))

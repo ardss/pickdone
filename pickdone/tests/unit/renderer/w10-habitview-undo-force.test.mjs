@@ -51,16 +51,21 @@ globalThis.window = {
 const mod = await import('../../../renderer/js/store/habits.js')
 const habits = mod.default
 
-test('W10-1 contract: both undo snapshot builders stamp force:true (LWW override)', () => {
-  for (const name of ['delHabitWithUndo', 'delMomentWithUndo']) {
+/* [W11 2026-10-26 P2] the undo no longer force-restores the whole blob (that rolled back
+ * interleaved edits during the toast window) — it snapshots the single deleted entry and
+ * routes through the targeted habits/reviveHabit / habits/reviveMoment mutations. This test
+ * was updated from the W10 force:true contract to the W11 targeted-revive contract; the
+ * replaceAll force behavior tests below remain valid (restore-backup path still uses them). */
+test('W11 contract: undo snapshots the single entry (savedAt) and revives via targeted mutations', () => {
+  for (const [name, revive] of [['delHabitWithUndo', 'reviveHabit'], ['delMomentWithUndo', 'reviveMoment']]) {
     const body = fnSource(HABIT_VIEW, name)
     assert.match(body, /savedAt:\s*Date\.now\(\)/, `${name} snapshot still stamps savedAt`)
-    assert.match(body, /force:\s*true/,
-      `${name} snapshot must carry force:true — without it the delete's persist() re-stamp makes the restore blob older than state and replaceAll's LWW guard silently drops it`)
+    assert.match(body, new RegExp(`habits/${revive}`), `${name} undo must route through the targeted habits/${revive} mutation (not the whole-blob replaceAll force-restore)`)
   }
-  // the Undo click still routes through habits/replaceAll with the snapshot
+  // the Undo click routes through the revive mutation carried by the snapshot descriptor
   const undoBody = fnSource(HABIT_VIEW, 'undoToastFor')
-  assert.match(undoBody, /habits\/replaceAll/, 'undo click commits habits/replaceAll with the snapshot')
+  assert.match(undoBody, /revive\.mutation/, 'undo click commits the revive mutation from the snapshot descriptor')
+  assert.doesNotMatch(fnSource(HABIT_VIEW, 'delHabitWithUndo'), /force:\s*true/, 'no more whole-blob force snapshots in the delete-undo path')
 })
 
 test('W10-1 behavior: replaceAll rejects an OLDER savedAt without force (the silent-no-op path)', () => {

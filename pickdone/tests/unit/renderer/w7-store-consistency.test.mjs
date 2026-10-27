@@ -59,37 +59,45 @@ test('R1.1 delMoment records a tombstone and persists deletedMoments in the blob
   assert.ok(Array.isArray(blob.deletedMoments) && blob.deletedMoments[0].id === 'm1', 'tombstone in the durable blob')
 })
 
-test('R1.2 applyExternal: a newer peer blob still carrying the deleted moment cannot resurrect it', () => {
+test('R1.2 applyExternal: a tombstone superseded by a newer alive inbound moment is pruned; absent ids stay sticky; peer tombstones merge', () => {
   const s = mkHabitsState({ savedAt: 500, moments: [{ id: 'keep', name: 'K' }], deletedMoments: [{ id: 'm1', deletedAt: 400 }] })
   habits.mutations.applyExternal(s, {
     savedAt: 900,
     habits: [],
-    moments: [{ id: 'm1', name: 'Zombie' }, { id: 'peer', name: 'Peer' }],
+    moments: [{ id: 'm1', name: 'UndoneUpstream' }, { id: 'peer', name: 'Peer' }],
     deletedMoments: [{ id: 'm9', deletedAt: 800 }]
   })
-  assert.ok(!s.moments.some(m => m.id === 'm1'), 'tombstoned moment filtered BEFORE the union-merge (delete is sticky even vs a NEWER savedAt)')
+  // [W11 2026-10-26] recalibrated: the round postdates the delete (400 < 900) and still carries
+  // m1 alive → undone upstream, alive row wins, tombstone pruned. m9 is absent from the inbound
+  // moments array → its tombstone keeps full stickiness.
+  assert.ok(s.moments.some(m => m.id === 'm1'), 'W11: superseded tombstone pruned — the alive inbound moment survives')
   assert.ok(s.moments.some(m => m.id === 'keep'), 'local moment survives the union-merge')
   assert.ok(s.moments.some(m => m.id === 'peer'), 'peer moment merged (union-merge intact)')
-  assert.deepEqual(s.deletedMoments.map(t => t.id).sort(), ['m1', 'm9'], 'peer tombstones merged')
+  assert.deepEqual(s.deletedMoments.map(t => t.id), ['m9'], 'm1 tombstone pruned; m9 (absent inbound) sticky')
 })
 
-test('R1.3 applyExternalPatch: tombstone gate on the LAN fold channel (fields + bare-blob shapes)', () => {
+test('R1.3 applyExternalPatch: superseded moment tombstones pruned on the LAN fold channel; newer tombstones still filter (fields + bare-blob shapes)', () => {
   const s = mkHabitsState({ savedAt: 500, deletedMoments: [{ id: 'm1', deletedAt: 400 }] })
-  habits.mutations.applyExternalPatch(s, { savedAt: 900, fields: { moments: [{ id: 'm1', name: 'Zombie' }, { id: 'm3', name: 'ok' }] } })
-  assert.ok(!s.moments.some(m => m.id === 'm1'), 'local tombstone filters the patch without peer tombstones')
+  habits.mutations.applyExternalPatch(s, { savedAt: 900, fields: { moments: [{ id: 'm1', name: 'undone upstream' }, { id: 'm3', name: 'ok' }] } })
+  // [W11 2026-10-26] the fold round postdates the delete and carries m1 alive → pruned, m1 survives
+  assert.ok(s.moments.some(m => m.id === 'm1'), 'W11: superseded tombstone pruned — fold round cannot re-delete the undone moment')
   assert.ok(s.moments.some(m => m.id === 'm3'))
-  habits.mutations.applyExternalPatch(s, { savedAt: 1000, moments: [{ id: 'm4', name: 'x' }], deletedMoments: [{ id: 'm4', deletedAt: 990 }] })
-  assert.ok(!s.moments.some(m => m.id === 'm4'), 'bare-blob shape: its own tombstones filter its moments')
+  habits.mutations.applyExternalPatch(s, { savedAt: 1000, moments: [{ id: 'm4', name: 'x' }], deletedMoments: [{ id: 'm4', deletedAt: 1100 }] })
+  assert.ok(!s.moments.some(m => m.id === 'm4'), 'bare-blob shape: a tombstone NEWER than the patch still filters its moment')
 })
 
-test('R1.4 replaceAll: a backup blob without deletedMoments cannot resurrect a deleted moment; blob.deletedMoments merge stickily', () => {
+test('R1.4 replaceAll: a backup OLDER than the delete cannot resurrect a deleted moment; superseded tombstones prune (W11); sticky merge of the rest', () => {
   const s = mkHabitsState({ savedAt: 500, deletedMoments: [{ id: 'm1', deletedAt: 400 }] })
-  habits.mutations.replaceAll(s, { savedAt: 900, habits: [], moments: [{ id: 'm1', name: 'FromBackup' }] })
-  assert.ok(!s.moments.some(m => m.id === 'm1'), 'delete is sticky across restores (old backup, no tombstone field)')
-  habits.mutations.replaceAll(s, { savedAt: 1000, habits: [], moments: [{ id: 'm5', name: 'x' }], deletedMoments: [{ id: 'm5', deletedAt: 950 }] })
-  assert.ok(!s.moments.some(m => m.id === 'm5'), 'backup whose own tombstone deletes its moment')
-  assert.ok(s.moments.some(m => m.id === 'm1') === false)
-  assert.deepEqual(s.deletedMoments.map(t => t.id).sort(), ['m1', 'm5'], 'sticky merge of local + incoming tombstones')
+  habits.mutations.replaceAll(s, { savedAt: 300, habits: [], moments: [{ id: 'm1', name: 'FromBackup' }] })
+  assert.ok(!s.moments.some(m => m.id === 'm1'), 'an older backup blob is LWW-rejected outright (stickiness kept)')
+  // [W11 2026-10-26] a NEWER restore round (savedAt 900 > deletedAt 400) carrying m1 alive =
+  // undone upstream → prune; a tombstone newer than the round (950 > 900... use round 900) still filters
+  habits.mutations.replaceAll(s, { savedAt: 900, habits: [], moments: [{ id: 'm1', name: 'UndoneUpstream' }] })
+  assert.ok(s.moments.some(m => m.id === 'm1'), 'W11: superseded tombstone pruned by a newer alive restore round')
+  assert.equal(s.deletedMoments.some(t => t.id === 'm1'), false, 'its tombstone did not survive the prune')
+  habits.mutations.replaceAll(s, { savedAt: 1000, habits: [], moments: [{ id: 'm5', name: 'x' }], deletedMoments: [{ id: 'm5', deletedAt: 1100 }] })
+  assert.ok(!s.moments.some(m => m.id === 'm5'), 'backup whose own NEWER tombstone deletes its moment')
+  assert.deepEqual(s.deletedMoments.map(t => t.id), ['m5'], 'sticky merge of the non-superseded tombstones')
 })
 
 test('R1.5 re-adding a deliberately restored id clears its tombstone; tombstone helpers exported', () => {
