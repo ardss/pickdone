@@ -126,7 +126,13 @@ function init (mainWin) {
   syncAutoDownload()
   autoUpdater.on('checking-for-update', () => {
     // D10: a periodic/error-retry check() overlapping a manual downloadUpdate must not clobber state
-    if (_manualDownload) return
+    // W12 (P2 2026-10-26): the last handler without the terminal 'ready' guard — every check()
+    // (4h periodic, 30s error retry, manual updater:check) fires this event first, so a re-check
+    // after update-downloaded clobbered 'ready' → 'checking', and the downstream M2b guards never
+    // saw 'ready' again; 'update-available' then reset to 'available'/'downloading' and
+    // quitAndInstall() (requires status==='ready') returned false for the rest of the session —
+    // the "restart to install" button died (with autoDownloadUpdates:false it never recovered).
+    if (_manualDownload || state.status === 'ready') return
     state.status = 'checking'; broadcast()
   })
   autoUpdater.on('update-available', i => {

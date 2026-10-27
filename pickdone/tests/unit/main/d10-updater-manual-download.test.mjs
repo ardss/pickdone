@@ -71,6 +71,55 @@ test('d10: update-available during a manual download cannot clobber status; down
   assert.equal(downloadCalls, 1, 'red before the fix: status reset re-opened the gate → double downloadUpdate call')
 })
 
+// W12 (2026-10-26) regression: the 'checking-for-update' handler was the only one missing the
+// terminal 'ready' guard. A periodic/error-retry/manual check() always fires it first, so a
+// re-check after update-downloaded clobbered 'ready' → 'checking', the downstream M2b guards
+// never saw 'ready' again, and quitAndInstall() returned false for the rest of the session —
+// the "restart to install" button died.
+test('d10/w12: a re-check after update-downloaded must NOT clobber the settled ready state', () => {
+  let checkHandler = null
+  let availHandler = null
+  let notAvailHandler = null
+  let downloadedHandler = null
+  const autoUpdater = {
+    isUpdaterActive: () => true,
+    autoDownload: false,
+    on: (evt, fn) => {
+      if (evt === 'checking-for-update') checkHandler = fn
+      if (evt === 'update-available') availHandler = fn
+      if (evt === 'update-not-available') notAvailHandler = fn
+      if (evt === 'update-downloaded') downloadedHandler = fn
+    },
+    checkForUpdates: async () => ({}),
+    downloadUpdate: async () => ({}),
+    quitAndInstall: () => {},
+  }
+  const updater = freshUpdater(autoUpdater)
+  updater.init(null)
+
+  // drive to 'ready' exactly as electron-updater does: available → downloading → downloaded
+  availHandler({ version: '9.9.9' })
+  assert.equal(updater.getStatus().status, 'downloading', 'auto-download on: update-available enters downloading')
+  downloadedHandler({ version: '9.9.9' })
+  assert.equal(updater.getStatus().status, 'ready', 'precondition: update-downloaded settles ready')
+
+  // the wedge: a periodic check() fires checking-for-update FIRST (this clobbered 'ready' before the fix)
+  checkHandler?.()
+  assert.equal(updater.getStatus().status, 'ready', 'red before the fix: checking-for-update clobbered the settled ready state')
+
+  // quitAndInstall still reports ready: the "restart to install" button stays alive for the session
+  checkHandler?.() // fire the wedge once more before the quit attempt
+  assert.equal(updater.quitAndInstall(), true, 'red before the fix: restart-to-install died after a re-check')
+
+  // the OTHER terminal guards behave the same (M2b family stays symmetric):
+  // update-available must not reset 'ready' to 'available'/'downloading' …
+  availHandler({ version: '9.9.10' })
+  assert.equal(updater.getStatus().status, 'ready', 'update-available must not downgrade the settled ready state')
+  // … and update-not-available must not downgrade it either
+  notAvailHandler({ version: '0.0.0-test' })
+  assert.equal(updater.getStatus().status, 'ready', 'update-not-available must not downgrade the settled ready state')
+})
+
 test('d10: after the manual download settles the gate reopens; normal download path unchanged', async () => {
   let availHandler = null
   const autoUpdater = {
