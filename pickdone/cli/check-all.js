@@ -109,9 +109,15 @@ const GROUPS = [
     // a budget label instead of a silent external kill.
     name: '③ Electron 活体（并行 3 路,各自独立端口+隔离 userData;失败重试1次抗负载抖动）', parallel: 3, retry: 1,
     stages: [
-      ['UI 集成测试（自拉起 Electron 隔离实例）', 'node', ['tests/integration-ui.test.mjs'], 20],
-      ['更新链路活体（dev降级/downloadUpdate守卫/开关默认/红点badge;真下载须公开仓后rc实测）', 'node', ['tests/integration-updater-ui.mjs'], 20],
-      ['UI 交互冒烟（真实鼠标输入链,自拉起实例;562261c pointer capture 吞 click 事件防线）', 'node', ['tests/run-interactions-gated.mjs'], 20],
+      // [W13 2026-10-27] runStage destructures [name, cmd, args, extraEnv, timeoutMin] with a
+      // 15min default — every tuple below carried its intended ceiling in the extraEnv slot
+      // (spreading a number yields {}, a silent no-op), so ALL ③ stages actually ran under
+      // 15min regardless of the numbers written here. Numbers moved to the timeout slot;
+      // extraEnv explicit null. The pool's 85 was doubly dead (wrong slot since its 2026-10-23
+      // 50min origin), masked until the pool grew to 9 targets.
+      ['UI 集成测试（自拉起 Electron 隔离实例）', 'node', ['tests/integration-ui.test.mjs'], null, 20],
+      ['更新链路活体（dev降级/downloadUpdate守卫/开关默认/红点badge;真下载须公开仓后rc实测）', 'node', ['tests/integration-updater-ui.mjs'], null, 20],
+      ['UI 交互冒烟（真实鼠标输入链,自拉起实例;562261c pointer capture 吞 click 事件防线）', 'node', ['tests/run-interactions-gated.mjs'], null, 20],
       // 2026-10-23 speed wave: the six run-interactions-gated lanes (ui-smoke / e2e / keyboard-e2e /
       // cssom-integrity / ui-coverage / overlay-visibility) each booted a PRIVATE Electron instance —
       // 6 boots + up to 6 concurrent instances per full gate. tests/run-interactions-shared.mjs boots
@@ -124,8 +130,8 @@ const GROUPS = [
       // case 9 × 8min per-target budget + reset/boot overhead ≈ 85min vs the old 50min ceiling,
       // so a legitimately slow (not hung) run got SIGKILLed mid-pool with zero per-target verdicts.
       // Ceiling raised to 85 and the label/comment updated to 9门.
-      ['UI 交互池（9门共享1实例:ui-smoke/e2e/键盘/cssom/覆盖走查/遮挡/旅程×3;逐目标独立裁决+单次实例重生）', 'node', ['tests/run-interactions-shared.mjs'], 85],
-      ['CLI 冒烟', 'node', ['cli/cli-smoke.js'], 20],
+      ['UI 交互池（9门共享1实例:ui-smoke/e2e/键盘/cssom/覆盖走查/遮挡/旅程×3;逐目标独立裁决+单次实例重生）', 'node', ['tests/run-interactions-shared.mjs'], null, 85],
+      ['CLI 冒烟', 'node', ['cli/cli-smoke.js'], null, 20],
     ]
   },
   {
