@@ -115,12 +115,16 @@ const GROUPS = [
       // 2026-10-23 speed wave: the six run-interactions-gated lanes (ui-smoke / e2e / keyboard-e2e /
       // cssom-integrity / ui-coverage / overlay-visibility) each booted a PRIVATE Electron instance —
       // 6 boots + up to 6 concurrent instances per full gate. tests/run-interactions-shared.mjs boots
-      // ONE isolated instance and runs the six targets SEQUENTIALLY against it (per-target isolation =
+      // ONE isolated instance and runs the targets SEQUENTIALLY against it (per-target isolation =
       // emulation-clear + page reload, NOT an app restart). Failure isolation is preserved per target:
       // a red target never reds its siblings; a target that kills the shared instance reds only itself
-      // and the instance is respawned exactly once for the rest. 30min budget = 6 sequential targets
-      // (each was 20min solo) including the group retry headroom.
-      ['UI 交互池（6门共享1实例:ui-smoke/e2e/键盘/cssom/覆盖走查/遮挡;逐目标独立裁决+单次实例重生）', 'node', ['tests/run-interactions-shared.mjs'], 50],
+      // and the instance is respawned exactly once for the rest.
+      // 2026-10-27 (W12): the pool grew 6 -> 9 targets (the three core-journey E2E regressions,
+      // tests/e2e-journeys/) but the stage ceiling stayed at the 6-target budget — nominal worst
+      // case 9 × 8min per-target budget + reset/boot overhead ≈ 85min vs the old 50min ceiling,
+      // so a legitimately slow (not hung) run got SIGKILLed mid-pool with zero per-target verdicts.
+      // Ceiling raised to 85 and the label/comment updated to 9门.
+      ['UI 交互池（9门共享1实例:ui-smoke/e2e/键盘/cssom/覆盖走查/遮挡/旅程×3;逐目标独立裁决+单次实例重生）', 'node', ['tests/run-interactions-shared.mjs'], 85],
       ['CLI 冒烟', 'node', ['cli/cli-smoke.js'], 20],
     ]
   },
