@@ -545,7 +545,13 @@ export default {
         return this.applyEvtPurgeDump(b, failed)
       }
       const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
-      if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
+      // W12 fix (2026-10-26): the settings segment is a stamped segment too (the settings module
+      // stamps schemaV on its persisted blobs, see settings.js persist/initFromDb) but it was
+      // restored via a bare JSON.parse, skipping the parseStampedSeg downgrade guard every sibling
+      // applies — a backup from a NEWER build was silently downgrade-read and the misread values
+      // re-persisted on the next persist. Route it through the same shared guard (absent/0
+      // schemaV = legacy blob, allowed — same contract as category/habits/filter/plan).
+      if (b.settingsState) seg('settings', () => { const st = this.parseStampedSeg(b.settingsState); this.$store.commit('settings/restore', st) })
       // setListRestore: backup-time tombstones must not win category LWW and re-delete peer-recovered
       // categories (round-6 P2) — live restored rows still take the fresh stamp (backup wins locally)
       if (b.categoryState) seg('category', () => { const c = this.parseStampedSeg(b.categoryState); if (c.list) this.$store.commit('category/setListRestore', c.list) })

@@ -13,7 +13,7 @@ if (window.dayjs && window.dayjs.extend && window.dayjs_plugin_isoWeek) window.d
 window.dayjs = window.dayjs || window.dayJs
 
 import store from './store/index.js'
-import { onExternalHabitBlob } from './store/habits.js'
+import { onExternalHabitBlob, isStaleExternalRound } from './store/habits.js'
 import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
 import { loadRuntime } from './store/helpers/runtimeState.js'
 import { criticalBackupWrite, ackQuitFlushAfterWrite } from './store/helpers/todoBackup.js'
@@ -81,7 +81,12 @@ app.use(store)
 onExternalHabitBlob(blob => {
   const s = store.state.habits
   if (!blob || !Array.isArray(blob.habits)) return false
-  if ((blob.savedAt || 0) < (s.savedAt || 0)) return false
+  // W12 fix (2026-10-26): this pre-guard hand-rolled strict `<`, so on a TIE it reported
+  // accepted=true while habits/applyExternal rejected the blob via isStaleExternalRound (`<=`) —
+  // relayAuxBlob then wrote the REJECTED blob verbatim to the durable DB meta row, bypassing
+  // records union-max + tombstone merge/prune. Use the mutation's own predicate so the callback
+  // verdict and the mutation's verdict can never drift apart again.
+  if (isStaleExternalRound(blob.savedAt, s.savedAt)) return false
   store.commit('habits/applyExternal', blob)
   return true
 })
