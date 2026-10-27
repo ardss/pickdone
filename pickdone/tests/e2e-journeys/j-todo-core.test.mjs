@@ -192,9 +192,23 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
     const onTomorrow = await until(`[...document.querySelectorAll('.td-item .td-title')].some(t => t.textContent.trim() === 'meeting')`, 8, 400)
     assert.ok(onTomorrow, 'the created task is not visible on the tomorrow day view (user cannot see what they just scheduled)')
   } finally {
+    // W11 2026-10-26: sweep by taskContent REGARDLESS of dayStart. Filtering on
+    // dayStart === TOMORROW0 here made cleanup conditional on the very behavior under test —
+    // when the pinned W10 bug recurs (row lands on TODAY), the sweep no-ops and the "meeting"
+    // row leaks into later pool targets (j-rail-stats J8 asserts today === 2 exactly, so a
+    // leaked row shows up as a MISLEADING second red far away from the real regression).
     const rows = await dbLive().catch(() => [])
     const binned = await dbBinned().catch(() => [])
-    const mine = [...(rows || []), ...(binned || [])].filter(r => r.taskContent === 'meeting' && r.dayStart === TOMORROW0).map(r => r.taskId)
+    const mine = [...(rows || []), ...(binned || [])]
+      .filter(r => r.taskContent === 'meeting' || r.taskContent.startsWith('meeting '))
+      .map(r => r.taskId)
+    // Loud regression signal: a swept row whose dayStart is not TOMORROW0 IS the W10 bug
+    // resurfacing as a leak — never let it pass silently.
+    const offDay = [...(rows || []), ...(binned || [])]
+      .filter(r => (r.taskContent === 'meeting' || r.taskContent.startsWith('meeting ')) && r.dayStart !== TOMORROW0)
+    for (const r of offDay) {
+      console.error(`[j-todo-core][W10-REGRESSION-SIGNAL] cleanup swept a "meeting" row scheduled for dayStart=${r.dayStart} (expected TOMORROW0=${TOMORROW0}) — the NL-date regression the J1 journey should have caught leaked past the row assertion`)
+    }
     await hardCleanup([...new Set([...createdIds, ...mine])])
   }
 })

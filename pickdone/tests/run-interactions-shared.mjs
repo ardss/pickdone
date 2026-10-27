@@ -155,6 +155,11 @@ async function resetSharedPage () {
     // no task rows because matrix renders pd-matrix-grid). Restore the fresh-boot baseline —
     // targets were all designed against a fresh instance's chrome.
     await sendT('Runtime.evaluate', { expression: `try{localStorage.setItem('todayViewMode','list')}catch(e){}`, returnByValue: true })
+    // W11 2026-10-26: the journey files pin localStorage.appLocale='en-US' and onboardingToursSeen
+    // for their en-US surface assertions — without this sweep those keys persist into every LATE
+    // pool target (keyboard-e2e / cssom-integrity / ui-coverage / overlay-visibility), which then
+    // run against a journey-pinned locale/overlay state instead of the fresh-instance surface.
+    await sendT('Runtime.evaluate', { expression: `try{localStorage.removeItem('appLocale');localStorage.removeItem('onboardingToursSeen')}catch(e){}`, returnByValue: true })
     await sendT('Page.reload') // plain reload: ignoreCache hangs under the app:// protocol (ui-smoke lesson)
     const probe = `JSON.stringify({ api: !!(window.todoAPI && window.todoAPI.closeRequest), iso: !!(window.todoAPI && window.todoAPI.isDataIsolated) })`
     for (let i = 0; i < 40; i++) {

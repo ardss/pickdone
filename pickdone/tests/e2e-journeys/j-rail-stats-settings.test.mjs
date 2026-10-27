@@ -338,8 +338,13 @@ test('J10: statistics reflect seeded today focus minutes; a settings boolean fli
     // Reload: the flip must survive (settings rows are DB-backed) and the UI must reflect it
     await send('Page.reload')
     assert.ok(await waitBoot(), 'app did not boot after the J10 settings reload')
-    const persisted = await waitFor(`(()=>{const v=(${STORE_Q}).state.settings.developerMode;return v===(v===true)?v:null})()`, 10, 500)
-    assert.equal(persisted, !(origDevMode === true), `developer-mode flip did not persist across reload (expected ${!(origDevMode === true)}, got ${persisted})`)
+    // W11 2026-10-26: stringly sentinel — the old `v===(v===true)?v:null` returned `false` for a
+    // legit persisted false, which waitFor treats as falsy and polls to exhaustion (null → false
+    // failure) whenever the original developerMode was true. 'true'/'false' are both truthy probe
+    // returns, so the poll settles on the FIRST real persisted value instead of burning its budget.
+    const persisted = await waitFor(`(()=>{const v=(${STORE_Q}).state.settings.developerMode;return v===true?'true':(v===false?'false':null)})()`, 10, 500)
+    const expectedPersisted = !(origDevMode === true) ? 'true' : 'false'
+    assert.equal(persisted, expectedPersisted, `developer-mode flip did not persist across reload (expected ${expectedPersisted}, got ${persisted})`)
     const opened2 = await evalAwait(`(()=>{const g=document.querySelector('.sn-account-gear:not(.sn-account-trash)');if(!g)return false;g.click();return true})()`)
     assert.ok(opened2, 'could not reopen settings modal')
     await waitFor(`!!document.querySelector('.modal--settings, .modal-container--settings')`, 10, 500)
@@ -356,6 +361,11 @@ test('J10: statistics reflect seeded today focus minutes; a settings boolean fli
     // Restore: original developer mode, remove the seeded ledger rows
     if (origDevMode !== null) {
       await evalAwait(`(async()=>{await (${STORE_Q}).dispatch('settings/update',{developerMode:${origDevMode === true}});return 'ok'})()`).catch(() => {})
+      // W11 2026-10-26: the restore used to sit in a bare .catch(()=>{}) with NO verification —
+      // a failed restore leaves developerMode flipped in db settings for the 4 later pool targets.
+      // Read back and fail loudly on mismatch.
+      const restoredVal = await evalAwait(`(${STORE_Q}).state.settings.developerMode`).catch(() => null)
+      assert.equal(restoredVal, origDevMode === true, `J10 restore FAILED: developerMode is ${restoredVal} but the pre-journey value was ${origDevMode === true} — this contaminates every later pool target`)
     }
     await evalAwait(`window.todoAPI.dbCall('tomatoRemoveByIds',${JSON.stringify(tIds)})`).catch(() => {})
     await evalAwait(`(async()=>{const st=(${STORE_Q});if(st)await st.dispatch('tomato/recordsReload');return 'ok'})()`).catch(() => {})

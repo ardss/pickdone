@@ -73,6 +73,17 @@ const evalJson = async expression => {
   ])
   return r ? JSON.parse(r.result?.result?.value ?? 'null') : null
 }
+// Await-style eval that SURFACES page exceptions (evalJson returns null on timeout and silently
+// ignores exceptionDetails — exactly how a failed cleanup used to pass unnoticed).
+const evalAwait = async expression => {
+  const r = await Promise.race([
+    send('Runtime.evaluate', { expression: `(${expression})`, returnByValue: true, awaitPromise: true }),
+    sleep(10000).then(() => null)
+  ])
+  if (!r) return null
+  if (r.exceptionDetails) throw new Error('page eval failed: ' + ((r.exceptionDetails.exception?.description || r.exceptionDetails.text) + '').slice(0, 300))
+  return r.result?.result?.value ?? null
+}
 
 // Vue store handle (Vue 3: window.appUI.$store is the official main.js seam; DOM fallbacks kept from ui-smoke)
 const STORE_Q = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;const p=a&&a._instance&&a._instance.proxy;if(p&&p.$store)return p.$store;return null})()`
@@ -92,6 +103,38 @@ const SET_VAL = `(el, v) => { const s = Object.getOwnPropertyDescriptor(HTMLInpu
 
 // Local YYYY-MM-DD day key derived from a timestamp (same shape as shared/date-key.mjs localDayKey)
 const PAGE_DAYKEY = `(ts) => { const d = new Date(ts); const p = n => String(n).padStart(2, '0'); return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) }`
+
+// W11 2026-10-26: verified cleanup. The journeys' finally blocks used to fire store-level
+// delHabit/delMoment commits with NO verification — if the store handle is gone after a
+// mid-test reload (evalJson's silent null) the habit/moment persists in db.habitsState for
+// every later pool target. After each cleanup we poll the DURABLE blob (dbCall getMeta), and
+// when the store path failed we fall back to a direct blob rewrite via the whitelisted
+// setMeta op (src/main/handlers/todo.js: 'setMeta' — main-window-only, args [key, value]).
+const blobArtifact = (blob, kind, name) =>
+  kind === 'habit'
+    ? !!(blob && (blob.habits || []).some(x => x.name === name))
+    : !!(blob && (blob.moments || []).some(x => x.name === name))
+const verifyBlobCleanup = async (kind, name) => {
+  const readBlob = () => evalAwait(`window.todoAPI.dbCall('getMeta','db.habitsState').then(v => v ? JSON.parse(v) : null)`)
+  let blob = null
+  for (let i = 0; i < 10; i++) {
+    blob = await readBlob().catch(() => null)
+    if (blob && !blobArtifact(blob, kind, name)) return 'clean'
+    await sleep(400)
+  }
+  if (!blob) console.error(`[j-habit-moment] cleanup verification could not read db.habitsState for "${name}" (blob unreadable) — attempting the direct setMeta fallback anyway`)
+  // Fallback: rewrite the blob without the artifact (store handle may be gone after a reload)
+  const stripped = blob ? { ...blob, [kind === 'habit' ? 'habits' : 'moments']: (blob[kind === 'habit' ? 'habits' : 'moments'] || []).filter(x => x.name !== name) } : null
+  if (stripped) {
+    const wrote = await evalAwait(`window.todoAPI.dbCall('setMeta',['db.habitsState', ${JSON.stringify(JSON.stringify(stripped))}]).then(() => 'ok')`).catch(() => null)
+    if (wrote === 'ok') {
+      const re = await readBlob().catch(() => null)
+      if (re && !blobArtifact(re, kind, name)) return 'clean-via-setmeta-fallback'
+    }
+  }
+  console.error(`[j-habit-moment] LEAKED ARTIFACT: habit/moment "${name}" (${kind}) is still present in db.habitsState after cleanup AND the setMeta blob-rewrite fallback — it will pollute every later pool target`)
+  assert.fail(`cleanup failed: the created ${kind} "${name}" is still in db.habitsState after both the store-level delete and the direct setMeta fallback`)
+}
 
 test('Precondition: connect CDP, pin locale, wait for the app to boot', { skip: !available ? 'no debug port on ' + CDP : (!isolated ? 'attached instance is NOT data-isolated; refusing writes on real user data' : false) }, async () => {
   const targets = await (await fetch(CDP + '/json')).json()
@@ -236,6 +279,8 @@ test('J5 habit lifecycle: create -> check in -> record visible -> delete -> Undo
     // self-cleanup: hard-remove the journey habit from store + DB, never pollute later targets
     await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; st.state.habits.habits.filter(x => x.name === ${JSON.stringify(name)}).forEach(x => st.commit('habits/delHabit', x.id)); return 'ok' })()`)
     await sleep(300)
+    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
+    await verifyBlobCleanup('habit', name).catch(e => { console.error('[j-habit-moment] J5 cleanup verification failed: ' + e.message); assert.fail(e.message) })
   }
 })
 
@@ -309,6 +354,8 @@ test('J6 moment (countdown): create with a future date -> correct days-left -> d
   } finally {
     await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; st.state.habits.moments.filter(x => x.name === ${JSON.stringify(name)}).forEach(x => st.commit('habits/delMoment', x.id)); return 'ok' })()`)
     await sleep(300)
+    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
+    await verifyBlobCleanup('moment', name).catch(e => { console.error('[j-habit-moment] J6 cleanup verification failed: ' + e.message); assert.fail(e.message) })
   }
 })
 
@@ -379,6 +426,8 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
   } finally {
     await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; if (${JSON.stringify(habitId)}) st.commit('habits/delHabit', ${JSON.stringify(habitId)}); return 'ok' })()`)
     await sleep(300)
+    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
+    await verifyBlobCleanup('habit', name).catch(e => { console.error('[j-habit-moment] J7 cleanup verification failed: ' + e.message); assert.fail(e.message) })
   }
 })
 
