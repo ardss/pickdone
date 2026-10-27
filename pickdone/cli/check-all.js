@@ -37,7 +37,10 @@ const FAST = process.argv.includes('--fast')
 // electron-as-node, so the strip is safe to apply centrally: every stage child inherits
 // this process's env. Suite-level strips (journey-driver, e2e-exit-close, lan-sync-journey)
 // stay as belt-and-braces; this removes the host-shell dependency for the whole gate.
-delete process.env.ELECTRON_RUN_AS_NODE
+// The strip itself moved into main() (2026-10-27): importing this module (the flake-metrics
+// unit test) must not mutate the importer's process.env — same import-without-side-effects
+// contract as the reap handler below (check-all.js ~299). All stage spawns live inside main(),
+// so the real gate path strips identically.
 // CPU-aware lane count for the Electron live pool: scale down on small machines, never exceed 3
 // (known load-sensitive gates: dbMirror backoff, perf 5000-task, UI coverage walkthrough get WORSE
 // under contention, so the ceiling stays at 3 even on 16-core boxes)
@@ -177,10 +180,12 @@ function runStage (stage) {
       registerChild(child.pid, { match: frags.slice(0, 4), purpose: `check-all stage: ${name}` })
     }
     let out = ''
+    let budgetKilled = false // budget-kill marker: taskkill /T /F grandchildren close with code=1 signal=null (2026-10-27)
     const CAP = 16 * 1024 * 1024 // 尾部 25 行足够,但保留较大环形缓冲防大输出丢关键信息
     child.stdout.on('data', d => { out = (out + d).slice(-CAP) })
     child.stderr.on('data', d => { out = (out + d).slice(-CAP) })
     const timer = setTimeout(() => {
+      budgetKilled = true
       // win32: child 是 shell 包装进程,可能先退 handing off 孙进程——树杀 + 按特征端口补杀双保险
       // (2026-09-09 实锤:仅杀包装 pid 时孤儿 visual-web 永挂,'close' 永不触发,整池卡死)
       if (process.platform === 'win32') {
@@ -208,7 +213,9 @@ function runStage (stage) {
     child.on('close', (code, signal) => {
       clearTimeout(timer)
       if (child.pid) unregisterChild(child.pid)
-      const timedOut = signal === 'SIGKILL'
+      // win32 budget kill rides taskkill /T /F: the direct child closes code=1 signal=null,
+      // so signal alone under-reports — OR the local marker in (2026-10-27).
+      const timedOut = signal === 'SIGKILL' || budgetKilled
       resolve({ name, ok: code === 0 && !timedOut, timedOut, out, ms: Date.now() - t0, budget: timeoutMin || 15 })
     })
   })
@@ -292,6 +299,9 @@ async function runPool (stages, limit, { retry = 0, onLastStage, workerGate, sil
 export { runPool, GROUPS }
 
 async function main () {
+// Electron-as-node strip (rationale: comment at top of file) — inside main() so a bare import
+// (flake-metrics unit test) never mutates the importer's env (2026-10-27).
+delete process.env.ELECTRON_RUN_AS_NODE
 const results = []
 // D4 exit-handler reap: normal runs prune each entry at 'close', so this is a no-op on a
 // clean exit; on a crash/throw/hard-signal path the still-registered stage children get

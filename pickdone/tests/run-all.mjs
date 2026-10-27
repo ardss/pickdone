@@ -577,7 +577,10 @@ if (r.status !== 0 && !r.error && r.stdout) {
         const cancelled2 = countCancelled(rt.tail)
         if (planOk && keptNotOk === 0 && notOkInRetry === 0 && cancelled1 === 0 && cancelled2 === 0 && rt.blocks.length > 0) {
           const all = renumber([...kept, ...rt.blocks])
-          const skips = all.filter(b => /# (SKIP|skip)/.test(b.join('\n'))).length
+          // TAP skip semantics: a skip directive belongs to a TEST POINT line (`ok N ... # SKIP`),
+          // not anywhere in the block — a diagnostic line inside a passing block containing
+          // "# SKIP" used to inflate the composed skip count (substring false positive).
+          const skips = all.filter(b => b.some(l => /^(?:not )?ok\b.*#\s*(SKIP|skip)\b/.test(l))).length
           const composed = [
             // W12 2026-10-26 (Fix 4): pass1 streams live, so the gate's tap file already holds
             // its raw bytes when this composed stream is appended. The separator marks the

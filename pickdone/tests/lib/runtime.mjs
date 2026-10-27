@@ -93,9 +93,13 @@ export async function spawnApp (opts = {}) {
     srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)) })
     srv.on('error', reject)
   })
+  // strip ELECTRON_RUN_AS_NODE (same as the shared pool's bootInstance): harness/IDE host
+  // shells export it → electron.exe boots as plain Node and dies in src/main/index.js.
+  const env = { ...process.env, TODO_USER_DATA_DIR: userDataDir, TODO_SYNC_PORT: String(syncPort) }
+  delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(ELECTRON, ['.', ...baseArgs, '--remote-debugging-port=' + port, ...(opts.appArgs || []), ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: APP_CWD,
-    env: { ...process.env, TODO_USER_DATA_DIR: userDataDir, TODO_SYNC_PORT: String(syncPort) },
+    env,
     // app 输出写文件：node:test 会捕获 hook console，启动日志必须落盘可查
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')],
     detached: false
@@ -155,6 +159,14 @@ export async function connectCdp (ctx, tries = 40) {
         const sendRaw = (method, params = {}) => new Promise(res => {
           const i2 = ++id; pending.set(i2, res); ws.send(JSON.stringify({ id: i2, method, params }))
         })
+        // bounded send: ws.send never rejects and a wedged/dead page never replies, so an
+        // unbounded sendRaw parks the boot sequence forever (outside any caller budget).
+        // Race each call against a 20s ceiling — a timeout rejects NAMED so the caller's
+        // catch (or the probe loop below) degrades to its own wait logic (2026-10-27).
+        const sendRawT = (method, params = {}) => Promise.race([
+          sendRaw(method, params),
+          sleep(20000).then(() => { throw new Error('timeout ' + method) })
+        ])
         ws.onmessage = e => {
           const m = JSON.parse(e.data)
           if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
@@ -172,11 +184,12 @@ export async function connectCdp (ctx, tries = 40) {
         // 语言钉死 zh-CN:CI runner 系统语言 en-US,应用跟随系统变英文,全套中文选择器/文案断言全哑
         // (2026-09-06 公开 CI 实锤:body 文本以 "PickDone Completed…" 开头=导航已英文化)。pin appLocale=en-US (product default: en unless system zh) + reload + wait for shell ready.
         try {
-          await sendRaw('Page.enable')
-          await sendRaw('Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US')}catch(e){}" })
-          await sendRaw('Page.reload', { ignoreCache: true })
+          await sendRawT('Page.enable')
+          await sendRawT('Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US')}catch(e){}" })
+          // plain reload — ignoreCache hangs under the app:// protocol (ui-smoke lesson, run-interactions-shared.mjs:176)
+          await sendRawT('Page.reload')
           for (let i = 0; i < 40; i++) {
-            const rr = await sendRaw('Runtime.evaluate', { expression: '!!window.appUI && !!document.querySelector(.app-shell-INIT)'.replace('.app-shell-INIT', String.fromCharCode(39) + '.app-shell' + String.fromCharCode(39)), returnByValue: true }).catch(() => null)
+            const rr = await sendRawT('Runtime.evaluate', { expression: '!!window.appUI && !!document.querySelector(.app-shell-INIT)'.replace('.app-shell-INIT', String.fromCharCode(39) + '.app-shell' + String.fromCharCode(39)), returnByValue: true }).catch(() => null)
             if (rr && rr.result && rr.result.value === true) break
             await sleep(500)
           }

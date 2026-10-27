@@ -44,6 +44,14 @@ try {
 
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
+// Runtime precondition gate (2026-10-27): node:test evaluates the `skip` option at REGISTRATION
+// time, so a J-precondition failure AT RUNTIME (assert booted fails) used to leave J1-J4 running
+// against a bad/dead page — cascading reds plus hardCleanup hammering an unbooted page and
+// leaking rows into later pool targets. preconditionOk flips true only when the precondition
+// test body completes; J1-J4 read it on their FIRST LINE (t.skip at runtime) and hardCleanup
+// short-circuits so no DB write ever targets a page that never booted.
+let preconditionOk = false
+
 // [signal-integrity] inside the shared pool the instance is GUARANTEED booted and data-isolated;
 // a whole-group skip there means the environment handoff broke — fail loud, never skip=green.
 {
@@ -142,6 +150,9 @@ const seedTask = async content => {
 const dbLive = async () => evalAwait(`window.todoAPI.dbCall('queryTodos', { deleted: 0 })`)
 const dbBinned = async () => evalAwait(`window.todoAPI.dbCall('queryTodos', { deleted: 1 })`)
 const hardCleanup = async ids => {
+  // Short-circuit on a page that never booted: dbCall/evalAwait against a dead WS would stall
+  // 10s per probe and the leak re-query would fire against nothing (precondition-cascade guard).
+  if (!preconditionOk || !ws) return 0
   if (!ids || !ids.length) return 0
   await evalAwait(`window.todoAPI.dbCall('hardDeleteMany', ${JSON.stringify(ids)})`)
   await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('todo/computeViews'); return true })()`)
@@ -199,9 +210,11 @@ test('J-precondition: connect CDP, pin en-US locale, dismiss onboarding overlays
   await sleep(600)
   await evalJson(`(()=>{try{localStorage.setItem('onboardingToursSeen',JSON.stringify({today:1,editpanel:1}))}catch{};return 'ok'})()`)
   await gotoHash('#/todo-list/today', '.qa-input')
+  preconditionOk = true // reached only when boot + locale pin + overlay retire all succeeded
 })
 
-test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean title (W10 2026-10-26 pin: it used to silently schedule TODAY with date words left in the title)', { skip: !available || !isolated }, async () => {
+test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean title (W10 2026-10-26 pin: it used to silently schedule TODAY with date words left in the title)', { skip: !available || !isolated }, async t => {
+  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
   const createdIds = []
   // W12 2026-10-26: the sweep is a named, REGISTERED cleanup — the watchdog races it (5s grace)
   // before force-exiting so a slow journey cannot leak rows into later pool targets.
@@ -264,7 +277,8 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
   }
 })
 
-test('J2 add → complete → enters the today-completed group → un-complete → back to the today group', { skip: !available || !isolated }, async () => {
+test('J2 add → complete → enters the today-completed group → un-complete → back to the today group', { skip: !available || !isolated }, async t => {
+  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
   const name = 'J2 complete journey ' + Math.random().toString(36).slice(2, 6)
   const ids = []
   // W12 2026-10-26: registered best-effort cleanup for the watchdog (see registerCleanup comment)
@@ -309,7 +323,8 @@ test('J2 add → complete → enters the today-completed group → un-complete �
   }
 })
 
-test('J3 soft delete → recycle bin shows the task → restore → back in the list', { skip: !available || !isolated }, async () => {
+test('J3 soft delete → recycle bin shows the task → restore → back in the list', { skip: !available || !isolated }, async t => {
+  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
   const name = 'J3 recycle journey ' + Math.random().toString(36).slice(2, 6)
   const ids = []
   // W12 2026-10-26: registered best-effort cleanup for the watchdog (see registerCleanup comment)
@@ -353,7 +368,8 @@ test('J3 soft delete → recycle bin shows the task → restore → back in the 
   }
 })
 
-test('J4 edit panel rename saves → list reflects the new title → search view finds it by keyword', { skip: !available || !isolated }, async () => {
+test('J4 edit panel rename saves → list reflects the new title → search view finds it by keyword', { skip: !available || !isolated }, async t => {
+  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
   const name = 'J4 edit journey ' + Math.random().toString(36).slice(2, 6)
   const keyword = 'J4editkw' + Math.random().toString(36).slice(2, 6)
   const newName = 'J4 edited ' + keyword

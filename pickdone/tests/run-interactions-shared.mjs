@@ -31,8 +31,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { registerChild, unregisterChild } from './lib/child-registry.mjs'
+import { fileURLToPath } from 'node:url'
 
-const appCwd = path.dirname(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')))
+// fileURLToPath (not `new URL().pathname`): pathname is percent-encoded — a checkout path with
+// spaces/non-ASCII made ELECTRON resolve to a %20-laden path and spawn threw ENOENT
+// (same pattern as cli/check-all.js:21).
+const appCwd = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const ELECTRON = process.platform === 'win32'
   ? path.join(appCwd, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(appCwd, 'node_modules', 'electron', 'dist', 'electron')
@@ -194,9 +198,13 @@ async function resetSharedPage () {
 function runTarget (script) {
   return new Promise(resolve => {
     const t0 = Date.now()
+    // strip ELECTRON_RUN_AS_NODE like bootInstance: harness/IDE hosts export it, and the child
+    // target's own spawnApp would otherwise boot electron.exe as plain Node (2026-10-27).
+    const env = { ...process.env, TODO_CDP: CDP, TODO_SHARED_CDP: CDP }
+    delete env.ELECTRON_RUN_AS_NODE
     const child2 = spawn(process.execPath, [script], {
       cwd: appCwd,
-      env: { ...process.env, TODO_CDP: CDP, TODO_SHARED_CDP: CDP },
+      env,
       stdio: 'inherit'
     })
     const killer = setTimeout(() => {

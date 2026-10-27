@@ -15,14 +15,21 @@ fail=0
 # 并在"有 staged js 却 0 个被检查"时拒绝放行。列表落盘再 while<file:管道子 shell 里改
 # checked 计数传不出来,重定向方式让循环跑在当前 shell。
 jslist=/tmp/hook-staged-js.$$
+errfile=/tmp/hook-check.err.$$  # 带 $$ 后缀:并发钩子实例互相覆盖对方的错误文件(与上行 jslist 同款)
 git diff --cached --name-only --diff-filter=ACM | tr -d '\r' | grep -E '\.[cm]?js$' > "$jslist" || true
 checked=0
+# 2026-10-27 堵漏检:pickdone/ 前缀剥掉后按 pickdone 相对路径检查;仓根其他目录的 JS
+# (qa/**、analysis/**、test/** 等)原样加 ../ 前缀检查——旧逻辑只剥前缀,非 pickdone 路径
+# 的 [ -f ] 判不存在被静默跳过(混合提交时外部 JS 漏检)。
 while IFS= read -r f; do
-  case "$f" in pickdone/*) f="${f#pickdone/}" ;; esac
-  [ -f "$f" ] || continue
-  if ! node --check "$f" 2>/tmp/hook-check.err; then
+  case "$f" in
+    pickdone/*) rel="${f#pickdone/}" ;;
+    *) rel="../$f" ;;
+  esac
+  [ -f "$rel" ] || continue
+  if ! node --check "$rel" 2>"$errfile"; then
     echo "  ✗ 语法错误: $f"
-    cat /tmp/hook-check.err
+    cat "$errfile"
     fail=1
     break
   fi
