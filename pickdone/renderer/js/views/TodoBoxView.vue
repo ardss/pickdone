@@ -365,9 +365,13 @@ export default {
         .map(id => this.$store.state.todo.todoList.find(x => x.taskId === id))
         .filter(Boolean)
       const { plain, repeatAsk, repeatRest } = splitBatchDelete(rows)
-      // Keep the recurring selections that did not get a modal this pass checked, so "delete" asks
-      // about the next repeat group when the user confirms again
-      this.checkedIds = repeatRest.map(t => t.taskId)
+      // [w14 P2] the plain rows STAY in checkedIds until the dispatch settles: the old code pruned
+      // them to repeatRest BEFORE deleteTodosMany, so a thrown dispatch (dead row mid-batch) left the
+      // selection desynced from reality — the batch bar vanished and there was no retry entry for the
+      // rows that never got deleted. Now: success -> selection keeps only the repeatRest pass-over;
+      // failure -> the (still alive) plain rows stay checked next to the repeatRest ones.
+      // Undo semantics unchanged: the snapshot is still built from the ids deleteTodosMany RETURNED
+      // (the success subset), so a total failure yields no phantom undo toast.
       // Aggregate undo: delete all plain rows first, then ONE batch undo toast restoring the whole
       // group — per-row deleteWithUndo would stack N toasts for an N-row selection while sibling
       // batch ops (batchToday/batchCat) aggregate via batchMoveWithUndo + closeAll
@@ -397,6 +401,12 @@ export default {
       }
       // [d21-A1] honest-failure feedback, same shape as batchToday/batchCat (msgPartialFail reuse)
       if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
+      // [w14 P2] selection update AFTER the dispatch: keep the recurring pass-over checked (so the
+      // next confirm asks about the next repeat group); on failure also keep the plain rows checked
+      // — they were never deleted, so the batch bar (and its delete button) stays as the retry entry.
+      this.checkedIds = failed
+        ? [...repeatRest.map(t => t.taskId), ...plain.map(t => t.taskId)]
+        : repeatRest.map(t => t.taskId)
       if (repeatAsk) this.$store.commit('ui/askRepeatDelete', repeatAsk.taskId)
     },
     ctxMenu (t, e) {

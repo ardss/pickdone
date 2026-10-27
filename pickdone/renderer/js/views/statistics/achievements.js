@@ -7,6 +7,7 @@
  */
 import { dayjs, FMT } from '../../utils/core.js'
 import { dayShift } from '../../utils/todayBounds.js'
+import { focusStartedAtOf } from '../../store/tomato-pure.js'
 import { doneTsOf } from './metrics.js'
 
 /* 24x24 line icons (Feather/Lucide style standard paths, stroke=currentColor follows the theme color) */
@@ -90,7 +91,13 @@ export function buildAchievements ({ todos, records }) {
     if (r.succeed === false) return
     focusMins += r.focusDuration || 0
     const end = Number(r.endTime) || 0
-    if (end && new Date(end).getHours() < 9) earlyCount++
+    if (!end) return
+    // [w14 P2] "清晨专注" classifies by SESSION START, not end hour: a 23:00->00:30 night-owl
+    // session ends at hour 0 and was counted as an early-morning focus. The startedAt is embedded
+    // in the minted tomatoId ('tmt_f_<startedAt>[_<salt>]', see store/tomato-pure focusStartedAtOf);
+    // legacy rows without a parsable id fall back to the endTime basis (old behavior).
+    const start = focusStartedAtOf(r.tomatoId) || end
+    if (new Date(start).getHours() < 9) earlyCount++
   })
   // Current streak (today being unfinished doesn't break it; counting continues from yesterday)
   let streak = 0

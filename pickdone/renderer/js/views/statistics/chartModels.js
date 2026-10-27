@@ -54,6 +54,15 @@ export function periodBounds (period, customRange, nowTick, t) {
   }
 }
 
+/** [w14 P2] calendar-day key of a focus record's endTime; '' when endTime is missing/0. The former
+ *  unguarded `dayjs(Number(r.endTime))` minted 'Invalid Date'/1970-01-01 keys for such records, so
+ *  their focus minutes silently dropped out of the heatmap. Same guard as buildTimelineRows (~L183). */
+export function focusDayKeyOf (r) {
+  const end = Number(r.endTime) || 0
+  if (!end) return ''
+  return dayjs(end).format(FMT.date)
+}
+
 /**
  * GitHub-style activity heatmap (half year 26 weeks / full year 52 weeks).
  * Mirrors the former `heatmap` computed: same level thresholds, same column/day-of-week layout,
@@ -74,7 +83,8 @@ export function buildHeatmap ({ todos, records, weeks, nowTick }) {
   })
   records.forEach(r => {
     if (r.succeed === false) return
-    const k = dayjs(Number(r.endTime)).format(FMT.date)
+    const k = focusDayKeyOf(r)
+    if (!k) return // [w14] endTime missing/0: skip instead of 'Invalid Date'/1970 key (silent loss)
     focusByDay.set(k, (focusByDay.get(k) || 0) + (r.focusDuration || 0))
   })
   const maxDone = Math.max(1, ...doneByDay.values())
