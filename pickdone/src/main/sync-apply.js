@@ -729,7 +729,7 @@ function applyRowSafe (state, incoming) {
     const ok = applyRowInner(state, incoming)
     if (ok) markApplied(state, incoming && incoming.entity)
     return ok
-  } catch (e) { log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); return false }
+  } catch (e) { /* W14 P1: a throw = an UNDECIDED row, never a decided no-op — rethrow so the round fails and the cursor/watermark stays (rationale: relay-sync-apply.js Failure contract) */ log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); throw e }
 }
 
 /**

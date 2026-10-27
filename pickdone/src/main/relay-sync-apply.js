@@ -28,6 +28,16 @@
  * frames (duplicate-safe by revisionId PK and by LWW no-ops). Business flush reports
  * { ok: false } only when quarantine parking failed too — that also throws (dropped
  * rows must never be acked as applied).
+ * W14 (2026-10-27, P1): applyRowSafe RETHROWS on exception instead of returning false —
+ * a transient DB failure (SQLITE_BUSY during the hydration reads) used to surface as a
+ * legitimate no-op here, and the false branch below advanced the cursor with verdict
+ * 'ok': the remote change was lost one-way and never retried. The false branch remains
+ * ONLY for DECIDED no-ops (LWW loser / identical content / ghost tombstone) — those
+ * still verdict 'ok' because the local table provably holds at-least-as-new content.
+ * An exception fails the whole round (before flushPendingWrites; withTransaction rolls
+ * the DAG ingest back) — fail-closed, idempotent replay. The LAN ingestSegment loop and
+ * the snapshot receivers get the same alignment for free: a throw fails the round, the
+ * ack/watermark stays below the segment, the peer re-pushes.
  */
 
 const syncApply = require('./sync-apply')

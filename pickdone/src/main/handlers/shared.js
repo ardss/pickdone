@@ -195,7 +195,13 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
     // D15-B6: stamped `catFiltersBak.<deletedAt>.<id>` — bounded by the recover window; the
     // unstamped legacy shape is GC'd only when its id is live again (stale recovered/re-created
     // leftover — recover itself deletes the backup it consumed).
-    m = k.match(/^catFiltersBak\.(\d+)\.(\d+)$/)
+    // W14 (2026-10-27, P2): the id segment used to be digit-only (`\.(\d+)$`), but the
+    // producers write `catFiltersBak.<deletedAt>.<victimId>` with NON-numeric victim ids too
+    // (db-category-ops.js purgeFiltersForCategoryVictims; renderer category.js
+    // catFiltersBakKeyTs) — those stamped keys fell through to the legacy unstamped rule,
+    // whose live-id check never matches a deleted victim, so the key leaked forever. Age is
+    // decided by the timestamp segment alone; accept any dot-free id in the second segment.
+    m = k.match(/^catFiltersBak\.(\d+)\.([^.]+)$/)
     if (m) { if (now - Number(m[1]) > retentionMs) dead.push(k); continue }
     m = k.match(/^catFiltersBak\.(.+)$/)
     if (m && live.has(m[1])) { dead.push(k); continue }

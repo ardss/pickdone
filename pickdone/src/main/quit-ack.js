@@ -60,9 +60,15 @@ function createQuitAckTracker () {
     /** P2 2026-09-12: a window destroyed between the send and its ack can never ack — without this
      *  the quit path waited out the full 2s cap every time the window closed mid-handshake. Drops the
      *  sender from the expected count (idempotent; a sender that already acked is a no-op, since its
-     *  ack is what satisfies allAcked). Returns true when expected was actually decremented. */
+     *  ack is what satisfies allAcked). Returns true when expected was actually decremented.
+     *  W14 (2026-10-27, P3): same expected-set membership gate as ack() — without it a stale
+     *  webContents id from an ABORTED previous round (destroyed after its round ended, abandon
+     *  delivered into the new round) decremented the CURRENT round's expected count for senders
+     *  that were never sent to, driving expected to 0 and satisfying allAcked() prematurely
+     *  (truncating the 2s flush window before the real windows acked). */
     abandon (senderId) {
       if (senderId == null || abandoned.has(senderId)) return false
+      if (expectedSenders.size > 0 && !expectedSenders.has(senderId)) return false
       abandoned.add(senderId)
       if (acked.has(senderId)) return false
       expected = Math.max(0, expected - 1)

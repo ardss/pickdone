@@ -319,7 +319,21 @@ function initInner (userDataPath) {
       // so delete and recreate encrypted. (PRAGMA key on the already-open plaintext handle would NOT
       // encrypt existing pages → the CLI reopening with db.key reads garbage: "file is not a database")
       db.close()
-      for (const f of [file, file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }) } catch {} }
+      // W14 (2026-10-27, P2): the main-file deletion used to be swallowed by the same bare
+      // catch as the wal/shm sidecars — on failure (EPERM/EBUSY on a locked win32 file, AV
+      // scan) the rebuild reopened the OLD PLAINTEXT db, wrote the session into it while the
+      // PRAGMA key was a no-op, and the next boot read db.key against a plaintext file →
+      // dbEncMismatch → the recovery chain reported "all data lost". The main file MUST be
+      // gone before rebuilding: if it survives, abort this init (the throw joins the
+      // migration/recovery chain in index.js) instead of silently running plaintext. The
+      // -wal/-shm sidecars stay tolerable: SQLite recreates them.
+      let mainFileRemoved = false
+      let mainFileErr = null
+      try { fs.rmSync(file, { force: true }); mainFileRemoved = !fs.existsSync(file) } catch (e) { mainFileErr = e }
+      for (const f of [file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }) } catch {} }
+      if (!mainFileRemoved) {
+        throw new Error('[TodoDB] 首装加密重建失败:旧明文 todos.db 删除不掉' + (mainFileErr ? '(' + mainFileErr.message + ')' : '') + ',拒绝在明文库上重建(转交恢复链处理)')
+      }
       require('./durable-fs').writeFileDurable(keyFile, key) // main-ipc-2 fsync fix (2026-09-22), same rationale as the migration path above
       db = new loadDriver()(file)
       db.pragma(`key='${key}'`)
