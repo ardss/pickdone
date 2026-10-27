@@ -48,8 +48,19 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
   }
 }
 
-// Watchdog: three journeys each do a reload + boot wait; 240s ceiling (pool per-target budget is 8min)
-const watchdog = setTimeout(() => { console.error('E2E watchdog forced exit (counted as failure)'); try { ws?.close() } catch {} process.exit(1) }, 240000)
+// Watchdog: three journeys each do a reload + boot wait; 240s ceiling (pool per-target budget is 8min).
+// 2026-10-26 (W12 Fix 2): process.exit used to fire directly, SKIPPING the tests' finally
+// cleanup sweeps and leaking seeded rows/settings into up to 8 downstream pool targets on a
+// slow (not broken) journey. Each test registers its best-effort cleanup below
+// (registerCleanup); the watchdog races it against a 5s grace before exiting.
+let cleanupFn = null
+const registerCleanup = fn => { cleanupFn = fn }
+const watchdog = setTimeout(async () => {
+  console.error('E2E watchdog forced exit (counted as failure)')
+  try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
+  try { ws?.close() } catch {}
+  process.exit(1)
+}, 240000)
 watchdog.unref?.()
 process.on('exit', () => { try { ws?.close() } catch {} })
 
@@ -141,6 +152,27 @@ test('J8: today overload badge counts ONLY today (2+3 est) not overdue backlog; 
   const P = 'jr8_'
   const created = []
   let origThreshold = null
+  // W12 2026-10-26: the sweep is a named, REGISTERED cleanup — the watchdog races it (5s grace)
+  // before force-exiting so a slow journey cannot leak rows/settings into later pool targets.
+  const cleanup = async () => {
+    // Self-cleanup: hard-delete every row we created, drop our estimate meta keys, restore the threshold
+    if (created.length) {
+      await evalAwait(`(async()=>{await window.todoAPI.dbCall('hardDeleteMany',${JSON.stringify(created)});return 'ok'})()`).catch(() => {})
+      for (const tid of ['a1', 'a2']) await evalAwait(`window.todoAPI.dbCall('deleteMeta','tomatoEstimateState:${P}${tid}')`).catch(() => {})
+      // LS reactive cache must be swept too — the DB meta delete alone leaves our ids inside the
+      // localStorage tomatoEstimateState blob for every later pool target
+      await evalAwait(`(()=>{try{const c=JSON.parse(localStorage.getItem('tomatoEstimateState')||'{}');for(const k of Object.keys(c))if(k.startsWith('${P}'))delete c[k];localStorage.setItem('tomatoEstimateState',JSON.stringify(c));localStorage.setItem('tomatoEstimateStateAt',String(Date.now()))}catch(e){}return 'ok'})()`).catch(() => {})
+    }
+    if (origThreshold !== null && origThreshold !== 10) {
+      await evalAwait(`(async()=>{await (${STORE_Q}).dispatch('settings/update',{dailyLoadWarnThreshold:${JSON.stringify(origThreshold)}});return 'ok'})()`).catch(() => {})
+    }
+    await reloadTodos().catch(() => {})
+    const left = await evalAwait(`window.todoAPI.dbCall('getAll',{}).then(rs=>rs.filter(t=>t.taskId&&t.taskId.startsWith('${P}')).length)`).catch(() => -1)
+    assert.equal(left, 0, 'J8 cleanup left rows behind (would pollute later targets)')
+    const badge3 = await evalAwait(`(()=>{const w=document.querySelector('.day-rail .dr-load-warn');return w?w.textContent.trim():null})()`).catch(() => 'eval-error')
+    assert.equal(badge3, null, `overload badge should disappear after cleanup, got "${badge3}"`)
+  }
+  registerCleanup(cleanup)
   try {
     await gotoToday()
     // Deterministic threshold: the journey pins 10 (the default) and restores whatever it was.
@@ -200,22 +232,7 @@ test('J8: today overload badge counts ONLY today (2+3 est) not overdue backlog; 
     const badge2 = await waitFor(`(()=>{const w=document.querySelector('.day-rail .dr-load-warn');return w?w.textContent.trim():null})()`, 15, 500)
     assert.ok(badge2 && /11\s*\/\s*10/.test(badge2), `overload badge should read "11/10" once planned (11) > threshold (10), got "${badge2}"`)
   } finally {
-    // Self-cleanup: hard-delete every row we created, drop our estimate meta keys, restore the threshold
-    if (created.length) {
-      await evalAwait(`(async()=>{await window.todoAPI.dbCall('hardDeleteMany',${JSON.stringify(created)});return 'ok'})()`).catch(() => {})
-      for (const tid of ['a1', 'a2']) await evalAwait(`window.todoAPI.dbCall('deleteMeta','tomatoEstimateState:${P}${tid}')`).catch(() => {})
-      // LS reactive cache must be swept too — the DB meta delete alone leaves our ids inside the
-      // localStorage tomatoEstimateState blob for every later pool target
-      await evalAwait(`(()=>{try{const c=JSON.parse(localStorage.getItem('tomatoEstimateState')||'{}');for(const k of Object.keys(c))if(k.startsWith('${P}'))delete c[k];localStorage.setItem('tomatoEstimateState',JSON.stringify(c));localStorage.setItem('tomatoEstimateStateAt',String(Date.now()))}catch(e){}return 'ok'})()`).catch(() => {})
-    }
-    if (origThreshold !== null && origThreshold !== 10) {
-      await evalAwait(`(async()=>{await (${STORE_Q}).dispatch('settings/update',{dailyLoadWarnThreshold:${JSON.stringify(origThreshold)}});return 'ok'})()`).catch(() => {})
-    }
-    await reloadTodos().catch(() => {})
-    const left = await evalAwait(`window.todoAPI.dbCall('getAll',{}).then(rs=>rs.filter(t=>t.taskId&&t.taskId.startsWith('${P}')).length)`).catch(() => -1)
-    assert.equal(left, 0, 'J8 cleanup left rows behind (would pollute later targets)')
-    const badge3 = await evalAwait(`(()=>{const w=document.querySelector('.day-rail .dr-load-warn');return w?w.textContent.trim():null})()`).catch(() => 'eval-error')
-    assert.equal(badge3, null, `overload badge should disappear after cleanup, got "${badge3}"`)
+    await cleanup()
   }
 })
 
@@ -223,6 +240,17 @@ test('J9: timeline plan chip — drag task onto an hour slot, remove via chip X,
   const P = 'jr9_'
   const taskId = P + 'chip'
   let chipId = null
+  // W12 2026-10-26: registered best-effort cleanup for the watchdog (see J8's cleanup comment)
+  const cleanup = async () => {
+    await evalAwait(`window.todoAPI.dbCall('planAll',[]).then(rs=>{const ids=rs.filter(x=>x.taskId==='${taskId}').map(x=>x.id);return ids.length?window.todoAPI.dbCall('planRemoveIds',ids):0})`).catch(() => {})
+    await evalAwait(`window.todoAPI.dbCall('hardDeleteMany',['${taskId}'])`).catch(() => {})
+    await reloadTodos().catch(() => {})
+    const leftTask = await evalAwait(`window.todoAPI.dbCall('getAll',{}).then(rs=>rs.filter(t=>t.taskId==='${taskId}').length)`).catch(() => -1)
+    const leftChip = await evalAwait(`window.todoAPI.dbCall('planAll',[]).then(rs=>rs.filter(x=>x.taskId==='${taskId}').length)`).catch(() => -1)
+    assert.equal(leftTask, 0, 'J9 cleanup left the task row behind')
+    assert.equal(leftChip, 0, 'J9 cleanup left the plan chip row behind')
+  }
+  registerCleanup(cleanup)
   try {
     await gotoToday()
     // Seed one today task through the DB, reload the store so the rail's task pool has it
@@ -272,19 +300,32 @@ test('J9: timeline plan chip — drag task onto an hour slot, remove via chip X,
     const rowBack = await waitFor(`window.todoAPI.dbCall('planAll',[]).then(rs=>!!rs.find(x=>x.taskId==='${taskId}'))`, 10, 400)
     assert.ok(rowBack, 'plan_chips row not restored in the DB after undo')
   } finally {
-    await evalAwait(`window.todoAPI.dbCall('planAll',[]).then(rs=>{const ids=rs.filter(x=>x.taskId==='${taskId}').map(x=>x.id);return ids.length?window.todoAPI.dbCall('planRemoveIds',ids):0})`).catch(() => {})
-    await evalAwait(`window.todoAPI.dbCall('hardDeleteMany',['${taskId}'])`).catch(() => {})
-    await reloadTodos().catch(() => {})
-    const leftTask = await evalAwait(`window.todoAPI.dbCall('getAll',{}).then(rs=>rs.filter(t=>t.taskId==='${taskId}').length)`).catch(() => -1)
-    const leftChip = await evalAwait(`window.todoAPI.dbCall('planAll',[]).then(rs=>rs.filter(x=>x.taskId==='${taskId}').length)`).catch(() => -1)
-    assert.equal(leftTask, 0, 'J9 cleanup left the task row behind')
-    assert.equal(leftChip, 0, 'J9 cleanup left the plan chip row behind')
+    await cleanup()
   }
 })
 
 test('J10: statistics reflect seeded today focus minutes; a settings boolean flip persists across reload', { skip: !available || !isolated }, async () => {
   const tIds = ['tmt_jr10_a', 'tmt_jr10_b']
   let origDevMode = null
+  // W12 2026-10-26: registered best-effort cleanup for the watchdog (see J8's cleanup comment)
+  const cleanup = async () => {
+    // Restore: original developer mode, remove the seeded ledger rows
+    if (origDevMode !== null) {
+      await evalAwait(`(async()=>{await (${STORE_Q}).dispatch('settings/update',{developerMode:${origDevMode === true}});return 'ok'})()`).catch(() => {})
+      // W11 2026-10-26: the restore used to sit in a bare .catch(()=>{}) with NO verification —
+      // a failed restore leaves developerMode flipped in db settings for the 4 later pool targets.
+      // Read back and fail loudly on mismatch.
+      const restoredVal = await evalAwait(`(${STORE_Q}).state.settings.developerMode`).catch(() => null)
+      assert.equal(restoredVal, origDevMode === true, `J10 restore FAILED: developerMode is ${restoredVal} but the pre-journey value was ${origDevMode === true} — this contaminates every later pool target`)
+    }
+    await evalAwait(`window.todoAPI.dbCall('tomatoRemoveByIds',${JSON.stringify(tIds)})`).catch(() => {})
+    await evalAwait(`(async()=>{const st=(${STORE_Q});if(st)await st.dispatch('tomato/recordsReload');return 'ok'})()`).catch(() => {})
+    const left = await evalAwait(`window.todoAPI.dbCall('tomatoAll',[]).then(rs=>rs.filter(r=>${JSON.stringify(tIds)}.includes(r.tomatoId)).length)`).catch(() => -1)
+    assert.equal(left, 0, 'J10 cleanup left seeded ledger rows behind')
+    await send('Runtime.evaluate', { expression: `location.hash='#/todo-list/today'` })
+    await sleep(800)
+  }
+  registerCleanup(cleanup)
   try {
     // Seed today's focus ledger: 30 + 60 = 90 minutes, ended 10 minutes ago (unattached free focus)
     const seeded = await evalAwait(`(async()=>{
@@ -358,21 +399,7 @@ test('J10: statistics reflect seeded today focus minutes; a settings boolean fli
     assert.equal(uiOn, !(origDevMode === true), 'settings UI switch state does not reflect the persisted value after reload')
     await evalAwait(`(()=>{const x=document.querySelector('.modal--settings .modal__close, .modal-container--settings .modal__close');if(x)x.click();return true})()`)
   } finally {
-    // Restore: original developer mode, remove the seeded ledger rows
-    if (origDevMode !== null) {
-      await evalAwait(`(async()=>{await (${STORE_Q}).dispatch('settings/update',{developerMode:${origDevMode === true}});return 'ok'})()`).catch(() => {})
-      // W11 2026-10-26: the restore used to sit in a bare .catch(()=>{}) with NO verification —
-      // a failed restore leaves developerMode flipped in db settings for the 4 later pool targets.
-      // Read back and fail loudly on mismatch.
-      const restoredVal = await evalAwait(`(${STORE_Q}).state.settings.developerMode`).catch(() => null)
-      assert.equal(restoredVal, origDevMode === true, `J10 restore FAILED: developerMode is ${restoredVal} but the pre-journey value was ${origDevMode === true} — this contaminates every later pool target`)
-    }
-    await evalAwait(`window.todoAPI.dbCall('tomatoRemoveByIds',${JSON.stringify(tIds)})`).catch(() => {})
-    await evalAwait(`(async()=>{const st=(${STORE_Q});if(st)await st.dispatch('tomato/recordsReload');return 'ok'})()`).catch(() => {})
-    const left = await evalAwait(`window.todoAPI.dbCall('tomatoAll',[]).then(rs=>rs.filter(r=>${JSON.stringify(tIds)}.includes(r.tomatoId)).length)`).catch(() => -1)
-    assert.equal(left, 0, 'J10 cleanup left seeded ledger rows behind')
-    await send('Runtime.evaluate', { expression: `location.hash='#/todo-list/today'` })
-    await sleep(800)
+    await cleanup()
   }
 })
 

@@ -54,8 +54,19 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
   }
 }
 
-// Watchdog: WS handles keep the event loop alive; force-exit after 120s no matter what
-const watchdog = setTimeout(() => { console.error('J-TODO-CORE watchdog forced exit (counted as failure)'); try { ws?.close() } catch {} process.exit(1) }, 120000)
+// Watchdog: WS handles keep the event loop alive; force-exit after 120s no matter what.
+// 2026-10-26 (W12 Fix 2): process.exit used to fire directly, SKIPPING the tests' finally
+// cleanup sweeps and leaking seeded todo rows into up to 8 downstream pool targets on a slow
+// (not broken) journey. Each test registers its best-effort cleanup below (registerCleanup);
+// the watchdog races it against a 5s grace before exiting.
+let cleanupFn = null
+const registerCleanup = fn => { cleanupFn = fn }
+const watchdog = setTimeout(async () => {
+  console.error('J-TODO-CORE watchdog forced exit (counted as failure)')
+  try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
+  try { ws?.close() } catch {}
+  process.exit(1)
+}, 120000)
 watchdog.unref?.()
 process.on('exit', () => { try { ws?.close() } catch {} })
 
@@ -72,13 +83,19 @@ const evalJson = async expression => {
   ])
   return r ? JSON.parse(r.result?.result?.value ?? 'null') : null
 }
-// Same as evalJson but returns the awaited value itself (DB rows via todoAPI.dbCall need awaitPromise)
+// Await-style eval. 2026-10-26 (W12 Fix 3): this used to be a byte-for-byte duplicate of the
+// OLD silent-null evalJson — it swallowed page exceptions and returned null on timeout, so a
+// failed hardCleanup no-op'd silently (j-habit-moment had already fixed the exact same hole;
+// the cleanup-verification doctrine was inconsistent between sibling journey files). Now it
+// surfaces exceptionDetails like j-habit's evalAwait does.
 const evalAwait = async expression => {
   const r = await Promise.race([
-    send('Runtime.evaluate', { expression: `(async () => JSON.stringify(await (${expression})))()`, returnByValue: true, awaitPromise: true }),
+    send('Runtime.evaluate', { expression: `(${expression})`, returnByValue: true, awaitPromise: true }),
     sleep(10000).then(() => null)
   ])
-  return r ? JSON.parse(r.result?.result?.value ?? 'null') : null
+  if (!r) return null
+  if (r.exceptionDetails) throw new Error('page eval failed: ' + ((r.exceptionDetails.exception?.description || r.exceptionDetails.text) + '').slice(0, 300))
+  return r.result?.result?.value ?? null
 }
 // Poll until a DOM/DB probe turns truthy (bounded retries; the probe result is returned for failure detail)
 const until = async (expression, tries = 12, gap = 400) => {
@@ -113,6 +130,19 @@ const hardCleanup = async ids => {
   if (!ids || !ids.length) return 0
   await evalAwait(`window.todoAPI.dbCall('hardDeleteMany', ${JSON.stringify(ids)})`)
   await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('todo/computeViews'); return true })()`)
+  // 2026-10-26 (W12 Fix 3): post-cleanup verification — the old silent-null evalAwait made a
+  // failed hardDeleteMany a silent no-op (null swallowed the page exception), leaking rows into
+  // later pool targets (j-rail-stats J8 asserts today === 2 exactly). Re-query BOTH live and
+  // binned rows and fail loudly naming the leaked ids.
+  const leaked = []
+  for (const [label, q] of [['live', dbLive], ['binned', dbBinned]]) {
+    const rows = await q().catch(() => [])
+    for (const tid of ids) if ((rows || []).some(r => r.taskId === tid)) leaked.push(`${label}:${tid}`)
+  }
+  if (leaked.length) {
+    console.error(`[j-todo-core] LEAKED ROWS after hardCleanup: ${leaked.join(', ')} — they will pollute every later pool target`)
+    assert.fail(`hardCleanup failed: seeded todo rows are still present in the DB after hardDeleteMany: ${leaked.join(', ')}`)
+  }
   return ids.length
 }
 // Real click on an element matched by a JS predicate inside the page (bubbling MouseEvent, as a user's click lands)
@@ -158,6 +188,29 @@ test('J-precondition: connect CDP, pin en-US locale, dismiss onboarding overlays
 
 test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean title (W10 2026-10-26 pin: it used to silently schedule TODAY with date words left in the title)', { skip: !available || !isolated }, async () => {
   const createdIds = []
+  // W12 2026-10-26: the sweep is a named, REGISTERED cleanup — the watchdog races it (5s grace)
+  // before force-exiting so a slow journey cannot leak rows into later pool targets.
+  const cleanup = async () => {
+    // W11 2026-10-26: sweep by taskContent REGARDLESS of dayStart. Filtering on
+    // dayStart === TOMORROW0 here made cleanup conditional on the very behavior under test —
+    // when the pinned W10 bug recurs (row lands on TODAY), the sweep no-ops and the "meeting"
+    // row leaks into later pool targets (j-rail-stats J8 asserts today === 2 exactly, so a
+    // leaked row shows up as a MISLEADING second red far away from the real regression).
+    const rows = await dbLive().catch(() => [])
+    const binned = await dbBinned().catch(() => [])
+    const mine = [...(rows || []), ...(binned || [])]
+      .filter(r => r.taskContent === 'meeting' || r.taskContent.startsWith('meeting '))
+      .map(r => r.taskId)
+    // Loud regression signal: a swept row whose dayStart is not TOMORROW0 IS the W10 bug
+    // resurfacing as a leak — never let it pass silently.
+    const offDay = [...(rows || []), ...(binned || [])]
+      .filter(r => (r.taskContent === 'meeting' || r.taskContent.startsWith('meeting ')) && r.dayStart !== TOMORROW0)
+    for (const r of offDay) {
+      console.error(`[j-todo-core][W10-REGRESSION-SIGNAL] cleanup swept a "meeting" row scheduled for dayStart=${r.dayStart} (expected TOMORROW0=${TOMORROW0}) — the NL-date regression the J1 journey should have caught leaked past the row assertion`)
+    }
+    await hardCleanup([...new Set([...createdIds, ...mine])])
+  }
+  registerCleanup(cleanup)
   try {
     await gotoHash('#/todo-list/today', '.qa-input')
     // Real interaction: type into the quick-add input as the user does
@@ -192,30 +245,20 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
     const onTomorrow = await until(`[...document.querySelectorAll('.td-item .td-title')].some(t => t.textContent.trim() === 'meeting')`, 8, 400)
     assert.ok(onTomorrow, 'the created task is not visible on the tomorrow day view (user cannot see what they just scheduled)')
   } finally {
-    // W11 2026-10-26: sweep by taskContent REGARDLESS of dayStart. Filtering on
-    // dayStart === TOMORROW0 here made cleanup conditional on the very behavior under test —
-    // when the pinned W10 bug recurs (row lands on TODAY), the sweep no-ops and the "meeting"
-    // row leaks into later pool targets (j-rail-stats J8 asserts today === 2 exactly, so a
-    // leaked row shows up as a MISLEADING second red far away from the real regression).
-    const rows = await dbLive().catch(() => [])
-    const binned = await dbBinned().catch(() => [])
-    const mine = [...(rows || []), ...(binned || [])]
-      .filter(r => r.taskContent === 'meeting' || r.taskContent.startsWith('meeting '))
-      .map(r => r.taskId)
-    // Loud regression signal: a swept row whose dayStart is not TOMORROW0 IS the W10 bug
-    // resurfacing as a leak — never let it pass silently.
-    const offDay = [...(rows || []), ...(binned || [])]
-      .filter(r => (r.taskContent === 'meeting' || r.taskContent.startsWith('meeting ')) && r.dayStart !== TOMORROW0)
-    for (const r of offDay) {
-      console.error(`[j-todo-core][W10-REGRESSION-SIGNAL] cleanup swept a "meeting" row scheduled for dayStart=${r.dayStart} (expected TOMORROW0=${TOMORROW0}) — the NL-date regression the J1 journey should have caught leaked past the row assertion`)
-    }
-    await hardCleanup([...new Set([...createdIds, ...mine])])
+    await cleanup()
   }
 })
 
 test('J2 add → complete → enters the today-completed group → un-complete → back to the today group', { skip: !available || !isolated }, async () => {
   const name = 'J2 complete journey ' + Math.random().toString(36).slice(2, 6)
   const ids = []
+  // W12 2026-10-26: registered best-effort cleanup for the watchdog (see registerCleanup comment)
+  const cleanup = async () => {
+    const rows = await dbLive().catch(() => [])
+    const mine = (rows || []).filter(r => ids.includes(r.taskId)).map(r => r.taskId)
+    await hardCleanup([...new Set([...ids, ...mine])])
+  }
+  registerCleanup(cleanup)
   try {
     const seeded = await seedTask(name)
     assert.ok(seeded && seeded.taskId, 'seeding J2 task failed')
@@ -247,15 +290,20 @@ test('J2 add → complete → enters the today-completed group → un-complete �
     })()`, 10, 500)
     assert.ok(backInToday, 'after un-completing the task did not return to the today uncompleted group (or still lingers in the completed group)')
   } finally {
-    const rows = await dbLive().catch(() => [])
-    const mine = (rows || []).filter(r => ids.includes(r.taskId)).map(r => r.taskId)
-    await hardCleanup([...new Set([...ids, ...mine])])
+    await cleanup()
   }
 })
 
 test('J3 soft delete → recycle bin shows the task → restore → back in the list', { skip: !available || !isolated }, async () => {
   const name = 'J3 recycle journey ' + Math.random().toString(36).slice(2, 6)
   const ids = []
+  // W12 2026-10-26: registered best-effort cleanup for the watchdog (see registerCleanup comment)
+  const cleanup = async () => {
+    const all = [...(await dbLive().catch(() => [])), ...(await dbBinned().catch(() => []))]
+    const mine = all.filter(r => ids.includes(r.taskId)).map(r => r.taskId)
+    await hardCleanup([...new Set([...ids, ...mine])])
+  }
+  registerCleanup(cleanup)
   try {
     const seeded = await seedTask(name)
     assert.ok(seeded && seeded.taskId, 'seeding J3 task failed')
@@ -286,9 +334,7 @@ test('J3 soft delete → recycle bin shows the task → restore → back in the 
     const backOnList = await until(`[...document.querySelectorAll('.td-item .td-title')].some(t => t.textContent.trim() === ${JSON.stringify(name)})`, 10, 400)
     assert.ok(backOnList, 'the restored task is not visible back on the today list')
   } finally {
-    const all = [...(await dbLive().catch(() => [])), ...(await dbBinned().catch(() => []))]
-    const mine = all.filter(r => ids.includes(r.taskId)).map(r => r.taskId)
-    await hardCleanup([...new Set([...ids, ...mine])])
+    await cleanup()
   }
 })
 
@@ -297,6 +343,13 @@ test('J4 edit panel rename saves → list reflects the new title → search view
   const keyword = 'J4editkw' + Math.random().toString(36).slice(2, 6)
   const newName = 'J4 edited ' + keyword
   const ids = []
+  // W12 2026-10-26: registered best-effort cleanup for the watchdog (see registerCleanup comment)
+  const cleanup = async () => {
+    const rows = await dbLive().catch(() => [])
+    const mine = (rows || []).filter(r => ids.includes(r.taskId)).map(r => r.taskId)
+    await hardCleanup([...new Set([...ids, ...mine])])
+  }
+  registerCleanup(cleanup)
   try {
     const seeded = await seedTask(name)
     assert.ok(seeded && seeded.taskId, 'seeding J4 task failed')
@@ -341,9 +394,7 @@ test('J4 edit panel rename saves → list reflects the new title → search view
     })()`, 14, 500)
     assert.ok(searched, `the search view does not find the renamed task by keyword "${keyword}"`)
   } finally {
-    const rows = await dbLive().catch(() => [])
-    const mine = (rows || []).filter(r => ids.includes(r.taskId)).map(r => r.taskId)
-    await hardCleanup([...new Set([...ids, ...mine])])
+    await cleanup()
   }
 })
 

@@ -325,14 +325,14 @@ function runnerFileArgs () {
 // gate's tap file), which would truncate the composed plan mid-stream.
 const emitSync = buf => { try { writeSync(1, buf) } catch { /* stdout already closed */ } }
 // `live:false` buffers the stdout pipe-through (bytes still accumulate in `out` for the
-// downstream consumers) — used for passes whose TAP may be REBUILT (the composed
-// full-corpus stream after flake-retry absorption), so the final stdout carries exactly
-// ONE coherent plan instead of pass1 raw + composed concatenated (double-plan bug
-// 2026-10-26: the composed stream was assigned to r.stdout but never emitted at all,
-// while pass1+retry bytes had already been piped through live).
-// Tradeoff, accepted deliberately: during a buffered pass the stdout/tap-file stays empty
-// (no live growth) — stderr diagnostics and the failure-path emissions below keep every
-// terminal state named.
+// downstream consumers). 2026-10-26 W12 contract: only the RETRY/rerun passes are buffered —
+// their TAP may be REBUILT (composed full-corpus stream) or APPENDED after pass1's raw
+// live-streamed bytes, and parseSummary anchors the LAST plan, so pass1 raw above stays as
+// evidence while the appended/composed stream is authoritative. Pass 1 itself streams live
+// (see the spawn site below for why buffered pass1 was reverted).
+// Tradeoff, accepted deliberately: during a buffered pass its own bytes appear only at the
+// final emission — stderr diagnostics and the failure-path emissions keep every terminal
+// state named.
 function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
   return new Promise(resolve => {
     // NODE_TEST_CONTEXT must NOT leak into the runner: when run-all itself is spawned from a
@@ -367,10 +367,18 @@ function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
   })
 }
 
-// Pass 1 is spawned BUFFERED (live:false): if the flake-retry path composes a full-corpus
-// TAP, that composed stream must be the only thing on stdout (exactly-once, one coherent
-// plan). Every non-composing terminal path below emits the buffered bytes exactly once.
-let r = await spawnRunner(null, { live: false })
+// Pass 1 is spawned LIVE again (2026-10-26 W12 Fix 4). History: it was spawned buffered
+// (live:false) so the composed flake-retry TAP could be the only stream on stdout (exactly-once
+// plan). That buffered pass1 meant NOTHING reached the gate's tap file until the child exited —
+// a hung/killed runner reproduced the 2026-10-22 "0-byte TAP, unattributable" incident that
+// streaming was built to prevent (cli/check-test-summary.cjs documents that contract: the tap
+// file must grow live). New contract, honest about the tradeoff: pass1's raw bytes stream live
+// into stdout/tap-file as EVIDENCE; when the flake-retry path composes a full-corpus TAP, the
+// composed stream is APPENDED after a loud separator line and is the authoritative record —
+// cli/check-test-summary.cjs parseSummary anchors summary parsing on the LAST `1..N` plan line
+// (verified 2026-10-26), so consumers read only the composed plan while the raw pass1 above it
+// stays on record. Retry passes that may be composed/appended stay buffered ({ live: false }).
+let r = await spawnRunner()
 // Native-crash retry (2026-10-10 nightly R2b): on Windows, per-file child processes die at
 // teardown to a libuv assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c)
 // surfacing as exitCode 3221226505 (0xC0000409) — a Node bug, NOT a test failure, and the
@@ -391,11 +399,10 @@ const onlyNativeCrash = tap => {
 }
 if (r.status !== 0 && r.stdout && onlyNativeCrash(String(r.stdout))) {
   console.error('[run-all] native teardown crash(s) (0xC0000409 libuv async assert) were the only failures — retrying the suite once (CI rerun doctrine)')
-  // The rerun is BUFFERED (live:false), not live-streamed: the flake-retry branch downstream
-  // re-emits `r.stdout` on its red paths, and with a live rerun those bytes were pass1's
-  // ALREADY-EMITTED TAP (double plan in the gate's tap file). Buffered, the rerun becomes the
-  // single authoritative stream for every downstream branch — pass1's crash TAP is superseded
-  // and the final exactly-once emission owns the rerun's bytes (one coherent plan).
+  // The rerun stays BUFFERED (live:false), not live-streamed (2026-10-26 W12): pass1's raw
+  // crash TAP is already on stdout (pass1 streams live) as evidence; the buffered rerun becomes
+  // the authoritative LAST plan (parseSummary anchors the last plan) — every downstream branch
+  // emits its bytes exactly once and nothing double-plans.
   r = await spawnRunner(null, { live: false })
 }
 // Flake-retry per FILE (2026-10-24, generalizes the rerun doctrine above): under gate
@@ -555,11 +562,20 @@ if (r.status !== 0 && !r.error && r.stdout) {
         const notOkInRetry = rt.blocks.filter(b => /^not ok \d+/.test(b[0])).length
         // pass1's cancel count rides the kept corpus (retried files' cancels cannot be
         // separated block-wise; the gate reds on any nonzero cancelled either way)
+        // W12 2026-10-26 (Fix 5): the RETRY pass's own cancelled count was invisible — a
+        // cancellation inside a retried file's retry pass occupied a slot and the composed
+        // summary counted it green. Both tails are parsed now; composition is REFUSED on any
+        // nonzero (mirroring the keptNotOk guard) and the real sum is emitted otherwise.
         const cancelled1 = Number((/# cancelled\s+(\d+)/.exec(p1.tail.join('\n')) || [])[1] || 0)
-        if (planOk && keptNotOk === 0 && notOkInRetry === 0 && rt.blocks.length > 0) {
+        const cancelled2 = Number((/# cancelled\s+(\d+)/.exec(rt.tail.join('\n')) || [])[1] || 0)
+        if (planOk && keptNotOk === 0 && notOkInRetry === 0 && cancelled1 === 0 && cancelled2 === 0 && rt.blocks.length > 0) {
           const all = renumber([...kept, ...rt.blocks])
           const skips = all.filter(b => /# (SKIP|skip)/.test(b.join('\n'))).length
           const composed = [
+            // W12 2026-10-26 (Fix 4): pass1 streams live, so the gate's tap file already holds
+            // its raw bytes when this composed stream is appended. The separator marks the
+            // boundary: consumers anchor the LAST plan (raw pass1 above is evidence).
+            '# COMPOSED-TAP-FOLLOWS: consumers anchor the LAST plan (raw pass1 above is evidence)',
             ...p1.head,
             ...all.map(b => b.join('\n')),
             `1..${all.length}`,
@@ -570,8 +586,9 @@ if (r.status !== 0 && !r.error && r.stdout) {
             `# fail ${keptNotOk + notOkInRetry}`,
             `# skip ${skips}`,
             // REAL counts (2026-10-26): the hardcoded `# cancelled 0` masked kept cancel
-            // blocks; pass1's summary count is carried through so the gate sees truth.
-            `# cancelled ${cancelled1}`,
+            // blocks. W12 Fix 5: the retry pass's cancelled count rides along too — the sum is
+            // emitted, and any nonzero refuses composition entirely (guard above).
+            `# cancelled ${cancelled1 + cancelled2}`,
             `# COMPOSED after flake-retry absorption (${failedFiles.length} file(s) re-ran green; pass1 blocks for those files replaced by retry blocks)`,
             `# flake-absorbed-at ${new Date().toISOString()}`
           ].join('\n')
@@ -584,6 +601,21 @@ if (r.status !== 0 && !r.error && r.stdout) {
           }])
           // r.stdout = the ONE coherent composed stream; final emission below writes it once.
           r = { status: 0, stdout: composed, stderr: r.stderr, streamed: false }
+        } else if (cancelled1 > 0 || cancelled2 > 0) {
+          // W12 2026-10-26 (Fix 5): cancelled test(s) inside pass1's kept corpus OR inside a
+          // retried file's retry pass — composition is REFUSED (mirrors the keptNotOk guard).
+          // A cancellation is neither pass nor fail; folding the retry green over it would
+          // count an occupied slot as a clean pass. The gate reds on `# cancelled > 0`.
+          console.error(`[run-all] ⚑FLAKY absorption REFUSED: cancelled test(s) detected (pass1=${cancelled1}, retry=${cancelled2}) — a cancellation is neither pass nor fail, composition skipped; raw pass1+retry TAP is the record`)
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: false, deepPool: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            cancelled1, cancelled2,
+            note: 'cancelled test(s) in pass1/retry — absorption refused, composition skipped'
+          }])
+          console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
+          emitSync(retry.stdout || '')
+          // r stays pass1 (status !== 0) → red exit via the final emission + status
         } else if (keptNotOk > 0) {
           // Kept not-ok outside the retried file set: real failures the retry never covered.
           // Refuse composition and fall through to the RED path — pass1's exit stands.
@@ -598,19 +630,24 @@ if (r.status !== 0 && !r.error && r.stdout) {
           emitSync(retry.stdout || '')
           // r stays pass1 (status !== 0) → red exit via the final emission + status
         } else {
-          console.error(`[run-all] ⚑FLAKY absorbed but TAP composition skipped (parse confidence low: plan=${planOk} keptNotOk=${keptNotOk} retryNotOk=${notOkInRetry}) — raw pass1+retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
+          console.error(`[run-all] ⚑FLAKY absorbed but TAP composition skipped (parse confidence low: plan=${planOk} keptNotOk=${keptNotOk} retryNotOk=${notOkInRetry} cancelled=${cancelled1}/${cancelled2}) — raw pass1+retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
           console.error('[run-all] ⚑FLAKY ledger still records this absorption')
           await recordFlake([{
             at: new Date().toISOString(), absorbed: true, deepPool: false, composed: false,
             files: failedFiles.map(f => path.relative(appRoot, f)),
             note: 'absorbed; ratchet saw partial corpus (composition guard failed)'
           }])
-          r = { status: 0, stdout: Buffer.concat([r.stdout, retry.stdout]), stderr: r.stderr, streamed: false }
+          // W12 2026-10-26 (Fix 4): pass1's raw bytes are ALREADY on stdout (live pass1) —
+          // emitting Buffer.concat([r.stdout, retry.stdout]) again would double-plan. Only the
+          // retry tail is appended after a separator, so the LAST plan (the retry's) stays
+          // what parseSummary anchors.
+          r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + (retry.stdout || ''), stderr: r.stderr, streamed: false }
         }
       }
     } else {
       console.error('[run-all] flake-retry did NOT absorb — real red, retry TAP below is authoritative')
-      emitSync(r.stdout) // pass1 raw TAP precedes the authoritative retry TAP
+      // W12 2026-10-26 (Fix 4): pass1's raw TAP is already on stdout from the live pass1 —
+      // emitting r.stdout here would double-plan; only the authoritative retry TAP is appended.
       r = retry
     }
   }
@@ -672,9 +709,11 @@ try {
     console.error(`[run-all] per-test timeout ceiling: ${TEST_TIMEOUT_MS}ms; slowest observed test: ${max.toFixed(0)}ms (${(TEST_TIMEOUT_MS / max).toFixed(1)}x margin)`)
   }
 } catch { /* diagnostics only — never mask the runner's real exit status */ }
-// Exactly-once stdout emission (2026-10-26 composed-TAP contract): passes that may be
-// composed are spawned buffered (live:false), so r.stdout here is the ONE authoritative
-// stream — the raw TAP for non-composing runs, the composed full-corpus TAP after
-// absorption. Emit it synchronously (flush before process.exit truncates a pipe).
+// Exactly-once stdout emission (updated 2026-10-26 W12 Fix 4): pass1 streams LIVE (diagnostics
+// must reach the gate's tap file while it runs — 0-byte-TAP contract). The retry/rerun passes
+// are buffered, so r.stdout here carries exactly what those passes own: the raw retry/rerun
+// TAP, the composed full-corpus TAP after absorption, or the appended retry tail — each
+// preceded by a loud separator; pass1's raw live-streamed bytes above are evidence. Emitted
+// synchronously (flush before process.exit truncates a pipe).
 if (!r.streamed && r.stdout && r.stdout.length) emitSync(r.stdout)
 process.exit(r.status ?? 1)

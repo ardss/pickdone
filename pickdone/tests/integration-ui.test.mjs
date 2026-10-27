@@ -120,15 +120,15 @@ async function startApp () {
     PORT = await pickFreePort()
     CDP = `http://127.0.0.1:${PORT}`
     lastSeen = '(no CDP targets observed)'
-    fs.appendFileSync(appCwd + '/tests/.artifacts/it-app.log', `[it] CDP attempt ${attempt}/3 port=${PORT}\n`)
+    fs.appendFileSync(IT_APP_LOG, `[it] CDP attempt ${attempt}/3 port=${PORT}\n`)
     child = spawn(ELECTRON, ['.', '--no-focus', ...uncTestFlags, '--remote-debugging-port=' + PORT], {
       cwd: appCwd,
       env: { ...process.env, TODO_USER_DATA_DIR: tmpDir, PICKDONE_MULTI: '1' }, // scoped test lock avoids colliding with any running user instance
-      stdio: ['ignore', fs.openSync(appCwd + '/tests/.artifacts/it-app.log', 'a'), fs.openSync(appCwd + '/tests/.artifacts/it-app.log', 'a')],
+      stdio: ['ignore', fs.openSync(IT_APP_LOG, 'a'), fs.openSync(IT_APP_LOG, 'a')],
       detached: false
     })
-    child.once('error', e => fs.appendFileSync(appCwd + '/tests/.artifacts/it-app.log', '[it] spawn error: ' + e.message + '\n'))
-    child.once('exit', (code, signal) => fs.appendFileSync(appCwd + '/tests/.artifacts/it-app.log', '[it] child exit code=' + code + ' signal=' + signal + '\n'))
+    child.once('error', e => fs.appendFileSync(IT_APP_LOG, '[it] spawn error: ' + e.message + '\n'))
+    child.once('exit', (code, signal) => fs.appendFileSync(IT_APP_LOG, '[it] child exit code=' + code + ' signal=' + signal + '\n'))
     connected = await connect()
     if (connected) break
     failedPorts.push(`${PORT}: ${lastSeen}; exit=${child.exitCode}`)
@@ -169,8 +169,17 @@ async function stopApp () {
   await sleep(2500) // wait for the process tree to exit and SQLite WAL to flush
 }
 
+// 2026-10-26 (W12 Fix 6): the app log used to be appended forever ('a' everywhere, no
+// truncation, no cap) and grew unboundedly across runs. It is truncated ONCE at the start of
+// this run (before-hook) — within a run the 'a' appends stay, because the 3 retry attempts
+// and the restart scenario write into the same file and each other's diagnostics matter.
+const IT_APP_LOG = appCwd + '/tests/.artifacts/it-app.log'
+
 test.before(async () => {
   try {
+  // W12 2026-10-26: truncate the per-run app log at run start (bounded artifact growth;
+  // see the IT_APP_LOG comment above). Best-effort: a read-only .artifacts dir must not red the suite.
+  try { fs.mkdirSync(path.dirname(IT_APP_LOG), { recursive: true }); fs.writeFileSync(IT_APP_LOG, '') } catch {}
   // Precondition: language-pack chunks must be syntactically valid (a parallel session once wrote half-finished en-US-C/zh-CN-C/D files, taking down the whole renderer page;
   // symptom: "every integration scenario fails" - the real culprit must be reported first, not letting 11 scenarios collectively fake-fall)
   const localesDir = path.join(appCwd, 'renderer', 'js', 'i18n', 'locales')

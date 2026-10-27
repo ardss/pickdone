@@ -55,8 +55,19 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
   }
 }
 
-// Watchdog: WS handles keep the event loop alive; force-exit after 120s no matter what
-const watchdog = setTimeout(() => { console.error('E2E watchdog forced exit (counted as failure)'); try { ws?.close() } catch {} process.exit(1) }, 120000)
+// Watchdog: WS handles keep the event loop alive; force-exit after 120s no matter what.
+// 2026-10-26 (W12 Fix 2): process.exit used to fire directly, SKIPPING the tests' finally
+// cleanup sweeps and leaking seeded habit/moment artifacts into up to 8 downstream pool
+// targets on a slow (not broken) journey. Each test registers its best-effort cleanup below
+// (registerCleanup); the watchdog races it against a 5s grace before exiting.
+let cleanupFn = null
+const registerCleanup = fn => { cleanupFn = fn }
+const watchdog = setTimeout(async () => {
+  console.error('E2E watchdog forced exit (counted as failure)')
+  try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
+  try { ws?.close() } catch {}
+  process.exit(1)
+}, 120000)
 watchdog.unref?.()
 process.on('exit', () => { try { ws?.close() } catch {} })
 
@@ -163,6 +174,15 @@ test('Precondition: connect CDP, pin locale, wait for the app to boot', { skip: 
 
 test('J5 habit lifecycle: create -> check in -> record visible -> delete -> Undo restores habit AND its record (W10 P1 pin)', { skip: !available || !isolated }, async () => {
   const name = 'E2E_J5_' + Math.random().toString(36).slice(2, 8)
+  // W12 2026-10-26: the sweep is a named, REGISTERED cleanup — the watchdog races it (5s grace)
+  // before force-exiting so a slow journey cannot leak artifacts into later pool targets.
+  const cleanup = async () => {
+    await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; st.state.habits.habits.filter(x => x.name === ${JSON.stringify(name)}).forEach(x => st.commit('habits/delHabit', x.id)); return 'ok' })()`)
+    await sleep(300)
+    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
+    await verifyBlobCleanup('habit', name)
+  }
+  registerCleanup(cleanup)
   try {
     await evalJson(`location.hash='#/todo-list/habit'`)
     assert.ok(await pollFor(`!!document.querySelector('.habit-add-input:not(.habit-freq-select)')`, 15, 500), 'habit page did not mount')
@@ -276,11 +296,7 @@ test('J5 habit lifecycle: create -> check in -> record visible -> delete -> Undo
     const blobRestored = await pollFor(`window.todoAPI.dbCall('getMeta', 'db.habitsState').then(v => { const b = v ? JSON.parse(v) : null; const h = b && (b.habits||[]).find(x => x.name === ${JSON.stringify(name)}); return h && h.records && h.records[${JSON.stringify('@T2@')}] === true ? 'db-ok' : null })`.replace('@T2@', todayKey), 15, 400)
     assert.equal(blobRestored, 'db-ok', 'undo restored the habit but the check-in record was lost from the durable DB meta row')
   } finally {
-    // self-cleanup: hard-remove the journey habit from store + DB, never pollute later targets
-    await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; st.state.habits.habits.filter(x => x.name === ${JSON.stringify(name)}).forEach(x => st.commit('habits/delHabit', x.id)); return 'ok' })()`)
-    await sleep(300)
-    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
-    await verifyBlobCleanup('habit', name).catch(e => { console.error('[j-habit-moment] J5 cleanup verification failed: ' + e.message); assert.fail(e.message) })
+    await cleanup().catch(e => { console.error('[j-habit-moment] J5 cleanup verification failed: ' + e.message); assert.fail(e.message) })
   }
 })
 
@@ -290,6 +306,14 @@ test('J6 moment (countdown): create with a future date -> correct days-left -> d
   const info = await evalJson(`(() => { const st = (${STORE_Q}); const ts = st.state.todo.todayTimestamp; const d = new Date(ts); d.setDate(d.getDate() + 10); const p = n => String(n).padStart(2, '0'); return { key: d.getFullYear() + '-' + p(d.getMonth()+1) + '-' + p(d.getDate()), diff: 10 } })()`)
   assert.ok(info && info.key, 'could not compute the future date key')
   const expectedDaysText = info.diff + ' days left' // en-US statsB.HabitView.countdownLeft for a countdown
+  // W12 2026-10-26: registered best-effort cleanup for the watchdog (see J5's cleanup comment)
+  const cleanup = async () => {
+    await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; st.state.habits.moments.filter(x => x.name === ${JSON.stringify(name)}).forEach(x => st.commit('habits/delMoment', x.id)); return 'ok' })()`)
+    await sleep(300)
+    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
+    await verifyBlobCleanup('moment', name)
+  }
+  registerCleanup(cleanup)
   try {
     await evalJson(`location.hash='#/todo-list/habit'`)
     assert.ok(await pollFor(`!!document.querySelector('.moment-add')`, 15, 500), 'moment section did not mount')
@@ -352,10 +376,7 @@ test('J6 moment (countdown): create with a future date -> correct days-left -> d
     const blobRestored = await pollFor(`window.todoAPI.dbCall('getMeta', 'db.habitsState').then(v => { const b = v ? JSON.parse(v) : null; return b && (b.moments||[]).some(x => x.name === ${JSON.stringify(name)}) ? 'db-ok' : null })`, 15, 400)
     assert.equal(blobRestored, 'db-ok', 'undo restored the moment card but the durable DB meta row lost it')
   } finally {
-    await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; st.state.habits.moments.filter(x => x.name === ${JSON.stringify(name)}).forEach(x => st.commit('habits/delMoment', x.id)); return 'ok' })()`)
-    await sleep(300)
-    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
-    await verifyBlobCleanup('moment', name).catch(e => { console.error('[j-habit-moment] J6 cleanup verification failed: ' + e.message); assert.fail(e.message) })
+    await cleanup().catch(e => { console.error('[j-habit-moment] J6 cleanup verification failed: ' + e.message); assert.fail(e.message) })
   }
 })
 
@@ -367,6 +388,14 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
   //  - 30-day grid (last30 ends today): yesterday cell .on, today cell off
   //  - month calendar: yesterday cell .checked with a .habit-cal-dot, today cell unchecked
   let habitId = null
+  // W12 2026-10-26: registered best-effort cleanup for the watchdog (see J5's cleanup comment)
+  const cleanup = async () => {
+    await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; if (${JSON.stringify(habitId)}) st.commit('habits/delHabit', ${JSON.stringify(habitId)}); return 'ok' })()`)
+    await sleep(300)
+    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
+    await verifyBlobCleanup('habit', name)
+  }
+  registerCleanup(cleanup)
   try {
     // seed via store commit (allowed seeding path): create daily habit + check in yesterday only
     const seeded = await evalJson(`(() => {
@@ -424,10 +453,7 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
     const blob = await pollFor(`window.todoAPI.dbCall('getMeta', 'db.habitsState').then(vv => { const b = vv ? JSON.parse(vv) : null; const h = b && (b.habits||[]).find(x => x.name === ${JSON.stringify(name)}); return h && h.records && h.records[${JSON.stringify('YK')}] === true && !h.records[${JSON.stringify('TK')}] ? 'db-ok' : null })`.replaceAll('"YK"', JSON.stringify(seeded.yKey)).replaceAll('"TK"', JSON.stringify(todayKey)), 15, 400)
     assert.equal(blob, 'db-ok', 'durable DB meta row does not hold yesterday-only check-in for the seeded habit')
   } finally {
-    await evalJson(`(() => { const st = (${STORE_Q}); if (!st) return 'no-store'; if (${JSON.stringify(habitId)}) st.commit('habits/delHabit', ${JSON.stringify(habitId)}); return 'ok' })()`)
-    await sleep(300)
-    // W11: verify the DURABLE blob, not just the store commit (silent no-op = leak into later targets)
-    await verifyBlobCleanup('habit', name).catch(e => { console.error('[j-habit-moment] J7 cleanup verification failed: ' + e.message); assert.fail(e.message) })
+    await cleanup().catch(e => { console.error('[j-habit-moment] J7 cleanup verification failed: ' + e.message); assert.fail(e.message) })
   }
 })
 

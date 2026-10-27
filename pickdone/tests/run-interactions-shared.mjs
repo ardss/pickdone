@@ -93,7 +93,11 @@ async function bootInstance () {
   CDP = `http://127.0.0.1:${port}`
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-shared-'))
   fs.mkdirSync(path.join(appCwd, 'tests', '.artifacts'), { recursive: true })
-  const logFile = path.join(appCwd, 'tests', '.artifacts', 'smoke-shared-pool-' + process.pid + '.log')
+  // 2026-10-26 (W12 artifact hygiene): the log used to carry a per-run pid suffix
+  // (`smoke-shared-pool-<pid>.log`) and was never reaped — every run left a fresh file in
+  // tests/.artifacts forever. Single reused file, opened 'a': bounded to one file, and each
+  // run appends below the previous run's bytes for forensics.
+  const logFile = path.join(appCwd, 'tests', '.artifacts', 'smoke-shared-pool.log')
   const env = { ...process.env, TODO_USER_DATA_DIR: tmpDir, TODO_CDP: CDP, TODO_SYNC_PORT: String(syncPort) }
   delete env.ELECTRON_RUN_AS_NODE // harness/IDE hosts export it → electron boots as plain Node (check-all strips centrally; belt-and-braces here)
   child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + port,
@@ -127,7 +131,16 @@ async function instanceDead () {
 }
 
 /** Page-level reset between targets: clear leaked emulation, reload, wait for the interactive probe. */
+// 2026-10-26 (W12 Fix 1): the WHOLE reset is now bounded by one 60s deadline. Previously the
+// readiness loop alone ran 40 iterations × (500ms sleep + up to 20s CDP send timeout) ≈ 13.7min
+// worst case — entirely OUTSIDE runTarget's 8min budget — while its own comment claimed a 20s
+// budget, so one wedged page starved the whole pool for a quarter hour before failing generically.
+// Every CDP call now races against the REMAINING deadline and a wedged page throws a NAMED
+// SharedPageResetTimeout fast: the target gets its own named red and the pool moves on.
+const RESET_DEADLINE_MS = 60000
 async function resetSharedPage () {
+  const deadline = Date.now() + RESET_DEADLINE_MS
+  const budgetLeft = () => Math.max(1000, Math.min(20000, deadline - Date.now()))
   const list = await (await fetch(CDP + '/json', { signal: AbortSignal.timeout(2000) })).json()
   const page = list.find(t => t.type === 'page' && t.url.includes('index.html') && !t.url.includes('__tomato-float'))
   if (!page) throw new Error('no main page target on the shared instance')
@@ -139,12 +152,12 @@ async function resetSharedPage () {
   const send = (method, params = {}) => new Promise(res => { const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params })) })
   // bounded send: the minimal CDP client above has no socket-level timeout, and a wedged page
   // must fail THIS reset (named) instead of hanging the whole pool outside any per-target budget.
-  // 20s (was 8s): under burst load a CDP round-trip to a LIVE page stalled past 8s and the reset
-  // red'd as "timeout Runtime.enable" (2026-10-23 full gate, both attempts) — a wedged page still
-  // fails named within the 20s probe budget below.
-  const sendT = (method, params = {}, ms = 20000) => Promise.race([
+  // The per-call timeout is clamped to the remaining reset deadline (≤20s, ≥1s floor) — under
+  // burst load a CDP round-trip to a LIVE page stalled past 8s and the reset red'd as "timeout
+  // Runtime.enable" (2026-10-23 full gate, both attempts), so the 20s per-call ceiling stays.
+  const sendT = (method, params = {}) => Promise.race([
     send(method, params),
-    sleep(ms).then(() => { throw new Error('timeout ' + method) })
+    sleep(budgetLeft()).then(() => { throw new Error('timeout ' + method) })
   ])
   try {
     await sendT('Runtime.enable'); await sendT('Page.enable')
@@ -162,7 +175,7 @@ async function resetSharedPage () {
     await sendT('Runtime.evaluate', { expression: `try{localStorage.removeItem('appLocale');localStorage.removeItem('onboardingToursSeen')}catch(e){}`, returnByValue: true })
     await sendT('Page.reload') // plain reload: ignoreCache hangs under the app:// protocol (ui-smoke lesson)
     const probe = `JSON.stringify({ api: !!(window.todoAPI && window.todoAPI.closeRequest), iso: !!(window.todoAPI && window.todoAPI.isDataIsolated) })`
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 40 && deadline - Date.now() > 0; i++) {
       await sleep(500)
       try {
         const r = await sendT('Runtime.evaluate', { expression: probe, returnByValue: true })
@@ -170,7 +183,9 @@ async function resetSharedPage () {
         if (parsed.api && parsed.iso) return true
       } catch { /* document tearing down during reload */ }
     }
-    throw new Error('shared page did not come back interactive within 20s')
+    const err = new Error(`shared page did not come back interactive within the ${RESET_DEADLINE_MS / 1000}s reset deadline`)
+    err.name = 'SharedPageResetTimeout'
+    throw err
   } finally {
     try { ws.close() } catch {}
   }

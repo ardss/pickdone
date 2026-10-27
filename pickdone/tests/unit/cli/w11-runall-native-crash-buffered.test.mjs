@@ -29,11 +29,15 @@ test('run-all: native-crash rerun is spawned buffered and emits nothing early', 
     'the native-crash branch must NOT emit pass1 (or anything) early — the final exactly-once emission owns the buffered rerun stream')
 })
 
-test('run-all: every composing-capable pass is spawned buffered (flake-retry pass stays buffered too)', () => {
+// W12 2026-10-26: pass1 streams live again (Fix 4); only the rebuilt/appended passes stay
+// buffered — assertion updated to the new contract.
+test('run-all: every REBUILT-capable pass is spawned buffered (native rerun + flake-retry pass; pass1 streams live per W12 Fix 4)', () => {
   const code = runAllSrc.split(/\r?\n/).filter(l => !/^\s*\/\//.test(l)).join('\n')
+  assert.ok(/let r = await spawnRunner\(\)/.test(code),
+    'pass1 must be spawned live (spawnRunner() with no { live } override) — 0-byte-TAP contract')
   const calls = (code.match(/await spawnRunner\(/g) || []).length
   const buffered = (code.match(/await spawnRunner\([\s\S]*?\{ live: false \}\)/g) || []).length
-  assert.ok(calls > 0, 'spawnRunner call sites must exist')
-  assert.equal(buffered, calls,
-    'every spawnRunner call must pass { live: false } — no live-streamed spawn may remain (double-emission contract)')
+  assert.ok(calls >= 2, 'spawnRunner call sites must exist')
+  assert.equal(buffered, calls - 1,
+    'every spawnRunner call EXCEPT pass1 must pass { live: false } (rebuilt/appended streams stay buffered)')
 })

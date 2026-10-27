@@ -75,17 +75,24 @@ test('GOLDEN run-all composed TAP: emitted exactly once, ONE coherent plan, full
   const out = r.stdout || ''
   assert.equal(r.status, 0, 'flake-retry absorption must leave the suite green: ' + (r.stderr || '').slice(-600))
   assert.match(r.stderr || '', /⚑FLAKY absorbed/, 'absorption must be loud on stderr')
-  // exactly-once emission: ONE plan line, not pass1 raw + composed concatenated
+  // W12 2026-10-26 contract: pass1 streams LIVE (0-byte-TAP diagnostics contract — a hung
+  // runner must leave diagnostics in the gate's tap file), so stdout carries pass1's raw plan
+  // FIRST (evidence of the original reds) and the composed full-corpus stream after the loud
+  // separator. Consumers anchor the LAST plan (cli/check-test-summary.cjs parseSummary).
   const plans = out.match(/^1\.\.\d+/gm) || []
-  assert.equal(plans.length, 1, `stdout must carry exactly ONE TAP plan (double-plan bug), got ${plans.length}`)
-  // composed stream is the authoritative record
-  assert.match(out, /# COMPOSED after flake-retry absorption/, 'the emitted stream must be the composed full-corpus TAP')
-  assert.match(out, /^1\.\.2$/m, 'composed plan must cover BOTH pass1-kept and retry blocks (2 blocks)')
+  assert.equal(plans.length, 2, `stdout must carry pass1 raw + composed (exactly 2 plans), got ${plans.length}`)
+  assert.match(out, /# COMPOSED-TAP-FOLLOWS: consumers anchor the LAST plan/, 'the composed stream must be preceded by the loud separator line')
+  // composed stream is the authoritative LAST plan (after the separator)
+  const sepIdx = out.indexOf('# COMPOSED-TAP-FOLLOWS')
+  const lastPlanIdx = out.lastIndexOf('1..2')
+  assert.ok(sepIdx > -1 && lastPlanIdx > sepIdx, 'the composed plan must come AFTER the separator (last-plan anchoring)')
+  assert.match(out.slice(sepIdx), /# COMPOSED after flake-retry absorption/, 'the emitted stream after the separator must be the composed full-corpus TAP')
+  assert.match(out.slice(lastPlanIdx), /^1\.\.2$/m, 'the LAST plan must cover BOTH pass1-kept and retry blocks (2 blocks)')
   // full corpus: the non-retried pass1 file's block is present (partial-corpus blindness closed)
   assert.match(out, /steady-ok/, 'kept pass1 blocks (non-retried files) must appear in the composed stream')
   assert.match(out, /flaky-first-run/, 'retry blocks must appear in the composed stream')
-  // real summary counts, anchored after the single plan
-  const tail = out.slice(out.search(/^1\.\.\d+/m))
+  // real summary counts, anchored after the LAST plan (what parseSummary reads)
+  const tail = out.slice(lastPlanIdx)
   assert.match(tail, /^# fail 0$/m, 'composed summary must report the real (zero) fail count')
   assert.match(tail, /^# cancelled 0$/m, 'composed summary must report the real cancel count')
   assert.match(tail, /^# pass 2$/m, 'composed summary pass count must cover the full corpus')
@@ -104,11 +111,17 @@ test('CONTRACT run-all composition fail-closes on kept not-ok + emits real count
     'a refused absorption must be recorded as absorbed:false')
   // fix 1b: the composed summary carries REAL counts, not a hardcoded `# cancelled 0`
   assert.ok(!/# cancelled 0'/.test(RUN_ALL_SRC), 'no hardcoded `# cancelled 0` may remain in the composed summary')
-  assert.match(RUN_ALL_SRC, /# cancelled \$\{cancelled1\}/, 'composed summary must emit the real cancel count')
+  // W12 2026-10-26 (Fix 5): the retry pass's cancelled count rides the sum; any nonzero in
+  // EITHER tail refuses composition (mirrors the keptNotOk guard)
+  assert.match(RUN_ALL_SRC, /# cancelled \$\{cancelled1 \+ cancelled2\}/, 'composed summary must emit the REAL cancelled sum (pass1 + retry)')
+  assert.match(RUN_ALL_SRC, /cancelled1 === 0 && cancelled2 === 0/, 'composition must be refused when either tail carries cancelled test(s)')
   assert.match(RUN_ALL_SRC, /# fail \$\{keptNotOk \+ notOkInRetry\}/,
     'composed summary MUST carry a # fail line — without it parseSummary returns fail=undefined and the gate fail-closes')
-  // exactly-once emission contract: buffered pass1 + single final synchronous emission
-  assert.match(RUN_ALL_SRC, /let r = await spawnRunner\(null, \{ live: false \}\)/, 'pass1 must spawn buffered so composition can own the stream')
+  // W12 2026-10-26 emission contract: pass1 streams LIVE (diagnostics reach the gate's tap
+  // file while it runs); the composed/appended streams follow after a separator and anchor
+  // the LAST plan; the final emission stays exactly-once via the streamed flag
+  assert.match(RUN_ALL_SRC, /let r = await spawnRunner\(\)/, 'pass1 must spawn live (0-byte-TAP diagnostics contract)')
+  assert.match(RUN_ALL_SRC, /# COMPOSED-TAP-FOLLOWS: consumers anchor the LAST plan/, 'the composed stream must carry the last-plan separator')
   assert.match(RUN_ALL_SRC, /if \(!r\.streamed && r\.stdout && r\.stdout\.length\) emitSync\(r\.stdout\)/,
     'the final stdout emission must be exactly-once via the streamed flag')
   assert.match(RUN_ALL_SRC, /writeSync\(1, buf\)/, 'emission must be synchronous (flush before process.exit truncates a pipe)')
