@@ -404,10 +404,16 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
   // orderBy is exposed via IPC; whitelist-validate to prevent SQL injection (only column name + ASC/DESC combinations allowed)
   const cols = new Set(['id', 'createdAt', 'updatedAt', 'scheduledDay', 'scheduledAt', 'completedAt', 'complete', 'remindAt', 'sort', 'priority', 'deadlineTs', 'important', 'urgent', 'categoryId', 'recurGroupId', 'status', 'content'])
   const parts = String(orderBy).split(',').map(x => x.trim().split(/\s+/))
+  // Harden (2026-10-26): validate each comma-part AND rebuild the clause from validated
+  // parts only. The old code validated tokens[0]/[1] but spliced the RAW string into the
+  // SQL, so tokens 3+ ('sort ASC; DROP') rode into the statement verbatim. Any part whose
+  // shape isn't exactly [column, dir?] throws with the same message as before.
+  const clauses = []
   for (const part of parts) {
-    if (!cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
+    if (part.length > 2 || !cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
+    clauses.push(part[0] + (part[1] ? ' ' + part[1].toUpperCase() : ''))
   }
-  sql += ` ORDER BY ${orderBy}`
+  sql += ` ORDER BY ${clauses.join(', ')}`
   // F2: limit validated on presence (0 = explicit zero rows, negatives throw). D19-DOM1: the SQL LIMIT must not precede the JS keyword filter — window/ceiling/cap in db-rows.keywordLimitWindow.
   const win = keywordLimitWindow(keywordTerms, limit)
   if (win.sqlLimit !== null) sql += ' LIMIT ' + win.sqlLimit

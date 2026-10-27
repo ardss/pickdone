@@ -391,8 +391,12 @@ const onlyNativeCrash = tap => {
 }
 if (r.status !== 0 && r.stdout && onlyNativeCrash(String(r.stdout))) {
   console.error('[run-all] native teardown crash(s) (0xC0000409 libuv async assert) were the only failures — retrying the suite once (CI rerun doctrine)')
-  emitSync(r.stdout) // pass1 raw TAP goes out first — the rerun streams live after it (no composition here)
-  r = await spawnRunner()
+  // The rerun is BUFFERED (live:false), not live-streamed: the flake-retry branch downstream
+  // re-emits `r.stdout` on its red paths, and with a live rerun those bytes were pass1's
+  // ALREADY-EMITTED TAP (double plan in the gate's tap file). Buffered, the rerun becomes the
+  // single authoritative stream for every downstream branch — pass1's crash TAP is superseded
+  // and the final exactly-once emission owns the rerun's bytes (one coherent plan).
+  r = await spawnRunner(null, { live: false })
 }
 // Flake-retry per FILE (2026-10-24, generalizes the rerun doctrine above): under gate
 // self-load a rotating set of 1-6 fs/timing-sensitive files red per full run while
