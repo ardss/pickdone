@@ -332,7 +332,7 @@ function initInner (userDataPath) {
       try { fs.rmSync(file, { force: true }); mainFileRemoved = !fs.existsSync(file) } catch (e) { mainFileErr = e }
       for (const f of [file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }) } catch {} }
       if (!mainFileRemoved) {
-        throw new Error('[TodoDB] 首装加密重建失败:旧明文 todos.db 删除不掉' + (mainFileErr ? '(' + mainFileErr.message + ')' : '') + ',拒绝在明文库上重建(转交恢复链处理)')
+        throw new Error('[TodoDB] fresh-install encryption rebuild aborted: old plaintext todos.db is un-deletable' + (mainFileErr ? ' (' + mainFileErr.message + ')' : '') + ' - refusing to rebuild over a plaintext db (handed to the recovery chain)')
       }
       require('./durable-fs').writeFileDurable(keyFile, key) // main-ipc-2 fsync fix (2026-09-22), same rationale as the migration path above
       db = new loadDriver()(file)

@@ -80,7 +80,7 @@ test('w14 db fresh-install rebuild: un-deletable plaintext todos.db aborts init 
     try { db.init(dir) } catch (e) { threw = e }
   } finally { fs.rmSync = origRm }
   assert.ok(threw, 'init must NOT silently continue on the old plaintext db')
-  assert.match(String(threw && threw.message), /加密重建失败|删除不掉/)
+  assert.match(String(threw && threw.message), /fresh-install encryption rebuild aborted|un-deletable/)
   assert.equal(fs.existsSync(path.join(dir, 'todos.db')), true, 'the plaintext db is still there — no rebuild may have happened over it')
   assert.equal(fs.existsSync(path.join(dir, 'db.key')), false, 'no db.key may be written once the rebuild aborted')
   // Recovery path still works: a normal init on the same dir now succeeds (encrypts fresh).

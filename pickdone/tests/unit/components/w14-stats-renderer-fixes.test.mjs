@@ -227,7 +227,7 @@ test('w3 listAllZero: dual-axis hides only when BOTH chartList and overlayList a
 })
 
 test('w1 watch model: an in-place chartList update re-renders the chart with the new data', async () => {
-  const { vm, card, created } = mountCard({ modelType: 3, chartList: [{ label: 'a', value: 1 }, { label: 'b', value: 2 }] })
+  const { vm, created } = mountCard({ modelType: 3, chartList: [{ label: 'a', value: 1 }, { label: 'b', value: 2 }] })
   await ticks(vm)
   assert.equal(created.length, 1, 'mounted: one chart instance')
   vm.model.chartList[0].value = 99
@@ -241,7 +241,7 @@ test('w1 watch model: an in-place chartList update re-renders the chart with the
 })
 
 test('w1 watch model: model swap (period switch) re-renders with the new period data', async () => {
-  const { vm, card, created } = mountCard({ modelType: 3, chartList: [{ label: 'a', value: 1 }] })
+  const { vm, created } = mountCard({ modelType: 3, chartList: [{ label: 'a', value: 1 }] })
   await ticks(vm)
   assert.equal(created.length, 1)
   vm.model = { modelType: 3, chartList: [{ label: 'x', value: 42 }] } // StatisticsView period switch
@@ -252,7 +252,7 @@ test('w1 watch model: model swap (period switch) re-renders with the new period 
 })
 
 test('w1 watch model: canvas <-> empty branch swap still re-renders when data appears', async () => {
-  const { vm, card, created } = mountCard({ modelType: 3, chartList: [] }) // empty -> chart-empty branch, no canvas mounted
+  const { vm, created } = mountCard({ modelType: 3, chartList: [] }) // empty -> chart-empty branch, no canvas mounted
   await ticks(vm)
   assert.equal(created.length, 0)
   vm.model = { modelType: 3, chartList: [{ label: 'a', value: 5 }] }
