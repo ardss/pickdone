@@ -341,6 +341,7 @@ function initInner (userDataPath) {
 
 
   const cols = Object.keys(todoToRow({ taskId: '' }))
+  const buildUpsertSql = focusMinutesSetter => db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => c === 'focusMinutes' ? focusMinutesSetter : `${c} = excluded.${c}`).join(', ')}`)
   // B1 (2026-10-03) — focusMinutes accumulate-vs-replace duality. The renderer's contract
   // (store todo.js "U-1 write-once at the DB layer") treats focus minutes as MONOTONIC:
   // the only mutation that ever lowers nothing is bumpSnow's DB-side `focusMinutes = focusMinutes + ?`
@@ -353,12 +354,31 @@ function initInner (userDataPath) {
   // focusMinutes is the only todos column with an accumulate-vs-replace duality (every other
   // column is last-writer-wins by design), so it gets the guard and an explicit contract
   // comment here rather than a per-call-site workaround.
-  stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => c === 'focusMinutes' ? 'focusMinutes = MAX(todos.focusMinutes, excluded.focusMinutes)' : `${c} = excluded.${c}`).join(', ')}`)
+  stmts.upsert = buildUpsertSql('focusMinutes = MAX(todos.focusMinutes, excluded.focusMinutes)')
+  // W13 (2026-10-26, P2 cross-device ledger divergence): the B1 MAX guard above was baked into
+  // EVERY whole-row write path — including commitSyncBatch (cloud ack) and upsertMany (LAN
+  // snapshot/flush landing). But W7-R's renderer `undo:` compensation legitimately LOWERS
+  // focusMinutes; when that decrease synced to a peer, the peer's MAX guard rejected it (kept its
+  // own stale higher value), so the two ledgers diverged permanently and every snapshot round
+  // re-fought the same row. Root split: there are TWO calibers of whole-row writer.
+  //   - Local-origin (renderer `upsert` op): a writer may carry a STALE in-window snapshot, so it
+  //     keeps the B1 MAX guard.
+  //   - Sync-origin (commitSyncBatch cloud ack, upsertMany LAN landing): rows are
+  //     POST-ADJUDICATION winners — the peer's decrease is authoritative and MUST land, or the
+  //     ledgers can never converge. stmts.upsertSync (plain `= excluded.focusMinutes`) serves
+  //     commitSyncBatch; upsertMany runs the same plain caliber because ALL its callers (sync
+  //     apply flush via todo.putMany, CSV import, backup restore, recovery re-import, CLI pool
+  //     rescale) write freshly-sourced authoritative row sets, never stale renderer snapshots —
+  //     the B1 threat shape only exists on the single-row `upsert` path. Keep the two calibers
+  //     deliberate; do not merge them back.
+  stmts.upsertSync = buildUpsertSql('focusMinutes = excluded.focusMinutes')
   stmts.getById = db.prepare('SELECT * FROM todos WHERE id = ?')
   stmts.hardDelete = db.prepare('DELETE FROM todos WHERE id = ?')
   stmts.getMeta = db.prepare('SELECT value FROM meta WHERE key = ?')
   stmts.setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-  stmts.upsertMany = db.transaction(rows => { for (const r of rows) stmts.upsert.run(r) })
+  // W13 (2026-10-26): plain caliber — see the upsertSync block above for why the bulk path
+  // must NOT carry the B1 MAX guard (peer adjudicated decreases must land).
+  stmts.upsertMany = db.transaction(rows => { for (const r of rows) stmts.upsertSync.run(r) })
   // Atomic field increment: a whole-row overwrite from a stale cross-window row loses concurrent increments (estimate from two windows in the same tick); DB-side += avoids the race
   // P1 2026-09-17: focus increments must also flip status to 'update' — the renderer's snapshot
   // filter drops rows with status='sync', so a bump on an already-synced row used to leave the
@@ -472,7 +492,9 @@ const OPS = {
     const cur = Number((curRow && curRow.value) || 0)
     if (v < cur) throw new Error('[TodoDB] commitSyncBatch: version ' + v + ' < current todosVersion ' + cur + ' — stale batch rejected')
     const tr = db.transaction(list => {
-      for (const t of list) { assertHasTaskId(t); stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v })) }
+      // W13 (2026-10-26): plain caliber (stmts.upsertSync) — cloud-ack rows are post-adjudication
+      // winners; a peer's W7-R undo decrease of focusMinutes must land, not be MAX-clamped away.
+      for (const t of list) { assertHasTaskId(t); stmts.upsertSync.run(todoToRow({ ...t, status: 'sync', version: v })) }
       stmts.setMeta.run('todosVersion', String(v))
     })
     tr(rows)

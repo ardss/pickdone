@@ -78,7 +78,13 @@ export function isMachineLocalMetaKey (id) {
     // Round-3 P1: migration/bookkeeping keys — a peer's 'schemaVersion' row could REGRESS (or
     // over-advance) the local schema migrator, and legacy 'dayPlanState'/'dayPlanState.*'
     // whole-package chip JSON would re-poison a device already migrated to plan_chips.
-    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
+    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.') ||
+    // [W13 2026-10-26 P2] tomato-float dismissal state (src/main/tomato-float.js sets it on every
+    // user float close): strictly per-device UI preference. Syncing it meant closing the float on
+    // device A permanently suppressed device B's float auto-show, and the two devices LWW-fought
+    // the key forever (unbounded oplog churn on every close). Exact key (not prefix) so a future
+    // user-data 'tomatoFloat*' meta key still syncs.
+    k === 'tomatoFloatClosedByUser'
 }
 
 // D2 fix (2026-10-21): the settings/habits blob meta keys moved here from sync-apply-hydrate.js
