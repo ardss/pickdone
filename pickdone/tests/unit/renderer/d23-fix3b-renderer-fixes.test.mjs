@@ -129,9 +129,12 @@ test('[A2] toggleEdit commits the previous dirty draft through the same save pat
   const src = read('renderer/js/components/TaskAccountModal.vue')
   const i = src.indexOf('toggleEdit (r) {')
   assert.ok(i > -1, 'toggleEdit found')
-  const body = src.slice(i, i + 600)
+  const body = src.slice(i, i + 1800)
   const iCommit = body.indexOf('this.commitDraftIfDirty()')
-  const iAssign = body.indexOf('this.editingId = r.tomatoId')
+  // W13 (2026-10-26): the row seeding moved into openRowEdit (the create-draft discard-confirm
+  // path reuses it), so the ordering pin now targets the LAST openRowEdit call — the non-create
+  // path must still commit the dirty draft BEFORE seeding the next row.
+  const iAssign = body.lastIndexOf('this.openRowEdit(r)')
   assert.ok(iCommit > -1 && iCommit < iAssign, 'the dirty-draft commit runs BEFORE the switch')
   assert.ok(/commitDraftIfDirty \(\) \{[\s\S]{0,900}this\.saveEdit\(true\)/.test(src), 'the dirty draft is committed via saveEdit(auto) (the editor-confirm save path, quiet autoSaved toast)')
   assert.ok(/Math\.round\(orig\.startMin\) === d\.startMin && orig\.dur === d\.dur && orig\.rest === d\.rest && orig\.abandoned === d\.abandoned/.test(src),

@@ -266,6 +266,12 @@ function trimToCapacity () {
   for (let i = 0; i < keys.length - MAX_KEYS; i++) {
     const evicted = keys[i]
     delete state[evicted]
+    // W13 (2026-10-26): evicted ids must also leave the lazy-fetch memo — `fetched` kept them
+    // short-circuiting ensureEstimate, so getEstimate() read a permanent stale 0 (per-task meta
+    // still held the value) and a recycled id could never recover its neighbor's slot. Mirror
+    // the invalidateEstimateCache teardown for the evicted id only.
+    fetched.delete(evicted)
+    epochOf.delete(evicted)
     try { persistTask(evicted, 0) } catch (e) { /* best-effort: MetaGC covers the DB side */ }
   }
 }

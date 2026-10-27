@@ -181,10 +181,26 @@ export default {
     },
     toggleEdit (r) {
       if (this.editingId === r.tomatoId) { this.editingId = null; this.draft = null; return }
+      // W13 (2026-10-26): an open manual-add draft is always unsaved (draftDirty() returns true for
+      // d.create), yet commitDraftIfDirty early-returns for it — clicking a ledger row used to
+      // silently destroy the add draft. Run the SAME discard-confirm flow requestClose uses
+      // (same i18n keys, same 'cancel'/'close' catch); on confirm the row edit proceeds through
+      // the normal dirty-commit path, on cancel the create draft stays open.
+      if (this.draft && this.draft.create) {
+        this.$confirm(this.$t('statsE.w7.accountDiscardConfirm'), this.$t('statsK.TomatoAccount.title', { name: this.task ? this.task.taskContent : '' }), { type: 'warning' })
+          .then(() => this.openRowEdit(r))
+          .catch((e) => { if (e !== 'cancel' && e !== 'close') this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) || '')) })
+        return
+      }
       // [maint/d23 FIX-3b] switching rows must not silently discard the previous row's unsaved
       // draft: if it differs from its record, commit it through the SAME save path as the
       // editor's confirm (saveEdit) before moving on.
       this.commitDraftIfDirty()
+      this.openRowEdit(r)
+    },
+    // W13 (2026-10-26): extracted from toggleEdit — seeds the row-edit draft once the discard
+    // path has cleared any conflicting draft.
+    openRowEdit (r) {
       this.editingId = r.tomatoId
       this.draft = { tomatoId: r.tomatoId, day0: r.day0, startMin: Math.round(r.startMin), dur: r.dur, rest: r.rest, abandoned: r.abandoned }
     },
