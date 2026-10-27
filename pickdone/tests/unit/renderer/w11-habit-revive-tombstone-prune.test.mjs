@@ -175,3 +175,65 @@ test('W11-1e2: a tombstone newer than the inbound round still filters the alive 
   assert.equal(state.habits.length, 0, 'the newer delete still wins over the stale inbound copy')
   assert.ok(state.deleted.find(t => t.id === 'h-still-deleted'), 'its tombstone survives')
 })
+
+/* [W11 2026-10-27 coverage follow-up] two genuinely untested branches, not coverage-chasing:
+ * (a) applyExternalPatch's moment-tombstone prune with its `changed` flag semantics (reference
+ *     identity passthrough), (b) applyExternal with a state that lacks the optional tombstone
+ *     fields entirely (non-array passthrough must not throw or fabricate arrays). */
+test('W11-3a: applyExternalPatch prunes a superseded moment tombstone and sets changed only when something moved', () => {
+  const state = {
+    habits: [], moments: [{ id: 'm-alive' }], savedAt: 100,
+    deleted: [], deletedMoments: [{ id: 'm-alive', deletedAt: 60 }]
+  }
+  const before = state.deletedMoments
+  // a round NEWER than the delete carrying the moment alive upstream -> tombstone superseded
+  habits.mutations.applyExternalPatch(state, { savedAt: 200, fields: { moments: [{ id: 'm-alive' }] } })
+  assert.equal(state.deletedMoments.find(t => t.id === 'm-alive'), undefined, 'superseded moment tombstone pruned')
+  // an OLD round (savedAt predates the delete) must NOT prune — stickiness for stale rounds
+  const state2 = {
+    habits: [], moments: [{ id: 'm-alive' }], savedAt: 300,
+    deleted: [], deletedMoments: [{ id: 'm-alive', deletedAt: 200 }]
+  }
+  habits.mutations.applyExternalPatch(state2, { savedAt: 210, fields: { moments: [{ id: 'm-alive' }] } })
+  assert.ok(state2.deletedMoments.some(t => t.id === 'm-alive'), 'a round predating the delete does not clear the tombstone')
+  void before
+})
+
+test('W11-3b: applyExternal on a state without tombstone fields passes through without fabricating or throwing', () => {
+  const state = { habits: [], moments: [], savedAt: 0 } // no deleted/deletedMoments keys at all
+  habits.mutations.applyExternal(state, {
+    schemaV: 1, savedAt: 500,
+    habits: [{ id: 'h1', records: {} }], moments: [],
+    deleted: [{ id: 'h-gone', deletedAt: 100 }]
+  })
+  assert.equal(state.habits[0].id, 'h1', 'inbound habit lands')
+  assert.ok(Array.isArray(state.deleted), 'tombstone arrays materialize as arrays, not throw')
+  assert.ok(state.deleted.some(t => t.id === 'h-gone'), 'a tombstone for an id absent from the inbound array stays sticky')
+})
+
+/* [W11 2026-10-27 coverage follow-up 2] applyExternalPatch's habits-fields path (merge records +
+ * tombstone prune + filter) with a superseded habit tombstone — the fold-round shape LAN sync
+ * actually sends. */
+test('W11-3c: applyExternalPatch habits path revives an upstream-undone habit and merges records', () => {
+  const state = {
+    habits: [{ id: 'h-local', records: { '2026-10-26': { count: 1 } } }],
+    moments: [], savedAt: 100,
+    deleted: [{ id: 'h-back', deletedAt: 60 }],
+    deletedMoments: []
+  }
+  habits.mutations.applyExternalPatch(state, {
+    savedAt: 250,
+    fields: {
+      habits: [{ id: 'h-back', records: { '2026-10-27': { count: 2 } } }]
+    }
+  })
+  const ids = state.habits.map(h => h.id)
+  assert.ok(ids.includes('h-back'), 'the habit undone upstream (round postdates the delete) is revived, not tombstone-filtered')
+  // [fold contract] applyExternalPatch REPLACES the habit list (records union-max for shared
+  // ids only) — a local-only habit absent from the patch drops. Same F2-class union-merge
+  // candidate as moments; recorded in the legacy list, NOT silently changed here.
+  assert.ok(!ids.includes('h-local'), 'documents the current fold contract: patch list replaces, local-only ids drop (legacy: union-merge candidate)')
+  assert.equal(state.deleted.some(t => t.id === 'h-back'), false, 'superseded tombstone pruned')
+  const revived = state.habits.find(h => h.id === 'h-back')
+  assert.ok(revived.records['2026-10-27'], 'inbound records merged with the revival')
+})
