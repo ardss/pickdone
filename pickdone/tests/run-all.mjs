@@ -566,8 +566,15 @@ if (r.status !== 0 && !r.error && r.stdout) {
         // cancellation inside a retried file's retry pass occupied a slot and the composed
         // summary counted it green. Both tails are parsed now; composition is REFUSED on any
         // nonzero (mirroring the keptNotOk guard) and the real sum is emitted otherwise.
-        const cancelled1 = Number((/# cancelled\s+(\d+)/.exec(p1.tail.join('\n')) || [])[1] || 0)
-        const cancelled2 = Number((/# cancelled\s+(\d+)/.exec(rt.tail.join('\n')) || [])[1] || 0)
+        // W13 2026-10-26: both regexes now carry the `m` flag and are matched LINE BY LINE —
+        // the un-`m`'d exec over the joined tail could silently miss a `# cancelled N` line
+        // (multi-line text without `m` never anchors per line), making the parse return 0 for
+        // a genuinely cancelled pass and the W12 "absorption refused on cancelled" guard never
+        // fire: fake green on cancelled tests in absorbed runs. Scanning per line is fail-loud
+        // by construction (any cancelled line anywhere in the tail is counted).
+        const countCancelled = tail => tail.reduce((n, l) => { const m = /^# cancelled\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
+        const cancelled1 = countCancelled(p1.tail)
+        const cancelled2 = countCancelled(rt.tail)
         if (planOk && keptNotOk === 0 && notOkInRetry === 0 && cancelled1 === 0 && cancelled2 === 0 && rt.blocks.length > 0) {
           const all = renumber([...kept, ...rt.blocks])
           const skips = all.filter(b => /# (SKIP|skip)/.test(b.join('\n'))).length

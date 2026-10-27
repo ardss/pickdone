@@ -48,20 +48,34 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
   }
 }
 
-// Watchdog: three journeys each do a reload + boot wait; 240s ceiling (pool per-target budget is 8min).
+// Watchdog: three journeys each do a reload + boot wait (pool per-target budget is 8min).
 // 2026-10-26 (W12 Fix 2): process.exit used to fire directly, SKIPPING the tests' finally
 // cleanup sweeps and leaking seeded rows/settings into up to 8 downstream pool targets on a
 // slow (not broken) journey. Each test registers its best-effort cleanup below
 // (registerCleanup); the watchdog races it against a 5s grace before exiting.
+// W13 2026-10-26: the timer used to be armed ONCE at module load and never re-armed — a
+// slow-but-green file was force-exited at the cumulative ceiling (the shared pool grants each
+// target 8min), and a stale fire during a PASSING test's finally ran the shared cleanupFn
+// concurrently with itself while the 5s grace could cut hardCleanup mid-delete. registerCleanup
+// now RE-ARMS the timer per test (7min, inside the pool's 8min per-target budget) and each
+// test's finally nulls cleanupFn when done, so a late fire can only ever race the CURRENT
+// test's cleanup, never re-run a finished one.
 let cleanupFn = null
-const registerCleanup = fn => { cleanupFn = fn }
-const watchdog = setTimeout(async () => {
-  console.error('E2E watchdog forced exit (counted as failure)')
-  try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
-  try { ws?.close() } catch {}
-  process.exit(1)
-}, 240000)
-watchdog.unref?.()
+const WATCHDOG_MS = 7 * 60 * 1000
+let watchdogTimer = null
+const armWatchdog = () => {
+  if (watchdogTimer) clearTimeout(watchdogTimer)
+  const watchdog = setTimeout(async () => {
+    console.error('E2E watchdog forced exit (counted as failure)')
+    try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
+    cleanupFn = null
+    try { ws?.close() } catch {}
+    process.exit(1)
+  }, WATCHDOG_MS)
+  watchdog.unref?.()
+  watchdogTimer = watchdog
+}
+const registerCleanup = fn => { cleanupFn = fn; armWatchdog() }
 process.on('exit', () => { try { ws?.close() } catch {} })
 
 let ws = null
@@ -232,7 +246,7 @@ test('J8: today overload badge counts ONLY today (2+3 est) not overdue backlog; 
     const badge2 = await waitFor(`(()=>{const w=document.querySelector('.day-rail .dr-load-warn');return w?w.textContent.trim():null})()`, 15, 500)
     assert.ok(badge2 && /11\s*\/\s*10/.test(badge2), `overload badge should read "11/10" once planned (11) > threshold (10), got "${badge2}"`)
   } finally {
-    await cleanup()
+    await cleanup(); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
@@ -300,7 +314,7 @@ test('J9: timeline plan chip — drag task onto an hour slot, remove via chip X,
     const rowBack = await waitFor(`window.todoAPI.dbCall('planAll',[]).then(rs=>!!rs.find(x=>x.taskId==='${taskId}'))`, 10, 400)
     assert.ok(rowBack, 'plan_chips row not restored in the DB after undo')
   } finally {
-    await cleanup()
+    await cleanup(); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
@@ -399,7 +413,7 @@ test('J10: statistics reflect seeded today focus minutes; a settings boolean fli
     assert.equal(uiOn, !(origDevMode === true), 'settings UI switch state does not reflect the persisted value after reload')
     await evalAwait(`(()=>{const x=document.querySelector('.modal--settings .modal__close, .modal-container--settings .modal__close');if(x)x.click();return true})()`)
   } finally {
-    await cleanup()
+    await cleanup(); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 

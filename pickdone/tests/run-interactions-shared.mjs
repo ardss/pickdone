@@ -205,6 +205,12 @@ function runTarget (script) {
       else { try { child2.kill('SIGKILL') } catch {} }
     }, PER_TARGET_BUDGET_MS)
     child2.on('exit', code => { clearTimeout(killer); resolve({ code: code ?? 1, ms: Date.now() - t0 }) })
+    // W13 2026-10-26: the promise above only ever resolved from 'exit'. A spawn 'error'
+    // (EMFILE/EBUSY under the 3-lane pool storm) fires WITHOUT an exit event, so runTarget hung
+    // forever and the 8min killer then ran taskkill against an undefined pid. A spawn error now
+    // resolves the SAME verdict shape with a named spawnError — the failure is attributed, not
+    // silently swallowed, and 'exit' firing afterwards is a no-op (resolve is idempotent).
+    child2.on('error', e => { clearTimeout(killer); resolve({ code: 1, ms: Date.now() - t0, spawnError: e.message }) })
   })
 }
 
@@ -241,7 +247,8 @@ try {
     console.log(`[shared-pool] ▶ ${name}`)
     const r = await runTarget(script)
     const stillAlive = !(await instanceDead())
-    const note = !stillAlive ? ' [instance died during/after this target]' : ''
+    // W13 2026-10-26: surface a spawn error (see runTarget) as a named note on the verdict.
+    const note = (r.spawnError ? ` [spawn error: ${r.spawnError}]` : '') + (!stillAlive ? ' [instance died during/after this target]' : '')
     results.push({ script, ok: r.code === 0 && stillAlive, ms: r.ms, note })
     console.log(`[shared-pool] ${r.code === 0 && stillAlive ? '✓' : '✗'} ${name} — ${(r.ms / 1000).toFixed(0)}s${note}`)
   }

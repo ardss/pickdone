@@ -55,20 +55,33 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
   }
 }
 
-// Watchdog: WS handles keep the event loop alive; force-exit after 120s no matter what.
+// Watchdog: WS handles keep the event loop alive; force-exit no matter what.
 // 2026-10-26 (W12 Fix 2): process.exit used to fire directly, SKIPPING the tests' finally
 // cleanup sweeps and leaking seeded habit/moment artifacts into up to 8 downstream pool
 // targets on a slow (not broken) journey. Each test registers its best-effort cleanup below
 // (registerCleanup); the watchdog races it against a 5s grace before exiting.
+// W13 2026-10-26: the timer used to be armed ONCE at module load and never re-armed — a
+// slow-but-green file was force-exited at 120s CUMULATIVE (the shared pool grants each target
+// 8min), and a stale fire during a PASSING test's finally ran the shared cleanupFn concurrently
+// with itself while the 5s grace could cut hardCleanup mid-delete. registerCleanup now RE-ARMS
+// the timer per test (7min, inside the pool's 8min per-target budget) and each test's finally
+// nulls cleanupFn when done, so a late fire can only ever race the CURRENT test's cleanup.
 let cleanupFn = null
-const registerCleanup = fn => { cleanupFn = fn }
-const watchdog = setTimeout(async () => {
-  console.error('E2E watchdog forced exit (counted as failure)')
-  try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
-  try { ws?.close() } catch {}
-  process.exit(1)
-}, 120000)
-watchdog.unref?.()
+const WATCHDOG_MS = 7 * 60 * 1000
+let watchdogTimer = null
+const armWatchdog = () => {
+  if (watchdogTimer) clearTimeout(watchdogTimer)
+  const watchdog = setTimeout(async () => {
+    console.error('E2E watchdog forced exit (counted as failure)')
+    try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
+    cleanupFn = null
+    try { ws?.close() } catch {}
+    process.exit(1)
+  }, WATCHDOG_MS)
+  watchdog.unref?.()
+  watchdogTimer = watchdog
+}
+const registerCleanup = fn => { cleanupFn = fn; armWatchdog() }
 process.on('exit', () => { try { ws?.close() } catch {} })
 
 let ws = null
@@ -296,7 +309,7 @@ test('J5 habit lifecycle: create -> check in -> record visible -> delete -> Undo
     const blobRestored = await pollFor(`window.todoAPI.dbCall('getMeta', 'db.habitsState').then(v => { const b = v ? JSON.parse(v) : null; const h = b && (b.habits||[]).find(x => x.name === ${JSON.stringify(name)}); return h && h.records && h.records[${JSON.stringify('@T2@')}] === true ? 'db-ok' : null })`.replace('@T2@', todayKey), 15, 400)
     assert.equal(blobRestored, 'db-ok', 'undo restored the habit but the check-in record was lost from the durable DB meta row')
   } finally {
-    await cleanup().catch(e => { console.error('[j-habit-moment] J5 cleanup verification failed: ' + e.message); assert.fail(e.message) })
+    await cleanup().catch(e => { console.error('[j-habit-moment] J5 cleanup verification failed: ' + e.message); assert.fail(e.message) }); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
@@ -376,7 +389,7 @@ test('J6 moment (countdown): create with a future date -> correct days-left -> d
     const blobRestored = await pollFor(`window.todoAPI.dbCall('getMeta', 'db.habitsState').then(v => { const b = v ? JSON.parse(v) : null; return b && (b.moments||[]).some(x => x.name === ${JSON.stringify(name)}) ? 'db-ok' : null })`, 15, 400)
     assert.equal(blobRestored, 'db-ok', 'undo restored the moment card but the durable DB meta row lost it')
   } finally {
-    await cleanup().catch(e => { console.error('[j-habit-moment] J6 cleanup verification failed: ' + e.message); assert.fail(e.message) })
+    await cleanup().catch(e => { console.error('[j-habit-moment] J6 cleanup verification failed: ' + e.message); assert.fail(e.message) }); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
@@ -453,7 +466,7 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
     const blob = await pollFor(`window.todoAPI.dbCall('getMeta', 'db.habitsState').then(vv => { const b = vv ? JSON.parse(vv) : null; const h = b && (b.habits||[]).find(x => x.name === ${JSON.stringify(name)}); return h && h.records && h.records[${JSON.stringify('YK')}] === true && !h.records[${JSON.stringify('TK')}] ? 'db-ok' : null })`.replaceAll('"YK"', JSON.stringify(seeded.yKey)).replaceAll('"TK"', JSON.stringify(todayKey)), 15, 400)
     assert.equal(blob, 'db-ok', 'durable DB meta row does not hold yesterday-only check-in for the seeded habit')
   } finally {
-    await cleanup().catch(e => { console.error('[j-habit-moment] J7 cleanup verification failed: ' + e.message); assert.fail(e.message) })
+    await cleanup().catch(e => { console.error('[j-habit-moment] J7 cleanup verification failed: ' + e.message); assert.fail(e.message) }); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 

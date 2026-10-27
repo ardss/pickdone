@@ -79,9 +79,11 @@ test('Fix 4: pass1 streams live; composed/appended streams carry the last-plan s
 })
 
 test('Fix 5: composition is refused on nonzero cancelled from either tail; the real sum is emitted', () => {
-  const i = runAllSrc.indexOf('cancelled2 = Number(')
+  // W13 2026-10-26: cancelled parsing moved from a joined-tail exec to per-line countCancelled
+  // (see tests/unit/cli/w13-gates-fixes.test.mjs Fix 1) — this pin tracks the new form.
+  const i = runAllSrc.indexOf('cancelled2 = countCancelled(')
   assert.ok(i > 0, 'the retry tail cancelled count must be parsed')
-  const guard = runAllSrc.slice(runAllSrc.indexOf('if (planOk &&'), runAllSrc.indexOf('{', runAllSrc.indexOf('cancelled2 = Number(')))
+  const guard = runAllSrc.slice(runAllSrc.indexOf('if (planOk &&'), runAllSrc.indexOf('{', runAllSrc.indexOf('cancelled2 = countCancelled(')))
   assert.ok(guard.includes('cancelled1 === 0 && cancelled2 === 0'),
     'the compose guard must require zero cancelled in BOTH tails')
   assert.ok(runAllSrc.includes('cancelled1 > 0 || cancelled2 > 0'),

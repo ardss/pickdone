@@ -60,14 +60,29 @@ const sleep = ms => new Promise(r => setTimeout(r, ms))
 // (not broken) journey. Each test registers its best-effort cleanup below (registerCleanup);
 // the watchdog races it against a 5s grace before exiting.
 let cleanupFn = null
-const registerCleanup = fn => { cleanupFn = fn }
-const watchdog = setTimeout(async () => {
-  console.error('J-TODO-CORE watchdog forced exit (counted as failure)')
-  try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
-  try { ws?.close() } catch {}
-  process.exit(1)
-}, 120000)
-watchdog.unref?.()
+// W13 2026-10-26: the watchdog used to be a single file-global 120s timer armed once at module
+// load and NEVER re-armed between tests. A slow-but-green file was force-exited at 120s
+// CUMULATIVE (the shared pool grants each target an 8min budget — this file can legitimately
+// use more than 2 of those minutes), and when the stale timer fired during a PASSING test's
+// finally the shared cleanupFn ran concurrently with itself while the 5s grace could cut
+// hardCleanup mid-delete. registerCleanup now RE-ARMS the timer per test (7min, inside the
+// pool's 8min per-target budget) and each test's finally nulls cleanupFn when done, so a
+// late fire can only ever race the CURRENT test's cleanup, never re-run a finished one.
+const WATCHDOG_MS = 7 * 60 * 1000
+let watchdogTimer = null
+const armWatchdog = () => {
+  if (watchdogTimer) clearTimeout(watchdogTimer)
+  const watchdog = setTimeout(async () => {
+    console.error('J-TODO-CORE watchdog forced exit (counted as failure)')
+    try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
+    cleanupFn = null
+    try { ws?.close() } catch {}
+    process.exit(1)
+  }, WATCHDOG_MS)
+  watchdog.unref?.()
+  watchdogTimer = watchdog
+}
+const registerCleanup = fn => { cleanupFn = fn; armWatchdog() }
 process.on('exit', () => { try { ws?.close() } catch {} })
 
 let ws = null
@@ -245,7 +260,7 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
     const onTomorrow = await until(`[...document.querySelectorAll('.td-item .td-title')].some(t => t.textContent.trim() === 'meeting')`, 8, 400)
     assert.ok(onTomorrow, 'the created task is not visible on the tomorrow day view (user cannot see what they just scheduled)')
   } finally {
-    await cleanup()
+    await cleanup(); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
@@ -290,7 +305,7 @@ test('J2 add → complete → enters the today-completed group → un-complete �
     })()`, 10, 500)
     assert.ok(backInToday, 'after un-completing the task did not return to the today uncompleted group (or still lingers in the completed group)')
   } finally {
-    await cleanup()
+    await cleanup(); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
@@ -334,7 +349,7 @@ test('J3 soft delete → recycle bin shows the task → restore → back in the 
     const backOnList = await until(`[...document.querySelectorAll('.td-item .td-title')].some(t => t.textContent.trim() === ${JSON.stringify(name)})`, 10, 400)
     assert.ok(backOnList, 'the restored task is not visible back on the today list')
   } finally {
-    await cleanup()
+    await cleanup(); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
@@ -394,7 +409,7 @@ test('J4 edit panel rename saves → list reflects the new title → search view
     })()`, 14, 500)
     assert.ok(searched, `the search view does not find the renamed task by keyword "${keyword}"`)
   } finally {
-    await cleanup()
+    await cleanup(); cleanupFn = null // W13 2026-10-26: hand the watchdog back (a late fire must not re-run a finished cleanup)
   }
 })
 
