@@ -284,10 +284,13 @@ async function runPool (stages, limit, { retry = 0, onLastStage, workerGate, sil
       // 仍然红才是真回归;重试通过会累计耗时,便于区分稳定绿与抖动绿
       for (let t = 0; t < retry && !results[i].ok; t++) {
         say(`  ↻ [${i + 1}/${stages.length}] ${stages[i][0]} 失败,重试 ${t + 1}/${retry} ...`)
+        const firstMs = results[i].ms
         const r2 = await runStage(stages[i])
+        // W16 fix(#8): 失败路径也累加首跑耗时——旧口径只累加在重试成功分支,仍红的 stage
+        // 的 ms 只剩重试耗时,汇总排序/总耗时口径失真(与成功路径不一致)
+        r2.ms += firstMs
         if (r2.ok) {
-          r2.ms += results[i].ms
-          FLAKE_EVENTS.push({ stage: stages[i][0], attempt: t + 2, firstRunMs: results[i].ms, retryMs: r2.ms - results[i].ms })
+          FLAKE_EVENTS.push({ stage: stages[i][0], attempt: t + 2, firstRunMs: firstMs, retryMs: r2.ms - firstMs })
         }
         results[i] = r2
       }
@@ -395,6 +398,10 @@ if (FAST) {
 // CHECK_ALL_SKIP_LIVE=1: 跳过③活体池(双 OS 分工——ubuntu runner 靠 xvfb 拉 Electron 最慢,
 // 让它只跑静态池+单测,活体全量由 windows job 独扛;墙钟取 max 而非两 OS 各跑全套)
 const SKIP_LIVE = process.env.CHECK_ALL_SKIP_LIVE === '1'
+// W16 fix(#1): 主分支已跑/已顺延的组登记于此,尾段据此去重——W15 按名挑选后,尾段把本地全量
+// 刚跑完的 ④视觉组原样再跑一遍;burst 顺延的组本应 exit 3 交给安静窗,尾段照跑把顺延语义击穿
+// (负载红翻成真回归 exit 1)。⑤a11y 组只在尾段跑,不受影响。
+const tailDoneGroups = new Set()
 if (SKIP_LIVE && !ON_CI) console.warn('  [warn] 本地环境忽略 CHECK_ALL_SKIP_LIVE——活体池只在 CI 的双 OS 分工下跳过(红队 G1:防该 env 未来被误用成本地静默降级开关)')
 if (FAST) {
   // Fast tier runs the CORE test tier: the deep suites (live-Electron e2e, two-instance
@@ -446,6 +453,7 @@ if (FAST) {
     console.warn(`  [check-all] ⏸ ambient load ~${ambientPct}% ≥ ${LOAD_DEFER_THRESHOLD}%:FRAGILE 池(③活体/④视觉)顺延至安静窗(--force-load 可强制)`)
     deferGroup(GROUPS[2], `ambient ${ambientPct}%`)
     deferGroup(GROUPS[3], `ambient ${ambientPct}%`)
+    tailDoneGroups.add(GROUPS[2]).add(GROUPS[3])
     results.push(...await runPool(GROUPS[1].stages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }))
   } else {
     if (FORCE_LOAD && ambientPct >= LOAD_DEFER_THRESHOLD) console.warn('  [check-all] --force-load:burst 期强制全量(红一律按真回归分诊,预算 KILL 自担)')
@@ -456,12 +464,13 @@ if (FAST) {
       runPool(GROUPS[3].stages, GROUPS[3].parallel, { retry: GROUPS[3].retry || 0 })
     ])
     results.push(...staticRs, ...liveRs, ...visualRs)
+    tailDoneGroups.add(GROUPS[3]) // 视觉池已随三池并发跑过,尾段不得重跑(W16 fix #1)
   }
 }
 // W15 2026-10-27: 尾段(④视觉/⑤a11y)按组名识别,不再按索引切片——旧 `GROUPS.slice(..., 4)` 在
 // 重排 GROUPS 后会把视觉池静默混入 CI;`--fast` 的旧 `slice(GROUPS.length)` 丢弃也会把 --a11y
 // 追加的 ⑤ 组一起静默吞掉。现在:视觉组按名挑出,FAST 丢弃只作用于视觉组,a11y 组照常运行。
-const tailGroups = GROUPS.filter(g => /视觉/.test(g.name) || /a11y/.test(g.name))
+const tailGroups = GROUPS.filter(g => (/视觉/.test(g.name) || /a11y/.test(g.name)) && !tailDoneGroups.has(g))
 for (const g of tailGroups) {
   if (FAST && /视觉/.test(g.name)) continue
   // 视觉回归(第4组)是本机门禁:基线为 gitignored 的机器本地文件,且依赖 agent-browser——

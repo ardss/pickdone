@@ -175,7 +175,8 @@ function main () {
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
     const gitOpts = { cwd: ROOT, encoding: 'utf8' }
-    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], gitOpts)
+    // W16 fix(#2): ACMR — git mv 只产生 R 条目,ACM 漏掉改名文件(与 lint-staged.mjs 对齐)
+    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], gitOpts)
     // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
     // inside the repo root): the raw toplevel-relative paths never matched the src/main regex
     // and --staged scanned ZERO files for its whole life while exiting green. Resolve every

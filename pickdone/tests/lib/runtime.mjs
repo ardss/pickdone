@@ -81,8 +81,14 @@ export async function spawnApp (opts = {}) {
   // data-isolated — TODO_USER_DATA_DIR points into a temp dir, never at %APPDATA%/pickdone.
   // Failing loudly here keeps future tests from regressing to attaching the real user data
   // (and, via src/main/log-isolation.js, from leaking log lines into the real main.log).
-  assert.ok(userDataDir && path.isAbsolute(userDataDir) && !path.resolve(userDataDir).toLowerCase().includes(process.env.APPDATA ? process.env.APPDATA.toLowerCase() : 'appdata'),
-    `spawnApp refuses non-isolated userData dir: ${userDataDir}`)
+  // W16 fix(#5): 校验口径从"不含 appdata 子串"改为"专用测试临时根(os.tmpdir() 的直接子目录)"
+  // ——旧裸子串匹配把含 "appdata" 字样的合法临时目录(如 %TEMP%\appdata-scratch\…)整批拒掉;
+  // 而 %APPDATA% 下的任何路径都必然落在 os.tmpdir() 之外,真 userData 误用依旧被拒绝。
+  const tmpRoot = path.resolve(os.tmpdir())
+  const resolvedDir = userDataDir ? path.resolve(userDataDir) : ''
+  assert.ok(resolvedDir && path.isAbsolute(resolvedDir) &&
+    resolvedDir.toLowerCase().startsWith(tmpRoot.toLowerCase() + path.sep),
+    `spawnApp refuses non-isolated userData dir (must live under the temp root ${tmpRoot}): ${userDataDir}`)
   const logFile = path.join(ARTIFACTS, `${opts.name || 'app'}-app.log`)
   const baseArgs = opts.allowFocus ? [] : ['--no-focus']
   // 2026-10-24: per-instance sync port — without an override every spawned app binds the
@@ -118,7 +124,10 @@ export async function stopApp (ctx) {
   let graceful = false
   if (ctx._ws) {
     try {
-      const exited = new Promise(r => { if (ctx.child) ctx.child.on('exit', r); else r() })
+      // W16 fix(#7): once 而非 on——stopApp 对同一 ctx 可被多次调用,旧 on('exit') 每次累挂
+      // 一个永不移除的监听器(MaxListeners 警告/泄漏);且子进程已退出时(exitCode !== null)
+      // 该监听器永不触发,直接以已退出态进入后续清理,不再空等。
+      const exited = new Promise(r => { if (ctx.child && ctx.child.exitCode === null) ctx.child.once('exit', r); else r() })
       await Promise.race([ctx._send('Browser.close'), sleep(4000).then(() => 'timeout')])
       graceful = await Promise.race([exited.then(() => true), sleep(4000).then(() => false)])
     } catch {}
@@ -137,6 +146,9 @@ export async function stopApp (ctx) {
   if (ctx.child && ctx.child.pid) {
     const dl = Date.now() + 20000
     while (Date.now() < dl) {
+      // W16 fix(#7): 先看 child 自己的退出态——pid 被系统复用后 process.kill(pid,0) 对着一个
+      // 无关进程持续"存活",旧循环白等满 20s;exitCode !== null 即进程本体已退,立即收尾。
+      if (ctx.child.exitCode !== null) break
       try { process.kill(ctx.child.pid, 0); await sleep(200) } catch { break }
     }
   }

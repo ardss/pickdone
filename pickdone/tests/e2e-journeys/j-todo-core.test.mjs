@@ -27,7 +27,10 @@ let available = false
 let isolated = false
 try {
   const list = await (await fetch(CDP + '/json', { signal: AbortSignal.timeout(1500) })).json()
-  const page = list.find(t => t.type === 'page' && !t.url.includes('__tomato-float'))
+  // W16 fix(#6): 预检过滤对齐 J-precondition 本体(~189 行)——旧过滤只排浮窗,共享池里其它
+  // target 留下的 __widget 页会被当成主窗附着,isolation 探测/后续用例全打在 widget 上假红。
+  const page = list.find(t => t.type === 'page' && !t.url.includes('__tomato-float') && /#\/todo-list/.test(t.url)) ||
+    list.find(t => t.type === 'page' && t.url.includes('index.html') && !t.url.includes('__tomato-float'))
   available = !!page
   if (page) {
     const ws2 = new WebSocket(page.webSocketDebuggerUrl)

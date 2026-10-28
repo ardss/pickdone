@@ -26,11 +26,11 @@
  * Usage: node tests/run-interactions-shared.mjs [script.mjs ...]   (defaults to the six gates)
  */
 import { spawn, execSync } from 'node:child_process'
-import net from 'node:net'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { registerChild, unregisterChild } from './lib/child-registry.mjs'
+import { pickFreePort } from './lib/runtime.mjs' // W16 fix(#4): 复用 runtime 版多段横跨实现(见下)
 import { fileURLToPath } from 'node:url'
 
 // fileURLToPath (not `new URL().pathname`): pathname is percent-encoded — a checkout path with
@@ -74,18 +74,9 @@ async function cdpAlive (url) {
   try { await fetch(url + '/json/list', { signal: AbortSignal.timeout(800) }); return true } catch { return false }
 }
 
-async function pickFreePort () {
-  for (let i = 0; i < 12; i++) {
-    const p = await new Promise((res, rej) => {
-      const srv = net.createServer()
-      srv.listen(0, '127.0.0.1', () => { const port = srv.address().port; srv.close(() => res(port)) })
-      srv.on('error', rej)
-    })
-    if (!(await cdpAlive(`http://127.0.0.1:${p}`))) return p
-  }
-  throw new Error('no free debug port found')
-}
-
+// W16 fix(#4): 本地 listen(0) 版已删——OS 动态段正是 WinNAT 保留段的猎场(runtime.mjs:33-40
+// 教训:2026-09-23 实锤 9400-9799 整段被吞,单一策略必然再撞)。改用 runtime.mjs 导出的
+// pickFreePort(bind-then-release,候选横跨 9400/12000/18000/21000 四段),单一实现不再漂移。
 let CDP = null
 let child = null
 let tmpDir = null

@@ -95,7 +95,8 @@ function main () {
       return e
     }
     const git = args2 => execFileSync('git', args2, { cwd: ROOT, encoding: 'utf8', env: gitEnv() })
-    const out = git(['diff', '--cached', '--name-only', '--diff-filter=ACM'])
+    // W16 fix(#2): ACMR — git mv 只产生 R 条目,ACM 漏掉改名文件(与 lint-staged.mjs 对齐)
+    const out = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR'])
     // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
     // inside the repo root): resolving them against ROOT silently matched nothing and the
     // staged gate checked ZERO files for its whole life (the 2026-10-10 ratchet-red-on-main
