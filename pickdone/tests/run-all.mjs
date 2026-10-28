@@ -580,7 +580,14 @@ if (r.status !== 0 && !r.error && r.stdout) {
           // TAP skip semantics: a skip directive belongs to a TEST POINT line (`ok N ... # SKIP`),
           // not anywhere in the block — a diagnostic line inside a passing block containing
           // "# SKIP" used to inflate the composed skip count (substring false positive).
-          const skips = all.filter(b => b.some(l => /^(?:not )?ok\b.*#\s*(SKIP|skip)\b/.test(l))).length
+          // W15 2026-10-27: per TEST-POINT LINE across the composed corpus, not per BLOCK — the
+          // block form counted each file block at most once, but node:test nests each file's test
+          // points as INDENTED `ok N ... # SKIP` lines inside its top-level block, so a file with
+          // 3 skipped test points contributed 1 (or 0) and the skip ratchet under-counted exactly
+          // on the paths it exists to guard. W14 semantics preserved: only `ok N`/`not ok N` lines
+          // match (the `ok`/`not ok` anchor cannot match a diagnostic text line), indentation now
+          // allowed.
+          const skips = all.reduce((n, b) => n + b.filter(l => /^\s*(?:not )?ok\b.*#\s*(?:SKIP|skip)\b/.test(l)).length, 0)
           const composed = [
             // W12 2026-10-26 (Fix 4): pass1 streams live, so the gate's tap file already holds
             // its raw bytes when this composed stream is appended. The separator marks the

@@ -53,7 +53,19 @@ const DEFAULT_TARGETS = [
   'tests/ui-coverage.mjs',
   'tests/integration/overlay-visibility.test.mjs',
 ]
-const TARGETS = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_TARGETS
+// W15 2026-10-27: argv used to be treated wholesale as target script paths — a stray flag
+// (`--foo`, a path typo, a relative path that does not exist) became a spawn target and either
+// died obscurely or consumed an 8min budget as a red. Targets must be EXISTING .mjs paths;
+// anything else is a fail-loud listing, not a silent spawn.
+const requested = process.argv.slice(2)
+if (requested.length) {
+  const bad = requested.filter(p => !(p.endsWith('.mjs') && fs.existsSync(path.resolve(appCwd, p))))
+  if (bad.length) {
+    console.error(`[shared-pool] ✗ invalid target(s): must be an existing .mjs path (relative to ${appCwd}):\n  ` + bad.join('\n  '))
+    process.exit(2)
+  }
+}
+const TARGETS = requested.length ? requested : DEFAULT_TARGETS
 
 const PER_TARGET_BUDGET_MS = 8 * 60 * 1000 // same ceiling class as the gated wrapper's 10min watchdog
 const MAX_INSTANCE_RESPAWNS = 1

@@ -433,8 +433,19 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
       if (!card) return null;
       const circle = card.querySelector('.habit-check');
       const cells = card.querySelectorAll('.habit-grid__cell');
-      const today = document.querySelector('.habit-cal-day.today');
-      const yCell = today && today.previousElementSibling;
+      // W15 2026-10-27: yesterday cell located by INDEX within the .habit-cal-day set (only
+      // day cells, weekday headers excluded by the class selector). previousElementSibling
+      // walked the RAW sibling list, which also contains the 7 .habit-cal-wd header spans —
+      // with month day 1 on Monday (offset 0) the today cell's previous sibling is a header
+      // span and J7 false-red'd. calDays is a continuous 42-day run, so index-1 is always
+      // yesterday WHEN it renders; when the grid starts ON today (1st + Monday offset 0)
+      // yesterday is not in this month's grid at all -> the test pages to the previous month
+      // and reads the last in-month cell there (see the pager branch below).
+      const calGrid = document.querySelector('.habit-cal-grid');
+      const calCells = calGrid ? [...calGrid.querySelectorAll('.habit-cal-day')] : [];
+      const tIdx = calCells.findIndex(c => c.classList.contains('today'));
+      const today = tIdx >= 0 ? calCells[tIdx] : null;
+      const yCell = tIdx > 0 ? calCells[tIdx - 1] : null;
       const st = (${STORE_Q});
       const h = st && st.state.habits.habits.find(x => x.name === ${JSON.stringify(name)});
       return {
@@ -446,6 +457,7 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
         yesterdayCellOn: !!(cells[28] && cells[28].classList.contains('on')),
         streak: ((card.querySelector('.habit-streak')||{}).textContent||'').trim(),
         todayCalChecked: !!(today && today.classList.contains('checked')),
+        yesterdayInGrid: tIdx > 0,
         yesterdayCalChecked: !!(yCell && yCell.classList.contains('checked')),
         yesterdayCalDot: !!(yCell && yCell.querySelector('.habit-cal-dot')),
         storeToday: !!(h && h.records && h.records[${JSON.stringify('TK')}]),
@@ -460,7 +472,28 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
     assert.ok(!v.todayCellOn, 'the 30-day grid lights TODAY although today was never checked')
     assert.ok(v.streak.includes('1-day streak') && !v.streak.includes('0-day'), 'streak should survive at 1 day for yesterday-checked/today-open, got: ' + v.streak)
     assert.ok(!v.todayCalChecked, 'month calendar marks today checked although today has no check-in')
-    assert.ok(v.yesterdayCalChecked && v.yesterdayCalDot, 'month calendar does not mark yesterday as checked (dot missing)')
+    if (v.yesterdayInGrid) {
+      assert.ok(v.yesterdayCalChecked && v.yesterdayCalDot, 'month calendar does not mark yesterday as checked (dot missing)')
+    } else {
+      // Month-start boundary (W15): the grid begins ON today (day 1 + Monday offset 0), so
+      // yesterday (the previous month's last day) only renders on the prev-month page. Page
+      // back, assert it there (yesterday = the LAST in-month cell of that grid), then restore.
+      const paged = await evalJson(`(() => {
+        const nav = document.querySelector('.habit-cal-nav');
+        const btn = nav && nav.querySelector('button');
+        if (!btn || btn.disabled) return 'no-prev';
+        btn.click(); return 'paged'
+      })()`)
+      assert.equal(paged, 'paged', 'month grid starts on today but the prev-month pager is unavailable')
+      const yv = await pollFor(`(() => {
+        const grid = document.querySelector('.habit-cal-grid');
+        const inMonth = grid ? [...grid.querySelectorAll('.habit-cal-day')].filter(c => !c.classList.contains('out')) : [];
+        const yCell = inMonth[inMonth.length - 1] || null;
+        return { n: inMonth.length, yChecked: !!(yCell && yCell.classList.contains('checked')), yDot: !!(yCell && yCell.querySelector('.habit-cal-dot')) }
+      })()`, 15, 400)
+      assert.ok(yv && yv.n > 0 && yv.yChecked && yv.yDot, 'prev-month page does not mark yesterday (its last in-month day) as checked with a dot')
+      await evalJson(`(() => { const b = document.querySelector('.habit-cal-today'); if (b) b.click(); return true })()`)
+    }
     assert.ok(v.storeYesterday && !v.storeToday, 'store records map wrong: yesterday=' + v.storeYesterday + ' today=' + v.storeToday)
     // durable DB row agrees with what the page shows
     const blob = await pollFor(`window.todoAPI.dbCall('getMeta', 'db.habitsState').then(vv => { const b = vv ? JSON.parse(vv) : null; const h = b && (b.habits||[]).find(x => x.name === ${JSON.stringify(name)}); return h && h.records && h.records[${JSON.stringify('YK')}] === true && !h.records[${JSON.stringify('TK')}] ? 'db-ok' : null })`.replaceAll('"YK"', JSON.stringify(seeded.yKey)).replaceAll('"TK"', JSON.stringify(todayKey)), 15, 400)

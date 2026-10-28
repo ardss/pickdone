@@ -200,9 +200,18 @@ function runStage (stage) {
           // vite on 6175 survived this reaper and poisoned the next run's host preflight.
           const mPort = (Array.isArray(args) ? args.join(' ') : '').match(/--port=(\d+)/)
           const reapPorts = mPort ? [mPort[1]] : ['5175', '6175']
+          // W15 (2026-10-27): `findstr :<port>` is a SUBSTRING match — ':5175' also hits
+          // ':51750'..':51759' local addresses and remote endpoints merely CONTAINING the
+          // digits, so innocent listeners got tree-killed. Run netstat raw and filter in JS:
+          // keep LISTENING lines whose LOCAL-ADDRESS column (2nd) ENDS with `:<port>` —
+          // exact-port only (pidsFromNetstatOutput stays untouched in event-utils.cjs).
+          const pidsOnPortExact = (out, port) => evtUtils.pidsFromNetstatOutput(
+            String(out || '').split(/\r?\n/)
+              .filter(l => { const c = l.trim().split(/\s+/); return /LISTENING/i.test(l) && c[1] && c[1].endsWith(':' + port) })
+              .join('\n'))
           for (const p of reapPorts) {
-            const r = spawnSync('netstat -ano | findstr :' + p + ' | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
-            for (const pid of evtUtils.pidsFromNetstatOutput(r.stdout || '')) {
+            const r = spawnSync('netstat -ano', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
+            for (const pid of pidsOnPortExact(r.stdout || '', p)) {
               try { spawn('taskkill', ['/pid', pid, '/T', '/F'], { shell: true, stdio: 'ignore' }) } catch {}
             }
           }
@@ -449,7 +458,12 @@ if (FAST) {
     results.push(...staticRs, ...liveRs, ...visualRs)
   }
 }
-for (const g of GROUPS.slice(FAST ? GROUPS.length : 4)) {
+// W15 2026-10-27: 尾段(④视觉/⑤a11y)按组名识别,不再按索引切片——旧 `GROUPS.slice(..., 4)` 在
+// 重排 GROUPS 后会把视觉池静默混入 CI;`--fast` 的旧 `slice(GROUPS.length)` 丢弃也会把 --a11y
+// 追加的 ⑤ 组一起静默吞掉。现在:视觉组按名挑出,FAST 丢弃只作用于视觉组,a11y 组照常运行。
+const tailGroups = GROUPS.filter(g => /视觉/.test(g.name) || /a11y/.test(g.name))
+for (const g of tailGroups) {
+  if (FAST && /视觉/.test(g.name)) continue
   // 视觉回归(第4组)是本机门禁:基线为 gitignored 的机器本地文件,且依赖 agent-browser——
   // CI 裸机上必然 14 场景全 MISSING-BASELINE,不得入 CI;本地 check:all 照常护航
   if (ON_CI && /视觉/.test(g.name)) {

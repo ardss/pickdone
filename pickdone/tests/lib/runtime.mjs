@@ -177,7 +177,7 @@ export async function connectCdp (ctx, tries = 40) {
             consoleErrors.push(m.params.args.map(a => a.value ?? a.description ?? '').join(' ').slice(0, 300))
           }
         }
-        await sendRaw('Runtime.enable')
+        await sendRawT('Runtime.enable') // W15: bounded like every other call below — an unbounded sendRaw parked the boot forever on a wedged page
         ctx._ws = ws
         ctx._send = sendRaw
         ctx.consoleErrors = consoleErrors

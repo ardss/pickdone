@@ -38,15 +38,23 @@ for (const f of FILES) {
   }
   try {
     work = execFileSync('git', ['show', `:${f}`], { cwd: ROOT, encoding: 'utf8' })
-  } catch { /* unstaged: fall through to worktree */ }
-  if (work == null) {
-    try {
-      work = readFileSync(path.join(ROOT, f.slice('pickdone/'.length)), 'utf8')
-    } catch (e) {
+  } catch { /* not in the index: fall through to worktree */ }
+  // W15 2026-10-27: `git show :f` succeeds for ANY file present in the index — including an
+  // UNMODIFIED one — so a worktree-only (unstaged) edit was never compared and the gate
+  // silently compared HEAD↔HEAD while claiming to guard the working tree. Read the worktree
+  // version too and compare against the LARGER of (index, worktree) rule counts: whichever
+  // version is bigger is the one that could grow the deposit file.
+  try {
+    const wt = readFileSync(path.join(ROOT, f.slice('pickdone/'.length)), 'utf8')
+    work = work == null ? wt : (ruleCount(wt) > ruleCount(work) ? wt : work)
+  } catch (e) {
+    if (work == null) {
       console.error(`  ✗ css-freeze: HEAD:${f} 存在但工作区/暂存区均读不到（${String(e.message).split('\n')[0]}）`)
       failed = true
       continue
     }
+    // worktree read failed but the index version exists (e.g. staged-deleted file): the index
+    // comparison above still guards — keep going.
   }
   compared++
   const h = ruleCount(head), w = ruleCount(work)
