@@ -293,8 +293,37 @@ function downloadUpdate () {
   return _manualDownload
 }
 
+// W16 (2026-10-28) pre-install sync-safety settle: quitAndInstall runs OUTSIDE the quit chain
+// (it skips will-quit entirely — electron-updater spawns the installer whose customInit
+// taskkills the process), so the quit-path flush triggers must be re-fired HERE or everything
+// not yet on disk when the installer lands is lost — including the LAN sync round boundary.
+// Mirrors flushOnceOnReady's trigger set, synchronously:
+//   1. the debounced dbMirror/reminder flush (same scheduler trigger index.js's quit flush uses)
+//   2. stopSyncForQuit: closes the in-flight LAN round sockets (each round settles through its
+//      normal failure path) and persists pull/push watermarks + the security ring while the DB
+//      handle is still open.
+// Bounded-wait note: quitAndInstall's contract is a SYNCHRONOUS boolean (index.js's D10
+// quit-hang fallback calls it and branches on the return value, so it cannot await). The
+// tokenized bounded handshake for renderer-pending writes already ran at 'update-downloaded'
+// (flushOnceOnReady -> quit-ack.runFlushRound, 2s cap); this settle hard-commits the
+// main-process side at the install moment itself.
+function preInstallSyncSettle () {
+  try { require('./scheduler').flushFiredNow() } catch (e) { try { log.warn('[Updater] pre-install scheduler flush failed:', e && e.message) } catch { /* best-effort */ } }
+  try {
+    const lanSync = require('./lan-sync-bootstrap')
+    if (typeof lanSync.stopSyncForQuit === 'function') {
+      // Fire-and-forget: the stop's internal await chain (server close -> watermark persist)
+      // races the installer's taskkill by design margin; quitting without it would race with
+      // NO settle at all (in-flight rounds would hold sockets and unsent watermarks into the kill).
+      const p = lanSync.stopSyncForQuit()
+      if (p && typeof p.catch === 'function') p.catch(() => { /* best-effort */ })
+    }
+  } catch (e) { try { log.warn('[Updater] pre-install LAN sync settle failed:', e && e.message) } catch { /* best-effort */ } }
+}
+
 function quitAndInstall () {
   if (isPortable || state.status !== 'ready') return false
+  preInstallSyncSettle()
   autoUpdater.quitAndInstall(true, true) // silent + runAfter: skips the install wizard and auto-launches the new version after update (smooth default)
   return true
 }
@@ -304,5 +333,6 @@ function getStatus () {
 }
 
 module.exports = { init, check, downloadUpdate, quitAndInstall, getStatus, flushOnceOnReady, forwardFlushAck,
+  preInstallSyncSettle, // W16: pre-install sync-safety settle (unit-testable: flush triggers fire before the installer spawns)
   syncAutoDownload, // updater-config-read-fail-open fix: unit-testable decision (plain node + __setConfigDir)
 }

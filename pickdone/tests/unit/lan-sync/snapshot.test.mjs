@@ -670,7 +670,11 @@ test('snapshot: sender streams chunks directly from the rows array (buildSnapsho
     ingestSegment: () => ({ applied: 0, rejected: 0 }),
     // Array path: no buildSnapshot JSON string is ever produced.
     buildSnapshotRows: () => rows.slice(),
-    snapshotSchemaVersion: 7,
+    // W16 (2026-10-28): schemaVersion is now ENFORCED on the receiving side — a snapshot ABOVE
+    // the local SYNC_SCHEMA_VERSION (1) rejects the whole round (w16-sync-version-gates.test.mjs).
+    // This test exercises the rows-streaming path, so it advertises the CURRENT schema (the old
+    // value 7 codified the pre-W16 lenient intake).
+    snapshotSchemaVersion: 1,
   })
   nodeA.start()
   nodeB.start()

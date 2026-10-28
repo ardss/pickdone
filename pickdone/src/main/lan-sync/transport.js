@@ -46,6 +46,31 @@ const cipher = require('./cipher')
 const { MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget, ProtocolError, cleanDeviceName, LineReader } = require('./line-reader')
 
 const PROTO_VER = 2
+// W16 (2026-10-28) protoVer ENFORCEMENT: PROTO_VER was advertised-only since the encrypted
+// transport (hello/hello-ack accepted any peer version). MIN_PROTO_VER is the lowest version
+// this build pairs with — currently equal to PROTO_VER, i.e. anything older than the v2
+// encrypted handshake is refused (a v1 peer cannot do the enc:1 handshake anyway, but the
+// explicit gate answers with a DISTINCT reason instead of a misleading "encryption required";
+// a hello with NO protoVer field at all — the legacy shape — counts as below MIN_PROTO_VER).
+// A peer NEWER than us is refused too: silently ingesting a newer protocol's messages is how
+// data corrupts. Both rejections ride the EXISTING error faces (hello-ack ok:false on the
+// server, 'rejected' + onUnauthorized on the dialer) with a structured `code` field
+// ('peer-too-new' / 'peer-too-old') + peerProtoVer, so the syncEvent consumer can map copy.
+const MIN_PROTO_VER = 2
+// W16: our own app version, advertised in `hello` so a peer can record which build it is
+// talking to (stored on the server's state.peer, delivered to the app via onPeer). Resolved
+// lazily from package.json (present in dev and inside app.asar) — this module stays pure Node,
+// no Electron import.
+let _cachedAppVersion = null
+function ownAppVersion () {
+  if (_cachedAppVersion !== null) return _cachedAppVersion
+  try { _cachedAppVersion = String(require('../../../package.json').version || '') } catch { _cachedAppVersion = '' }
+  return _cachedAppVersion
+}
+// W16: structured code for a version-gate rejection.
+function protoVerRejectCode (peerProto) {
+  return peerProto > PROTO_VER ? 'peer-too-new' : 'peer-too-old'
+}
 // TODO_SYNC_PORT (2026-10-01): per-instance sync port for single-machine multi-instance debugging
 // (PICKDONE_MULTI=1 + scripts/dev-duo.mjs). Unset env keeps the historical fixed 58471 — the pure
 // resolver is unit-tested (tests/unit/main/multi-instance-port.test.cjs). UDP fallback discovery
@@ -388,6 +413,18 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
           socket.destroy()
           return
         }
+        // W16 protoVer gate: BEFORE the enc gate — a peer outside [MIN_PROTO_VER, PROTO_VER]
+        // gets the precise version reason instead of "encryption required". Absent/garbage
+        // protoVer (legacy hello shape) is treated as below MIN_PROTO_VER.
+        const peerProto = Number(msg.protoVer) || 0
+        if (peerProto < MIN_PROTO_VER || peerProto > PROTO_VER) {
+          const code = protoVerRejectCode(peerProto)
+          const reason = code === 'peer-too-new' ? 'peer too new' : 'peer too old'
+          if (onUnauthorized) onUnauthorized({ deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '', host: socket.remoteAddress, error: reason, code, peerProtoVer: peerProto || null })
+          send(socket, { type: 'hello-ack', ok: false, protoVer: PROTO_VER, error: reason })
+          socket.destroy()
+          return
+        }
         // Encryption capability gate (PROTO_VER 2): both sides ship together in this repo, so
         // a peer that does not advertise enc support is refused instead of silently falling
         // back to plaintext sync data. Checked BEFORE auth so old peers get a clear reason.
@@ -440,7 +477,11 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
           socket.destroy()
           return
         }
-        state.peer = { deviceId: claimed, host: socket.remoteAddress, protoVer: msg.protoVer || PROTO_VER,
+        state.peer = { deviceId: claimed, host: socket.remoteAddress, protoVer: peerProto,
+          // W16: the peer's app build, advertised in hello (best-effort, length-capped) —
+          // delivered through onPeer so the peer-info surface can display it. Absent on
+          // peers older than W16.
+          appVersion: typeof msg.appVersion === 'string' && msg.appVersion ? msg.appVersion.slice(0, 64) : null,
           // Per-instance-port fix (2026-10-01): the peer's own LISTEN port, advertised in hello —
           // this is the port a dial BACK to them must use when per-instance TODO_SYNC_PORT
           // overrides make it differ from ours. Absent on legacy peers (node-events falls back).
@@ -666,7 +707,10 @@ function connect(host, port, opts) {
     if (pairCode !== undefined) { send(socket, { type: 'pair-request', deviceId, code: String(pairCode), nonce: pairNonce, pub: pairEph.pub, ...(listenPort ? { listenPort } : {}) }); return }
     // Two-way confirmed pairing (no code): ask the peer; the human there accepts or rejects.
     if (pairOpen) { send(socket, { type: 'pair-request', deviceId, deviceName: deviceName || '', nonce: pairNonce, pub: pairEph.pub, ...(listenPort ? { listenPort } : {}) }); return }
-    send(socket, { type: 'hello', deviceId, protoVer, authCode, enc: cipher.ENC_VER, salt, ...(listenPort ? { listenPort } : {}) })
+    send(socket, { type: 'hello', deviceId, protoVer, authCode, enc: cipher.ENC_VER, salt,
+      // W16: advertise our app build alongside protoVer (best-effort, capped).
+      appVersion: (typeof opts.appVersion === 'string' && opts.appVersion ? opts.appVersion : ownAppVersion()).slice(0, 64),
+      ...(listenPort ? { listenPort } : {}) })
   })
   // D17 P3: dial 'close' must emit exactly ONCE per dial. The timeout path used to emit 'close'
   // manually AND socket.destroy() then fired the socket 'close' handler which emitted it AGAIN —
@@ -736,6 +780,19 @@ function connect(host, port, opts) {
           return
         }
         if (msg.type === 'hello-ack' && msg.ok) {
+          // W16 protoVer gate (dialer side): the ack echoes the SERVER's protoVer. Outside our
+          // [MIN_PROTO_VER, PROTO_VER] window the round is refused BEFORE any data flows —
+          // structured code + peer version ride the existing 'rejected' / onUnauthorized face.
+          // A legacy ack with NO protoVer counts as below MIN_PROTO_VER.
+          const peerAckProto = Number(msg.protoVer) || 0
+          if (peerAckProto < MIN_PROTO_VER || peerAckProto > PROTO_VER) {
+            const code = protoVerRejectCode(peerAckProto)
+            const reason = code === 'peer-too-new' ? 'peer too new' : 'peer too old'
+            em.emit('rejected', { type: 'hello-ack', ok: false, error: reason, code, peerProtoVer: peerAckProto || null })
+            if (onUnauthorized) onUnauthorized({ deviceId, host, error: reason, code, peerProtoVer: peerAckProto || null })
+            socket.destroy()
+            return
+          }
           // Refuse plaintext peers (option a, both sides ship together): the ack MUST echo
           // enc support, else syncing over an unencrypted link would be silent.
           if (msg.enc !== 1) {
@@ -796,4 +853,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, flushThenDestroy, PAIR_FLUSH_CAP_MS, ProtocolError, PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }
+module.exports = { createLanServer, connect, send, wireConnection, flushThenDestroy, PAIR_FLUSH_CAP_MS, ProtocolError, PROTO_VER, MIN_PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }
