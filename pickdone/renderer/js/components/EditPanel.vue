@@ -714,8 +714,8 @@ export default {
       let undone = false
       const deleteFromDisk = () => {
         if (undone || !item.url) return
-        // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments.
-        const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
+        // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments. [w16 P2 fix] the recycleList counts too: with the undo toast pending, the task can be whole-deleted into the bin — there the todoList lookup misses, the guard passed, and the physical file was deleted anyway (a later bin restore revived a row whose attachment 404'd).
+        const row = this.$store.state.todo.todoList.concat(this.$store.state.todo.recycleList).find(t => t.taskId === (this.e && this.e.taskId))
         if (attachmentUrlPresent(row, item.url)) return
         // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection.
         // [maint-0925 D] the old catch(() => {}) discarded the structured error entirely: log it via the

@@ -28,10 +28,13 @@ export function installSyncEventToasts ({ onSyncEvent, i18n, toast, EP }) {
       ? 'sync.degradedOplog'
       : evt.type === 'flush-quarantined' ? 'sync.degradedFlush' : null
     if (!key || shown.has(key)) return
-    shown.add(key)
     try {
       if (!EP || !EP.ElMessage) return
       toast({ type: 'warning', message: i18n.global.t(key), duration: 8000, showClose: true })
+      // [w16 P3 fix] mark shown only AFTER the toast actually surfaced: the add used to sit
+      // before the EP availability check, so an event arriving before EP was ready burned the
+      // one-shot alarm without the user ever seeing it.
+      shown.add(key)
     } catch (e) { console.warn('[lan-sync] degraded toast failed', e) }
   })
 }

@@ -20,9 +20,11 @@ const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
 test('#5 QuickAdd Esc carries the IME composition guard', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
-  // Vue passes the keyup event implicitly to the named handler (the binding shape is pinned
-  // by tests/unit/renderer/uiux-1001-quickadd-esc.test.mjs); the guard lives in onCancel.
-  assert.match(src, /@keyup\.esc="onCancel"/, 'Esc binding on the qa input (implicit event arg)')
+  // Vue passes the keydown event implicitly to the named handler ([w16 fix 2026-10-28] the
+  // binding moved from keyup to keydown — after compositionend Chromium's keyup fires with
+  // isComposing=false, so the flag is invisible there; shape still pinned by
+  // tests/unit/renderer/uiux-1001-quickadd-esc.test.mjs); the guard lives in onCancel.
+  assert.match(src, /@keydown\.esc="onCancel"/, 'Esc binding on the qa input (implicit event arg)')
   assert.match(src, /onCancel \(e\) \{[\s\S]*?if \(e && \(e\.isComposing \|\| e\.keyCode === 229\)\) return/,
     'onCancel early-returns on IME composition, same guard as the Enter handler')
 })

@@ -119,6 +119,10 @@ export default {
   },
 
   mounted () {
+    // [w16 P2 fix] Seed the pips-tour baseline with the CURRENT count: _prevTodayDone had no
+    // initialization, so a genuine 0→1 jump saw prev===undefined (blocked by `prev !== 0`) and
+    // every later completion was blocked by `todayDone < 1` — only undo-then-redo ever taught.
+    this._prevTodayDone = this.todayDone
     this._iv = setInterval(() => {
       this.ts = Date.now() // completion check / bookkeeping live in store/tomato's shared tick (dispatched per window by main.js); this only refreshes the display
       // While idle (non-running) the status does not change; push once after each flip instead of pushing IPC every second

@@ -98,7 +98,12 @@ export default {
       // whether it should follow settings.weekStartDay is pending product confirmation (see weekGrid.js).
       // D4 2026-09-24: the matcher itself moved to shared/filter-core.mjs (single source with db.js
       // conds parsing and cli/lib.js applyViewConds); done defaults to false = undone-only parity.
-      const win = { today0: today0(), weekEnd: isoWeekEnd(Date.now()) }
+      // [w16 P3 fix] the window clock must be REACTIVE: a bare Date.now() has zero reactive deps,
+      // so after a midnight rollover the today/week/overdue buckets stayed frozen in the old day
+      // until an unrelated store mutation re-rendered. todo.todayTimestamp is refreshed by the
+      // store's setTodayTs across midnight (RecycleBinView.vue precedent).
+      const now = this.$store.state.todo.todayTimestamp || Date.now()
+      const win = { today0: today0(now), weekEnd: isoWeekEnd(now) }
       return this.$store.state.todo.todoList
         .filter(t => matchesViewConds(t, f.conds || {}, win))
         // F2-P3: createTime ASC tiebreaker per sortMode.js's custom spec — import-path ties

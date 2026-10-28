@@ -8,8 +8,8 @@
              :maxlength="TITLE_MAX"
              @input="failed = false"
              @paste="onPaste"
-             @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"
-             @keyup.esc="onCancel"/>
+             @keydown.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"
+             @keydown.esc="onCancel"/>
       <transition name="fade">
         <!-- Inline failure feedback for the 64px standalone quick-add window: a $message toast is
              clipped there (overflow:hidden), so quiet mode surfaces the error inside the card -->
