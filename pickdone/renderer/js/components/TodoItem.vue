@@ -389,9 +389,12 @@ export default {
     // orphaned on the old day (the hand-written { todoTime: target } patch used to wipe both).
     moveDay (offset) {
       const cur = this.rawOf()
-      const base = cur.todoTime
-        ? dayjs(cur.todoTime)
-        : dayjs().startOf('day')
+      // [w17] base prefers the task's own dayStart: a PURE-DATE task (dayStart in the future, no
+      // todoTime) "+1 day" used to be Math.max-pulled back to tomorrow (direction inverted) because
+      // the base defaulted to bare today, ignoring the scheduled date.
+      const base = cur.dayStart
+        ? dayjs(cur.dayStart)
+        : (cur.todoTime ? dayjs(cur.todoTime) : dayjs().startOf('day'))
       const target = offset === 0
         ? +dayjs().startOf('day')
         // Postpone: at least to tomorrow; unexpired tasks are pushed forward from their original date

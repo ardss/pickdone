@@ -18,7 +18,7 @@
         <template v-if="painted(idx)">
         <div class="pd-day-deck__head">
           <span class="pd-day-deck__label">{{ labelOf(c.ts) }}</span>
-          <span class="pd-day-deck__count">{{ doneOf(c) }}/{{ totalCountOf(c) }}</span>
+          <span class="pd-day-deck__count">{{ doneOf(c) }}/{{ totalCountOf(c) }}<span v-if="c.futureN" class="pd-day-deck__overdue-more" aria-hidden="true">+{{ c.futureN }}</span></span>
         </div>
         <div class="pd-day-deck__wd">{{ fmtMd(c.ts) + ' ' + $t('statsA.core.weekOf', { w: $t('statsA.core.wd' + dayjs(c.ts).day()) }) }}</div>
         <div class="pd-day-deck__bar" aria-hidden="true">
@@ -100,7 +100,7 @@ import { FMT } from '../utils/core.js'
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A2]
 import { getLocale } from '../i18n/index.js'
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
-import { deckWindowDays, deckCards, clampToDayWindow, DECK_SPAN_DAYS } from '../utils/dayWindow.js' // [w16-deck] window build + single-pass bucketing; clamp only fronts beyond-cap edges now
+import { deckWindowDays, deckCards, clampToDayWindow, anchorFrontIndex, DECK_SPAN_DAYS } from '../utils/dayWindow.js' // [w16-deck] window build + single-pass bucketing; clamp only fronts beyond-cap edges now; [w17] anchorFrontIndex re-anchors front when the window shifts
 import { dayShift, dayStart } from '../utils/todayBounds.js' // [D19] sanctioned calendar-day stepping (raw ms arithmetic drifts off local midnight across DST)
 
 // Bare dayjs is the window.dayjs global (injected by the browser host); taking an explicit reference satisfies lint and avoids global lookups
@@ -182,6 +182,23 @@ export default {
       if (this._flipLocal) {
         this._flipLocal = false
         if (this.$announce && ts) this.$announce(this.$t('statsE.TodayView.deckDayAnnounce', { d: this.labelOf(ts) }))
+      }
+    },
+    // [w17] The card window itself changed (midnight tick recomputed days, or daySelectedTs was
+    // reset to 0 / shifted the window): `front` is a bare INDEX, so a stale value can point outside
+    // the new window — every card display:none (blank board) and the ArrowRight guard dies. Re-anchor
+    // onto a valid index aligned to the current selection (ts=0 → today0). A window that merely
+    // SHIFTED (same calendar day still fronted) stays untouched so the user's day survives the tick;
+    // _selSync suppresses the front watcher's write-back — the store selection stays authoritative.
+    days (nDays, oDays) {
+      if (!Array.isArray(nDays) || !nDays.length) return
+      const sel = this.$store.state.ui.daySelectedTs
+      const target = sel ? dayStart(+sel) : this.today0
+      if (nDays[this.front] === target) return // already fronting the selection/today
+      const idx = anchorFrontIndex(nDays, this.today0, sel || 0)
+      if (idx !== this.front && nDays[idx] !== (oDays ? oDays[this.front] : undefined)) {
+        this._selSync = true
+        this.front = idx
       }
     },
     // Reverse sync (fixed 2026-09-02): the date strip's "back to today" / calendar popover day-pick only wrote the store, and the deck had no

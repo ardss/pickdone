@@ -57,6 +57,7 @@
 
 <script lang="ts">
 import { FMT } from '../utils/core.js'
+import { dayStart } from '../utils/todayBounds.js' // [w17] consumer-side dayStart() normalization for the list bucketing (same caliber as the deck)
 import { maybeRunTour } from '../utils/onboardingTours.js'
 /** Today's todos —— expired uncompleted (collapsed groups by date) + today + completed today.
  *  The former "recent todos" page was removed (finalized by user on 2026-08-29): expired tasks roll into this page as a hierarchy,
@@ -204,11 +205,14 @@ export default {
     groups () {
       const g = []
       const dayjs = window.dayjs
-      const sel = this.$store.state.ui.daySelectedTs || dayjs().startOf('day').valueOf()
+      // [w17] consumer-side dayStart() normalization (same as DayDeck's deckCards bucketing):
+      // a bare `t.dayStart === sel` silently dropped drifted rows (cross-timezone synced rows with
+      // non-midnight ms, or 'YYYY-MM-DD' ISO strings parsed as UTC) that the deck still showed.
+      const sel = dayStart(this.$store.state.ui.daySelectedTs || dayjs().startOf('day').valueOf())
       const isToday = sel === dayjs().startOf('day').valueOf()
       if (!isToday) {
         // Project baseline behavior: selecting another date in today view -> show that day's tasks
-        const all = this.fitProj(this.$store.getters['todo/activeList'].filter(t => t.dayStart === sel))
+        const all = this.fitProj(this.$store.getters['todo/activeList'].filter(t => dayStart(t.dayStart) === sel))
         const undone = all.filter(t => !t.complete)
         const done = all.filter(t => t.complete)
         const lbl = sel === +dayjs().add(1, 'day').startOf('day') ? this.$t('statsA.core.tomorrow')

@@ -76,24 +76,53 @@ export function deckWindowDays (today0, selTs) {
  * @param {Array} list source tasks (pre-filtered by the parent view)
  * @param {number[]} days deckWindowDays() output
  * @param {number} today0 local midnight of today
- * @returns {{ts: number, all: Array, overdue: Array, overdueShown: Array}[]}
+ * @returns {{ts: number, all: Array, overdue: Array, overdueShown: Array, futureN: number}[]}
  */
 export function deckCards (list, days, today0) {
   const byDay = new Map(days.map(ts => [ts, []]))
   const windowStart = days.length ? days[0] : Infinity
+  const windowEnd = days.length ? days[days.length - 1] : Infinity
   const overdue = []
+  let futureN = 0
   for (const t of (Array.isArray(list) ? list : [])) {
     if (!t || t.delete || !t.dayStart) continue
     const ds = dayStart(t.dayStart)
     const bucket = byDay.get(ds)
     if (bucket) bucket.push(t)
     else if (!t.complete && ds < windowStart) overdue.push(t)
+    // [w17] the future horizon cap truncates too: incomplete rows dated beyond the window END
+    // used to fall into NO bucket with no signal (the past direction had the +N badge). Count
+    // them onto the LAST card as a pure numeric badge (same incomplete-only contract as overdue).
+    else if (!t.complete && ds > windowEnd) futureN++
   }
   if (overdue.length > 1) overdue.sort((a, b) => dayStart(b.dayStart) - dayStart(a.dayStart))
-  return days.map(ts => ({
+  return days.map((ts, i) => ({
     ts,
     all: byDay.get(ts) || [],
     overdue: ts === dayStart(today0) ? overdue : [],
-    overdueShown: ts === dayStart(today0) ? overdue.slice(0, DECK_OVERDUE_CAP) : []
+    overdueShown: ts === dayStart(today0) ? overdue.slice(0, DECK_OVERDUE_CAP) : [],
+    futureN: i === days.length - 1 ? futureN : 0
   }))
+}
+
+/**
+ * [w17] Re-anchor the deck's front INDEX after the card window changed. `front` is a bare index:
+ * when `days` shrinks or shifts (midnight tick, daySelectedTs reset to 0) a stale front can point
+ * outside the window — every card display:none (blank board) and the arrow-key guards die.
+ * - the selection (dayStart()-normalized; ts=0 anchors to today0) is fronted when it is a member;
+ * - a beyond-cap selection fronts the nearest cap edge via clampToDayWindow (same semantics as the
+ *   store watcher / created alignment — never feeds a store write-back);
+ * - an empty window returns 0.
+ *
+ * @param {number[]} days deckWindowDays() output
+ * @param {number} today0 local midnight of today
+ * @param {number} selTs raw store selection (0 = none)
+ * @returns {number} a valid index into `days`
+ */
+export function anchorFrontIndex (days, today0, selTs) {
+  if (!Array.isArray(days) || !days.length) return 0
+  const target = dayStart(selTs || today0 || 0)
+  let idx = days.indexOf(target)
+  if (idx < 0) idx = days.indexOf(clampToDayWindow(days, target))
+  return idx >= 0 ? idx : 0
 }

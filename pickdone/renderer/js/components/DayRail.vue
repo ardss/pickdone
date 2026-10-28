@@ -349,7 +349,7 @@ export default {
       return list
     },
     /* Follow the right column's date strip (user-finalized): the time rail shows the selected day, not just today — can review history / plan the future */
-    selTs () { return this.$store.state.ui.daySelectedTs || today0() },
+    selTs () { void this.nowTs; return this.$store.state.ui.daySelectedTs || today0() }, // [w17] nowTs dependency: with daySelectedTs === 0 (main path) the fallback today0() froze at yesterday across midnight
     isViewingToday () { return this.selTs === today0() },
     headLabel () {
       if (this.isViewingToday) return this.$t('statsA.core.today')
