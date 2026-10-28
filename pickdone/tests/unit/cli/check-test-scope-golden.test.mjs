@@ -101,3 +101,12 @@ test('summary offline: red TAP fails AND lands the full failing TAP in-tree', ()
     if (before === null) { try { fs.unlinkSync(repoTap) } catch { /* was absent */ } } else { fs.writeFileSync(repoTap, before) }
   }
 })
+
+test('W17 pin: stagedFiles git filter is ACMR (R keeps git-mv+docs sets from false-skipping)', () => {
+  // A `git mv src + docs edit` staged set yields ONLY docs + R entries; with the old ACM filter
+  // the R entry was dropped, docs-only won, and the whole unit stage skipped. Source pin the
+  // filter letter set (same set the W16 gates use).
+  const src = fs.readFileSync(CLI('check-test-scope.cjs'), 'utf8')
+  assert.match(src, /--diff-filter=ACMR/, 'staged diff-filter must be ACMR')
+  assert.doesNotMatch(src, /--diff-filter=ACM(?!R)/, 'no bare ACM filter may remain')
+})

@@ -71,7 +71,9 @@ function stagedFiles () {
   const args = process.argv.slice(2)
   if (args.length) return args.map(f => f.split(path.sep).join('/'))
   try {
-    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], {
+    // W17 fix(2026-10-28): ACMR — `git mv 源文件 + 文档` 的 staged 集在 ACM 下只剩文档条目,
+    // 被误判 docs-only → 单测整级 skip。R(改名)与 W16 其余门对齐。
+    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
       cwd: ROOT, encoding: 'utf8',
     })
     return out.split(/\r?\n/).filter(Boolean).map(f => f.split(path.sep).join('/'))

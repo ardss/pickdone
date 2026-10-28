@@ -69,7 +69,10 @@ if (process.argv.includes('--all')) {
   const walk = d => {
     for (const f of require('fs').readdirSync(d)) {
       const p = path.join(d, f)
-      if (require('fs').statSync(p).isDirectory()) { if (!/node_modules|vendor|i18n/.test(f)) walk(p); continue }
+      // 2026-10-28 anchor fix (W17): the old unanchored /node_modules|vendor|i18n/ substring
+      // pruned ANY directory whose NAME contained those substrings (e.g. i18n-helpers/, my-vendor-bridge/)
+      // — whole legit subtrees silently left the scan surface. Anchor to whole path segments.
+      if (require('fs').statSync(p).isDirectory()) { if (!/^(node_modules|vendor|i18n)$/.test(f)) walk(p); continue }
       if (SCAN_EXT(f) && !IGNORE_FILES.test(p)) files.push(p)
     }
   }
@@ -77,6 +80,13 @@ if (process.argv.includes('--all')) {
   walk(path.join(ROOT, 'shared'))
 } else {
   const gitOpts = { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
+  // 2026-10-28 quotePath fix (W17): git quotes non-ASCII paths as octal escapes by default; the
+  // SCAN_EXT regex (no trailing quote) then silently dropped e.g. renderer/js/界面.vue from BOTH
+  // the diff list and the dirtyJs self-check — the two fake-green guards shared the same broken
+  // regex, so the scan collapsed to 0 files and exited green. Pin quotePath=false so raw UTF-8
+  // names flow through (same pin the pre-commit hook applies to ITS OWN calls — the `-c` flag is
+  // per-invocation and does NOT propagate into child gates, hence the pin here too).
+  const QUOTE_PATH_OFF = ['-c', 'core.quotePath=false']
   // 2026-09-23 P2 fix: the previous bare `git diff --name-only HEAD` printed REPO-ROOT-relative paths
   // (pickdone/...) while `git ls-files --others` printed pickdone-RELATIVE ones — the f.startsWith('pickdone')
   // filter then dropped tracked changes via the path.join(ROOT, f) double-prefix and untracked ones via the
@@ -91,8 +101,8 @@ if (process.argv.includes('--all')) {
   // guard below and made any file deletion a false red. --diff-filter=d (lowercase = exclude
   // deletions) keeps deleted paths out of the scan list while added/copied/modified/renamed
   // ones (which all exist on disk) still get scanned.
-  const diff = execFileSync('git', ['diff', '--name-only', '--relative', '--diff-filter=d', 'HEAD'], gitOpts)
-    + '\n' + execFileSync('git', ['ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
+  const diff = execFileSync('git', [...QUOTE_PATH_OFF, 'diff', '--name-only', '--relative', '--diff-filter=d', 'HEAD'], gitOpts)
+    + '\n' + execFileSync('git', [...QUOTE_PATH_OFF, 'ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
   files = diff.split('\n').map(f => f.trim().replace(/\\/g, '/'))
     .filter(f => SCAN_EXT(f) && !f.startsWith('../'))
   // 假绿防线: stat 失败的文件被静默剔除 = 扫描面静默缩水。diff 里的 js/vue 路径必然在盘上
@@ -107,7 +117,7 @@ if (process.argv.includes('--all')) {
     // Self-check (假绿防线): the worktree DOES hold dirty js/vue files but none were scanned — that is
     // scan-surface collapse (filter/normalization rot), not a clean pass. Fail red instead.
     // Same extension set as the scan filter, so dirty shared/*.mjs files count here too.
-    const dirtyJs = execFileSync('git', ['status', '--porcelain'], gitOpts).split('\n').filter(l => {
+    const dirtyJs = execFileSync('git', [...QUOTE_PATH_OFF, 'status', '--porcelain'], gitOpts).split('\n').filter(l => {
       const f = l.slice(3).trim().replace(/\\/g, '/')
       // Deletions (status X/Y = D) are legitimately unscannable — --diff-filter=d already
       // dropped them above; counting them here would false-red a deletion-only worktree.

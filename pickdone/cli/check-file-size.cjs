@@ -96,7 +96,10 @@ function main () {
     }
     const git = args2 => execFileSync('git', args2, { cwd: ROOT, encoding: 'utf8', env: gitEnv() })
     // W16 fix(#2): ACMR — git mv 只产生 R 条目,ACM 漏掉改名文件(与 lint-staged.mjs 对齐)
-    const out = git(['diff', '--cached', '--name-only', '--diff-filter=ACMR'])
+    // W17 fix(2026-10-28): quotePath=false — git 默认把非 ASCII 路径打成带引号八进制串,扩展名
+    // 正则(尾引号不匹配)会静默剔除,staged 扫描面塌缩回 0 假绿。pre-commit 的 `-c` 是单次性的,
+    // 不会传播到本子进程,必须自带。`-c` 与 lint-staged 的 -z 等价达成同一语义,选前者改动最小。
+    const out = git(['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'])
     // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
     // inside the repo root): resolving them against ROOT silently matched nothing and the
     // staged gate checked ZERO files for its whole life (the 2026-10-10 ratchet-red-on-main

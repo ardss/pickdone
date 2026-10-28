@@ -176,7 +176,9 @@ function main () {
     const { execFileSync } = require('child_process')
     const gitOpts = { cwd: ROOT, encoding: 'utf8' }
     // W16 fix(#2): ACMR — git mv 只产生 R 条目,ACM 漏掉改名文件(与 lint-staged.mjs 对齐)
-    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], gitOpts)
+    // W17 fix(2026-10-28): quotePath=false — 非 ASCII 文件名默认被打成带引号八进制串,被扩展名
+    // 正则静默剔除 → 熔断守卫失效、门禁扫 0 假绿(pre-commit 的 `-c` 单次性不传播到本子进程)。
+    const out = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], gitOpts)
     // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
     // inside the repo root): the raw toplevel-relative paths never matched the src/main regex
     // and --staged scanned ZERO files for its whole life while exiting green. Resolve every

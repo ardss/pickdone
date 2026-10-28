@@ -59,6 +59,18 @@ function suiteMatchesCalibration (j) {
   return summarySuite(j) === CALIBRATION_SUITE
 }
 
+// W17 fix (2026-10-28): run-all tags tier-scoped summaries as `<suites>+<tier>` (tier ∈ core|deep,
+// see the suiteTag write in tests/run-all.mjs). A tier run's file set is a strict subset of the
+// pool, so its coverage reading is a DIFFERENT instrument; worse, coverage-summary.json is a
+// SINGLE SHARED SLOT with no run identity — a concurrent pre-commit core-subset run OVERWRITES the
+// slot while this gate is polling it, and comparing against the subset reading false-reds.
+// Any tier-suffixed summary is therefore treated as slot pollution: do NOT compare, report why,
+// exit non-zero (an explicit red beats a silent wrong verdict — the operator re-runs).
+function summaryIsTierScoped (j) {
+  const s = summarySuite(j)
+  return typeof s === 'string' && /(^|[+])(core|deep)$/.test(s)
+}
+
 // F4 fix (2026-10-15): the baseline read used to be a bare JSON.parse — a corrupted file (crash
 // mid-write, hand edit) crashed the gate with a raw SyntaxError. Now: a clear report, exit non-zero,
 // and NO silent rebuild — a rebuilt baseline would erase the ratchet history (only-upward floor)
@@ -144,7 +156,7 @@ function parseAllFiles (out) {
   return null
 }
 
-module.exports = { parseAllFiles, loadBaseline, writeBaseline, readBaselineDoc, BASELINE_FILE, summarySuite, suiteMatchesCalibration }
+module.exports = { parseAllFiles, loadBaseline, writeBaseline, readBaselineDoc, BASELINE_FILE, summarySuite, suiteMatchesCalibration, summaryIsTierScoped }
 
 if (require.main !== module) return
 
@@ -204,6 +216,12 @@ const measuredFromSummary = preflight && (preflight.generatedAt && startedAt - D
 
 let measured
 let reuseSuiteMatches = true // own runCoverage() is always the calibration suite
+// W17 fix: a tier-scoped summary in the shared slot means a concurrent --tier run polluted it —
+// the subset reading must not be compared against the full-pool baseline. Explicit red, no comparison.
+if (measuredFromSummary && summaryIsTierScoped(measuredFromSummary)) {
+  console.error(`✗ [check-coverage-ratchet] coverage-summary.json is tier-scoped (suite="${summarySuite(measuredFromSummary)}") — a concurrent --tier run owns/polluted the shared slot and its file set is a strict subset (different instrument). Refusing to compare against it: re-run this gate after the tier run finishes (its own run writes a --suite=${CALIBRATION_SUITE} summary).`)
+  process.exit(1)
+}
 if (measuredFromSummary) {
   measured = { lines: measuredFromSummary.lines, branches: measuredFromSummary.branches, functions: measuredFromSummary.functions }
   console.log(`[check-coverage-ratchet] reused coverage summary (suite=${summarySuite(measuredFromSummary) || 'unknown/legacy'}) from the unit gate (${measured.lines}/${measured.branches}/${measured.functions})`)

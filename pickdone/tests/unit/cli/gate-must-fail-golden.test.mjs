@@ -219,3 +219,71 @@ test('GOLDEN i18n incremental: a committed-file deletion is green (diff-filter=d
   const rb = runGate('check-i18n.js', path.join(root, 'pickdone'))
   assert.equal(rb.code, 1, 'dirty hardcoded CN must stay red after the deletion fix: ' + rb.out)
 })
+
+test('W17 GOLDEN i18n incremental: a dirty NON-ASCII filename enters the scan (quotePath pin)', () => {
+  // W17 quotePath hole: git quotes non-ASCII paths as octal escapes by default; the SCAN_EXT
+  // regex (no trailing quote match) silently dropped renderer/js/界面.vue from BOTH the diff
+  // list and the dirtyJs self-check (same broken filter) → scan collapsed to 0 files, green.
+  const { root, write } = mkTree('i18n-nonascii')
+  const vue = cn => `<template><div/></template>\n<script>export default { mounted () { this.$message(${cn}) } }</script>\n`
+  write('pickdone/renderer/js/ok.vue', vue('this.$t("common.ok")'))
+  execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  // Dirty a tracked file with a non-ASCII name (tracked → git diff HEAD lists it)
+  fs.writeFileSync(path.join(root, 'pickdone/renderer/js/界面文件.vue'), vue('"硬编码中文bad"'))
+  const rb = runGate('check-i18n.js', path.join(root, 'pickdone'))
+  assert.equal(rb.code, 1, 'dirty non-ASCII-named file must be scanned and red (silent drop = quotePath hole): ' + rb.out)
+  assert.match(rb.out, /界面文件\.vue/, 'the non-ASCII file itself must appear in the hit list')
+
+  // Clean counterpart: same name, translated copy → green with the file actually scanned
+  fs.writeFileSync(path.join(root, 'pickdone/renderer/js/界面文件.vue'), vue('this.$t("common.ok")'))
+  const rg = runGate('check-i18n.js', path.join(root, 'pickdone'))
+  assert.equal(rg.code, 0, 'clean non-ASCII-named file must pass: ' + rg.out)
+  assert.match(rg.out, /扫了 1 个文件/, 'the non-ASCII file must have entered the scan surface (0 = collapse): ' + rg.out)
+})
+
+test('W17 GOLDEN boot-order --staged: a staged NON-ASCII filename is scanned (quotePath pin)', () => {
+  const mk = (name, rel, body) => {
+    const { root, write } = mkTree(name)
+    write(rel, body)
+    execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+    return root
+  }
+  const good = mk('bo-nonascii', 'pickdone/src/main/ok.js', 'let init = () => {}\ninit()\n')
+  fs.writeFileSync(path.join(good, 'pickdone/src/main/启动.js'), 'let qd = () => {}\nqd()\n')
+  execSync('git add pickdone/src/main/启动.js', { cwd: good, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  const rg = runGate('check-boot-order.cjs', path.join(good, 'pickdone'), ['--staged'])
+  assert.equal(rg.code, 0, 'staged non-ASCII-named src/main file must be scanned and pass: ' + rg.out)
+  assert.match(rg.out, /1 个文件/, 'must scan exactly 1 staged file (0 = the quotePath silent drop): ' + rg.out)
+})
+
+test('W17 GOLDEN file-size --staged: a staged NON-ASCII filename is scanned (quotePath pin)', () => {
+  const { root, write } = mkTree('fs-nonascii')
+  write('pickdone/renderer/js/ok.js', 'let i = () => {}\n'.repeat(10))
+  execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  fs.writeFileSync(path.join(root, 'pickdone/renderer/js/界面.js'), 'let q = () => {}\nq()\n')
+  execSync('git add pickdone/renderer/js/界面.js', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  const rg = runGate('check-file-size.cjs', path.join(root, 'pickdone'), ['--staged'])
+  assert.equal(rg.code, 0, 'staged non-ASCII-named file must be scanned and pass: ' + rg.out)
+  assert.match(rg.out, /扫描 1 个文件/, 'must scan exactly 1 staged file (0 = the quotePath silent drop): ' + rg.out)
+})
+
+test('W17 GOLDEN esm-graph: legal re-export forms are green (export * as + export { x as default })', () => {
+  // W17 false-red fix: hasDefault used to recognize only ExportDefaultDeclaration, so
+  // `export { x as default }` was flagged white-screen-class; `export * from` targets had an
+  // unknown-but-checkable surface and named imports through them false-red.
+  const good = mkTree('esm-reexport')
+  good.write('renderer/js/main.js', "import Def from './reexport.js'\nimport { helper } from './star.js'\nDef()\nhelper()\n")
+  good.write('renderer/js/impl.js', 'const helper = () => {}\nexport { helper as default }\n')
+  good.write('renderer/js/reexport.js', "export { default } from './impl.js'\n")
+  good.write('renderer/js/star-impl.js', 'export const helper = () => {}\n')
+  good.write('renderer/js/star.js', "export * from './star-impl.js'\n")
+  const rg = runGate('check-esm-graph.cjs', good.root)
+  assert.equal(rg.code, 0, 'legal re-export forms must pass (was white-screen-class false-red): ' + rg.out)
+
+  // Detection intact: a genuinely missing named export (no star) still reds.
+  const bad = mkTree('esm-reexport-bad')
+  bad.write('renderer/js/main.js', "import { nope } from './dep.js'\nnope()\n")
+  bad.write('renderer/js/dep.js', 'export const real = 1\n')
+  const rb = runGate('check-esm-graph.cjs', bad.root)
+  assert.equal(rb.code, 1, 'genuinely missing named export must stay red: ' + rb.out)
+})
