@@ -106,10 +106,14 @@ test('[F6] dayShift keeps every stepped timestamp on local midnight across the w
   }
 })
 
-test('[F6] DayDeck no longer invents raw ms day arithmetic; days use dayShift', () => {
+test('[F6] DayDeck no longer invents raw ms day arithmetic; days step via dayShift', () => {
   const src = read('renderer/js/components/DayDeck.vue')
   assert.match(src, /import \{ dayShift, dayStart \} from '\.\.\/utils\/todayBounds\.js'/)
-  assert.match(src, /dayShift\(t0, i - SPAN\)/)
+  // [w16-deck 2026-10-28] the days array is built by utils/dayWindow.js deckWindowDays, whose
+  // dayShift loop is unit-tested in w16-deck-card-view.test.mjs; pin the delegation here
+  assert.match(src, /deckWindowDays\(this\.today0/, 'days delegate calendar-day stepping to the shared helper')
+  const dayWindow = read('renderer/js/utils/dayWindow.js')
+  assert.match(dayWindow, /dayShift\(ts, 1\)/, 'the helper still steps via dayShift, never raw ms products')
   assert.match(src, /dayShift\(today, -1\)/, 'yesterday label comparison steps via dayShift too')
   assert.ok(!/\*\s*DAY\b/.test(src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')),
     'no `* DAY` day arithmetic left in DayDeck (comments excluded)')

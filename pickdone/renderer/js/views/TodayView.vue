@@ -183,8 +183,9 @@ export default {
       return this.groups.flatMap(g => g.todos)
     },
     deckTasks () {
-      // The card view buckets across the ±7d window, so it needs the full non-deleted list with the
-      // project filter applied; DayDeck still applies its own delete/dayStart filters internally
+      // The card view buckets across its ±30d window (extendable to the selected day), so it needs
+      // the full non-deleted list with the project filter applied; DayDeck still applies its own
+      // delete/dayStart filters internally
       return this.fitProj(this.$store.state.todo.todoList)
     },
     v () { return this.$store.state.todo.views },

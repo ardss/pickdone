@@ -52,13 +52,18 @@ test('A3 clampToDayWindow clamps to the nearest window edge', () => {
   assert.equal(clampToDayWindow([], 50), 50, 'empty window is a no-op')
 })
 
-test('A3 DayDeck watcher and mounted alignment both route through clampToDayWindow', () => {
+test('A3 DayDeck: clamp is the beyond-cap fallback only — the selection itself is never rewritten', () => {
+  // [w16-deck 2026-10-28] the clamp-and-write-back contract above was superseded: the window now
+  // EXTENDS to cover an out-of-window daySelectedTs (see w16-deck-card-view.test.mjs), and
+  // clampToDayWindow only fronts the cap edge for beyond-horizon picks, with no store write-back.
   const src = read('renderer/js/components/DayDeck.vue')
-  assert.match(src, /import \{ clampToDayWindow \} from '\.\.\/utils\/dayWindow\.js'/)
-  const watcher = src.slice(src.indexOf("'$store.state.ui.daySelectedTs' (ts)"), src.indexOf('mounted ()'))
-  assert.match(watcher, /clampToDayWindow\(this\.days, \+ts\)/, 'store watcher clamps before findIndex')
-  const mounted = src.slice(src.indexOf('mounted ()'), src.indexOf('beforeUnmount'))
-  assert.match(mounted, /clampToDayWindow\(this\.days, \+sel\)/, 'mounted alignment clamps too')
+  assert.match(src, /clampToDayWindow[\s\S]*from '\.\.\/utils\/dayWindow\.js'/)
+  const watcher = src.slice(src.indexOf("'$store.state.ui.daySelectedTs' (ts)"), src.indexOf('created ()'))
+  assert.match(watcher, /dayStart\(\+ts\)/, 'the selection is normalized before lookup')
+  assert.match(watcher, /clampToDayWindow\(this\.days, target\)/, 'beyond-cap picks front the cap edge')
+  assert.ok(!watcher.includes('setDaySelected'), 'neither path writes the choice back')
+  const created = src.slice(src.indexOf('created ()'), src.indexOf('mounted ()'))
+  assert.match(created, /clampToDayWindow\(this\.days, target\)/, 'initial alignment falls back to the cap edge too')
 })
 
 /* ---------- A4: TagView/CategoryView recomplete guard + empty-state toast ---------- */
