@@ -189,6 +189,12 @@ export default {
       this._prevTodayDone = this.todayDone
       if (this.todayDone < 1 || this._pipsTourDone) return
       if (prev !== 0) return // only a real 0→1 jump within this session teaches; users starting with existing completions get no popup
+      // A ledger REPLACE (recordsReplace: boot hydration or a broadcast reload re-reading seeded
+      // rows) landing moments ago is bulk fill, not this session's first completion — local
+      // bookings go through their own mutations and never refresh the stamp. Re-baseline (prev
+      // above already carries the new count) instead of force-firing the tour (2026-10-28 pool:
+      // seeded rows made the tour pop under every later target, inert on the whole shell).
+      if (Date.now() - ((this.s && this.s.lastLedgerReplaceAt) || 0) < 2500) return
       import('../utils/onboardingTours.js').then(mod => {
         if (mod.tourSeenState().pips) { this._pipsTourDone = true; return }
         this._pipsTourDone = true

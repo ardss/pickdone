@@ -97,7 +97,7 @@ try{
  const first=await evalCDP("({url:location.href,hasAPI:!!window.todoAPI,vueErr:window.__lastVueErr?.msg||null})")
  trace('BOOT '+JSON.stringify(first))
  if(!first.hasAPI||first.vueErr)throw Error('renderer API error: '+JSON.stringify(first))
- const created=await evalCDP(`(()=>{let el=document.querySelector('.qa-input');el.focus();el.value='合成打包测试20261013';el.dispatchEvent(new Event('input',{bubbles:true}));let e=new KeyboardEvent('keyup',{key:'Enter',keyCode:13,bubbles:true});Object.defineProperty(e,'isComposing',{value:false});el.dispatchEvent(e);return true})()`)
+ const created=await evalCDP(`(()=>{let el=document.querySelector('.qa-input');el.focus();el.value='合成打包测试20261013';el.dispatchEvent(new Event('input',{bubbles:true}));let e=new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true});Object.defineProperty(e,'isComposing',{value:false});el.dispatchEvent(e);return true})()`)
  await sleep(1600)
  const found=await evalCDP(`(await window.todoAPI.dbCall('getAll',{})).some(x=>x.taskContent==='合成打包测试20261013')`)
  trace('QUICK_ADD '+JSON.stringify({created,found}))

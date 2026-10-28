@@ -429,9 +429,9 @@ export default {
     /** 账本从行表整载(启动/收到广播时);DB 是唯一源,直接替换内存副本 */
     recordsReplace (s, list) {
       if (Array.isArray(list)) {
-        // 最后一道防线:同 id 重复行(历史脏数据/迁移产物)不进 UI;保留首现次序(DB 已按 endTime DESC)
         const seen = new Set()
         s.tomatoRecordList = list.filter(r => { const id = r && r.tomatoId; if (!id || seen.has(id)) return false; seen.add(id); return true })
+        s.lastLedgerReplaceAt = Date.now() // w16: bulk-load edge (hydration/broadcast reload) — TomatoBar's pips trigger re-baselines on it instead of misreading fill as a first completion
       }
     },
     /** Cross-window sync: float/main windows each have an independent Vuex instance; after the peer writes localStorage, the storage event triggers a re-read.

@@ -79,3 +79,23 @@ test('W16: an already-seen pips tour never pops again', async () => {
   assert.deepEqual(run, [])
   assert.equal(inst._pipsTourDone, true)
 })
+
+test('W16 triage: a bulk ledger replace (recordsReplace) within 2.5s is fill — no tour, prev re-baselined', async () => {
+  const run = []
+  const tours = { tourSeenState: () => ({ pips: false }), runTour: name => run.push(name) }
+  const inst = makeInstance(tours, 0)
+  inst.s = { lastLedgerReplaceAt: Date.now() - 100 } // a recordsReplace just landed (seeded rows echo)
+  inst.todayDone = 7 // 0→7 over the bulk replace — not a teaching moment
+  inst.maybePipsTour()
+  await tick(); await tick(); await tick()
+  assert.deepEqual(run, [], 'a bulk-fill jump right after a ledger replace must not pop the tour')
+  assert.equal(inst._prevTodayDone, 7, 'prev must carry the post-fill count')
+  // later, well past the replace window: an undo→complete loop (0→1 in-session) still teaches —
+  // the watcher would fire on the 0 step (prev re-captured as 0), then the 1 step teaches
+  inst.todayDone = 0
+  inst.maybePipsTour() // the 0 step: maybePipsTour re-baselines prev (early return, no tour)
+  inst.todayDone = 1
+  inst.maybePipsTour()
+  await tick(); await tick(); await tick()
+  assert.deepEqual(run, ['pips'], 'a genuine in-session 0→1 after the fill window still teaches')
+})

@@ -259,7 +259,7 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
     const chip = await evalJson(`(() => { const c = document.querySelector('.qa-date-chip'); return c ? c.textContent.trim() : null })()`)
     assert.ok(chip && /tomorrow\s*15:00/.test(chip), `the NL date chip did not promise "tomorrow 15:00" — got: ${JSON.stringify(chip)}`)
     // Press Enter (keyup, same as e2e.test.mjs's proven path)
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
+    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
     // DB truth: the row must exist, titled exactly "meeting"
     const row = await until(`(async () => { const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return rows.find(r => r.taskContent === 'meeting' && r.dayStart === ${TOMORROW0}) || null })()`, 10, 400)
     assert.ok(row, 'no DB row titled exactly "meeting" scheduled for TOMORROW was created')

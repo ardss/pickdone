@@ -19,8 +19,18 @@ test('setup: spawn isolated instance at minimum supported viewport', async () =>
   await send(ctx, 'Emulation.setDeviceMetricsOverride', { width: 760, height: 480, deviceScaleFactor: 1, mobile: false })
   // 隔离实例=全新首次启动,新手引导浮层(ob-opts)会压在任何弹窗之上——先记账"已看过"并清掉现场,
   // 本门测的是确认框可见性;引导与弹层的先后关系是既有独立约束(引导须等弹层退场)
+  // [w16 triage] onboardingToursSeen is a settings-schema key (settings.js Y6): the DB/config
+  // truth overwrites a direct localStorage set at the next boot, so the tour's own force-fire
+  // (TomatoBar, since the w16 pips fix made it actually fire) re-armed right past this pre-set.
+  // Dismiss through the AUTHORITATIVE channel — the settings store action, which mirrors to
+  // LS/config/DB (2s debounce — hence the settle wait before reload).
   await evalJson(ctx, `(() => {
-    localStorage.setItem('onboardingToursSeen', JSON.stringify({ today: true, editpanel: true, pips: true })) localStorage.setItem('appLocale', 'en-US')
+    const s = (window.appUI && window.appUI.$store) || document.getElementById('app').__vue_app__.config.globalProperties.$store
+    return s.dispatch('settings/update', { onboardingToursSeen: { today: true, editpanel: true, pips: true } }).then(() => 'dismissed-via-store')
+  })()`)
+  await sleep(2500) // settings dbMirror debounce is 2s — let the DB truth land before reload
+  await evalJson(ctx, `(() => {
+    localStorage.setItem('appLocale', 'en-US')
     localStorage.setItem('onboardingDone', '1')
     document.querySelectorAll('[class*="driver-js"], [class*="driver-popover"], .ob-opts').forEach(e => e.remove())
     return 'tours dismissed'
