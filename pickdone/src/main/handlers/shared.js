@@ -254,7 +254,22 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
  *  input. Exported for unit tests. */
 const FLOAT_FORBIDDEN_SETTINGS_KEYS = new Set([
   'enableSecurityLock', 'securityLockPassword', 'securityLockQuestion',
-  'shortcutKeySettings', 'runWhenComputerStart'
+  'shortcutKeySettings', 'runWhenComputerStart',
+  // W16 (2026-10-28 P2): the original five left every OTHER main-window-consumed config key
+  // writable by a trapped float (verify set: every readConfig() call site — windows.js,
+  // close-behavior.js, i18n.js, index.js, updater.js). Each key below changes next-launch or
+  // window behavior when silently persisted by a compromised float:
+  //   winBounds / winIsMaximized            — main-window geometry on next launch (windows.js)
+  //   hideMainWindowOnStartup               — main window never shows after relaunch (windows.js)
+  //   closeActionMinimize / closeTrayNotified — X quits vs hides / notice suppression (close-behavior.js)
+  //   appLocale                             — app-wide language on next boot (i18n.js boot cache;
+  //                                           the sanctioned write path is the main-only set-app-locale)
+  //   enableHardwareAcceleration            — HW accel off on next launch (index.js)
+  //   autoDownloadUpdates                   — flip updater auto-download consent (updater.js)
+  // The float's legitimate write surface (whiteNoiseAudio / whiteNoiseVolume) stays allowed.
+  'winBounds', 'winIsMaximized', 'hideMainWindowOnStartup',
+  'closeActionMinimize', 'closeTrayNotified',
+  'appLocale', 'enableHardwareAcceleration', 'autoDownloadUpdates'
 ])
 function stripForbiddenSettingsKeys (patch, { float } = {}) {
   const clean = { ...(patch && typeof patch === 'object' ? patch : {}) }

@@ -3,7 +3,7 @@
  *  local:// maps the userData/files attachment directory */
 const path = require('path')
 const fs = require('fs')
-const { attachDir, attachmentPath } = require('./attachments')
+const { attachDir, attachmentPath, resolveAttachmentCase } = require('./attachments')
 
 // F3 (2026-10-19): cached realpath of the attachment dir for the local:// symlink-escape check
 // (see the handler comment). Null until first resolved; recomputed on transient failure.
@@ -76,8 +76,20 @@ function handleAppProtocol () {
       // the executable) came back as 200 octet-stream through app://. Only the three trees the
       // renderer actually loads are served now; everything else is 404. src/preload is NOT a root:
       // the preload script is loaded via a filesystem path (windows.js), not app://.
-      const top = u.replace(/\\/g, '/').split('/')[0]
-      if (!APP_ROOTS.includes(top)) return new Response('not found', { status: 404 })
+      // W16 (2026-10-28 P1): the allowlist top-segment used to be read from the RAW decoded u, but
+      // path.join/normalize below treats an encoded backslash (%5C) as a real separator on Windows —
+      // 'renderer-dist%5C..%5C..%5Csrc%5Cmain%5Cdb.js' had top='renderer-dist' while the resolved
+      // file escaped to <root>/src/main/db.js, re-opening the whole install tree (the very hole the
+      // 2026-10-02 hardening closed). The decision now runs on the NORMALIZED, root-relative path:
+      // a relative path whose first segment is not an allowlisted root (incl. any surviving '..'
+      // segment or an absolute escape) can never pass. On POSIX %5C stays a literal filename char
+      // and the normalized check is equally strict.
+      const rel = path.relative(root, file)
+      const segs = rel.split(path.sep)
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel) ||
+          segs.some(s => s === '..') || !APP_ROOTS.includes(segs[0])) {
+        return new Response('not found', { status: 404 })
+      }
       const mime = {
         '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript',
         '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
@@ -108,6 +120,12 @@ function handleAppProtocol () {
       let resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
+      // W16 (2026-10-28 P2): Chromium lowercases the HOST of a standard-scheme url, so a local://
+      // key with uppercase can arrive lowercased; on a case-sensitive FS the exact path misses and
+      // the request 404'd. Resolve to the real on-disk name (exact hit keeps the path untouched;
+      // otherwise the unique case-insensitive basename match) BEFORE the bookkeeping/realpath
+      // checks so those see the true file name.
+      resolved = resolveAttachmentCase(resolved)
       // P3 F3 (2026-10-19): the lexical check above does not follow symlinks — a symlink inside
       // attachDir pointing at e.g. the user's homedir made the containment test pass while
       // readFile served the target bytes (arbitrary read). Resolve BOTH sides with realpath and

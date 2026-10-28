@@ -113,7 +113,7 @@ function loadSettingsHandlers () {
   }
 }
 
-test('P2-1: float writes get the security/shortcut forbidden set stripped (2026-09-22 per-sender contract)', () => {
+test('P2-1: float writes get the security/shortcut/main-consumed forbidden set stripped (per-sender contract; W16 2026-10-28 expanded the strip set to every main-window-consumed config key)', () => {
   const { handlers, floatEvent } = loadSettingsHandlers()
   const c = handlers['notify-settings-updated'](floatEvent, {
     whiteNoiseAudio: 'rain',
@@ -124,8 +124,12 @@ test('P2-1: float writes get the security/shortcut forbidden set stripped (2026-
   const written = c.written
   assert.equal(written.enableSecurityLock, undefined, 'the lock kill-switch is stripped from float writes')
   assert.equal(written.whiteNoiseAudio, 'rain', 'the float white-noise choice is the legitimate write')
-  assert.equal(written.appLocale, 'zh-CN', 'non-forbidden keys pass for the float under the per-sender set')
-  assert.equal(written.hideMainWindowOnStartup, true)
+  // W16 (2026-10-28): appLocale and hideMainWindowOnStartup are main-window-consumed config keys
+  // (i18n boot cache / windows.js show-on-launch) — the old contract let a trapped float silently
+  // persist them and change next-launch behavior; they are now in the float strip set. Main
+  // senders keep them (see the main-window test below).
+  assert.equal(written.appLocale, undefined, 'appLocale is stripped from float writes (W16 strip list)')
+  assert.equal(written.hideMainWindowOnStartup, undefined, 'hideMainWindowOnStartup is stripped from float writes (W16 strip list)')
 })
 
 test('P2-1: an all-stripped float patch lands as an empty merge (no forbidden key survives)', () => {

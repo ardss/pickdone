@@ -79,6 +79,13 @@ export function isMachineLocalMetaKey (id) {
     // over-advance) the local schema migrator, and legacy 'dayPlanState'/'dayPlanState.*'
     // whole-package chip JSON would re-poison a device already migrated to plan_chips.
     k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.') ||
+    // [W16 2026-10-28 P1] durable running-tomato session row (src/main/tomato-session.js writes it
+    // via setMeta on every renderer FSM transition): strictly per-device runtime state. Syncing it
+    // made EVERY peer believe a focus session was running — a spurious "focus in progress" quit
+    // confirm on the peer, and its next-boot reconcile booked-or-voided a session that only ever
+    // lived on the originating machine. Exact key (not prefix), same convention as
+    // tomatoFloatClosedByUser, so a future user-data 'tomatoRunning*' meta key still syncs.
+    k === 'tomatoRunningSession' ||
     // [W13 2026-10-26 P2] tomato-float dismissal state (src/main/tomato-float.js sets it on every
     // user float close): strictly per-device UI preference. Syncing it meant closing the float on
     // device A permanently suppressed device B's float auto-show, and the two devices LWW-fought

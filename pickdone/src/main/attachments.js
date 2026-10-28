@@ -44,18 +44,34 @@ function isAppOwnedBookkeeping (f) { return isUnownedNoiseFile(f) || String(f) =
 const ATT_TMP_RE = /\.att-tmp-\d+-\d+$/
 const TMP_SWEEP_MAX_AGE_MS = 24 * 60 * 60 * 1000
 function isCrashTmpResidue (f) { return ATT_TMP_RE.test(String(f)) }
+// W16 (2026-10-28 P2): crash-claim phantoms. claimSlot reserves the final name with an exclusive
+// 0-byte placeholder; a process crash between the claim and the publish rename left that 0-byte
+// FINAL-named file behind forever — invisible to the D19 `.att-tmp-*` sweep and counted by both
+// quota scanners, so every crash permanently shrank the 64MB/200-file budget. There are NO
+// legitimate 0-byte attachments: saveAttachment rejects empty payloads and LAN ingress rides the
+// same whitelist/size gates, so a 0-byte non-bookkeeping file is always an in-flight claim
+// placeholder (young) or a crashed claim (old). Same 24h age gate as .att-tmp-*: a young one may
+// be a concurrent upload mid-claim and is never touched; an old one is swept, and a row still
+// referencing it hits the existing missing-file guard (re-pull from peer / re-upload) — self-healing.
+function isCrashClaimPhantom (f, stat, { now = Date.now(), maxAgeMs = TMP_SWEEP_MAX_AGE_MS } = {}) {
+  const name = String(f)
+  if (isAppOwnedBookkeeping(name) || isCrashTmpResidue(name)) return false
+  try { return stat.size === 0 && now - stat.mtimeMs > maxAgeMs } catch { return false }
+}
 /** Age-based crash-residue sweep: unlink `.att-tmp-*` older than 24h. A YOUNG tmp file may be
  *  a concurrent transfer's in-flight spool — never touched. Pure-ish over injected fs for tests;
- *  returns the removed count. */
+ *  returns the removed count. W16: also unlinks 0-byte crash-claim phantoms (see above). */
 function sweepTmpResidue (dir, { now = Date.now(), maxAgeMs = TMP_SWEEP_MAX_AGE_MS, fsMod = fs } = {}) {
   let removed = 0
   try {
     for (const f of fsMod.readdirSync(dir)) {
-      if (!isCrashTmpResidue(f)) continue
-      let old = false
-      try { old = now - fsMod.statSync(path.join(dir, f)).mtimeMs > maxAgeMs } catch { old = false }
-      if (!old) continue
-      try { fsMod.unlinkSync(path.join(dir, f)); removed++ } catch { /* best-effort */ }
+      let stat = null
+      try { stat = fsMod.statSync(path.join(dir, f)) } catch { continue }
+      const isTmp = isCrashTmpResidue(f)
+      if (!isTmp && !isCrashClaimPhantom(f, stat, { now, maxAgeMs })) continue
+      if (now - stat.mtimeMs > maxAgeMs) {
+        try { fsMod.unlinkSync(path.join(dir, f)); removed++ } catch { /* best-effort */ }
+      }
     }
   } catch { /* unreadable dir: nothing to sweep */ }
   return removed
@@ -67,9 +83,12 @@ function dirUsage (dir) {
   let bytes = 0
   let count = 0
   for (const f of fs.readdirSync(dir)) {
-    // C14: white-noise slot; lifecycle: alias map; D19: crash-residue .att-tmp-* — none are attachment quota
-    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f)) continue
-    try { bytes += fs.statSync(path.join(dir, f)).size; count++ } catch { /* vanished mid-scan */ }
+    // C14: white-noise slot; lifecycle: alias map; D19: crash-residue .att-tmp-*; W16: crash-claim
+    // 0-byte phantoms — none are attachment quota
+    let stat = null
+    try { stat = fs.statSync(path.join(dir, f)) } catch { /* vanished mid-scan */ }
+    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f) || (stat && isCrashClaimPhantom(f, stat))) continue
+    if (stat) { bytes += stat.size; count++ }
   }
   return { bytes, count }
 }
@@ -94,8 +113,10 @@ function withinStorageQuota (existingBytes, incomingBytes, quotaBytes) {
 function dirTotalBytes (dir) {
   let n = 0
   for (const f of fs.readdirSync(dir)) {
-    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f)) continue
-    try { n += fs.statSync(path.join(dir, f)).size } catch { /* raced delete */ }
+    let stat = null
+    try { stat = fs.statSync(path.join(dir, f)) } catch { /* raced delete */ }
+    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f) || (stat && isCrashClaimPhantom(f, stat))) continue
+    if (stat) n += stat.size
   }
   return n
 }
@@ -232,6 +253,27 @@ function findKeyRefs (key, rows, { excludeTaskId = null } = {}) {
   return hits
 }
 
+/** W16 (2026-10-28 P2): case-insensitive resolve fallback for local:// keys. The key minted by
+ *  saveAttachment preserves the user file's ORIGINAL case, and Chromium lowercases the HOST part
+ *  of standard-scheme URLs — on a case-sensitive filesystem a local://Fetch.PNG request for
+ *  fetch.PNG (or vice versa) used to 404 outright (Windows was accidentally masked by its
+ *  case-insensitive FS, while aliases.json / findKeyRefs kept comparing original case, so a
+ *  case-only rename could strand refs or delete the wrong twin). Minimal, storage-neutral fix:
+ *  resolve on-disk at the SERVE boundary only — exact stat first, else the unique
+ *  case-insensitive basename match; the raw path when nothing matches (the caller keeps its 404
+ *  contract). No DB rows are touched and no keys are rewritten. */
+function resolveAttachmentCase (resolvedPath, fsMod = fs) {
+  try { if (fsMod.statSync(resolvedPath).isFile()) return resolvedPath } catch { /* fall through to scan */ }
+  let base
+  try { base = path.basename(resolvedPath) } catch { return resolvedPath }
+  try {
+    const dir = path.dirname(resolvedPath)
+    const hit = fsMod.readdirSync(dir).find(f => f.toLowerCase() === base.toLowerCase())
+    if (hit) return path.join(dir, hit)
+  } catch { /* unreadable dir: keep the raw path */ }
+  return resolvedPath
+}
+
 function attachmentPath (key) {
   // Malformed percent-encoding (e.g. 'a%zz.png') made decodeURIComponent throw URIError; protocol.js
   // already maps the handler-level throw to a 404 — fall back to the raw key so both layers agree and
@@ -304,11 +346,15 @@ module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota
   readAliases, setAlias, deleteAlias, aliasesPath, pruneMissingAliases,
   // F2: shared-reference counting for single-key deletes (App delete-file + CLI attachment rm).
   attachmentKeyOfUrl, findKeyRefs,
+  // W16: serve-side case-insensitive key resolve fallback (local:// host lowercasing).
+  resolveAttachmentCase,
   // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
   // attachments-guards.js is the shared gate for every write entry without duplicating caps.
   MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,
   // D19-DOM1: crash-residue classifier + age sweep (exported for unit tests / the att-tmp quota fix).
   isCrashTmpResidue, sweepTmpResidue, TMP_SWEEP_MAX_AGE_MS,
+  // W16: crash-claim 0-byte phantom classifier (startup sweep + quota exclusion).
+  isCrashClaimPhantom,
   // Domain-1 F-A2 refactor (2026-09-23): the whitelist is exported so the LAN attachment
   // receiver (lan-sync/att-transfer.js) enforces the SAME extension set on inbound files —
   // one whitelist, two doors (upload IPC + sync ingress); keep it tighten-only (D6 svg root-fix).
