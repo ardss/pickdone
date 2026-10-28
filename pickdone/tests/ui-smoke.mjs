@@ -202,7 +202,7 @@ const seedRes = await send('Runtime.evaluate', {
     var el = document.querySelector('.qa-input'); if (!el) return 'no-input'
     el.focus(); var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
     set.call(el, '冒烟_统计播种任务'); el.dispatchEvent(new Event('input', { bubbles: true }))
-    el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true })); await new Promise(r => setTimeout(r, 900))
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await new Promise(r => setTimeout(r, 900))
     var c = document.querySelector('.td-item .td-check, .td-item [role="checkbox"]'); if (!c) return 'no-check'
     c.click(); await new Promise(r => setTimeout(r, 1200))
     return 'seeded'

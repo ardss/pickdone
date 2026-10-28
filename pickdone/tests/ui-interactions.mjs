@@ -173,7 +173,7 @@ console.log('\n[4] quick-add creation')
 await gotoHash('#/todo-list/today', '.qa-input')
 const before = await evalJson(`document.querySelectorAll('.td-item').length`)
 await evalJson(`(() => { var el = document.querySelector('.qa-input'); el.focus(); var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '交互冒烟_临时任务'); el.dispatchEvent(new Event('input', { bubbles: true })); return 'ok' })()`)
-await evalJson(`(() => { var el = document.querySelector('.qa-input'); el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true })); return 'ok' })()`)
+await evalJson(`(() => { var el = document.querySelector('.qa-input'); el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'ok' })()`)
 await sleep(900)
 const after = await evalJson(`document.querySelectorAll('.td-item').length`)
 ok('quick-add Enter creation takes effect', after === before + 1, `before=${before} after=${after}`)
@@ -298,7 +298,7 @@ ok('card deck mounted', await evalJson(`!!document.querySelector('.pd-day-deck')
 const seedIfNeeded = async () => {
   if (await evalJson(`!!document.querySelector('.pd-day-deck__card.front .pd-day-deck__chk[aria-checked="false"]')`)) return false
   await evalJson(`(() => { var el = document.querySelector('.qa-input'); if (!el) return 'no-input'; el.focus(); var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '交互冒烟_临时任务'); el.dispatchEvent(new Event('input', { bubbles: true })); return 'ok' })()`)
-  await evalJson(`(() => { var el = document.querySelector('.qa-input'); if (el) el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true })); return 'ok' })()`)
+  await evalJson(`(() => { var el = document.querySelector('.qa-input'); if (el) el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'ok' })()`)
   await sleep(1000)
   return true
 }

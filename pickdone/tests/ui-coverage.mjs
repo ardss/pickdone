@@ -45,7 +45,7 @@ try {
     el.focus();el.value=${JSON.stringify(text)};
     el.dispatchEvent(new Event('input',{bubbles:true}));return 'ok'})()`)
   const enterIn = async sel => evalJson(ctx, `(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return 'nosel';
-    el.dispatchEvent(new KeyboardEvent('keyup',{key:'Enter',bubbles:true}));return 'ok'})()`)
+    el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));return 'ok'})()`)
   const ok = (name, cond, detail = '') => {
     if (cond) { pass++; console.log('  ✓ ' + name) } else { fail++; fails.push(name); console.error('  ✗ ' + name + (detail ? ' — ' + detail : '')) }
   }

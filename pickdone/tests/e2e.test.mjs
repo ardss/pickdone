@@ -150,7 +150,7 @@ test('E2E: quick add -> delete to recycle bin -> hard purge (self-created self-c
     i.focus(); i.value = ${JSON.stringify(name)};
     i.dispatchEvent(new Event('input', { bubbles: true }));
     await new Promise(r => setTimeout(r, 300));
-    i.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', keyCode: 13, bubbles: true }));
+    i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true }));
     await new Promise(r => setTimeout(r, 600));
     return document.body.innerHTML.includes(${JSON.stringify(name)}) ? 'ok' : 'missing';
   })()`)

@@ -214,7 +214,7 @@ t('integration: quick add -> list renders -> DB consistency', async () => {
   const okType = await type('.qa-input', '集成测试任务A')
   assert.ok(okType, 'the quick-add input exists')
   await evalJson(`(()=>{const el=document.querySelector('.qa-input');
-    const ev=new KeyboardEvent('keyup',{key:'Enter',keyCode:13,bubbles:true});
+    const ev=new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true});
     Object.defineProperty(ev,'isComposing',{value:false});
     el.dispatchEvent(ev);return true})()`)
   await sleep(1000)
