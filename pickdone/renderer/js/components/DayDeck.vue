@@ -11,7 +11,7 @@
            @pointerup="onPointerUp($event)"
            @pointercancel="onPointerUp($event)"
            @dragover.prevent="onDragOver(idx, $event)"
-           @dragleave="dropHover === idx && (dropHover = null)"
+           @dragleave="onDragLeave(idx, $event)"
            @drop.prevent="onDrop(idx, $event)"
            @click.stop="onCardClick(idx)">
         <div class="pd-day-deck__head">
@@ -282,6 +282,14 @@ export default {
       if (dragged && dayStart(dragged.dayStart || 0) === this.days[idx]) return
       if (this.dropHover !== idx) this.dropHover = idx
       e.dataTransfer.dropEffect = 'move'
+    },
+    /* [fix 2026-10-27] dragleave fires when the pointer crosses onto a CHILD element (task rows,
+       progress bar) inside the card; the old inline `dropHover=null` killed the drop-ok outline
+       mid-hover. Only clear when the pointer actually left the card. */
+    onDragLeave (idx, e) {
+      const rel = e && e.relatedTarget
+      if (rel && e.currentTarget && e.currentTarget.contains(rel)) return
+      if (this.dropHover === idx) this.dropHover = null
     },
     onDrop (idx, e) {
       this.dropHover = null

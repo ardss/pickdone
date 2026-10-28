@@ -290,7 +290,9 @@ test('[V11] the Esc handler returns early while a .el-picker-panel overlay is in
   const i = src.editPanel.indexOf('this._onKeydown = (e) => {')
   assert.ok(i > -1)
   const body = src.editPanel.slice(i, src.editPanel.indexOf("window.addEventListener('keydown', this._onKeydown)", i))
-  const iGuard = body.indexOf("document.querySelector('.el-picker-panel')")
+  // [fix 2026-10-27] the whitelist now also covers DayDateStrip's .ds-cal-pop calendar popover
+  // (same early-return contract; guard must still precede the closeEditCleanup dispatch)
+  const iGuard = body.indexOf("document.querySelector('.el-picker-panel, .ds-cal-pop')")
   const iClose = body.indexOf("dispatch('ui/closeEditCleanup'")
   assert.ok(iGuard > -1 && iClose > -1 && iGuard < iClose,
     'the picker-panel guard precedes the closeEditCleanup dispatch')

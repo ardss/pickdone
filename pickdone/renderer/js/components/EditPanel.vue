@@ -344,7 +344,8 @@ export default {
       // [maint-0925 A2] store-level overlay whitelist (filter modal hoisted out of FilterView local data)
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
       // [fix 2026-10-09] a date/time picker (.el-picker-panel, append-to-body) owns Esc (else the keypress fell through to closeEditCleanup)
-      if (document.querySelector('.el-picker-panel')) return
+      // [fix 2026-10-27] .ds-cal-pop (DayDateStrip calendar popover) owns Esc too — else the keypress bubbled to window and closeEditCleanup orphan-deleted the inline task.
+      if (document.querySelector('.el-picker-panel, .ds-cal-pop')) return
       // [F3 2026-10-18] store-invisible local overlays (else Esc deleted the inline task behind the dialog)
       if (document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')) return
       const st = this.$store.state.ui.rightSidebarTodoEdit

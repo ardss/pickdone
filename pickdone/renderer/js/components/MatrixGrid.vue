@@ -3,7 +3,7 @@
   <div class="matrix-wrap">
     <div class="matrix-grid">
     <div v-for="q in quadrants" :key="q.key" class="matrix-quadrant" :class="[q.cls, { 'over': overKey===q.key }]"
-         @dragover.prevent="overKey=q.key" @dragleave="overKey===q.key&&(overKey=null)" @drop.prevent="dropOn(q, $event)">
+         @dragover.prevent="overKey=q.key" @dragleave="onDragLeave($event)" @drop.prevent="dropOn(q, $event)">
       <div class="matrix-quadrant__head">
         <span class="matrix-quadrant__title">{{ q.title }}</span>
         <em class="matrix-quadrant__count">{{ q.tasks.length }}</em>
@@ -151,12 +151,23 @@ export default {
       // [fix 2026-10-09] cross-view drops: TodoItem drags set text/plain = taskId and the calendar
       // time-blocks already accept them, so a drop with no internal dragId must resolve the task
       // from the store (mirrors DayRail.onDrop) instead of silently no-oping
-      if (!t && !id && e && e.dataTransfer) {
-        const droppedId = e.dataTransfer.getData('text/plain')
+      // [fix 2026-10-27] the `!id` gate dead-ended a row that left this.tasks mid-drag (the store
+      // swap during drag removed it from the rendered set): dragId was set, `!t && !id` was false,
+      // drop silently no-oped. Fall back to the dataTransfer id whenever `!t`, not only when `!id`.
+      if (!t && e && e.dataTransfer) {
+        const droppedId = id != null ? String(id) : e.dataTransfer.getData('text/plain')
         if (droppedId) t = this.$store.state.todo.todoList.find(x => String(x.taskId) === droppedId)
       }
       if (!t || ((t.important || 0) === q.important && (t.urgent || 0) === q.urgent)) return
       this.moveQuadrant(t, q)
+    },
+    /* [fix 2026-10-27] dragleave fires when the pointer crosses onto a CHILD element (task row,
+       empty-slot label) inside the quadrant; the old inline `overKey=null` killed the 'over'
+       highlight mid-hover (flicker). Only clear when the pointer actually left the quadrant. */
+    onDragLeave (e) {
+      const rel = e && e.relatedTarget
+      if (rel && e.currentTarget && e.currentTarget.contains(rel)) return
+      this.overKey = null
     },
     /* [maint-0924 A3] keyboard path (WCAG 2.1.1): Ctrl+1..4 = the four quadrants, same moveWithUndo
      * exit and priority ledger as the drag path — the matrix had zero keyboard move before */

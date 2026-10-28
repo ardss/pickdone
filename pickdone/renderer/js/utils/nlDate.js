@@ -95,19 +95,27 @@ function parseEnglishDate (text, base) {
           label = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
         }
       } else {
-        // Jan 15 / January 15 / Jan 15 2026 / Jan 15, 2026
-        m = lc.match(/\b([a-z]+)\s+(\d{1,2})(?:[,\s]+(\d{4}))?/)
-        if (m && EN_MONTHS[m[1]] != null) {
-          const mo = EN_MONTHS[m[1]]
-          const d = +m[2]
-          const explicitYear = m[3] != null
-          const y = explicitYear ? +m[3] : base.year()
+        // Jan 15 / January 15 / Jan 15 2026 / Jan 15, 2026 — and month+year without a day
+        // ("jan 2027" = Jan 1, 2027). [fix 2026-10-27] the old `(\d{1,2})(?:[,\s]+(\d{4}))?`
+        // greedily ate the "20" of "2027" and left "27" stranded in the title. Now the digit
+        // run is matched atomically (4-digit run = year, 1-2 digit run = day), with (?!\d)
+        // boundaries so glued junk like "jan 152026" fails to match entirely instead of
+        // half-matching. Matched against datePart with the /i flag (not the lowercased lc) so
+        // the chip label keeps the user's original casing ("Jan 15", not "jan 15").
+        m = datePart.match(/\b([A-Za-z]+)\s+(\d{4}|\d{1,2})(?!\d)(?:(?:\s+|,\s*)(\d{4})(?!\d))?/)
+        if (m && EN_MONTHS[m[1].toLowerCase()] != null) {
+          const mo = EN_MONTHS[m[1].toLowerCase()]
+          const numRun = m[2]
+          const yearOnly = numRun.length === 4 // "jan 2027": month + bare year, no day
+          const d = yearOnly ? 1 : +numRun
+          const explicitYear = yearOnly || m[3] != null
+          const y = m[3] != null ? +m[3] : (yearOnly ? +numRun : base.year())
           if (d >= 1 && d <= base.year(y).month(mo).daysInMonth()) {
             date = base.year(y).month(mo).date(d).startOf('day')
             // A bare "Jan 15" (no year) that already passed this year rolls to next year,
             // same as the Chinese core's M月D日 rule
             if (!explicitYear && date.isBefore(base, 'day')) date = date.add(1, 'year')
-            label = `${m[1]} ${d}${m[3] ? ' ' + m[3] : ''}`
+            label = yearOnly ? `${m[1]} ${y}` : `${m[1]} ${d}${m[3] ? ' ' + m[3] : ''}`
           }
         }
         if (!date) {
@@ -135,10 +143,11 @@ function parseEnglishDate (text, base) {
             date = base.add(diff, 'day').startOf('day')
             label = m[0]
           } else if ((m = lc.match(/\bthis\s+weekend\b|\bweekend\b/))) {
-            // This Saturday (0-6 days from now)
+            // This Saturday (0-6 days from now). [fix 2026-10-27] `diff || 7` pushed Saturday's
+            // own "this weekend" to NEXT Saturday; diff===0 means today IS Saturday — keep it.
             const baseDow = base.day()
             const diff = (6 - baseDow + 7) % 7
-            date = base.add(diff || 7, 'day').startOf('day')
+            date = base.add(diff, 'day').startOf('day')
             label = 'weekend'
           }
         }

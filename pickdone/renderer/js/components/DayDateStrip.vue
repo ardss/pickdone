@@ -30,7 +30,7 @@
     <!-- Calendar popover -->
     <transition name="fade">
       <div v-if="showCal" v-click-outside="() => showCal = false" class="ds-cal-pop" @click.stop
-           @keydown.esc.prevent="showCal = false"
+           @keydown.esc.prevent.stop="showCal = false"
            @focusout="calFocusOut"
            @mouseenter="calEnter" @mouseleave="calLeave">
         <div class="ds-cal-head">
