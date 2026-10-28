@@ -272,15 +272,25 @@ function findKeyRefs (key, rows, { excludeTaskId = null } = {}) {
  *  case-only rename could strand refs or delete the wrong twin). Minimal, storage-neutral fix:
  *  resolve on-disk at the SERVE boundary only — exact stat first, else the unique
  *  case-insensitive basename match; the raw path when nothing matches (the caller keeps its 404
- *  contract). No DB rows are touched and no keys are rewritten. */
+ *  contract). No DB rows are touched and no keys are rewritten.
+ *  W17 (2026-10-28): uniqueness guard — with a case-only twin pair on disk the old "first
+ *  insensitive match" silently served the WRONG twin's bytes. Now: exactly one match → use it;
+ *  several → only the character-exact match of the requested base, otherwise unresolved (caller
+ *  404s) + a warn. */
 function resolveAttachmentCase (resolvedPath, fsMod = fs) {
   try { if (fsMod.statSync(resolvedPath).isFile()) return resolvedPath } catch { /* fall through to scan */ }
   let base
   try { base = path.basename(resolvedPath) } catch { return resolvedPath }
   try {
     const dir = path.dirname(resolvedPath)
-    const hit = fsMod.readdirSync(dir).find(f => f.toLowerCase() === base.toLowerCase())
-    if (hit) return path.join(dir, hit)
+    const lower = base.toLowerCase()
+    const hits = fsMod.readdirSync(dir).filter(f => f.toLowerCase() === lower)
+    if (hits.length === 1) return path.join(dir, hits[0])
+    if (hits.length > 1) {
+      const exact = hits.find(f => f === base)
+      if (exact) return path.join(dir, exact)
+      console.warn('[attachments] ambiguous case-insensitive key "' + base + '" (' + hits.length + ' on-disk twins) — refusing to guess, 404')
+    }
   } catch { /* unreadable dir: keep the raw path */ }
   return resolvedPath
 }

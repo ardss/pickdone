@@ -20,7 +20,7 @@ function sanitizeConfigOut (c) {
 }
 
 module.exports = function settingsHandlers (ctx) {
-  const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray } = ctx
+  const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray, isLocked, isLockWindow } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
   // M2b (P3 2026-10-23): boolean ownership twin (shared.js makeSenderIsMain) — the inline
   // `getMainWindow() && e.sender === getMainWindow().webContents` test below threw a TypeError when
@@ -34,7 +34,12 @@ module.exports = function settingsHandlers (ctx) {
   return {
     // --- Settings / config ---
     // Sensitive-key stripping: the security-lock ciphertext in config must never be sent down to any renderer window (a compromised auxiliary window could pair with decrypt-secret to recover the lock-screen plaintext password)
-    'get-settings': () => {
+    'get-settings': (e) => {
+      // W17 (P2): last gateless read channel while locked — every sibling config consumer
+      // already throws (handlers/todo.js:125 style). A locked aux window used to read the full
+      // config (backup whitelist / winBounds / shortcuts). The lock-screen window itself stays
+      // exempt (same isLockWindow carve-out as the todo bus); other callers while locked throw.
+      if (isLocked && isLocked() && !(isLockWindow && e && isLockWindow(e.sender))) throw new Error('app is locked')
       const c = readConfig()
       delete c.securityLockPassword
       delete c.securityLockQuestion

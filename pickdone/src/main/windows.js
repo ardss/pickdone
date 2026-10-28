@@ -355,6 +355,21 @@ function createWindowManager (ctx) {  const {
     }
     win.on('restore', clampIntoView)
     win.on('show', clampIntoView)
+    // W17: restore/show never fire while a VISIBLE window sits on a secondary monitor that is
+    // then unplugged — the bounds become dead-zone coordinates and the window is unreachable
+    // forever (same shape as the float window's W16 fix). Re-clamp on display topology changes;
+    // listeners are window-scoped (with a destroyed-window liveness check) and removed on
+    // 'closed' so close-then-tray recreation cannot leak or double-wire them.
+    const _screen = (() => { try { return require('electron').screen } catch { return null } })()
+    const _displayHandlers = []
+    if (_screen) {
+      const _clampIfLive = () => { try { if (win && !win.isDestroyed()) clampIntoView() } catch { /* gone */ } }
+      for (const ev of ['display-removed', 'display-metrics-changed']) {
+        _displayHandlers.push([ev, _clampIfLive])
+        _screen.on(ev, _clampIfLive)
+      }
+    }
+    win.on('closed', () => { if (_screen) for (const [ev, h] of _displayHandlers) { try { _screen.removeListener(ev, h) } catch { /* gone */ } } })
   }
 
   return { createMainWindow, getMainWindow,

@@ -26,7 +26,11 @@ module.exports = function attachmentHandlers (ctx) {
       if (isLocked()) throw new Error('locked')
       if (typeof url !== 'string') return false // F2 2026-09-15: 非字符串 url 此前在 startsWith 处 TypeError;与 save-upload-file-to-download 守卫同款
       if (url.startsWith('local://')) {
-        const p = attachmentPath(url.slice(8))
+        // W17: resolve the case-insensitive fallback BEFORE the missing guard — Chromium
+        // lowercased keys rendered fine via the serve boundary's W16 fallback but this path
+        // used the RAW name: every open reported missing (one wasted sync round per click)
+        // and every delete ENOENT'd. No match → the raw path keeps the original contracts.
+        const p = attachments.resolveAttachmentCase(attachmentPath(url.slice(8)))
         // Missing-file guard (feature: LAN-synced attachments): the metadata row may arrive
         // before the file is pulled over. Structured result -> renderer toasts "not yet
         // synced" instead of a raw open failure. P1-8 (2026-09-19 UX review): the missing key
@@ -101,7 +105,9 @@ module.exports = function attachmentHandlers (ctx) {
           }
         }
       }
-      try { fs.unlinkSync(attachmentPath(key)) } catch (err) {
+      // W17: same case-fallback as open-file above — deleting a lowercased-key row must hit the
+      // real on-disk name instead of ENOENT (no match → raw path, ENOENT stays idempotent-success).
+      try { fs.unlinkSync(attachments.resolveAttachmentCase(attachmentPath(key))) } catch (err) {
         // Already-gone is success (idempotent delete); anything else is a real failure
         if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
       }
