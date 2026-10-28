@@ -138,6 +138,10 @@ function createExternalDbWatch (deps) {
       try { lastSettingsSavedAt = Number(dbm.call('settingsRowsMaxUpdated')) || 0 } catch { /* legacy lib: watermark stays 0 */ }
     }
     let debounce = null
+    // W15 (2026-10-25): one-shot absorb of our OWN wal write after a kick whose baseline re-read
+    // failed (see kick) — the next distinct mtime is re-baselined without a reload so a persistent
+    // stable-read failure cannot turn our own echo into an external-write replay loop.
+    let echoAbsorbArmed = false
     // CLI sync command channel (feat/cli-sync-pair): same polling surface as cliTomatoCmd — the CLI
     // writes meta cliSyncCmd, we dispatch into db-sync-ops (the Device Center's own registry) and
     // write the receipt to cliSyncState. Handled in the MAIN process directly: LAN sync state lives
@@ -276,7 +280,7 @@ function createExternalDbWatch (deps) {
     // used to be swallowed with lastMtime already advanced: the external write was consumed
     // forever (next poll saw m === lastMtime). On failure the baseline is rolled back so the
     // next poll re-processes the same change (kick's success path re-baselines as before).
-    const kick = (rollbackMtime) => {
+    const kick = (rollbackMtime, observedMtime) => {
       clearTimeout(debounce)
       debounce = setTimeout(() => {
         try {
@@ -295,8 +299,18 @@ function createExternalDbWatch (deps) {
           log.info('[TodoDB] 检测到外部写入（CLI），已刷新调度器并通知渲染端')
           try { require('./lan-sync-bootstrap').kickSyncRound('external-db-write') } catch { /* sync lazy-not-init */ }
           // Resync the mtime baseline: reloadAll itself writes reminderLastSeenAt (touching -wal); without this
-          // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop
-          lastMtime = readWatchMtime() ?? lastMtime
+          // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop.
+          // W15 (2026-10-25): a failed re-read (stable-read null) must not leave a STALE baseline —
+          // lastMtime then sits before reloadAll's own wal write, and under persistent read failure
+          // EVERY later poll re-kicks on our own echo: the same external write replays a full
+          // reload+broadcast each 500ms tick. Keep the baseline at the OBSERVED (consumed) change
+          // mtime and arm a one-shot echo absorb: the next distinct mtime (our own wal write) is
+          // re-baselined WITHOUT a reload; a further distinct mtime is a genuine new change again.
+          const nowM = readWatchMtime()
+          if (nowM != null) { lastMtime = nowM; echoAbsorbArmed = false } else {
+            lastMtime = observedMtime ?? lastMtime
+            echoAbsorbArmed = observedMtime != null
+          }
         } catch (e) {
           lastMtime = rollbackMtime
           log.warn('[TodoDB] 外部写入刷新失败,基线已回滚待下轮重处理:', e && e.message)
@@ -323,6 +337,14 @@ function createExternalDbWatch (deps) {
           forwardTomatoCmd(); forwardSyncCmd(); return
         }
         if (m === lastMtime) { forwardTomatoCmd(); forwardSyncCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
+        // W15 echo absorb (see kick): after a failed baseline re-read the first distinct mtime is
+        // almost always our OWN reloadAll wal write — re-baseline it silently instead of replaying
+        // a full reload+broadcast for our own echo (one-shot: the flag is consumed here).
+        if (echoAbsorbArmed) {
+          echoAbsorbArmed = false
+          lastMtime = m
+          forwardTomatoCmd(); forwardSyncCmd(); return
+        }
         // R7 sweep (2026-10-10): the baseline must NOT advance past a change whose forwarding
         // failed — the old `lastMtime = m` before kick/forwards let any throw here CONSUME the
         // external write (next poll sees m === lastMtime and returns: silent missed change, no
@@ -331,7 +353,7 @@ function createExternalDbWatch (deps) {
         const prevMtime = lastMtime
         try {
           lastMtime = m
-          kick(prevMtime)
+          kick(prevMtime, m)
           forwardTomatoCmd()
           forwardSyncCmd()
         } catch (e) {

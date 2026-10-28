@@ -18,8 +18,8 @@ const oplog = require('./db-oplog')({
   getDb: () => db,
   log,
   getPurgeChips: () => purgeChipsScratch,
-  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible // (peers stop receiving that change until the next full snapshot while the push watermark // advances). Surface it through the Device Center sync-event channel (lazy require:
-  // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then). onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
+  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible (peers stop receiving that change until the next full snapshot while the push watermark advances). Surface it through the Device Center sync-event channel (lazy require: lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then). Regression 2026-10-25: the hook line itself was swallowed by an inline // comment — keep it a REAL object property.
+  onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
 }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 // Sync v2 write-path recorder (flag-gated, see db-revisions.cjs): mirrors the oplog // contract — never fails an already-committed write, warn + continue on error.
 const revisions = require('./db-revisions.cjs')({ getDb: () => db, log })
