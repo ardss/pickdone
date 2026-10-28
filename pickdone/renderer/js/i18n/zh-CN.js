@@ -191,6 +191,9 @@ export default {
     "quarantineRows": "已暂存 {n} 行",
     "quarantineHint": "同步落库失败的行已暂存于本机，等待快照恢复（只读展示）。",
     "oversizedSegmentNotice": "传输数据超过单次同步上限（超长分段），需要升级对端版本或拆分数据后重新配对",
-    "hibernatingNotice": "连接失败次数较多，已暂停常规拨号，约 {n} 秒后自动重试"
+    "hibernatingNotice": "连接失败次数较多，已暂停常规拨号，约 {n} 秒后自动重试",
+    "peerTooNewNotice": "同步对端版本过新，请升级本端后重新同步",
+    "peerTooOldNotice": "同步对端版本过旧，请升级对端后重新同步",
+    "snapshotSchemaTooNewNotice": "对端快照格式过新，请升级本端后重新同步"
   }
 }

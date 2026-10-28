@@ -423,23 +423,22 @@ function mergeableLsTombstones (rows, recycleBinAutoDeleteDays) {
     !rows.some(r => r.categoryId === d.categoryId) &&
     (retentionDays === 0 || !d.deletedAt || d.deletedAt > cutoff))
 }
-export { mergeableLsTombstones }
 function deletedFromLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
     return ((d && Array.isArray(d.list)) ? d.list : []).filter(c => c && c.delete)
   } catch { return [] }
 }
-
+/** W16 ghost-row gate: rows with no id / blank name (LS cache loaded verbatim) rendered as empty 32px dropdown options. Pure + exported for tests. */
+function isValidCatRow (c) { return !!(c && c.categoryId != null && c.categoryId !== '' && c.categoryName && String(c.categoryName).trim()) }
+export { isValidCatRow, mergeableLsTombstones }
 export default {
   namespaced: true,
   state: () => ({ list: loadList(), projectIds: [], projectMeta: {} }),
   getters: {
     /** Views' single name/color lookup: a soft-deleted (or missing) categoryId resolves to null so every
-     *  consumer (taskRow color-follow, name chips, …) falls back to the uncategorized default. Matches the
-     *  CLI contract (cli/lib.js deleteCategory: "tasks keep categoryId and fall back to the default
-     *  (uncategorized) in views") — previously a deleted category kept answering byId within the session,
-     *  so its name/color haunted rows that the EditPanel dropdown (sortedAll) already excluded. */
+     *  consumer falls back to the uncategorized default (CLI deleteCategory contract; a deleted category
+     *  used to keep answering byId and haunt rows the EditPanel dropdown already excluded). */
     byId: s => id => s.list.find(c => c.categoryId === id && !c.delete) || null,
     /** Project-type categories (sorted by listSort) — progressive disclosure: empty array when no projects, sidebar renders no entry */
     projects: s => s.list
@@ -450,8 +449,8 @@ export default {
     /** Lifecycle status of one project (normalized: absent/invalid = 'active') */
     projectStatus: s => id => normalizeStatus((s.projectMeta[id] || {}).status),
     roots: s => s.list.filter(c => !c.folderIs && !c.folderId && !c.delete).sort((a, b) => a.listSort - b.listSort),
-    // All non-deleted categories sorted by listSort (shared by EditPanel category dropdown etc.)
-    sortedAll: s => s.list.filter(c => !c.delete).sort((a, b) => a.listSort - b.listSort),
+    // All non-deleted categories sorted by listSort; W16: isValidCatRow = getter-level last line of defense against ghost rows
+    sortedAll: s => s.list.filter(c => !c.delete && isValidCatRow(c)).sort((a, b) => a.listSort - b.listSort),
     folders: s => s.list.filter(c => c.folderIs && !c.delete),
     visibleCount: s => s.list.filter(c => c.delete).length,
     hierarchical (s) {
@@ -473,9 +472,10 @@ export default {
      *  The rows ARE the authoritative DB content, so they also seed the persist diff-baseline: the first
      *  real user edit after load commits just that row, not the whole list re-synced. */
     setListFromDb (state, list) {
-      state.list = list
-      prunePersistBaseline(list)
-      for (const c of list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
+      // W16 ghost-row root fix at the ONLY memory-entry choke point (init DB rows / LS migration / failed-DB cache / tombstone re-merge): drop live rows with no id or blank name; tombstones (delete:true) are recovery metadata and stay.
+      state.list = list.filter(c => (c && c.delete) || isValidCatRow(c))
+      prunePersistBaseline(state.list)
+      for (const c of state.list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
     },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
       // D19-DOM2 (#9, CLI parity CATEGORY_EXISTS): duplicate LIVE names are rejected — the CLI,      // resolves categories by name, so duplicates produced AMBIGUOUS_MATCH and locked it out,      // (same contract as cli/lib-categories.cjs addCategory; component callers surface,      // catNameExistsWarn via $message.warning). Uniqueness is judged on the CLI's normKey,,      // not the raw string: the raw compare let 'Work' be created next to 'work'/'Ｗｏｒｋ'.

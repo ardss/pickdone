@@ -191,6 +191,9 @@ export default {
     "quarantineRows": "{n} rows parked",
     "quarantineHint": "Rows a failed sync flush dropped are parked machine-locally and recover via a full snapshot (read-only view).",
     "oversizedSegmentNotice": "Transfer exceeded the single-sync size cap (oversized segment) — upgrade the peer's app version or split the data, then pair again",
-    "hibernatingNotice": "Repeated connection failures — regular dialing is paused, auto-retry in about {n}s"
+    "hibernatingNotice": "Repeated connection failures — regular dialing is paused, auto-retry in about {n}s",
+    "peerTooNewNotice": "Sync peer is on a newer app version — upgrade this device to resume syncing",
+    "peerTooOldNotice": "Sync peer is on an older app version — upgrade the peer to resume syncing",
+    "snapshotSchemaTooNewNotice": "Peer snapshot format is newer than this device supports — upgrade this device to resume syncing"
   }
 }

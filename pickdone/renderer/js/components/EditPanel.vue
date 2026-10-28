@@ -246,16 +246,16 @@ export default {
     tomatoActual () {
       const id = this.e && this.e.taskId
       if (!id) return 0
-      // The original predicate r.focus!==false was a copy-paste bug (focus is the task name, always truthy = abandoned ones were counted too); use the store lookup uniformly (abandoned excluded)
+      // Copy-paste bug fix: the original r.focus!==false was always truthy; uniform store lookup (abandoned excluded)
       return this.$store.getters['tomato/actualCountByTask'].get(id) || 0
     },
-    // Recycle bin task: task cannot be found in the non-deleted list, so fall back to the recycle list to detect it (hide the "complete" row, show the restore banner)
+    // Recycle bin: task missing from the live list, detected via the recycle list (hide "complete" row, show restore banner)
     inRecycle () {
       if (!this.e || !this.e.taskId) return false
       if (this.task) return false
       return this.$store.state.todo.recycleList.some(t => t.taskId === this.e.taskId)
     },
-    cats () { return this.$store.getters['category/sortedAll'] },
+    cats () { /* W16: LEAF cats only — folders are containers (roots excludes likewise); sortedAll keeps folders for SideNav/manage */ return this.$store.getters['category/sortedAll'].filter(c => !c.folderIs) },
     curCat () { return this.cats.find(c => c.categoryId === (this.e && this.e.categoryId)) || null },
     // Tags = virtual derivation from #xxx in the content (a cross-cutting multi-select dimension); editing rewrites the hash tokens in the title text
     taskTags () { return this.e ? extractTags(this.e.title) : [] },

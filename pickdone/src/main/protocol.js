@@ -116,7 +116,17 @@ function handleAppProtocol () {
   // local:// local attachment protocol (maps userData/files)
   protocol.handle('local', async (req) => {
     try {
-      const key = decodeURIComponent(req.url.slice('local://'.length))
+      // W16 (2026-10-28 P1): two url mint forms arrive here. NEW (saveAttachment since this wave):
+      // path form `local:///<encoded-key>` — the key lives in the URL's PATH component, which
+      // Chromium preserves verbatim (no lowercasing, no IDNA/punycode transcoding), so decoding
+      // recovers the exact on-disk name (fixes Chinese/uppercase paste-image 404s). LEGACY (rows
+      // already in the DB): host form `local://<encoded-key>` — the host is lowercased (case
+      // fallback below) and non-ASCII hosts were punycoded by Chromium (unrecoverable; those
+      // stale rows fall back to the case-insensitive scan / 404 as before). Strip one leading
+      // '/' to normalize both forms onto the same key.
+      let keyRaw = req.url.slice('local://'.length)
+      if (keyRaw.startsWith('/')) keyRaw = keyRaw.slice(1)
+      const key = decodeURIComponent(keyRaw)
       let resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)

@@ -215,16 +215,27 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
     if (!published) { try { fs.unlinkSync(dest) } catch { /* placeholder cleanup best-effort */ } }
   }
   const finalName = path.basename(dest)
-  const url = `local://${encodeURIComponent(finalName)}`
+  // W16 (2026-10-28 P1): mint the url in PATH form (local:///<encoded-key>, key in the URL's path
+  // component). The previous host form (local://<encoded-key>) put the key in the HOST, which
+  // Chromium lowercases AND IDNA/punycode-transcodes — a Chinese or uppercase filename arrived at
+  // the local:// handler as a punycode host, decodeURIComponent could not recover the original
+  // name and the request 404'd (user-visible "pasted image shows broken"). The path component is
+  // preserved verbatim (percent-decoding only), so the handler decodes back to the exact on-disk
+  // name. attachmentKeyOfUrl strips the leading '/' so legacy rows keep resolving.
+  const url = `local:///${encodeURIComponent(finalName)}`
   return { url, key: finalName, name, size: fs.statSync(dest).size, ext }
 }
 /** F2 (2026-10-15): resolve the on-disk key a `local://` url refers to — percent-decode + basename,
  *  with attachmentPath's same malformed-encoding fallback (raw key). Non-local:// urls → null.
+ *  W16 (2026-10-28): tolerates BOTH mint forms — the new path form `local:///<encoded-key>`
+ *  (leading '/' stripped before basename) and the legacy host form `local://<encoded-key>` — so
+ *  existing DB rows keep resolving through the SAME rules saveAttachment now mints by.
  *  Pure (no IO), so both the App delete-file handler and the CLI remove path count references
  *  through the SAME resolution rules the unlink itself uses. */
 function attachmentKeyOfUrl (url) {
   if (typeof url !== 'string' || !url.startsWith('local://')) return null
   let k = url.slice(8)
+  if (k.startsWith('/')) k = k.slice(1) // path-form: the key lives in the URL's path component
   try { k = decodeURIComponent(k) } catch { /* malformed encoding: raw key, matches attachmentPath */ }
   return path.basename(k)
 }

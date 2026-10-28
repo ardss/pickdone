@@ -220,6 +220,17 @@ const syncPairRequest = (host, port) => dbCallLoose('syncPairRequest', { host, p
 
 import { peerDotClass, peerPendingKind, capFeed, feedIcon, parseConnectAddress, pairFailureKey, relTimeParts, securityVisible, peerFlushStalled, peerDisplayName, peerStatusInfo } from './sync-tab-helpers.js'
 
+/** W16 (2026-10-28): sync version-gate structured codes → i18n copy. peer-too-new/peer-too-old ride
+ *  the peer-unauthorized syncEvent (97d541ca), snapshot-schema-too-new rides round-error; both
+ *  branches below look the code up here and fall back to the event's raw detail text. Kept as a
+ *  named module-scope const so the regression test can extract and evaluate the exact mapping
+ *  from the SFC source (plain <script> blocks must not add named exports for the SFC compiler). */
+const SYNC_GATE_NOTICE_KEYS: Record<string, string> = {
+  'peer-too-new': 'sync.peerTooNewNotice',
+  'peer-too-old': 'sync.peerTooOldNotice',
+  'snapshot-schema-too-new': 'sync.snapshotSchemaTooNewNotice'
+}
+
 export default {
   name: 'SettingsSyncTab',
   data () {
@@ -406,7 +417,12 @@ export default {
       else if (evt.type === 'pair-throttled') this.throttledAlert = true
       else if (evt.type === 'round-done' || evt.type === 'round-error') {
         const kind = evt.type === 'round-error' ? 'error' : (evt.kind === 'snapshot' ? 'snapshot' : (evt.dir === 'pull' ? 'pull' : 'push'))
-        this.feedLive = [{ at: Date.now(), kind, peer: evt.deviceName || evt.deviceId || '', detail: evt.detail || evt.error || '' }].concat(this.feedLive).slice(0, 50)
+        // W16: a version-gate round failure (snapshot-schema-too-new) carries a structured code —
+        // map it to localized copy instead of leaking the raw main-process error string.
+        const gateKey = evt.type === 'round-error' && SYNC_GATE_NOTICE_KEYS[evt.code as string]
+        const detail = gateKey ? this.$t(gateKey) : (evt.detail || evt.error || '')
+        this.feedLive = [{ at: Date.now(), kind, peer: evt.deviceName || evt.deviceId || '', detail }].concat(this.feedLive).slice(0, 50)
+        if (gateKey) this.$message.warning(this.$t(gateKey))
       }
       // r3 fix (2026-09-28): one-way data-loss alerts used to be emit-only — the event type had
       else if (evt.type === 'egress-hydration-failed') {
@@ -420,8 +436,13 @@ export default {
       // r5 fix (2026-09-28): four more emit-only syncEvent types had zero renderer consumers —
       else if (evt.type === 'peer-unauthorized') {
         const who = evt.deviceName || evt.deviceId || ''
-        this.feedLive = [{ at: Date.now(), kind: 'error', peer: who, detail: this.$t('sync.peerUnauthorizedNotice') }].concat(this.feedLive).slice(0, 50)
-        this.$message.warning(this.$t('sync.peerUnauthorizedNotice'))
+        // W16: 97d541ca routes the protoVer window gate through this event with a structured code
+        // (peer-too-new / peer-too-old) — show the specific upgrade direction; unknown codes keep
+        // the generic re-pair notice.
+        const gateKey = SYNC_GATE_NOTICE_KEYS[evt.code as string]
+        const notice = gateKey ? this.$t(gateKey) : this.$t('sync.peerUnauthorizedNotice')
+        this.feedLive = [{ at: Date.now(), kind: 'error', peer: who, detail: notice }].concat(this.feedLive).slice(0, 50)
+        this.$message.warning(notice)
       } else if (evt.type === 'peer-unpaired') {
         const who = evt.deviceName || evt.deviceId || ''
         this.feedLive = [{ at: Date.now(), kind: 'pair', peer: who, detail: this.$t('sync.peerUnpairedNotice') }].concat(this.feedLive).slice(0, 50)
