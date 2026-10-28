@@ -507,7 +507,7 @@ function notifyRenderers (reason) {
  * peer-online, peer-offline, peer-unauthorized, peer-unpaired, pair-request, pair-accepted,
  * pair-rejected, pair-throttled, snapshot-sync, round-done, round-error, server-error,
  * sync-conflict, flush-quarantined, tomato-announce, attachments-arrived,
- * egress-hydration-failed, oplog-append-failed, sync-degraded.
+ * egress-hydration-failed, oplog-append-failed, sync-degraded, float-recovery-exhausted.
  * (r4 2026-09-28: that list is set-equality-gated against the actual emit sites —
  * tests/unit/main/fix-20260928-r4-main.test.mjs greps every emitSyncEvent('<type>') and fails
  * on any drift in either direction.)

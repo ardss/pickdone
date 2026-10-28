@@ -195,7 +195,7 @@ test('[delFile] deleteFile rejection reaches reportError (no bare catch(() => {}
   globalThis.window.todoAPI = { deleteFile: url => Promise.reject(new Error('delete-file failed: EPERM ' + url)) }
   const fn = new Function('undone', 'item', 'attachmentUrlPresent', 'reportError', m[1])
   await fn.call(
-    { $store: { state: { todo: { todoList: [{ taskId: 't1' }] } } } },
+    { $store: { state: { todo: { todoList: [{ taskId: 't1' }], recycleList: [] } } } },
     false, { url: 'att://x' }, () => false,
     (where, err) => reported.push([where, err])
   )
