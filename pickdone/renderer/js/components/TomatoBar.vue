@@ -126,9 +126,14 @@ export default {
     this._iv = setInterval(() => {
       this.ts = Date.now() // completion check / bookkeeping live in store/tomato's shared tick (dispatched per window by main.js); this only refreshes the display
       // While idle (non-running) the status does not change; push once after each flip instead of pushing IPC every second
+      // w16 fix (2026-10-28): while RUNNING the signature now carries the exact remaining second —
+      // the old minute-granularity gate (floor(remainSec/60)) only refreshed the Windows taskbar
+      // progress bar once per minute, so the bar sat a frozen stub near the origin for the first
+      // minutes of a focus. main-process tomato-taskbar.update debounces at 0.004 (~6s of a 25:00
+      // focus), so per-second IPC stays cheap and the bar now tracks the real countdown.
       const st = this.$store.state.tomato
-      // Remaining seconds sourced like pushTaskbar (the component has no remainSec data field; it used to be always undefined, freezing the taskbar countdown after phase switches)
-      const sig = (st.status || '') + ':' + (st.status && st.status !== 'default' ? Math.floor(this.remainSecNow() / 60) : '')
+      const isRunning = !!st.status && st.status !== 'default'
+      const sig = (st.status || '') + ':' + (isRunning ? this.remainSecNow() : '')
       if (sig !== this._lastTbSig) { this._lastTbSig = sig; this.pushTaskbar() }
       // Re-align the float window's real visibility every 15s (tray/shortcut closing the float bypasses this component, so the local toggle state drifts)
       this._floatSyncN = (this._floatSyncN || 0) + 1

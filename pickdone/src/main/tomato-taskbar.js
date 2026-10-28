@@ -73,13 +73,19 @@ function update (p = {}) {
   const status = p.status || 'default'
   const running = status === 'startTomatoTime' || status === 'startRestTime'
   const paused = !!p.paused
-  const total = Math.max(1, Number(p.totalSec) || 0)
+  // w16 (2026-10-28): Math.max(1, …) used to paper over a missing/zero totalSec as total=1 while
+  // remainSec stayed huge → value = 1 - remain/1 clamped to 0 → the taskbar showed a frozen stub
+  // at the origin for the whole focus. A fraction with no sane total is unknowable: mark the
+  // progress unknown and SKIP the set (keep last progress) instead of writing a wrong value.
+  const rawTotal = Number(p.totalSec)
+  const total = Number.isFinite(rawTotal) && rawTotal > 0 ? rawTotal : 0
   const remain = Math.max(0, Number(p.remainSec) || 0)
+  const progressKnown = !(running || paused) || total > 0
 
   // 1) Progress bar: running/paused = elapsed fraction (focus normal, rest/paused paused yellow); idle = clear (-1)
   const mode = !running && !paused ? 'none' : (status === 'startTomatoTime' && !paused ? 'normal' : 'paused')
-  const value = running || paused ? Math.min(1, Math.max(0, 1 - remain / total)) : 0
-  if (mode !== last.mode || (mode !== 'none' && Math.abs(value - (last.value || 0)) > 0.004)) {
+  const value = running || paused ? Math.min(1, Math.max(0, 1 - remain / (total || remain || 1))) : 0
+  if (progressKnown && (mode !== last.mode || (mode !== 'none' && Math.abs(value - (last.value || 0)) > 0.004))) {
     try { mainWin.setProgressBar(mode === 'none' ? -1 : value, { mode }) } catch (e) { /* */ }
     last.mode = mode; last.value = value
   }
@@ -94,7 +100,7 @@ function update (p = {}) {
   }
 
   // 4/5) Tray progress ring and today's badge: must be called before the thumbnail branch's early return below; updated in the idle state too
-  trayAndBadge(p, status, paused, remain, total)
+  trayAndBadge(p, status, paused, remain, total || remain || 1) // w16: never divide by 0 → NaN ring
 
   // 3) Thumbnail toolbar: attach [Give up] while timing (the pomodoro has no pause semantics — final decision: sleep = completes normally when the wall clock runs out)
   if (process.platform !== 'win32') return
