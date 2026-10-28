@@ -126,6 +126,8 @@ contextBridge.exposeInMainWorld('todoAPI', {
   // Erase DWM ghost residue after content transitions (called on expand/collapse of the abandon popover)
   flushTomatoFloat: () => invoke('flush-tomato-float'),
   setTomatoFloatBounds: () => invoke('set-tomato-float-bounds'),
+  // W16 (2026-10-28) diagnostics: layered float self-check (route/DOM/paint) — main window only.
+  tomatoFloatDiagnose: () => invoke('tomato-float-diagnose'),
   startTomatoFloatDrag: () => invoke('start-tomato-float-drag'),
   stopTomatoFloatDrag: () => invoke('stop-tomato-float-drag'),
   ensureWindowWidth: w => invoke('ensure-window-width', w),

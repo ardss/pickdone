@@ -394,7 +394,7 @@ export default {
       document.documentElement.classList.add('widget-transparent')
       // document.title is what DWM ghost repaints draw — clear it to cut the ghost off at the root
       document.title = ''
-      if (window.todoAPI) window.todoAPI.setTomatoFloatBounds()
+      this.$nextTick(() => { if (!document.querySelector('.tomato')) return; if (window.todoAPI) window.todoAPI.setTomatoFloatBounds() }) // W16 render-health handshake via existing 'set-tomato-float-bounds': sent ONLY after the card (.tomato) is really mounted — ready-to-show/did-finish-load are fake health ("window alive, screen blank" incident); a handshake missing in the guard's 10s window drives the bounded rebuild (design notes: tomato-float.js noteRenderHandshake)
     }
     this.refresh()
     this._onStorage = () => this.refresh()

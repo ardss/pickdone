@@ -175,6 +175,7 @@ export default {
     "conflictApplied": "Sync conflict: \"{name}\" — the other device's version was applied",
     "degradedOplog": "Failed to queue a local change for sync — this session's increments may not have reached other devices; a restart recovers automatically",
     "degradedFlush": "A sync segment could not be applied and was quarantined to the conflict-backup area — no data is lost; see sync settings for details",
+    "floatRecoveryExhausted": "The pomodoro floating window failed to recover automatically after repeated attempts and stays hidden — reopen it from Settings → Pomodoro; details are in the diagnostic logs",
     "unpairedByRemote": "Unpaired by the other device — pair again",
     "conflictSection": "Sync conflict backups",
     "conflictHint": "Data overwritten by a sync conflict is backed up here automatically — nothing is truly lost until you confirm, and you can restore anytime.",

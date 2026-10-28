@@ -118,6 +118,7 @@ interface TodoAPI {
   runAutoBackup: (...args: any[]) => any
   setAppLocale: (...args: any[]) => any
   setTomatoFloatBounds: (...args: any[]) => any
+  tomatoFloatDiagnose: (...args: any[]) => any
   showMainFromFloat: (...args: any[]) => any
   showTomatoFloat: (...args: any[]) => any
   startTomatoFloatDrag: (...args: any[]) => any

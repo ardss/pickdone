@@ -26,7 +26,10 @@ export function installSyncEventToasts ({ onSyncEvent, i18n, toast, EP }) {
     if (!evt) return
     const key = evt.type === 'oplog-append-failed' || evt.type === 'sync-degraded'
       ? 'sync.degradedOplog'
-      : evt.type === 'flush-quarantined' ? 'sync.degradedFlush' : null
+      : evt.type === 'flush-quarantined' ? 'sync.degradedFlush'
+      // W16 (2026-10-28): tomato float bounded recovery exhausted — one structured main-process
+      // report over this existing syncEvent channel; the float stays hidden until reopened.
+      : evt.type === 'float-recovery-exhausted' ? 'sync.floatRecoveryExhausted' : null
     if (!key || shown.has(key)) return
     try {
       if (!EP || !EP.ElMessage) return
