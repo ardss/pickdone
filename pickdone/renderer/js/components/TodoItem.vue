@@ -128,7 +128,7 @@ import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js
 import { taskContextMenu } from '../utils/taskMenu.js' // [maint-0925 A16] one menu builder for all views
 import { descLineClampStyle } from '../utils/descLines.js' // [B6 fix] consumes settings.todoDescriptionDisplayLineNumber
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
-import { isReleaseOutsideViewport } from '../utils/winbindGeometry.js' // [win-bind T8] pure release-point gate
+import { isReleaseOutsideViewport, isCompletedDragRelease } from '../utils/winbindGeometry.js' // [win-bind T8] pure release-point gate + [QA r1 #3] completed-vs-cancelled gate
 import WinBindBadge from './WinBindBadge.vue' // [win-bind T8] bound-window chip in the meta strip
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
@@ -282,7 +282,10 @@ export default {
       // Release OUTSIDE the window bounds = bind intent; inside (or Esc-drag-back) keeps the
       // original behavior untouched. The gate is a pure predicate; cancel semantics (button still
       // down / desktop / own window) are resolved by the main process and cancel silently.
-      if (e && isReleaseOutsideViewport(e, window)) this.$store.dispatch('winbind/releaseOutside', this.todo.taskId)
+      // [QA r1 #3] isCompletedDragRelease (dragend.dropEffect === 'move') kills the Esc path
+      // BEFORE any IPC: an Esc-cancelled drag reports 'none' (measured live), so identify is
+      // never dispatched and the fast-Esc-release button race in the main process cannot mis-bind.
+      if (e && isReleaseOutsideViewport(e, window) && isCompletedDragRelease(e)) this.$store.dispatch('winbind/releaseOutside', this.todo.taskId)
     },
     async onDrop (e) {
       e.preventDefault()

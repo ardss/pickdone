@@ -262,8 +262,9 @@ test('contract lock: store win-bind key usage matches the preload exposed surfac
 test('TodoItem.onDragEnd dispatches winbind/releaseOutside only through the geometry gate', async () => {
   const fs = await import('node:fs')
   const src = fs.readFileSync(new URL('../../../../renderer/js/components/TodoItem.vue', import.meta.url), 'utf8')
-  assert.match(src, /import \{ isReleaseOutsideViewport \} from '\.\.\/utils\/winbindGeometry\.js'/, 'gate imported')
-  assert.match(src, /isReleaseOutsideViewport\(e,\s*window\)[^\n]*winbind\/releaseOutside/, 'gated dispatch on the same line')
+  assert.match(src, /import \{ isReleaseOutsideViewport, isCompletedDragRelease \} from '\.\.\/utils\/winbindGeometry\.js'/, 'gates imported')
+  // [QA r1 #3] BOTH gates on the dispatch line: outside geometry AND completed (not Esc-cancelled) drag
+  assert.match(src, /isReleaseOutsideViewport\(e,\s*window\)\s*&&\s*isCompletedDragRelease\(e\)[^\n]*winbind\/releaseOutside/, 'gated dispatch on the same line')
   // scope freeze: the reorder path must stay untouched
   assert.match(src, /async onDrop \(e\)/, 'onDrop still present')
   assert.match(src, /_writeSort \(list\)/, '_writeSort still present')

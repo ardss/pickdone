@@ -13,7 +13,7 @@ import '../../../setup.mjs'
 import { test } from '../../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 
-const { isReleaseOutsideViewport } = await import('../../../../renderer/js/utils/winbindGeometry.js')
+const { isReleaseOutsideViewport, isCompletedDragRelease } = await import('../../../../renderer/js/utils/winbindGeometry.js')
 
 const WIN = { screenX: 100, screenY: 200, outerWidth: 800, outerHeight: 600 } // spans x[100,900] y[200,800]
 
@@ -54,4 +54,19 @@ test('non-finite or missing coordinates never claim outside (fail-closed: no acc
   assert.equal(isReleaseOutsideViewport({ screenX: 500, screenY: 500 }, null), false)
   assert.equal(isReleaseOutsideViewport({ screenX: 500, screenY: 500 }, {}), false)
   assert.equal(isReleaseOutsideViewport({ screenX: Infinity, screenY: 500 }, WIN), false)
+})
+
+/* [QA r1 #3] completed-vs-cancelled gate: dragend.dropEffect discriminates a real outside
+ * release ('move', the source's effectAllowed set in TodoItem.onDragStart) from an Esc-cancel
+ * ('none' — HTML dnd spec forces none on a cancelled drag; measured live on Electron 39). */
+test('isCompletedDragRelease: move = completed release, none = Esc-cancel (fail-closed)', () => {
+  assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'move' } }), true, 'outside release reports move')
+  assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'none' } }), false, 'Esc-cancel reports none')
+  // fail-closed: missing/odd shapes never claim completion
+  assert.equal(isCompletedDragRelease({}), false)
+  assert.equal(isCompletedDragRelease(null), false)
+  assert.equal(isCompletedDragRelease({ dataTransfer: null }), false)
+  assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: undefined } }), false)
+  assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'copy' } }), false, 'foreign-accepted copy also fails closed')
+  assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'link' } }), false)
 })

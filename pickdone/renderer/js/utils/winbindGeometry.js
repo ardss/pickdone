@@ -29,3 +29,18 @@ export function isReleaseOutsideViewport (pt, win) {
       !Number.isFinite(wy) || !Number.isFinite(ww) || !Number.isFinite(wh)) return false
   return !(px >= wx && px <= wx + ww && py >= wy && py <= wy + wh)
 }
+
+/** [QA r1 #3] true when the native drag COMPLETED (mouse release), false when it was CANCELLED
+ *  (Esc). Measured on Electron 39/Chromium 142 with real SendInput drags (live probe,
+ *  2026-10-29): dragend.dropEffect === 'move' on an outside release (the completion reports the
+ *  source's effectAllowed, set to 'move' in TodoItem.onDragStart), and === 'none' on Esc-cancel
+ *  (HTML dnd spec: a cancelled drag forces dropEffect 'none' at dragend). The event's
+ *  buttons/button fields are USELESS here — Chromium synthesizes dragend with buttons=0 in BOTH
+ *  cases, so this is the only deterministic renderer-side discriminator. It closes the Esc
+ *  mis-bind race that the main process's GetAsyncKeyState check cannot (the identify PS
+ *  roundtrip samples the button ~50-100ms after dragend — later than a fast Esc→release).
+ *  Fail-closed: a release a foreign app accepts as 'copy'/'link' also returns false (a missed
+ *  bind is better than an accidental one — same doctrine as isReleaseOutsideViewport). */
+export function isCompletedDragRelease (e) {
+  return !!(e && e.dataTransfer && e.dataTransfer.dropEffect === 'move')
+}
