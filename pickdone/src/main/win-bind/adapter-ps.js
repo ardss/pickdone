@@ -155,11 +155,24 @@ namespace WinBind {
             uint fgPid;
             uint fgThread = GetWindowThreadProcessId(fg, out fgPid);
             uint myThread = GetCurrentThreadId();
-            bool attached = fgThread != 0 && fgThread != myThread && AttachThreadInput(myThread, fgThread, true);
-            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
-            set = SetForegroundWindow(h);
-            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
-            if (attached) AttachThreadInput(myThread, fgThread, false);
+            bool attached = false;
+            bool altDown = false;
+            try {
+              attached = fgThread != 0 && fgThread != myThread && AttachThreadInput(myThread, fgThread, true);
+              altDown = true;
+              keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+              set = SetForegroundWindow(h);
+            } finally {
+              try {
+                if (altDown) keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+              } finally {
+                if (attached) {
+                  if (!AttachThreadInput(myThread, fgThread, false)) {
+                    throw new InvalidOperationException("AttachThreadInput detach failed");
+                  }
+                }
+              }
+            }
           }
           fgNow = GetForegroundWindow() == h;
           if (!fgNow) Thread.Sleep(30);
