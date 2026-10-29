@@ -134,7 +134,10 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
     },
 
     todayTodoList: applySort(todayList),
-    todayXNext: todayXNext.sort((x, y) => (x.dayStart - y.dayStart) || (x.todoTime - y.todoTime)),
+    // [w19 NaN-guard] same ||0 fallback caliber as the Review-P3 comparators above — the array
+    // itself only ever holds rows with a finite numeric dayStart (the dsNum gate), but a drifted
+    // NaN todoTime made the second subtraction return NaN (implementation-defined order).
+    todayXNext: todayXNext.sort((x, y) => ((x.dayStart || 0) - (y.dayStart || 0)) || ((x.todoTime || 0) - (y.todoTime || 0))),
     todayXOpen,
     // Completed-group sort matches the grouping basis (completedAt first, avoiding sort misplacement when editing after completion)
     // [nan-comparator fix] same ||0 fallback as the Review-P3 (2026-09-22) comparators above —

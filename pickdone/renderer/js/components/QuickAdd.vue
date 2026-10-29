@@ -237,8 +237,11 @@ export default {
         // input shows the first pending line as the visible draft.
         const rest = lines.slice(done)
         if (rest.length) {
-          this._pendingLines = rest.concat(this._pendingLines || [])
-          this.text = rest[0]
+          // [w19 retry-order fix] FIFO append (the old prepend put a LATER failed batch
+          // ahead of lines already queued); and never clobber a draft the user typed during the
+          // await window — only seed the input when it is empty.
+          this._pendingLines = (this._pendingLines || []).concat(rest)
+          if (!this.text.trim()) this.text = rest[0]
         }
         if (this.quiet) this.markFailed()
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))

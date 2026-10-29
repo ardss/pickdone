@@ -195,9 +195,13 @@ export default {
     cat () { return this.$store.getters['category/byId'](this.todo.categoryId) },
     // D14-A3: deadline chip red only when the due DAY has passed (dueStateOf semantics: days<0
     // = overdue; today = due-soon) — the old `deadlineTs < Date.now()` fired on the due day itself
+    // [w19 midnight fix]: the "today" side reads the reactive store owner (todo.todayTimestamp,
+    // maintained by setTodayTs across midnight — same W9 caliber as RecycleBinView.isOverdue)
+    // instead of a bare dayjs(): a wall-clock read has no reactive dependency, so this computed
+    // cached its pre-midnight value and the red chip never appeared after the day flipped.
     deadlineOverdue () {
       if (!(this.todo.deadlineTs > 0) || this.todo.complete) return false
-      return dayjs(this.todo.deadlineTs).startOf('day').valueOf() < dayjs().startOf('day').valueOf()
+      return dayjs(this.todo.deadlineTs).startOf('day').valueOf() < this.$store.state.todo.todayTimestamp
     },
     // [B6 fix] the "Description visible lines" slider (todoDescriptionDisplayLineNumber) had a settings
     // UI but no consumer — the description never clamped. Apply the configured clamp to .td-desc.
@@ -221,7 +225,10 @@ export default {
       return this.$store.getters['tomato/actualCountByTask'].get(id) || 0
     },
     checkboxColor () { return chkColor(this.$store, this.todo) },
-    dateLabel () { return formatDayLabel(this.todo.dayStart || this.todo.todoTime, Date.now(), this.$t.bind(this)) },
+    // [w19 midnight fix] same reactive-today caliber as deadlineOverdue above: the label's
+    // "today/yesterday/tomorrow" comparison now reads todo.todayTimestamp instead of Date.now(),
+    // so the badge re-renders at rollover instead of showing a stale "today" all next day.
+    dateLabel () { return formatDayLabel(this.todo.dayStart || this.todo.todoTime, this.$store.state.todo.todayTimestamp, this.$t.bind(this)) },
     // UX walk 2026-10-12: NL quick-add stores a clock time ("周四下午3点" → todoTime 15:00) but the
     // row only showed the date, so the time looked silently dropped. Surface the time-of-day when
     // the timestamp carries one (all-day tasks are midnight → no label).

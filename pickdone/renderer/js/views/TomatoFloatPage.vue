@@ -179,7 +179,7 @@ export default {
     },
     /* Ring arc remaining ratio 0-100 (ready = full ring); pathLength=100 draws directly by percentage */
     ringPct () {
-      const s = this.st || {}
+      const s = this.st || {}; if (this.remaining == null) return 100 // [w19] same first-frame null guard as clock() — a starting pomodoro used to flash an empty 0% ring
       if (this.working) {
         const total = (s.tomatoTime || 25) * 60
         return Math.max(0, Math.min(100, this.remaining / total * 100))
