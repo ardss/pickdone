@@ -114,13 +114,15 @@ function init (mainWin) {
   // handlers/system.js which now asks the same confirm). No second gate here: this path cannot
   // run without the user having already confirmed the quit.
   autoUpdater.autoInstallOnAppQuit = true // after download, a normal user quit silently upgrades
-  // P1-4 (2026-09-19 release-chain round): electron-updater derives the feed FILE from the app
-  // version — a `0.4.0-beta.x` version implies a `beta` channel and fetches `beta.yml`, which
-  // electron-builder never publishes for this project (it only emits `latest.yml` for the draft
-  // release). Result: every beta build's first update check 404'd. Pin the channel to `latest`
-  // (with allowPrerelease so beta versions still satisfy the range check) so the updater reads
-  // the artifact that actually ships, matching the GitHub draft release layout.
-  autoUpdater.channel = 'latest'
+  // P1-4 (2026-09-19): electron-updater derives the feed FILE from the channel — a beta app version
+  // implies channel `beta` and fetches `beta.yml`, which electron-builder never publishes for this
+  // project (it only emits `latest.yml`). Pinning channel='latest' fixed that 404 but introduced a
+  // WORSE one (2026-10-29 beta.21 实锤): GitHubProvider's prerelease matcher requires the channel to
+  // be null-or-alpha/beta (`shouldFetchVersion = !channel || ['alpha','beta'].includes(channel)`),
+  // so channel='latest' matched NO beta tag at all → "No published versions on GitHub" forever.
+  // Correct shape: leave `channel` UNSET (currentVersion 0.4.0-beta.x yields currentChannel 'beta',
+  // which matches beta tags; and a null channel resolves the feed file to latest.yml by default)
+  // + allowPrerelease=true. Verified against node_modules/electron-updater 6.8.9 getLatestVersion.
   autoUpdater.allowPrerelease = true
   autoUpdater.allowDowngrade = false
   syncAutoDownload()

@@ -167,12 +167,17 @@ test('P2f: tomatoAnnounce clears remote announces when sync is disabled', () => 
   assert.match(tab, /tomatoAnnounce\/clearRemote/, 'toggle-off drops the chip immediately')
 })
 
-/* ---------------- P1-4i: updater channel pin ---------------- */
+/* ---------------- P1-4i: updater channel shape ---------------- */
 
-test('P1-4i: updater pins channel to latest (beta.yml 404 fix)', () => {
+test('P1-4i: updater leaves channel unset (beta.yml fallback + prerelease matcher), allowPrerelease on', () => {
   const src = read('src/main/updater.js')
-  assert.match(src, /autoUpdater\.channel = 'latest'/)
-  assert.match(src, /autoUpdater\.allowPrerelease = true/, 'beta app versions still satisfy the range check')
+  // 2026-10-29 beta.21 实锤: electron-updater 6.8.9 GitHubProvider 的 prerelease 匹配要求 channel
+  // 为 null 或 alpha/beta (`shouldFetchVersion = !channel || ['alpha','beta'].includes(channel)`) —
+  // 旧的 channel='latest' 钉法让任何 beta tag 都匹配不上 → "No published versions on GitHub" 永远报错。
+  // channel 未设时: currentVersion(beta) 得 currentChannel='beta' 正常匹配; feed 文件经 allowPrerelease
+  // 回落 latest.yml(beta.yml 404 fallback)。两者缺一不可,钉死防回潮。
+  assert.doesNotMatch(src, /autoUpdater\.channel\s*=/, 'channel must stay unset — pinning latest breaks the beta matcher')
+  assert.match(src, /autoUpdater\.allowPrerelease = true/, 'prerelease match + latest.yml 404 fallback both require it')
 })
 
 /* ---------------- P1-4k: check-all live stage ceilings ---------------- */
