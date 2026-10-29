@@ -136,6 +136,7 @@ app.directive('click-outside', {
 
 // Reload from DB when other windows modify data (runtime module registered outside the root module)
 store.registerModule('_rt', {
+  namespaced: true,
   actions: {
     async refreshFromDb () {
       let rows
