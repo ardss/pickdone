@@ -147,16 +147,38 @@ test('M-3: import:pick-preview contract after successful pick is {ok:true,...} (
 
 test('M-3: import:run with a vanished picked file returns structured {ok:false, code}', async () => {
   const file = path.join(process.env.TODO_DB_DIR, 'vanish.csv')
-  fs.writeFileSync(file, 'a,b\r\n1,2\r\n')
+  // w19: a real 3.x CSV so the preview parse SUCCEEDS and the single-object grant is fully
+  // established (the old junk fixture made the preview itself fail, which under the w19
+  // whole-object grant contract is AUTH_EXPIRED — covered by the dedicated test below).
+  fs.writeFileSync(file, 'Date: 2024-01-01 12:00:00\r\nVersion: 3.0\r\n"List Name","Title","Start Date","Due Date","Completed Time","Content","Priority","Tags"\r\n"Inbox","t1",,,,"",0,life\r\n')
   const origDialog = stubs.electron.dialog
   stubs.electron.dialog = { showOpenDialog: async () => ({ canceled: false, filePaths: [file] }) }
   const hs = importHandlers(mkWinCtx())
-  await hs['import:pick-preview'](mkWinEvent()) // grants lastPickedImportPath + hash
+  const pv = await hs['import:pick-preview'](mkWinEvent()) // establishes the {path, hash} grant
+  assert.equal(pv.ok, true, 'preview succeeds so the vanished-file run path is exercised')
   fs.unlinkSync(file) // vanish between preview and run (the M-3 scenario)
   const r = await hs['import:run'](mkWinEvent(), file)
   stubs.electron.dialog = origDialog
   assert.equal(r.ok, false)
   assert.equal(r.code, 'FILE_MISSING')
+})
+
+test('M-3b [w19]: a FAILED preview leaves no half-grant — run answers AUTH_EXPIRED (never HASH_MISMATCH)', async () => {
+  // The w19 single-object grant replaces the two loose variables: preview A lands {path:A,hash:A},
+  // preview B lands {path:B,hash:B}, A's failure used to clear only the hash → the surviving
+  // half-grant {path:B, hash:''} passed the path gate but every run died on HASH_MISMATCH. Now a
+  // failed preview wipes the WHOLE grant, so run deterministically answers AUTH_EXPIRED.
+  const file = path.join(process.env.TODO_DB_DIR, 'vanish2.csv')
+  fs.writeFileSync(file, 'a,b\r\n1,2\r\n') // junk without the 3.x header → preview parse fails
+  const origDialog = stubs.electron.dialog
+  stubs.electron.dialog = { showOpenDialog: async () => ({ canceled: false, filePaths: [file] }) }
+  const hs = importHandlers(mkWinCtx())
+  const pv = await hs['import:pick-preview'](mkWinEvent())
+  assert.equal(pv.ok, false, 'junk csv fails the preview')
+  const r = await hs['import:run'](mkWinEvent(), file)
+  stubs.electron.dialog = origDialog
+  assert.equal(r.ok, false)
+  assert.equal(r.code, 'AUTH_EXPIRED')
 })
 
 // ---------------------------------------------------------------------------
@@ -231,9 +253,14 @@ test('CONTRACT getMetaMany: bad input throws a structured error', () => {
 test('M-9: verifyLockPassword accepts the right password and rejects the wrong one', () => {
   const sl = require_('../../../src/main/security-lock.js')
   let stored = { securityLockPassword: 'plain:s3cret' }
+  // w19: verify caches the stored string with configWriteVersion invalidation (D18 caliber, same
+  // as cachedLockFlag) — the mock models that contract explicitly: every config write bumps ver,
+  // so a password change / the fallback wipe invalidates the cache immediately.
+  let cfgVer = 0
   const lock = sl.createSecurityLock({
     getMainWindow: () => null, showMainOrLock: () => {},
-    readConfig: () => stored, writeConfig: p => { stored = { ...stored, ...p } },
+    readConfig: () => stored, writeConfig: p => { stored = { ...stored, ...p }; cfgVer++ },
+    configVersion: () => cfgVer,
     i18n: { t: s => s }, log: console,
   })
   assert.equal(lock.verifyLockPassword('s3cret'), true)
@@ -243,7 +270,7 @@ test('M-9: verifyLockPassword accepts the right password and rejects the wrong o
   // intentional fail-open): verify FAILS (no arbitrary input unlocks a nominally locked app) and
   // the load-failed fallback runs — lock disabled + password cleared via writeConfig, so the user
   // re-sets a password instead of hitting a permanent lockout or a silent bypass.
-  stored = { securityLockPassword: 'enc1:bm90LXJlYWw', enableSecurityLock: true }
+  stored = { securityLockPassword: 'enc1:bm90LXJlYWw', enableSecurityLock: true }; cfgVer++ // external config write bumps the version
   const origReq = Module._load
   Module._load = (request, parent, isMain) => (request === 'electron' ? { safeStorage: { decryptString: () => { throw new Error('no key') } } } : origReq.call(this, request, parent, isMain))
   try {
