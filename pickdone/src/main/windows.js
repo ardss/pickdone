@@ -343,6 +343,13 @@ function createWindowManager (ctx) {  const {
     // some workArea — so a half-off-screen window (monitor unplugged) clamps back too.
     const clampIntoView = () => {
       try {
+        // W18 fix: a maximized window can report out-of-view bounds during display churn, but
+        // setBounds on it un-maximizes / corrupts the maximized state (the OS snap is lost).
+        // Skip the clamp entirely: a maximized window is always on-screen by construction, and
+        // display-removed re-maximizes it to the new workArea on its own. Same liveness-first
+        // style as the persisted-bounds branch above (:312), which also never touches a
+        // maximized window's bounds.
+        if (win.isMaximized && win.isMaximized()) return
         const { screen } = require('electron')
         const b = win.getBounds()
         if (windowBoundsVisible(b, screen.getAllDisplays())) return

@@ -39,7 +39,14 @@ module.exports = function settingsHandlers (ctx) {
       // already throws (handlers/todo.js:125 style). A locked aux window used to read the full
       // config (backup whitelist / winBounds / shortcuts). The lock-screen window itself stays
       // exempt (same isLockWindow carve-out as the todo bus); other callers while locked throw.
-      if (isLocked && isLocked() && !(isLockWindow && e && isLockWindow(e.sender))) throw new Error('app is locked')
+      // W18 fix: the tomato-float window stays VISIBLE while locked (lockAppNow only hides the
+      // main window + quick-add — security-lock.js), and its legitimate get-settings read
+      // (white-noise list) was newly bricked by the W17 gate: every read rejected while the
+      // lock screen was up. Carve out the float window itself — same sender-identity test
+      // (tomatoFloat.isSelfSender) notify-settings-updated already uses for its float write
+      // carve-out; NOT a general exemption, any other window still throws.
+      if (isLocked && isLocked() && !(isLockWindow && e && isLockWindow(e.sender)) &&
+          !(e && tomatoFloat.isSelfSender && tomatoFloat.isSelfSender(e.sender))) throw new Error('app is locked')
       const c = readConfig()
       delete c.securityLockPassword
       delete c.securityLockQuestion

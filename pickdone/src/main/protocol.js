@@ -46,7 +46,13 @@ async function fileResponse (file, mime, request, extraHeaders) {
       return new Response('range not satisfiable', { status: 416, headers: { 'Content-Range': 'bytes */' + total } })
     }
     const out = buf.subarray(0, bytesRead)
-    headers['Content-Range'] = 'bytes ' + start + '-' + (start + bytesRead - 1) + '/' + total
+    // W18 fix: `total` used to stay the stale stat size even after a concurrent shrink, so the
+    // Content-Range could claim "bytes start-end/<old-larger-total>" with a body that stops short —
+    // the header then disagrees with reality. The bytes in hand are the ground truth: the resource
+    // as served is exactly start + bytesRead long (this is the same contract the 200 path's
+    // Content-Length fix below already uses — headers must describe the body actually sent).
+    const totalServed = start + bytesRead
+    headers['Content-Range'] = 'bytes ' + start + '-' + (start + bytesRead - 1) + '/' + totalServed
     headers['Content-Length'] = String(out.length)
     return new Response(out, { status: 206, headers })
   }

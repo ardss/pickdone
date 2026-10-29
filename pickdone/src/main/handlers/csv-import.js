@@ -185,6 +185,17 @@ module.exports = function importHandlers (ctx) {
       if (!lastPickedImportPath || f !== lastPickedImportPath) {
         return { ok: false, code: 'AUTH_EXPIRED', message: 'import: this run was already executed or the app restarted — pick the file again to preview and approve a fresh import' }
       }
+      // D15 "exactly once" contract hardening (W18 fix): the grant wipe used to live AFTER all the
+      // awaits (stat/read/worker parse/importItems), so two concurrent import:run invocations for
+      // the same path could both pass the gate above and double-import the same approved bytes.
+      // Consume the grant ATOMICALLY — immediately after the gate, BEFORE entering any async work —
+      // keeping the approved hash in a local for the TOCTOU check below. A concurrent second run now
+      // deterministically hits the AUTH_EXPIRED path. Note this makes every failure past this point
+      // (stat/read/parse) consume the grant too: re-execution always requires a fresh preview, which
+      // is the intended single-shot semantics (same as the old partial-import wipe path).
+      const approvedHash = lastPickedImportHash
+      lastPickedImportPath = ''
+      lastPickedImportHash = ''
       // H7 2026-09-12 P2: re-stat at run time — the file could have been swapped for a bigger one
       // between import:pick-preview and import:run (TOCTOU on the 20MB cap)
       // M-3 (2026-09-20): a vanished file used to throw raw ENOENT here; return the structured
@@ -211,7 +222,7 @@ module.exports = function importHandlers (ctx) {
         lastPickedImportHash = ''
         return { ok: false, code: 'FILE_MISSING', message: 'import: file no longer readable: ' + ((err && err.message) || String(err)) }
       }
-      if (!lastPickedImportHash || textHash(text) !== lastPickedImportHash) {
+      if (!approvedHash || textHash(text) !== approvedHash) {
         try { appAudit.recordCustom('import', ['import:run', f], [], [], 'aborted: file changed since preview (hash mismatch), re-preview required') } catch { /* best-effort */ }
         return { ok: false, code: 'HASH_MISMATCH', message: 'import: file changed since preview — re-run preview to approve the current content' }
       }

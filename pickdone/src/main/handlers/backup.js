@@ -169,21 +169,50 @@ function safeAttachDir () {
 // positional compare — 1MB readSync windows compared against the same offsets of the payload
 // buffer, so memory stays O(chunk) instead of O(file) and an unequal prefix bails on the first
 // mismatched chunk. fsMod is injected for tests. Exported for unit tests.
+// W18 fix: the payload side still encoded the WHOLE jsonText into one Buffer (`Buffer.from`
+// = a second full-size allocation), violating the O(chunk) contract this function documents.
+// The string is now encoded chunk-by-chunk: each iteration picks the shortest utf16 slice that
+// is exactly `len` utf8 bytes (never splitting a surrogate pair — a split pair would decode to
+// replacement chars and false-negative the compare), encodes only that slice, and compares.
+// Memory is O(chunk) end to end; a mismatch anywhere still bails on that chunk.
 function twinMatches (fsMod, filePath, jsonText) {
   let st
   try { st = fsMod.statSync(filePath) } catch { return false }
   const expected = Buffer.byteLength(jsonText, 'utf8')
   if (st.size !== expected) return false
-  const buf = Buffer.from(jsonText, 'utf8')
+  const s = String(jsonText)
   const CHUNK = 1024 * 1024
   let fd
   try {
     fd = fsMod.openSync(filePath, 'r')
     const scratch = Buffer.alloc(Math.min(CHUNK, expected))
-    for (let off = 0; off < expected; off += CHUNK) {
-      const len = Math.min(CHUNK, expected - off)
+    let sOff = 0 // utf16 code-unit cursor into s
+    for (let off = 0; off < expected;) {
+      // Pick the largest char-boundary slice [sOff, sOff+c) encoding to at most CHUNK utf8
+      // bytes (binary search — byteLength is monotonic in c). The FILE-side chunk length is
+      // whatever that slice actually encodes, so a 1MB window never needs to land mid-character.
+      const target = Math.min(CHUNK, expected - off)
+      let lo = 1, hi = s.length - sOff, best = 0
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1
+        if (Buffer.byteLength(s.slice(sOff, sOff + mid), 'utf8') <= target) { best = mid; lo = mid + 1 } else hi = mid - 1
+      }
+      // never end a slice between the halves of a surrogate pair (a split pair encodes to
+      // replacement chars != the file bytes and would corrupt the compare)
+      if (sOff + best < s.length) {
+        const lead = s.charCodeAt(sOff + best - 1)
+        if (lead >= 0xD800 && lead <= 0xDBFF) best--
+      }
+      if (best <= 0) return false
+      const piece = s.slice(sOff, sOff + best)
+      const len = Buffer.byteLength(piece, 'utf8') // <= target, so off+len never passes expected
+      if (off + len > expected) return false // defensive
       if (fsMod.readSync(fd, scratch, 0, len, off) !== len) return false
-      if (scratch.compare(buf, off, off + len, 0, len) !== 0) return false // scratch[0..len) vs buf[off..off+len)
+      const chunk = Buffer.from(piece, 'utf8') // O(chunk): only this slice is encoded
+      if (chunk.length !== len) return false // defensive: slice/byte math desynced
+      if (scratch.compare(chunk, 0, len, 0, len) !== 0) return false // scratch[0..len) vs chunk[0..len)
+      sOff += best
+      off += len
     }
     return true
   } catch { return false } finally { try { if (fd != null) fsMod.closeSync(fd) } catch { /* best-effort */ } }

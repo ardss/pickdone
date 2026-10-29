@@ -31,6 +31,11 @@ module.exports = function attachmentHandlers (ctx) {
         // used the RAW name: every open reported missing (one wasted sync round per click)
         // and every delete ENOENT'd. No match → the raw path keeps the original contracts.
         const p = attachments.resolveAttachmentCase(attachmentPath(url.slice(8)))
+        // sec-local-protocol parity (W18 fix): the serve boundary (protocol.js:157) 404s internal
+        // bookkeeping files (aliases.json, .att-tmp-* atomic-write temps) — but this handler opened
+        // them straight via shell.openPath, leaking the LAN alias map (and stale temp bytes) to
+        // whatever OS handler claims .json. Same decision, IPC shape: refuse like an unknown scheme.
+        if (require('../protocol').isLocalBookkeepingFile(path.basename(p))) return false
         // Missing-file guard (feature: LAN-synced attachments): the metadata row may arrive
         // before the file is pulled over. Structured result -> renderer toasts "not yet
         // synced" instead of a raw open failure. P1-8 (2026-09-19 UX review): the missing key
@@ -94,6 +99,11 @@ module.exports = function attachmentHandlers (ctx) {
       // name (B5), so the reference scan uses the decoded key too.
       let aliasKey = key
       try { aliasKey = decodeURIComponent(key) } catch { /* malformed encoding: use raw (matches attachmentPath) */ }
+      // sec-local-protocol parity (W18 fix): same bookkeeping guard as the serve boundary
+      // (protocol.js:157) — before this, a local://aliases.json / .att-tmp-* url deleted the
+      // internal alias map or an in-flight atomic-write temp straight via unlinkSync. Refuse
+      // honestly (false = "nothing deleted", same shape as the unknown-scheme path above).
+      if (require('../protocol').isLocalBookkeepingFile(path.basename(aliasKey))) return false
       if (!(opts && opts.force)) {
         let rows = null
         try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }

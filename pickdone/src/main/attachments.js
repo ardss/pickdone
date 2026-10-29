@@ -137,7 +137,15 @@ function claimSlot (dir, fileName, fsMod = fs) {
     }
   }
   candidate = p.join(dir, stem + '-' + Date.now() + ext)
-  fsMod.closeSync(fsMod.openSync(candidate, 'wx'))
+  // W18 fix: the loop-exhausted fallback used to let openSync's EEXIST (an astronomically unlucky
+  // same-ms collision) escape as a raw OS error out of the upload IPC. Same structured error-face
+  // convention as saveAttachment's own gates ('attachment: ...' — see the extension/quota throws).
+  try {
+    fsMod.closeSync(fsMod.openSync(candidate, 'wx'))
+  } catch (e) {
+    if (e && e.code === 'EEXIST') throw new Error('attachment: cannot claim a file slot (name collision)')
+    throw e
+  }
   return candidate
 }
 async function saveAttachment ({ taskId, name, dataBase64 }) {
