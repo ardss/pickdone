@@ -30,6 +30,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
 
 namespace WinBind {
   public static class Native {
@@ -50,10 +51,15 @@ namespace WinBind {
     [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
     [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] static extern bool FlashWindow(IntPtr hWnd, bool bInvert);
+    [DllImport("user32.dll")] static extern bool AttachThreadInput(uint idAttach, uint idAttachTo, bool fAttach);
+    [DllImport("user32.dll")] static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
+    [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
 
     const uint GA_ROOT = 2;
     const int SW_RESTORE = 9;
     const int VK_LBUTTON = 0x01;
+    const byte VK_MENU = 0x12;
+    const uint KEYEVENTF_KEYUP = 0x2;
     const int TITLE_CAP = 512;
     const char DQ = '"';
     const char BS = '\\\\';
@@ -126,15 +132,45 @@ namespace WinBind {
       try {
         IntPtr h = new IntPtr(hwnd64);
         bool wasIconic = IsIconic(h);
-        if (wasIconic) ShowWindow(h, SW_RESTORE);
-        bool set = SetForegroundWindow(h);
-        bool fgNow = GetForegroundWindow() == h;
+        bool set = false;
+        bool fgNow = false;
+        int attempts = 0;
+        // [QA r1 #2/#5] plain SetForegroundWindow is DENIED for a background process without
+        // OS foreground rights (the resident PS child never received input), and it can race
+        // SW_RESTORE's async completion on minimized windows. Bounded escalation: every attempt
+        // first lets a pending restore finish (poll IsIconic), then tries the switch — attempt 1
+        // plain, attempts 2+ attach into the CURRENT foreground thread's input queue and spoof a
+        // single ALT press (classic idiom that satisfies the foreground lock). FlashWindow stays
+        // the final degrade; worst case ~0.9s, far under the adapter's 5s query timeout.
+        while (!fgNow && attempts < 3) {
+          attempts++;
+          if (IsIconic(h)) {
+            ShowWindow(h, SW_RESTORE);
+            for (int i = 0; i < 25 && IsIconic(h); i++) Thread.Sleep(10);
+          }
+          if (attempts == 1) {
+            set = SetForegroundWindow(h);
+          } else {
+            IntPtr fg = GetForegroundWindow();
+            uint fgPid;
+            uint fgThread = GetWindowThreadProcessId(fg, out fgPid);
+            uint myThread = GetCurrentThreadId();
+            bool attached = fgThread != 0 && fgThread != myThread && AttachThreadInput(myThread, fgThread, true);
+            keybd_event(VK_MENU, 0, 0, UIntPtr.Zero);
+            set = SetForegroundWindow(h);
+            keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, UIntPtr.Zero);
+            if (attached) AttachThreadInput(myThread, fgThread, false);
+          }
+          fgNow = GetForegroundWindow() == h;
+          if (!fgNow) Thread.Sleep(30);
+        }
         bool flashed = false;
         if (!fgNow) flashed = FlashWindow(h, true);
         return ("{XokX:true,XresultX:{XwasIconicX:" + (wasIconic ? "true" : "false")
           + ",XsetForegroundX:" + (set ? "true" : "false")
           + ",XforegroundNowX:" + (fgNow ? "true" : "false")
-          + ",XflashedX:" + (flashed ? "true" : "false") + "}}").Replace('X', DQ);
+          + ",XflashedX:" + (flashed ? "true" : "false")
+          + ",XattemptsX:" + attempts + "}}").Replace('X', DQ);
       } catch (Exception e) {
         return "{XokX:false,XerrorX:".Replace('X', DQ) + JsonStr(e.Message) + "}";
       }
