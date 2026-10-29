@@ -98,6 +98,30 @@ contextBridge.exposeInMainWorld('todoAPI', {
   isMaximized: () => invoke('is-maximized'),
   closeRequest: () => invoke('close-main-window-request'),
 
+  // ---- Window binding (T7 win-bind) ----
+  // Dedicated channels (NOT dbCall — same dedicated-channel precedent as purgeRecycleBin, so
+  // the ALLOWED_RENDERER_OPS three-way whitelist stays untouched). identify takes ZERO args:
+  // the physical cursor position never leaves the main process's PowerShell probe.
+  // IdentifyResult: { window: WinBindWindowRef|null, reason: 'NO_WINDOW'|'OWN_WINDOW'|'DESKTOP'|
+  // 'BUTTON_DOWN'|'ADAPTER_ERROR'|'TIMEOUT'|null } — window non-null ⟹ reason null.
+  winBindIdentify: () => invoke('win-bind:identify'),
+  // ref must be the identify result verbatim (main re-verifies hwnd+pid against a fresh
+  // snapshot before persisting — forged/closed windows come back STALE_REF).
+  winBindBind: (taskId, ref) => invoke('win-bind:bind', taskId, ref),
+  // ActivationResult: { ok:true } | { ok:false, reason, flashed?, candidates? } — flashed=true
+  // means main degraded to a taskbar flash; candidates only on AMBIGUOUS.
+  winBindActivate: taskId => invoke('win-bind:activate', taskId),
+  // idempotent: a missing taskId resolves { ok:true, removed:false }, never rejects.
+  winBindUnbind: taskId => invoke('win-bind:unbind', taskId),
+  // hydration pull; the renderer filters orphan bindings by its known taskIds.
+  winBindList: () => invoke('win-bind:list'),
+  // Multi-window badge sync: main broadcasts { reason:'bind'|'unbind', taskId } to all windows.
+  onWinBindChanged: fn => {
+    const h = (_e, p) => fn(p)
+    ipcRenderer.on('win-bind-changed', h)
+    return () => ipcRenderer.removeListener('win-bind-changed', h)
+  },
+
   // ---- Attachments ----
   uploadAttachment: payload => invoke('upload-attachment', payload), // {taskId,name,dataBase64}
   openFile: url => invoke('open-file', url),

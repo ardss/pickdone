@@ -758,6 +758,7 @@ app.on('will-quit', (event) => {
     quitHangFallback.arm()
     try { extWatch.stopForQuit() } catch {} // release the fs.watchFile poll timers before closing
     try { shortcuts.unregisterAll() } catch {}
+    try { require('./win-bind').disposeForQuit() } catch {} // T7: kill the resident PS window-probe child
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
     // R7-B P2: the sync node stops here — after the flush window, before the DB handle closes.
@@ -788,11 +789,10 @@ app.on('will-quit', (event) => {
 })
 
 /* ================= Full IPC registration (channel names aligned with the project baseline) =================
-   Handlers are split by domain into handlers/*.js modules; each exports (ctx) => ({ channel: fn }).
-   This file stays the assembly point: ctx injection + Object.assign merge + the unified error-wrap loop. */
+   Handlers are split by domain into handlers/*.js modules, each exporting (ctx) => ({ channel: fn });
+   this file stays the assembly point: ctx injection + Object.assign merge + the unified error-wrap loop. */
 function registerIpc () {
-  // App-side audit trail (src/main/audit.js) resolves its JSONL path lazily; wire it to the real userData
-  // here so app.setPath('userData', TODO_USER_DATA_DIR) test isolation is honored
+  // App-side audit trail (src/main/audit.js) resolves its JSONL path lazily; wire it to the real userData so app.setPath('userData', TODO_USER_DATA_DIR) test isolation is honored
   appAudit.setDirResolver(() => app.getPath('userData'))
 
   // Shared context injected into every handler domain (argument injection only — handler modules never require index.js)
@@ -828,7 +828,8 @@ function registerIpc () {
     require('./handlers/attachments')(hctx),
     require('./handlers/csv-import')(hctx),
     require('./handlers/tomato')(hctx),
-    require('./handlers/system')(hctx)
+    require('./handlers/system')(hctx),
+    require('./win-bind')(hctx) // T7: five dedicated win-bind:* channels (win-bind/index.js)
   )
   // Flush-ack handshake receiver (see will-quit): renderer sends this after dispatching its debounced
   // flush writes on app-quitting-flush. fire-and-forget (ipcMain.on, not handle) — the main process is
@@ -854,6 +855,5 @@ function registerIpc () {
     })
   }
 }
-
 
 module.exports = { getMainWindow }
