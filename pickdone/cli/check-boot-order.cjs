@@ -78,14 +78,17 @@ function collectUses (node, parent, skipIds, out) {
 
 function declaratorIds (decl) {
   const ids = []
+  // W18 fix: bind ONLY pattern bindings. The old generic walker recursed into every
+  // child key of a destructuring Property, so `{ a: b }` also registered the KEY 'a'
+  // as a phantom binding (and a require-below-first-use false red for a name that is
+  // not bound at all). Same walkNames shape as check-esm-graph.cjs:103.
   const walk = n => {
     if (!n || typeof n.type !== 'string') return
     if (n.type === 'Identifier') { ids.push(n); return }
-    for (const key of Object.keys(n)) {
-      const child = n[key]
-      if (Array.isArray(child)) child.forEach(walk)
-      else if (child && typeof child.type === 'string') walk(child)
-    }
+    if (n.type === 'ObjectPattern') { for (const p of n.properties) walk(p.value || p.argument); return }
+    if (n.type === 'ArrayPattern') { for (const el of n.elements) walk(el); return }
+    if (n.type === 'AssignmentPattern') { walk(n.left); return }
+    if (n.type === 'RestElement') { walk(n.argument); return }
   }
   for (const d of decl.declarations) walk(d.id)
   return ids
@@ -174,7 +177,16 @@ function main () {
   let files
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
-    const gitOpts = { cwd: ROOT, encoding: 'utf8' }
+    // W18 fix: git runs hooks with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE injected; with GIT_DIR
+    // set, `rev-parse --show-toplevel` resolves against the hook's cwd instead of the real
+    // worktree root, so every joined path missed. Strip the injected git env for BOTH calls
+    // (mirrors check-file-size.cjs:92-97).
+    const gitEnv = () => {
+      const e = { ...process.env }
+      delete e.GIT_DIR; delete e.GIT_WORK_TREE; delete e.GIT_INDEX_FILE
+      return e
+    }
+    const gitOpts = { cwd: ROOT, encoding: 'utf8', env: gitEnv() }
     // W16 fix(#2): ACMR — git mv 只产生 R 条目,ACM 漏掉改名文件(与 lint-staged.mjs 对齐)
     // W17 fix(2026-10-28): quotePath=false — 非 ASCII 文件名默认被打成带引号八进制串,被扩展名
     // 正则静默剔除 → 熔断守卫失效、门禁扫 0 假绿(pre-commit 的 `-c` 单次性不传播到本子进程)。
