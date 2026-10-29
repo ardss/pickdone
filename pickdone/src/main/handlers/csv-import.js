@@ -136,8 +136,14 @@ module.exports = function importHandlers (ctx) {
   // The gate throws before any dialog/parse/write work.
   const assertNotLocked = () => { if (isLocked && isLocked()) throw new Error('app is locked') }
 
-  let lastPickedImportPath = '' // the only legitimate path source for import:run (the import:pick-preview dialog)
-  let lastPickedImportHash = '' // sha256 of the exact text the user previewed/approved
+  // W19 (2026-10-30): the grant is ONE object, replaced atomically. It used to be two loose
+  // variables (lastPickedImportPath / lastPickedImportHash) that a failed preview could clear
+  // one-sided: preview A lands {path:A,hash:A}, preview B lands {path:B,hash:B}, A's failure
+  // path cleared only the hash → the surviving grant {path:B, hash:''} passed the path gate in
+  // import:run but every run failed the !approvedHash check with HASH_MISMATCH until a fresh
+  // preview. Object-swap semantics: every failure path wipes the WHOLE grant, and import:run
+  // consumes the whole object in one read — no half-cleared states can ever be observed.
+  let lastPickedImportGrant = null // { path, hash } — the only legitimate source for import:run
 
   return {
     // --- CSV import (migrating from other apps): reuses the CLI's cli/import.js engine; both preview and execution go through the main process ---
@@ -154,7 +160,7 @@ module.exports = function importHandlers (ctx) {
       })
       if (r.canceled || !r.filePaths[0]) return null
       const file = r.filePaths[0]
-      lastPickedImportPath = file // import:run only allows executing the most recent dialog-picked path (prevents the renderer passing arbitrary paths to read files)
+      lastPickedImportGrant = { path: file, hash: '' } // hash lands only after the read succeeds (W19: single-object grant)
       // 同步 readFileSync 无上限曾把整个主进程(全部窗口/定时器)卡死在大 CSV 上:先 statSync 限 20MB 超限报错(2026-09-09 P2)
       // M-3 (2026-09-20): the statSync moved INSIDE the try — a file deleted between the dialog and
       // the stat used to throw raw ENOENT out of the IPC handler instead of the structured contract.
@@ -162,12 +168,12 @@ module.exports = function importHandlers (ctx) {
         const tooBig = fixUtil.checkImportFileSize(fs.statSync(file).size)
         if (tooBig) return { ok: false, code: 'USAGE', message: tooBig }
         const text = fs.readFileSync(file, 'utf8')
-        lastPickedImportHash = textHash(text) // remember what the user actually approved (TOCTOU guard below)
+        lastPickedImportGrant = { path: file, hash: textHash(text) } // remember what the user actually approved (TOCTOU guard below)
         // rowsToItems 在数十万行时同步阻塞主进程数秒:解析移入 worker 线程(2026-09-12 W1)
         const { format, items } = await runImportParse(text)
         return { ok: true, file, report: importer.importItems(items, { format, dryRun: true }) }
       } catch (err) {
-        lastPickedImportHash = '' // failed preview granted nothing: run must re-preview before executing
+        lastPickedImportGrant = null // failed preview granted nothing: run must re-preview before executing (W19: the WHOLE object goes, not just the hash)
         // code (FORMAT_UNKNOWN/EMPTY_FILE) rides along when the worker supplied one; undefined code
         // falls back to the renderer's generic import-failed copy
         return { ok: false, code: err && err.code, message: (err && err.message) || String(err) }
@@ -182,7 +188,7 @@ module.exports = function importHandlers (ctx) {
       // B15 (2026-09-25): a completed/absent grant is now the structured AUTH_EXPIRED contract (see the
       // success-path wipe below) instead of a bare throw — invoke() rejections strip the code across the
       // context bridge, so the renderer could only ever show generic import-failed copy.
-      if (!lastPickedImportPath || f !== lastPickedImportPath) {
+      if (!lastPickedImportGrant || f !== lastPickedImportGrant.path) {
         return { ok: false, code: 'AUTH_EXPIRED', message: 'import: this run was already executed or the app restarted — pick the file again to preview and approve a fresh import' }
       }
       // D15 "exactly once" contract hardening (W18 fix): the grant wipe used to live AFTER all the
@@ -193,16 +199,14 @@ module.exports = function importHandlers (ctx) {
       // deterministically hits the AUTH_EXPIRED path. Note this makes every failure past this point
       // (stat/read/parse) consume the grant too: re-execution always requires a fresh preview, which
       // is the intended single-shot semantics (same as the old partial-import wipe path).
-      const approvedHash = lastPickedImportHash
-      lastPickedImportPath = ''
-      lastPickedImportHash = ''
+      const approvedHash = lastPickedImportGrant.hash // W19: consumed from the single object — a failed preview can no longer leave path set with hash empty
+      lastPickedImportGrant = null
       // H7 2026-09-12 P2: re-stat at run time — the file could have been swapped for a bigger one
       // between import:pick-preview and import:run (TOCTOU on the 20MB cap)
       // M-3 (2026-09-20): a vanished file used to throw raw ENOENT here; return the structured
       // {ok:false, code} contract so the renderer surfaces a proper message instead of a throw.
       let stat
       try { stat = fs.statSync(f) } catch (err) {
-        lastPickedImportHash = ''
         return { ok: false, code: 'FILE_MISSING', message: 'import: file no longer readable: ' + ((err && err.message) || String(err)) }
       }
       const tooBig = fixUtil.checkImportFileSize(stat.size)
@@ -219,7 +223,6 @@ module.exports = function importHandlers (ctx) {
       // out of the IPC handler. Same shape as the M-3 stat guard: a failed read grants nothing.
       let text
       try { text = fs.readFileSync(f, 'utf8') } catch (err) {
-        lastPickedImportHash = ''
         return { ok: false, code: 'FILE_MISSING', message: 'import: file no longer readable: ' + ((err && err.message) || String(err)) }
       }
       if (!approvedHash || textHash(text) !== approvedHash) {
@@ -269,7 +272,7 @@ module.exports = function importHandlers (ctx) {
         // kickSyncRound no-ops safely before sync init.
         try { require('../lan-sync-bootstrap').kickSyncRound('csv-import') } catch { /* sync lazy-not-init */ }
       }
-      const wipeGrant = () => { lastPickedImportPath = ''; lastPickedImportHash = '' }
+      const wipeGrant = () => { lastPickedImportGrant = null } // W19: single-object grant, whole wipe
       let r
       try {
         r = importer.importItems(items, { dryRun: false, format })

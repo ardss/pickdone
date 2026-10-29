@@ -11,6 +11,9 @@ module.exports = function attachmentHandlers (ctx) {
   // D6 P2 (2026-09-21): destructive attachment channels are main-window-only, same capability
   // class as the backup channels hardened for this exact threat (compromised aux window).
   const assertMainWindow = require('./shared').makeAssertMainWindow(getMainWindow)
+  // W19: cached realpath of the attachment root for open-file containment (the dir never moves
+  // mid-process — same one-syscall amortization as protocol.js's realRoot).
+  let realAttachRoot = null
 
   return {
     // --- Attachments (offline localization) ---
@@ -44,6 +47,19 @@ module.exports = function attachmentHandlers (ctx) {
         if (!fs.existsSync(p)) {
           try { if (notifySyncChange) notifySyncChange('attachment-missing-open') } catch { /* sync lazy-not-init */ }
           return { missing: true, name: path.basename(p) }
+        }
+        // W19 (2026-10-30) symlink containment, sec-local-protocol parity: the serve boundary
+        // (protocol.js:145-156) realpath-compares BOTH sides before serving — but this handler
+        // handed the lexically-contained path straight to shell.openPath. A symlink inside the
+        // attachment store pointing at e.g. the user's homedir passed the lexical check and opened
+        // the TARGET via whatever OS handler claims the extension. Fail-closed like the protocol:
+        // an escaped resolution (or an unresolvable race-torn path) refuses the open.
+        try {
+          const real = await fs.promises.realpath(p)
+          realAttachRoot = realAttachRoot || await fs.promises.realpath(attachDir())
+          if (!(real === realAttachRoot || real.startsWith(realAttachRoot + path.sep))) return false
+        } catch {
+          return false // realpath failed (dangling symlink / vanished between existsSync and here): fail-closed
         }
         // Fault-7 (D12 2026-10-01): shell.openPath resolves with an ERROR STRING ('' = success) —
         // the old fire-and-forget `shell.openPath(p); return true` discarded it and claimed

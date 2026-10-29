@@ -42,6 +42,23 @@ function windowBoundsVisible (b, displays) {
   }))
 }
 
+/** [W19 2026-10-30] Pure restore-bounds sanitizer. The old restore path only floored `width` at
+ *  750 and left `height` to a falsy-default (a NEGATIVE persisted height passed straight into
+ *  BrowserWindow) while x/y flowed through untouched — a corrupted/hand-edited winBounds entry
+ *  produced an invisible (negative-sized) or degenerate window. Validate ALL FOUR fields with
+ *  Number.isFinite + sane ranges (width ≥ 750 matching minWidth, height ≥ 200; x/y just finite —
+ *  off-screen values are the existing clampIntoView's job). Any violation discards the WHOLE
+ *  bounds object (null → caller falls back to defaults) rather than half-trusting a corrupt blob. */
+const MIN_RESTORE_WIDTH = 750
+const MIN_RESTORE_HEIGHT = 200
+function sanitizeRestoreBounds (b) {
+  if (!b || typeof b !== 'object') return null
+  const { x, y, width, height } = b
+  if (![x, y, width, height].every(Number.isFinite)) return null
+  if (width < MIN_RESTORE_WIDTH || height < MIN_RESTORE_HEIGHT) return null
+  return { x, y, width, height }
+}
+
 function createWindowManager (ctx) {  const {
     readConfig, writeConfig, i18n, log, windowRef, closeBehavior,
     tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
@@ -78,10 +95,15 @@ function createWindowManager (ctx) {  const {
     // matchMedia,两级递进,加宽自动恢复),因此任何宽度下该行都单行。旧 winBounds 小于 750 须钳制。
     // Visual distinction for test instances (users confirmed "couldn't tell which is the real one"): isolated-environment instance = orange icon + [TEST] title + top-left badge
     const isTestEnv = !!process.env.TODO_USER_DATA_DIR
+    // W19: full sanitizeRestoreBounds validation (all four fields finite + min sizes); an invalid
+    // persisted entry falls back to the defaults instead of producing a negative-height or
+    // degenerate window. x/y remain trusted once finite — off-screen restore is clamped by the
+    // existing clampIntoView pass.
+    const restore = sanitizeRestoreBounds(bounds) || { width: 1000, height: 560 }
     win = new BrowserWindow({
-      width: Math.max(750, (bounds && bounds.width) || 1000),
-      height: (bounds && bounds.height) || 560,
-      x: bounds && bounds.x, y: bounds && bounds.y,
+      width: restore.width,
+      height: restore.height,
+      x: restore.x, y: restore.y,
       minWidth: 750,
       minHeight: 520,
       frame: false,                     // the project baseline runs frameless (Win11 auto rounded corners)
@@ -389,7 +411,7 @@ function createWindowManager (ctx) {  const {
 module.exports = {
   createWindowManager,
   /** [F4 #4] pure geometry seam for unit tests (no Electron needed). */
-  __windowGeom: { windowBoundsVisible },
+  __windowGeom: { windowBoundsVisible, sanitizeRestoreBounds },
   // D10 test seam: crash-counter marker round-trip (plain-node tests stub electron's app.getPath)
   __crashCounter: { read: readCrashRelaunchCount, write: writeCrashRelaunchCount },
   CRASH_RELAUNCH_CAP, CRASH_HEALTH_WINDOW_MS,

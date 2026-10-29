@@ -209,9 +209,26 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     showMainOrLock()
   }
 
+  // W19 (2026-10-30): verifyLockPassword used to readConfig() on EVERY unlock attempt — same
+  // ~1.5s synchronous AV-lock backoff D18 already removed from isLocked(). Cache the raw
+  // `securityLockPassword` STORED STRING (not the decrypted secret) with the same TTL + write-version
+  // invalidation as cachedLockFlag: config-store bumps _writeVersion on every successful writeConfig,
+  // so a password change / the disable-lock fallback wipe (both writeConfig) invalidates IMMEDIATELY.
+  // Only the opaque stored string is cached — decryption and comparison still run per attempt, and
+  // nothing plaintext ever sits in memory longer than the compare needs.
+  function cachedStoredPassword () {
+    let version = null
+    try { version = configVersion() } catch { /* no version source: TTL-only */ }
+    const now = Date.now()
+    if (now - pwCache.at < LOCK_FLAG_TTL_MS && (version === null || version === pwCache.version)) return pwCache.value
+    const v = String(readConfig().securityLockPassword || '')
+    pwCache = { value: v, version, at: now }
+    return v
+  }
+  let pwCache = { value: '', version: -1, at: 0 }
+
   function verifyLockPassword (plain) {
-    const c = readConfig()
-    const stored = String(c.securityLockPassword || '')
+    const stored = cachedStoredPassword()
     let expected = stored
     try {
       if (stored.startsWith('enc1:')) {
