@@ -18,6 +18,22 @@
  *   - tests themselves staged → the touched test dirs run directly (plus their whole dir:
  *     a changed helper in tests/lib affects every suite importing it — coarse again)
  *
+ * Staged-source contract (2026-10-28 W16-SCOPE-ARGV-P1, parameter-mode confusion fix):
+ *   - REQUIRED when imported (check-test-summary.cjs --affected): `stagedFiles()` reads the
+ *     GIT staged set (`git diff --cached`) ONLY. It MUST NOT read `process.argv` — argv
+ *     belongs to the importing process (its flags like --core/--affected/--retry-once were
+ *     being swallowed as staged "filenames", degrading every scoped run to full tier via
+ *     "unmapped surface: --core").
+ *   - Direct CLI positional args (`node cli/check-test-scope.cjs [staged-file...]`) remain
+ *     supported, but ONLY in the require.main path, and flag-like tokens (`--*`) are always
+ *     filtered out — flags are never filenames.
+ *
+ * Rebase note (2026-10-29 W16-SCOPE-W17-W18-REBASE-ISOLATED): this copy is the W16 separation
+ * patch REBASED onto the evolved repo file — it KEEPS the W17 fix (ACMR: `git mv 源文件 + 文档`
+ * must not degrade to docs-only skip) and the W18 fix (`-c core.quotePath=false`: non-ASCII
+ * paths must not be octal-escaped into DOCS_ONLY misses). Neither fix is reverted by the
+ * separation; the narrow tests lock both.
+ *
  * Output contract (consumed by cli/check-test-summary.cjs --affected):
  *   stdout JSON: { verdict: "scoped" | "full" | "skip", dirs: ["tests/unit/store", ...],
  *                  reason: string }
@@ -67,9 +83,8 @@ const SURFACE_MAP = [
 // Changes that cannot affect code behavior. Only these may produce the "skip" verdict.
 const DOCS_ONLY = /(^|\/)(docs\/.*|[^/]*\.md|[^/]*\.png|[^/]*\.jpe?g|[^/]*\.gif|[^/]*\.svg|\.gitignore|\.editorconfig|LICENSE.*)$/i
 
-function stagedFiles () {
-  const args = process.argv.slice(2)
-  if (args.length) return args.map(f => f.split(path.sep).join('/'))
+// Git is the ONLY staged-file source for in-process imports (W16-SCOPE-ARGV-P1).
+function stagedFilesFromGit () {
   try {
     // W17 fix(2026-10-28): ACMR — `git mv 源文件 + 文档` 的 staged 集在 ACM 下只剩文档条目,
     // 被误判 docs-only → 单测整级 skip。R(改名)与 W16 其余门对齐。
@@ -83,6 +98,20 @@ function stagedFiles () {
   } catch {
     return null // git unavailable → caller treats as "cannot scope"
   }
+}
+
+// CLI-only: the require.main path may accept explicit staged names from ITS OWN argv.
+// Flag-like tokens are filtered unconditionally — `--core` is an option, never a filename.
+function stagedFilesFromArgv (argv = []) {
+  return argv
+    .filter(a => !a.startsWith('--'))
+    .map(f => f.split(path.sep).join('/'))
+}
+
+// In-process contract: git staged set only. NEVER reads process.argv (the importing
+// process's flags must not be mistaken for staged filenames — W16-SCOPE-ARGV-P1).
+function stagedFiles () {
+  return stagedFilesFromGit()
 }
 
 // Strip the optional "pickdone/" repo-root prefix and normalize ".." segments so traversal
@@ -128,9 +157,10 @@ function scopeFor (files = stagedFiles()) {
 }
 
 if (require.main === module) {
-  const result = scopeFor(stagedFiles())
+  const cliFiles = stagedFilesFromArgv(process.argv.slice(2))
+  const result = scopeFor(cliFiles.length ? cliFiles : stagedFilesFromGit())
   console.log(JSON.stringify(result))
   process.exit(0)
 }
 
-module.exports = { scopeFor, stagedFiles, SURFACE_MAP, DOCS_ONLY }
+module.exports = { scopeFor, stagedFiles, stagedFilesFromGit, stagedFilesFromArgv, SURFACE_MAP, DOCS_ONLY }
