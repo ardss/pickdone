@@ -287,3 +287,42 @@ test('W17 GOLDEN esm-graph: legal re-export forms are green (export * as + expor
   const rb = runGate('check-esm-graph.cjs', bad.root)
   assert.equal(rb.code, 1, 'genuinely missing named export must stay red: ' + rb.out)
 })
+
+// —— W19 (2026-10-30) additions: detection branches fixed this round ——
+
+test('W19 GOLDEN i18n --all: a MULTI-LINE user-visible call with Chinese on a continuation line is red', () => {
+  // W19 hole: `ElMessage.error(\n '中文'\n)` put the Chinese on a line that never matched
+  // VISIBLE_RE, so both lines individually escaped and the hardcoded copy was invisible forever.
+  const bad = mkTree('i18n-ml-bad')
+  bad.write('shared/.gitkeep', '') // --all walks shared/ and now src/; missing dir = red for the WRONG reason
+  bad.write('renderer/js/bad.vue', '<template><div/></template>\n<script>import { ElMessage } from \'element-plus\'\nexport default { methods: { fail () { ElMessage.error(\n  \'多行调用里的硬编码中文\'\n) } } }</script>\n')
+  const rb = runGate('check-i18n.js', bad.root, ['--all'])
+  assert.equal(rb.code, 1, 'multi-line hardcoded CN call must be red: ' + rb.out)
+  assert.match(rb.out, /多行调用里的硬编码中文/, 'the continuation-line copy itself must appear in the hit')
+
+  const good = mkTree('i18n-ml-good')
+  good.write('shared/.gitkeep', '')
+  good.write('renderer/js/good.vue', '<template><div/></template>\n<script>import { ElMessage } from \'element-plus\'\nexport default { methods: { ok () { ElMessage.error(\n  this.$t(\'common.fail\')\n) } } }</script>\n')
+  const rg = runGate('check-i18n.js', good.root, ['--all'])
+  assert.equal(rg.code, 0, 'multi-line translated call must pass: ' + rg.out)
+})
+
+test('W19 GOLDEN tokens: a component <style> violation in the GATE_ROOT fixture tree is red', () => {
+  // W19 hole: cssSources() always used the real checkout root, so a component-level violation
+  // injected into the FIXTURE tree never entered the scan — the component half of the token gate
+  // was structurally untestable (always green under GATE_ROOT regardless of fixture content).
+  const bad = mkTree('tok-comp-bad')
+  bad.write('assets/css/base.css', '')
+  bad.write('assets/css/theme-dark.css', '')
+  bad.write('renderer/js/Comp.vue', '<template><div/></template>\n<style>\n.bad-card { background: #fff; }\n</style>\n')
+  const rb = runGate('check-tokens.js', bad.root)
+  assert.equal(rb.code, 1, 'component <style> R1 violation in the fixture tree must be red: ' + rb.out)
+  assert.match(rb.out, /Comp\.vue/, 'the component file itself must be named in the hit')
+
+  const good = mkTree('tok-comp-good')
+  good.write('assets/css/base.css', '')
+  good.write('assets/css/theme-dark.css', '')
+  good.write('renderer/js/Comp.vue', '<template><div/></template>\n<style>\n.ok-card { background: var(--panel, #fff); }\n</style>\n')
+  const rg = runGate('check-tokens.js', good.root)
+  assert.equal(rg.code, 0, 'token-using component style must pass: ' + rg.out)
+})

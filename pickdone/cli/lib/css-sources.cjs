@@ -19,15 +19,21 @@ function collectVueFiles (dir, out = []) {
   return out
 }
 
-function cssSources () {
+function cssSources (root = ROOT) {
+  // optional root (W19 2026-10-30): gates pointed at a GATE_ROOT fixture tree (check-tokens'
+  // golden self-tests) must scan the FIXTURE's css/vue, not the real checkout — default stays
+  // the real repo root so existing callers are unchanged
   const out = ['base.css', 'theme-dark.css'].map(f => {
-    const p = path.join(ROOT, 'assets', 'css', f)
+    const p = path.join(root, 'assets', 'css', f)
     return { rel: path.join('assets', 'css', f), css: fs.readFileSync(p, 'utf8') }
   })
-  for (const vp of collectVueFiles(path.join(ROOT, 'renderer', 'js'))) {
+  const rendererDir = path.join(root, 'renderer', 'js')
+  // missing renderer/js (fixture trees without components): nothing to extract — the global-css
+  // targets above are guarded fail-closed by each gate itself (missing target = explicit red)
+  for (const vp of fs.existsSync(rendererDir) ? collectVueFiles(rendererDir) : []) {
     const src = fs.readFileSync(vp, 'utf8')
     const css = [...src.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map(m => m[1]).join('\n')
-    if (css.trim()) out.push({ rel: path.relative(ROOT, vp), css })
+    if (css.trim()) out.push({ rel: path.relative(root, vp), css })
   }
   return out
 }

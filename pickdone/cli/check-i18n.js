@@ -41,24 +41,52 @@ const IGNORE_FILES = new RegExp([
   'tests[/\\\\]unit[/\\\\]cli[/\\\\]gate-must-fail-golden\\.test\\.mjs$',
 ].join('|'))
 
+// 2026-10-30 (W19) multi-line call escape: `ElMessage.error(\n  '中文'\n)` puts the Chinese on a
+// line of its own that never matched VISIBLE_RE, so the hardcoded copy escaped the scan forever.
+// Fix: each VISIBLE_RE statement-start line grows a BLOCK — lines are appended (bounded window,
+// bracket-balanced) until the parens opened on the start line close — and the CN scan then runs on
+// the merged block, so Chinese on a continuation line is seen. Per-line filters keep their old
+// semantics: comment lines are dropped from the block, console.*/$t filters are applied to the
+// CN-bearing line itself (so `$t('a')` on one line of a block never launders a raw-CN line on
+// another), and the start line still short-circuits on console.*.
+const BLOCK_MAX_LINES = 5
+function bracketDelta (s) {
+  let d = 0
+  for (const ch of s) { if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) d-- }
+  return d
+}
+const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/
+const T_HELPER = /\$t\(|i18n\.t\(|\bt\(/
+const CONSOLE_RE = /(?:console|log)\.(log|error|warn|info)\(/
+
 function scanFile (p, text, ignoreDebt) {
   const hits = []
   const lines = text.split('\n')
-  lines.forEach((ln, i) => {
-    if (!CN_RE.test(ln)) return
-    if (ln.trim().startsWith('//') || ln.trim().startsWith('*') || ln.trim().startsWith('/*')) return
-    if (!VISIBLE_RE.test(ln)) return
-    if (/console\.(log|error|warn|info)\(/.test(ln)) return // console.* is developer logging, not user-visible
-    // r3 2026-09-28: electron-log call sites (log.warn/error/info) are the same developer-logging
-    // surface as console.* — they surface in log files, never in user-visible UI. These pre-existing
-    // Chinese lines in main-process modules only surfaced once their files went dirty (the
-    // incremental scan reads WHOLE dirty files, not hunks).
-    // browser-dev/todo-browser-shim.js is the 5175 DEBUG host: its Chinese strings are throw
-    // messages for developers, never shipped UI copy.
-    if (!ignoreDebt && KNOWN_DEBT.some(f => p.replace(/\\/g, '/').endsWith(f))) return // legacy utils copy, pending an i18n migration batch
-    if (/\$t\(|i18n\.t\(|\bt\(/.test(ln)) return // defensive fallback already routed through an i18n t() helper
-    hits.push(`${path.relative(ROOT, p)}:${i + 1}: ${ln.trim().slice(0, 100)}`)
-  })
+  for (let i = 0; i < lines.length; i++) {
+    const start = lines[i]
+    if (!VISIBLE_RE.test(start)) continue
+    if (COMMENT_LINE.test(start)) continue
+    if (CONSOLE_RE.test(start)) continue // console.*/electron-log is developer logging, not user-visible (r3 surface, see below)
+    // grow the block while the start line's brackets are still open (bounded window)
+    let end = i
+    let depth = bracketDelta(start)
+    while (depth > 0 && end - i + 1 < BLOCK_MAX_LINES) {
+      end++
+      depth += bracketDelta(lines[end])
+    }
+    const rel = path.relative(ROOT, p)
+    let flagged = false
+    for (let j = i; j <= end && !flagged; j++) {
+      const ln = lines[j]
+      if (!CN_RE.test(ln)) continue
+      if (COMMENT_LINE.test(ln)) continue
+      if (CONSOLE_RE.test(ln)) continue
+      if (T_HELPER.test(ln)) continue // line already routed through an i18n t() helper
+      if (!ignoreDebt && KNOWN_DEBT.some(f => rel.replace(/\\/g, '/').endsWith(f))) continue // legacy utils copy, pending an i18n migration batch
+      hits.push(`${rel}:${j + 1}: ${ln.trim().slice(0, 100)}`)
+      flagged = true // one hit per VISIBLE_RE statement — report the first offending line
+    }
+  }
   return hits
 }
 
@@ -82,6 +110,12 @@ if (process.argv.includes('--all')) {
   }
   walk(path.join(ROOT, 'renderer', 'js'))
   walk(path.join(ROOT, 'shared'))
+  // 2026-10-30 (W19): --all claimed whole-repo coverage but never walked src/ — hardcoded CN in
+  // main-process/other src files only surfaced when a file went dirty (incremental mode), so a
+  // committed file could green-exit --all forever. Same IGNORE_FILES exemptions apply (log text
+  // in src/main/db.js, src/main/scheduler.js etc. stay whitelisted). existsSync guard: trees
+  // without a src/ subtree (fixture trees, non-Electron consumers) simply have nothing to walk.
+  if (require('fs').existsSync(path.join(ROOT, 'src'))) walk(path.join(ROOT, 'src'))
 } else {
   const gitOpts = { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
   // 2026-10-28 quotePath fix (W17): git quotes non-ASCII paths as octal escapes by default; the

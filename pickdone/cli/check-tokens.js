@@ -67,7 +67,10 @@ for (const rel of FILES) {
     }
   })
 }
-for (const { rel, css } of cssSources().filter(src => src.rel.includes("renderer"))) {
+// W19: pass OUR ROOT (GATE_ROOT-aware) so golden fixture trees' component <style> blocks enter
+// the scan — cssSources() otherwise always used the real checkout root and fixture-injected
+// component-level violations could never be seen (the detector half of the gate was untestable)
+for (const { rel, css } of cssSources(ROOT).filter(src => src.rel.includes("renderer"))) {
   const lines = css.split(/\r?\n/)
   lines.forEach((line, i) => {
     for (const [re, msg] of RULES) {

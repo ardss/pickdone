@@ -17,7 +17,7 @@
 const fs = require('fs')
 const path = require('path')
 
-const ROOT = path.join(__dirname, '..')
+const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: unit tests point the gate at a temp fixture tree
 const RENDERER = path.join(ROOT, 'renderer', 'js')
 const LEDGER = path.join(ROOT, 'tests', 'dualwrite-ledger.json')
 const SELFTEST = !!process.env.DUALWRITE_SELFTEST
@@ -34,24 +34,69 @@ function resolveConst (src, id) {
   return m ? m[1] : null
 }
 
+/**
+ * W19 (2026-10-30) multi-line/dynamic-key escape fix. The old single regex required the key to
+ * sit right after `(` and to be an identifier or '...'/"..." literal — a template-literal key
+ * (`setKey(`x`+id)`) or any first arg not starting with [A-Za-z_$'"] made the WHOLE call invisible
+ * to the scan, so the write point never entered the ledger. Now: match the call head only, then
+ * extract the first argument with a small bracket/string-aware scanner (newlines allowed).
+ * Classification preserves the old ledger keys exactly: leading identifier (even `id(...)`)
+ * -> resolveConst / `#id`; leading '...'/"..." literal -> its content. Anything else (template
+ * literals, computed exprs) gets a `<expr:...>` bail-out key — counted and warned, NOT red
+ * (the gate's red means "unregistered write point you must answer for"; a key we cannot even
+ * name statically goes through as a loud inventory entry instead of a false arrest).
+ */
+function extractFirstArg (src, openParenIdx) {
+  let i = openParenIdx + 1
+  while (i < src.length && /\s/.test(src[i])) i++ // newlines between ( and the key are fine
+  const start = i
+  let depth = 0
+  let inStr = null
+  for (; i < src.length; i++) {
+    const ch = src[i]
+    if (inStr) {
+      if (ch === '\\') { i++; continue }
+      if (ch === inStr) inStr = null
+      continue
+    }
+    if (ch === '\'' || ch === '"' || ch === '`') { inStr = ch; continue }
+    if (ch === '(' || ch === '[' || ch === '{') { depth++; continue }
+    if (ch === ')' || ch === ']' || ch === '}') {
+      if (depth === 0) return { arg: src.slice(start, i).trim() } // top-level closer = arg boundary
+      depth--
+    }
+    if (depth === 0 && ch === ',') return { arg: src.slice(start, i).trim() }
+  }
+  return null // unterminated call (inside a template string being typed, etc.) — not a real arg
+}
+
+function classifyKey (arg, src) {
+  let m
+  // leading quoted literal — UNANCHORED at the end: `'repeatRule:' + id` registered by the literal
+  // prefix exactly as the old regex did (dynamic prefix keys are registered by prefix)
+  if ((m = arg.match(/^'([^']*)'/)) || (m = arg.match(/^"([^"]*)"/))) return { key: m[1] }
+  if ((m = arg.match(/^[A-Za-z_$][\w$]*/))) { // identifier, or identifier-led expr like id(x) / obj.k — old scan saw just the identifier
+    const lit = resolveConst(src, m[0])
+    return { key: lit != null ? lit : `#${m[0]}` }
+  }
+  // static parse failed (template literal / computed first arg): bail out with an <expr:...> key
+  // (counted as a warning, never red)
+  return { key: '<expr:' + arg.replace(/\s+/g, ' ').slice(0, 40) + '>', dynamic: true }
+}
+
 function scan () {
   const hits = []
+  const re = /(localStorage\.(?:setItem|removeItem)|safeSet)\(/g // no \s before ( — `safeSet (` is the function DEFINITION, not a write point (old head semantics kept)
   for (const file of walk(RENDERER)) {
     const rel = path.relative(ROOT, file).replace(/\\/g, '/')
     const src = fs.readFileSync(file, 'utf8')
-    const re = /localStorage\.(setItem|removeItem)\(\s*([A-Za-z_$][\w$]*|'[^']*'|"[^"]*")|safeSet\(\s*([A-Za-z_$][\w$]*|'[^']*'|"[^"]*")/g
     let m
     while ((m = re.exec(src))) {
-      const raw = m[2] !== undefined ? m[2] : m[3]
-      let key
-      if (/^['"]/.test(raw)) key = raw.slice(1, -1)
-      else {
-        const lit = resolveConst(src, raw)
-        key = lit != null ? lit : `#${raw}` // the # prefix = literal not resolved within the file; registered by identifier
-      }
-      // Dynamic prefix keys (repeatRule:xxx etc.) are registered by prefix
+      const res = extractFirstArg(src, re.lastIndex - 1)
+      if (!res || !res.arg) continue
+      const { key, dynamic } = classifyKey(res.arg, src)
       const line = src.slice(0, m.index).split('\n').length
-      hits.push({ file: rel, key, line })
+      hits.push({ file: rel, key, line, dynamic: !!dynamic })
     }
   }
   if (SELFTEST) hits.push({ file: 'renderer/js/__selftest__.js', key: 'dualwriteSelftestFakeKey', line: 1 })
@@ -75,9 +120,11 @@ function main () {
 
   const problems = []
   const seen = new Set()
+  let dynamicCount = 0
   for (const h of hits) {
     const id = `${h.file}::${h.key}`
     seen.add(id)
+    if (h.dynamic) { dynamicCount++; continue } // <expr:...> bail-out: loud warning below, never a red problem
     const entry = ledger[id]
     if (!entry) {
       problems.push(`未登记写点: ${id}:${h.line} —— 请回答「权威源是谁、何时校准」后登记进 tests/dualwrite-ledger.json`)
@@ -91,10 +138,17 @@ function main () {
     }
   }
   for (const id of Object.keys(ledger)) {
+    if (id.includes('<expr:')) continue // expr-summary keys drift with the code — never subject to the rot check
     if (!seen.has(id)) problems.push(`台账条目已无对应代码(腐烂条目,请核实后删除): ${id}`)
   }
 
   console.log(`[check-dualwrite] 扫描写点 ${hits.length} 处 / 台账 ${Object.keys(ledger).length} 条`)
+  if (dynamicCount) {
+    // W19: statically unparseable keys — inventory-visible, warned, NOT red (keeps the gate's
+    // red = "unregistered static write point" semantics; these need a human naming pass instead)
+    console.warn(`[check-dualwrite] ⚠ ${dynamicCount} 处写点键无法静态解析，已按 <expr:...> 兜底登记（请改为静态键或人工登记台账）:`)
+    hits.filter(h => h.dynamic).forEach(h => console.warn(`  ⚠ ${h.file}:${h.line} ${h.key}`))
+  }
   if (SELFTEST) {
     const caught = problems.some(p => p.includes('__selftest__'))
     console.log(caught ? '[check-dualwrite] 负向自测: 假写点被正确拦截 ✓' : '[check-dualwrite] 负向自测失败: 假写点未被拦截 ✗')
