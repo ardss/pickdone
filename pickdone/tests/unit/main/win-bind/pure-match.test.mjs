@@ -145,3 +145,69 @@ test('resolveBinding: zero processName hits → NOT_FOUND', () => {
   ], 999)
   assert.deepEqual(res, { status: 'NOT_FOUND' })
 })
+
+/* [QA r1 P3·observation + live chain] UWP host-process degeneration: every UWP app's windows
+ *  report processName 'applicationframehost' AND share the host's pid (measured live: bound
+ *  Calculator pid 12696, closed it, opened Settings on the SAME pid — the old bare-pid rung
+ *  ACTIVATED Settings). Both pid-trust rungs are suppressed for host names; exact title
+ *  decides, AMBIGUOUS is the fail-closed exit. The HWND fastpath stays trusted. */
+const AFH_REF = { processName: 'applicationframehost', execPath: '', title: '计算器', pidHint: 12696, hwnd: 900, boundAt: 1 }
+
+test('resolveBinding: LIVE CHAIN — bound Calculator, closed it, only Settings on the SAME host pid remains → NOT activated', () => {
+  const res = M.resolveBinding({ taskId: 't', ref: AFH_REF }, [
+    { hwnd: 15600866, pid: 12696, processName: 'applicationframehost', execPath: '', title: '设置' }
+  ], 999)
+  assert.equal(res.status, 'AMBIGUOUS', 'same host pid is NOT a same-instance proof — bare PID rung suppressed')
+  assert.equal(res.candidates.length, 1, 'the single window is kept as evidence, never activated')
+})
+
+test('resolveBinding: UWP host name, same host pid, bound app still open → PID_TITLE (title decides)', () => {
+  const res = M.resolveBinding({ taskId: 't', ref: AFH_REF }, [
+    { hwnd: 501, pid: 12696, processName: 'applicationframehost', execPath: '', title: '设置' },
+    { hwnd: 502, pid: 12696, processName: 'applicationframehost', execPath: '', title: '计算器' }
+  ], 999)
+  assert.deepEqual(res, { status: 'FOUND', hwnd: 502, via: 'PID_TITLE' })
+})
+
+test('resolveBinding: UWP host name + restarted (host pid gone), only unrelated UWP open → NOT PROCESS_UNIQUE (fail-closed)', () => {
+  // restart-ladder variant: the host process itself restarted, the only window is an unrelated UWP
+  const res = M.resolveBinding({ taskId: 't', ref: AFH_REF }, [
+    { hwnd: 501, pid: 12001, processName: 'ApplicationFrameHost.exe', execPath: '', title: '设置' }
+  ], 999)
+  assert.equal(res.status, 'AMBIGUOUS', 'uniqueness is not trusted for host names')
+  assert.equal(res.candidates.length, 1, 'the single window is kept as evidence, never activated')
+})
+
+test('resolveBinding: UWP host name + restarted, same app reopened (title matches) → PROCESS_TITLE', () => {
+  const res = M.resolveBinding({ taskId: 't', ref: AFH_REF }, [
+    { hwnd: 502, pid: 12002, processName: 'applicationframehost', execPath: '', title: '计算器' }
+  ], 999)
+  assert.deepEqual(res, { status: 'FOUND', hwnd: 502, via: 'PROCESS_TITLE' })
+})
+
+test('resolveBinding: UWP host name, two UWP windows with the same title → AMBIGUOUS (existing guard)', () => {
+  const res = M.resolveBinding({ taskId: 't', ref: AFH_REF }, [
+    { hwnd: 503, pid: 12696, processName: 'applicationframehost', execPath: '', title: '计算器' },
+    { hwnd: 504, pid: 12696, processName: 'applicationframehost', execPath: '', title: '计算器' }
+  ], 999)
+  assert.equal(res.status, 'AMBIGUOUS')
+  assert.deepEqual(res.candidates.map(c => c.hwnd).sort(), [503, 504])
+})
+
+test('resolveBinding: UWP host name, HWND fastpath still trusted (handle pins the window, not a process identity)', () => {
+  const fast = M.resolveBinding({ taskId: 't', ref: AFH_REF }, [
+    { hwnd: 900, pid: 12696, processName: 'applicationframehost', execPath: '', title: '标题漂移无所谓' }
+  ], 999)
+  assert.deepEqual(fast, { status: 'FOUND', hwnd: 900, via: 'HWND_FASTPATH' })
+})
+
+test('resolveBinding: normal apps keep PID / PROCESS_UNIQUE on title drift (regression guard)', () => {
+  const byPid = M.resolveBinding({ taskId: 't', ref: { ...REF, hwnd: 42 } }, [
+    { hwnd: 43, pid: 45504, processName: 'notepad', execPath: '', title: 'drifted' }
+  ], 999)
+  assert.deepEqual(byPid, { status: 'FOUND', hwnd: 43, via: 'PID' })
+  const res = M.resolveBinding({ taskId: 't', ref: REF }, [
+    { hwnd: 5, pid: 12000, processName: 'notepad', execPath: '', title: 'drifted title' }
+  ], 999)
+  assert.deepEqual(res, { status: 'FOUND', hwnd: 5, via: 'PROCESS_UNIQUE' })
+})

@@ -75,6 +75,19 @@ function byExactTitle (cands, title) {
   return cands.filter(c => c.title === title)
 }
 
+/** [QA r1 P3·observation] Host-process names: every UWP app's windows are owned by
+ *  ApplicationFrameHost, so the process side of the snapshot reports 'applicationframehost'
+ *  for Calculator AND Settings AND every other UWP — processName is NOT an app identity for
+ *  this class (enumerated live: two different UWP apps visible as two applicationframehost
+ *  windows). Worse, measured live on the bind→close→reopen-other-UWP chain: all UWP views in
+ *  the pool share the SAME host pid, so even the "same instance" pid rung mis-fires (bound
+ *  Calculator pid X, closed it, opened Settings — Settings rides the same pid X and got
+ *  ACTIVATED). For these names BOTH pid-trust rungs are suppressed and the exact-title rung
+ *  decides (a UWP window's title is its app's own name — measured live: distinct per app),
+ *  with the AMBIGUOUS-never-guessed guard as the fail-closed exit. The HWND fastpath stays
+ *  trusted — it pins the window handle itself, not a process identity. */
+const HOST_PROC_NAMES = new Set(['applicationframehost'])
+
 /** F3/F4 relocation ladder (frozen contract). Never trusts an old HWND across pids — HWND is a
  *  handle-table slot value and gets REUSED after app restart, so hwnd equality with a different
  *  pid is treated as coincidence and falls through to the processName ladder.
@@ -86,7 +99,11 @@ function byExactTitle (cands, title) {
  *    3) app restarted (pid gone): processName matches; exactly 1 → PROCESS_UNIQUE (title drift
  *       tolerated); >1 narrowed by exact title → PROCESS_TITLE; still >1 or 0 title hits →
  *       AMBIGUOUS with candidates;
- *    4) zero processName hits → NOT_FOUND. Ambiguity is never guessed away. */
+ *    4) zero processName hits → NOT_FOUND. Ambiguity is never guessed away.
+ *  [QA r1 P3] HOST-PROC EXCEPTION (applicationframehost): processName AND pid belong to the
+ *  host, not the app — every UWP view shares both. Rungs 2 (bare pid) and 3 (unique process)
+ *  are suppressed for host names; the exact-title rungs decide, AMBIGUOUS is the fail-closed
+ *  exit. Rung 1 (HWND) stays trusted — it pins the window handle, not a process identity. */
 function resolveBinding (binding, windows, ownPid) {
   const ref = binding && binding.ref ? binding.ref : {}
   const refProc = normProcName(ref.processName)
@@ -99,19 +116,24 @@ function resolveBinding (binding, windows, ownPid) {
     }
   }
 
-  // 2) same instance: processName + pid
+  // 2) same instance: processName + pid. [QA r1 P3 live] a host name's pid is the HOST's —
+  //    shared by every UWP view in the pool — so the bare-pid rung is suppressed there and
+  //    the exact-title rung decides (title match = PID_TITLE; miss = AMBIGUOUS, never guess).
+  const hostProc = HOST_PROC_NAMES.has(refProc)
   const samePid = snap.filter(w => normProcName(w.processName) === refProc && w.pid === ref.pidHint)
-  if (samePid.length === 1) return { status: 'FOUND', hwnd: samePid[0].hwnd, via: 'PID' }
-  if (samePid.length > 1) {
+  if (!hostProc && samePid.length === 1) return { status: 'FOUND', hwnd: samePid[0].hwnd, via: 'PID' }
+  if (samePid.length > 1 || (hostProc && samePid.length > 0)) {
     const hits = byExactTitle(samePid, ref.title)
     if (hits.length === 1) return { status: 'FOUND', hwnd: hits[0].hwnd, via: 'PID_TITLE' }
     return { status: 'AMBIGUOUS', candidates: hits.length > 0 ? hits : samePid }
   }
 
-  // 3) app restarted: pid gone/dead, processName only
+  // 3) app restarted: pid gone/dead, processName only. [QA r1 P3] a host process name
+  //    (applicationframehost) is not an app identity — its "unique" window is just "the only
+  //    UWP open", so the uniqueness rung is suppressed there and the exact title decides.
   const sameProc = snap.filter(w => normProcName(w.processName) === refProc)
   if (sameProc.length === 0) return { status: 'NOT_FOUND' }
-  if (sameProc.length === 1) return { status: 'FOUND', hwnd: sameProc[0].hwnd, via: 'PROCESS_UNIQUE' }
+  if (sameProc.length === 1 && !hostProc) return { status: 'FOUND', hwnd: sameProc[0].hwnd, via: 'PROCESS_UNIQUE' }
   const procHits = byExactTitle(sameProc, ref.title)
   if (procHits.length === 1) return { status: 'FOUND', hwnd: procHits[0].hwnd, via: 'PROCESS_TITLE' }
   return { status: 'AMBIGUOUS', candidates: procHits.length > 0 ? procHits : sameProc }
