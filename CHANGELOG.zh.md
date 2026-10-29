@@ -3,6 +3,7 @@
 System.Object[]
 
 ## [Unreleased]
+- 窗口绑定（win-bind）：把任务行拖出 PickDone 窗口、释放在任意外部 Windows 窗口上即完成绑定；任务行出现窗口徽标——点徽标（或任务菜单项）一键唤回绑定窗口（还原+置前），原地可解绑，绑定关系应用重启后保留。窗口身份绝不信任过期 HWND：重定位沿「带 pid 守卫的 HWND 快路径 → 进程 → 精确标题」梯级攀升，同名歧义时拒绝猜测（返回 AMBIGUOUS 附候选清单，绝不激活错窗口）；共用 applicationframehost 宿主 pid 的 UWP 窗口仅按标题匹配；对拒绝 text/move 拖放的 OLE 目标（画图等整类）的释放，与 Esc 取消靠按键事件证据加 200ms 复查窗口区分，两种语义互不劫持。激活对 OS 前台锁逐级升级（直接 SetForegroundWindow → AttachThreadInput + ALT 伪装 → 任务栏闪烁），每种失败原因都有 fail-closed 的用户反馈。窗口探测用常驻 PowerShell 子进程内嵌 user32 P/Invoke——Windows 通用能力，不要求任何目标应用装插件，不新增依赖；持久化为主进程自有存储，渲染端 dbCall 白名单分毫未动。全程测试先行（6 份 RED 测试在实现前因契约模块不存在而失败，证据存档）；7 份测试文件落位回归池（94 用例，含常驻 PS 适配器活体套件）；由独立 QA 以真实 OS 级拖拽注入与激活链在隔离用户数据目录下实机验收——绑定、最小化/后台唤回、同名歧义、目标关闭与重启重定位、取消拖拽、重启持久化、F5 回归——并以 sha1 核验真实用户数据库全程未变。
 
 ## [0.4.0-beta.21] - 2026-10-29
 - 更新器修复（当日热修已落三台存量机器与已发布安装包）：9 月 19 日为修 beta.yml 404 把更新通道钉死在 `latest`，而 electron-updater 6.8.9 的 GitHubProvider 预发布匹配器要求通道为 null 或 alpha/beta（`shouldFetchVersion`）——通道一钉，此后所有 beta 版本对应用内更新器永久不可见（永远报 "No published versions on GitHub"），这正是存量机器一个月来只能手动升级的根因。现在通道保持不设：beta 版本号自动解析出 beta 通道正常匹配标签，beta.yml 404 在 allowPrerelease 下回落 latest.yml。三台机器实测：已装版本能正确解析已发布版本。
