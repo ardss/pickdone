@@ -10,12 +10,13 @@ import ui from './ui.js'
 import repeatSettings from './repeatSettings.js'
 import filters from './filters.js'
 import tomatoAnnounce from './tomatoAnnounce.js'
+import winbind from './winbind.js' // win-bind: task↔window bindings (drag-outside-to-bind)
 import { snapshotString } from './helpers/snapshotString.js'
 
 const Vuex = window.Vuex
 
 const store = Vuex.createStore({
-  modules: { auth, todo, tomato, settings, category, habits, ui, repeatSettings, filters, tomatoAnnounce },
+  modules: { auth, todo, tomato, settings, category, habits, ui, repeatSettings, filters, tomatoAnnounce, winbind },
   state: () => ({ cloudEnabled: false }),
   getters: {
     tomatoBarVisible (state) {

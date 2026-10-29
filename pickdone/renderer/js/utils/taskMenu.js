@@ -15,7 +15,7 @@ import { toggleCompleteWithUndo } from './completeAction.js'
  * @param {Object} [caps] capability switches: { edit, complete, move, tomato, copy, del }, all on by default
  */
 export function buildTaskMenu (vm, t, caps = {}, extra = []) {
-  const c = { edit: true, complete: true, move: true, tomato: true, copy: true, del: true, recycle: false, ...caps }
+  const c = { edit: true, complete: true, move: true, tomato: true, copy: true, del: true, recycle: false, winbind: false, ...caps }
   // recycle view passes rows with t.delete=true: skip the soft-delete guard; menu items come entirely from extra (restore/purge)
   if (!t || (t.delete && !c.recycle)) return []
   const raw = () => vm.$store.state.todo.todoList.find(x => x.taskId === t.taskId) || t
@@ -123,6 +123,25 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
         }).catch(() => {})
       }
     })
+  }
+  // [win-bind T8] window rows appear only for tasks WITH a binding, and only in views that opted
+  // in via caps.winbind (scope freeze: TodoItem today/list rows; other views unchanged).
+  // Defensive module read: stub stores in unit tests may not register the winbind module.
+  if (c.winbind) {
+    const wb = vm.$store.state.winbind
+    const wbRef = (wb && wb.bindings && wb.bindings[t.taskId]) || null
+    if (wbRef) {
+      items.push({
+        icon: 'locate',
+        label: vm.$t('statsJ.winbind.activateMenu', { name: wbRef.processName || '' }),
+        fn: () => vm.$store.dispatch('winbind/activate', t.taskId)
+      })
+      items.push({
+        icon: 'x',
+        label: vm.$t('statsJ.winbind.unbindMenu'),
+        fn: () => vm.$store.dispatch('winbind/unbind', t.taskId)
+      })
+    }
   }
   if (c.copy) {
     items.push({

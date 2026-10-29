@@ -81,6 +81,8 @@
           {{ $t('statsJ.TodoItem.deadlineSpace', { d: dayjs(todo.deadlineTs).format(FMT.cnDate) }) }}
         </span>
         <span v-if="cat && showDateBadge===false" class="td-cat" :style="{color:cat.categoryColor}">{{cat.categoryName}}</span>
+        <!-- [win-bind T8] bound-window chip: click = bring the window back, ✕ = unbind -->
+        <WinBindBadge :task-id="todo.taskId"></WinBindBadge>
       </div>
     </div>
     <!-- [c-wave 20261013] v-if guards only the date badge: the td-right container always renders, or undated
@@ -126,6 +128,8 @@ import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js
 import { taskContextMenu } from '../utils/taskMenu.js' // [maint-0925 A16] one menu builder for all views
 import { descLineClampStyle } from '../utils/descLines.js' // [B6 fix] consumes settings.todoDescriptionDisplayLineNumber
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
+import { isReleaseOutsideViewport } from '../utils/winbindGeometry.js' // [win-bind T8] pure release-point gate
+import WinBindBadge from './WinBindBadge.vue' // [win-bind T8] bound-window chip in the meta strip
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
@@ -140,7 +144,9 @@ let dragSortBlocked = false
 // plus reminderExtra shifting); imported below.
 
 export default {
-  name: 'TodoItem',  props: {
+  name: 'TodoItem',
+  components: { WinBindBadge }, // [win-bind T8] locally registered: today/list views only (scope freeze)
+  props: {
     todo: { type: Object, required: true },
     groupKey: { type: String, default: '' },
     query: { type: String, default: '' },
@@ -163,6 +169,11 @@ export default {
     }
   },
   beforeUnmount () { clearTimeout(this._enterTimer) },
+  mounted () {
+    // [win-bind T8] hydrate task↔window bindings once per renderer session (the store action
+    // itself is session-once guarded — every row dispatching here is fine)
+    this.$store.dispatch('winbind/initFromList')
+  },
   computed: {
     cat () { return this.$store.getters['category/byId'](this.todo.categoryId) },
     // D14-A3: deadline chip red only when the due DAY has passed (dueStateOf semantics: days<0
@@ -264,7 +275,15 @@ export default {
       this.$el.classList.toggle('drag-above', !this.dropAfter)
     },
     onDragLeave () { this.$el.classList.remove('drag-above', 'drag-below') },
-    onDragEnd () { this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false; dragActive = false; dragSortBlocked = false },
+    onDragEnd (e) {
+      this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false; dragActive = false; dragSortBlocked = false
+      // [win-bind T8] dragend fires on the source row after ANY native-dnd release, including
+      // outside this window (no drop event arrives then, so reorder is naturally skipped).
+      // Release OUTSIDE the window bounds = bind intent; inside (or Esc-drag-back) keeps the
+      // original behavior untouched. The gate is a pure predicate; cancel semantics (button still
+      // down / desktop / own window) are resolved by the main process and cancel silently.
+      if (e && isReleaseOutsideViewport(e, window)) this.$store.dispatch('winbind/releaseOutside', this.todo.taskId)
+    },
     async onDrop (e) {
       e.preventDefault()
       dragActive = false
@@ -431,7 +450,7 @@ export default {
       // [maint-0925 A16] the hand-copied item list drifted from buildTaskMenu (this copy lacked the
       // shared guards and duplicated copy/delete verbatim). One builder for all views; view-specific
       // rows (reorder / repeat-scope delete) ride in as `extra`, tomato stays off the row menu.
-      taskContextMenu(this, this.rawOf(), e, { tomato: false, recycle: !!this.todo.delete }, [
+      taskContextMenu(this, this.rawOf(), e, { tomato: false, recycle: !!this.todo.delete, winbind: true }, [
         (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-up', label: this.$t('statsE.TodoItem.moveUp'), fn: () => this.keyboardMove(-1) } : null,
         (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-down', label: this.$t('statsE.TodoItem.moveDown'), fn: () => this.keyboardMove(1) } : null,
         this.isRepeat ? { icon: 'repeat', label: this.$t('statsE.TodoItem.repeatDeleteMenu'), fn: () => this.$store.commit('ui/askRepeatDelete', this.todo.taskId), danger: true } : null
