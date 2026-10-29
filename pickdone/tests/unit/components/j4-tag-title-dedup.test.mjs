@@ -94,7 +94,11 @@ async function mountItem (taskContent, query = '') {
     taskContextMenu: () => {},
     descLineClampStyle: descLines.descLineClampStyle,
     roleButtonActivate: roleKey.roleButtonActivate,
-    roleCheckboxActivate: roleKey.roleCheckboxActivate
+    roleCheckboxActivate: roleKey.roleCheckboxActivate,
+    // [win-bind T8] TodoItem locally registers WinBindBadge; the import-stripping harness needs
+    // the name defined — stub component (this harness never renders the template block)
+    WinBindBadge: { name: 'WinBindBadge', render: () => null },
+    isReleaseOutsideViewport: () => false
   }
   const Comp = loadScript(TI_SFC, deps)
   const Vue = require('vue')

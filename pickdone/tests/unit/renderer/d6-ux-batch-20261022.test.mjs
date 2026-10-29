@@ -125,7 +125,7 @@ test('D6-4 TodoItem dragstart announces the non-custom-sort ignore once; drop-ti
   const writeSort = TODOITEM.slice(TODOITEM.indexOf('_writeSort (list) {'), TODOITEM.indexOf('keyboardMove (dir)'))
   assert.match(writeSort, /if \(!dragSortBlocked && this\.\$message\)/)
   // flag always resets at dragend (fires after drop too)
-  assert.match(TODOITEM, /onDragEnd \(\) \{[^\n]*dragSortBlocked = false \}/)
+  assert.match(TODOITEM, /onDragEnd \(e?\) \{[\s\S]{0,200}?dragSortBlocked = false\b/, 'flag always resets at dragend (fires after drop too; win-bind T8 made the handler multi-line)')
 })
 
 test('D6-5 SearchView empty state offers clear-and-rescan (filters + keyword, then refocus)', () => {
