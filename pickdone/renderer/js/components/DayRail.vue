@@ -372,7 +372,8 @@ export default {
       const day = this.selDayStart
       const cands = this.$store.state.todo.todoList.filter(t => {
         if (t.delete) return false
-        return t.dayStart === day || (t.todoTime ? +dayjs(t.todoTime).startOf('day') === day : false)
+        /* [w18] normalize dayStart to midnight too: a drifted/string dayStart failed strict equality and the row vanished from the entry-card candidates */
+        return (t.dayStart ? +dayjs(t.dayStart).startOf('day') === day : false) || (t.todoTime ? +dayjs(t.todoTime).startOf('day') === day : false)
       })
       const rank = t => (t.complete ? 1 : 0)
       return cands.sort((a, b) => rank(a) - rank(b))
@@ -413,12 +414,14 @@ export default {
         const to = Math.max(0, Math.min(endMin, 1440))
         if (to <= from) continue
         if (!this.axisPx) {
-          // Collapsed mini rail = whole-day proportional container, positioned by 1440-minute percentages (expanded state not yet measured on first frame stays empty awaiting re-measure)
+          // Collapsed mini rail = whole-day proportional container, positioned by 1440-minute percentages.
+          // [w18] continue, not return: the old in-loop return stopped after the FIRST record — the collapsed rail rendered only one focus block per day
           if (this.railCollapsed) {
             segs.push({
               style: { top: (from / 1440 * 100) + '%', height: Math.max(0.2, (to - from) / 1440 * 100) + '%', background: segColor },
               tip, taskId: r.focusTaskId, tomatoId: r.tomatoId
             })
+            continue
           }
           return segs // Expanded state not yet measured; re-rendered by the watcher/timer after measurement
         }

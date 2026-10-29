@@ -41,7 +41,12 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
     // menu click = explicit operation, must carry the 5s undo toast (same layer as row-inline moveDay; drag stays silent by design)
     const move = (offset) => {
       const cur = raw()
-      const base = cur.todoTime ? dayjs(cur.todoTime) : dayjs().startOf('day')
+      // [w18] base prefers the task's own dayStart (same fix as TodoItem.moveDay): a PURE-DATE task
+      // (dayStart in the future, no todoTime) used to be Math.max-pulled back to tomorrow on
+      // "postpone", because the base defaulted to bare today and ignored the scheduled date.
+      const base = cur.dayStart
+        ? dayjs(cur.dayStart).startOf('day')
+        : (cur.todoTime ? dayjs(cur.todoTime) : dayjs().startOf('day'))
       const target = offset === 0
         ? +dayjs().startOf('day')
         : Math.max(+dayjs().add(offset, 'day').startOf('day'), +base.add(offset, 'day').startOf('day'))

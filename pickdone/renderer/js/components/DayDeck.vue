@@ -222,7 +222,10 @@ export default {
       const target = dayStart(+sel)
       let idx = this.days.findIndex(ts => ts === target)
       if (idx < 0) idx = this.days.findIndex(ts => ts === clampToDayWindow(this.days, target))
-      if (idx >= 0) { this._selSync = true; this.front = idx }
+      // [w18] guard idx !== front like the store watcher below: when already fronting the selection,
+      // a bare _selSync=true is never consumed (equal front fires no watcher) and would swallow the
+      // NEXT local flip's store write-back
+      if (idx >= 0 && idx !== this.front) { this._selSync = true; this.front = idx }
     }
   },
   mounted () {

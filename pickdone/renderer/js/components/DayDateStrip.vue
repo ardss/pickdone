@@ -147,7 +147,8 @@ export default {
     taskDays () {
       const set = new Set()
       for (const t of this.$store.state.todo.todoList) {
-        if (!t.delete && t.dayStart) set.add(t.dayStart)
+        // [w18] normalize to local midnight before adding: calCell probes with day-start ts, so a raw drifted/ISO-string dayStart never matched and the dot vanished
+        if (!t.delete && t.dayStart) set.add(+dayjs(t.dayStart).startOf('day'))
       }
       return set
     },

@@ -237,14 +237,16 @@ export default {
       const expired = this.fitProj((this.v.recent && this.v.recent.expiredUncompleted) || [])
       const byDate = new Map()
       for (const t of expired) {
-        const k = t.dayStart
+        // [w18] normalize the group key to local midnight (same caliber as sel above): a raw
+        // drifted/string dayStart made dayjs(Number(k)) NaN ("Invalid Date") and split same-day rows
+        const k = dayStart(t.dayStart)
         if (!byDate.has(k)) byDate.set(k, [])
         byDate.get(k).push(t)
       }
       // Weekday names via statsA.core.wd0~6 (dayjs.day(): Sunday=0)
       const expiredDays = [...byDate.keys()].sort((a, b) => b - a)
       for (const k of expiredDays) {
-        const d = dayjs(Number(k))
+        const d = dayjs(k)
         const lbl = +d === +dayjs().subtract(1, 'day').startOf('day')
           ? this.$t('statsE.TodayView.overdueFromYesterday')
           : this.$t('statsA.core.calMd', { m: d.month() + 1, d: d.date(), w: this.$t('statsA.core.weekOf', { w: this.$t('statsA.core.wd' + d.day()) }) })
