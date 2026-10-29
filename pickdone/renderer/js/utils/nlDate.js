@@ -215,9 +215,14 @@ export function parseNaturalDate (text, base = dayjs()) {
     // Peel the English time phrase off first, parse the remaining CJK text with the
     // shared core, then apply the peeled time onto the parsed date.
     const peeled = peelEnglishTime(raw)
+    if (!peeled.hasTime) return parseChineseNaturalDate(peeled.text, base, FMT.cnFull)
+    // [mixed-illegal-time fix] Illegal time word ("明天 45pm 买菜"): the old path returned the
+    // Chinese parse of the ALREADY-PEELED text, so the bogus "45pm" vanished without a trace
+    // from restText — same silent-swallow class the English branch gave up wholesale on
+    // (restText keeps the raw text). Re-run the Chinese core on the untouched raw so restText
+    // keeps the full original input and the word stays visible to the user.
+    if (peeled.h > 23 || peeled.min > 59) return parseChineseNaturalDate(raw, base, FMT.cnFull)
     const cnResult = parseChineseNaturalDate(peeled.text, base, FMT.cnFull)
-    if (!peeled.hasTime) return cnResult
-    if (peeled.h > 23 || peeled.min > 59) return cnResult
     const d = cnResult.date || base.startOf('day')
     let withTime = d.hour(peeled.h).minute(peeled.min).second(0)
     if (withTime.isBefore(base)) withTime = withTime.add(1, 'day')

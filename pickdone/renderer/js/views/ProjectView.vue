@@ -150,6 +150,7 @@
 import {dayjs, DAY_MS, rescheduleExpired, FMT } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
+import { crossDayRevertPatch } from '../utils/crossDayMove.js' // [reschedule-undo-reminder fix]
 import { buildExpiryGroups } from '../utils/expiryGroups.js'
 import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf, newMilestoneId } from '../utils/milestones.js'
 import { COLOR_PALETTE } from '../store/category.js'
@@ -565,7 +566,7 @@ export default {
           batchMoveWithUndo(this, {
             label: this.$t('statsB.ProjectView.rescheduled'),
             snap,
-            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: crossDayRevertPatch(r.orig, r.patch) })
           })
         } else {
           // [maint-0924 A13] n=0 was silent — say there is nothing to reschedule

@@ -24,6 +24,7 @@
  * Events filtered by categoryId === route id; rows reuse <todo-item>.
  */
 import { batchMoveWithUndo } from '../utils/confirm.js'
+import { crossDayRevertPatch } from '../utils/crossDayMove.js' // [reschedule-undo-reminder fix]
 import { rescheduleExpired } from '../utils/core.js'
 import { buildExpiryGroups } from '../utils/expiryGroups.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
@@ -86,7 +87,7 @@ export default {
           batchMoveWithUndo(this, {
             label: this.$t('statsE.CategoryView.overdueRescheduledMsg'),
             snap,
-            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: crossDayRevertPatch(r.orig, r.patch) })
           })
         } else {
           this.$message.info(this.$t('statsE.CategoryView.nothingToReschedule'))

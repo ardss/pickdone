@@ -76,8 +76,16 @@ test('core: rescheduleExpired only changes expired incomplete ones and counts th
   const { n, snap } = await rescheduleExpired(dispatch, todos, today)
   assert.equal(n, 1)
   assert.equal(calls[0][1].patch.dayStart, today)
-  // snap carries the original values for batchMoveWithUndo (feedback-consistency consolidation 2026-09-01)
-  assert.deepEqual(snap, [{ id: 'a', dayStart: today - DAY, todoTime: undefined }])
+  // snap carries the original values for batchMoveWithUndo; [w19] it ALSO carries the full
+  // original row + the forward patch so views revert via crossDayRevertPatch(orig, patch) —
+  // the two-field revert used to strand re-anchored reminderTime/reminderExtra on the expired day.
+  assert.equal(snap.length, 1)
+  assert.equal(snap[0].id, 'a')
+  assert.equal(snap[0].dayStart, today - DAY)
+  assert.equal(snap[0].todoTime, undefined)
+  assert.equal(snap[0].orig.dayStart, today - DAY, 'full original row snapshotted')
+  assert.equal(snap[0].orig.taskId, 'a')
+  assert.equal(snap[0].patch.dayStart, today, 'forward patch carried for the exact revert')
 })
 
 test('core: parseSubtasks tolerates double-encoded JSON strings', () => {
