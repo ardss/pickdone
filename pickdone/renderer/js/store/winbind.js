@@ -40,7 +40,9 @@ function api () {
 /** Full win-bind surface present? One missing key = feature off (rollout guard). */
 function winBindApi () {
   const a = api()
-  return (a && a.winBindIdentifyUnderCursor && a.winBindBind && a.winBindActivate && a.winBindUnbind && a.winBindList) ? a : null
+  // [QA r1 #1] the key surface is preload's (src/preload/index.js winBindIdentify + contracts.d.ts);
+  // an "UnderCursor"-suffixed name here made winBindApi() permanently null — every UI action silently off.
+  return (a && a.winBindIdentify && a.winBindBind && a.winBindActivate && a.winBindUnbind && a.winBindList) ? a : null
 }
 
 /** Session-once hydration guard: every TodoItem row dispatches initFromList on mount; the FIRST
@@ -98,7 +100,7 @@ export default {
       if (!a || !taskId) return
       commit('PATCH_STATUS', { key: 'identifying', value: taskId })
       try {
-        const r = await a.winBindIdentifyUnderCursor()
+        const r = await a.winBindIdentify()
         if (!r || !r.window) return // silent cancel — every null-window reason is user-intent or nothing-to-bind
         const b = await a.winBindBind(taskId, r.window)
         if (b && b.ok) {

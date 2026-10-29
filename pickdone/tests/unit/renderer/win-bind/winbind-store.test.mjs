@@ -54,8 +54,10 @@ function stubApi (impl = {}) {
     ipc.push([name, ...a])
     return (impl[name] || dflt)(...a)
   }
+  // [QA r1 #1/#6] stub keys mirror the REAL preload surface (src/preload/index.js) — the
+  // contract-lock test below fails if this stub ever drifts from the exposed names again.
   globalThis.window.todoAPI = {
-    winBindIdentifyUnderCursor: rec('identify', async () => null),
+    winBindIdentify: rec('identify', async () => null),
     winBindBind: rec('bind', async () => null),
     winBindActivate: rec('activate', async () => null),
     winBindUnbind: rec('unbind', async () => null),
@@ -233,6 +235,28 @@ test('store/index.js registers the winbind module', async () => {
   const src = fs.readFileSync(new URL('../../../../renderer/js/store/index.js', import.meta.url), 'utf8')
   assert.match(src, /import winbind from '\.\/winbind\.js'/)
   assert.match(src, /modules:\s*\{[^}]*\bwinbind\b/)
+})
+
+/* [QA r1 #1/#6] Contract lock: the stub above once spelled winBindIdentifyUnderCursor — same
+ * wrong name as the store, so 26 cases stayed green while the real preload exposed winBindIdentify
+ * and the whole feature was dead in the live app. Lock BOTH sides to the frozen preload surface:
+ *   1) preload source actually exposes the six frozen keys;
+ *   2) every winBind-family key (incl. onWinBindChanged) the store module calls exists on that surface
+ *      (a renamed key in either file fails here instead of shipping a silent outage). */
+test('contract lock: store win-bind key usage matches the preload exposed surface', async () => {
+  const fs = await import('node:fs')
+  const preloadSrc = fs.readFileSync(new URL('../../../../src/preload/index.js', import.meta.url), 'utf8')
+  const FROZEN = ['winBindIdentify', 'winBindBind', 'winBindActivate', 'winBindUnbind', 'winBindList', 'onWinBindChanged']
+  for (const k of FROZEN) {
+    assert.match(preloadSrc, new RegExp('\\b' + k + '\\s*:'), 'preload must expose ' + k + ' (frozen contract)')
+  }
+  const storeSrc = fs.readFileSync(new URL('../../../../renderer/js/store/winbind.js', import.meta.url), 'utf8')
+  const used = new Set()
+  for (const m of storeSrc.matchAll(/\ba\.(winBind[A-Za-z]+|onWinBindChanged)\b/g)) used.add(m[1])
+  assert.ok(used.size >= 5, 'store references the five IPC keys, saw: ' + [...used].join(','))
+  for (const k of used) {
+    assert.ok(FROZEN.includes(k), 'store calls ' + k + ' which is NOT in the frozen preload surface (stale or invented key)')
+  }
 })
 
 test('TodoItem.onDragEnd dispatches winbind/releaseOutside only through the geometry gate', async () => {
