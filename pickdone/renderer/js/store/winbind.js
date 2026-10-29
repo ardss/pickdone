@@ -51,6 +51,25 @@ function winBindApi () {
  *  fields; a renderer reload (main window rebuild) resets it with the module. */
 let hydratedOnce = false
 
+/** [QA r1 #4] Session-once subscription arming: the main process broadcasts 'win-bind-changed'
+ *  {reason:'bind'|'unbind', taskId} to ALL windows on every main-side binding mutation, but
+ *  nothing consumed it — other windows' badges never refreshed. initFromList arms the
+ *  subscription once per renderer session; the callback re-pulls the list (idempotent full
+ *  refresh — the originator window's echo just converges to the same truth, no loop). */
+let changeSubscribed = false
+function armChangeSubscription (a, dispatch) {
+  if (changeSubscribed || !a || typeof a.onWinBindChanged !== 'function') return
+  try {
+    a.onWinBindChanged(() => {
+      try { dispatch('refresh') } catch (e) { /* store torn down (window closing) */ }
+    })
+    changeSubscribed = true
+  } catch (e) {
+    // subscription itself failed (old preload without the key is filtered by the typeof check;
+    // a throw here means a broken bridge — retry on the next row mount)
+  }
+}
+
 export default {
   namespaced: true,
   state: () => ({
@@ -74,10 +93,12 @@ export default {
     SET_FEEDBACK (s, fb) { s.lastFeedback = fb }
   },
   actions: {
-    /** Mount-time hydration: pull bindings, keep only tasks the renderer still knows. */
-    async initFromList ({ commit, rootState }) {
+    /** Pull bindings and keep only tasks the renderer still knows (orphan filtering — main
+     *  never GCs deleted tasks' bindings by contract). Shared by hydration and the
+     *  win-bind-changed refresh; resolves true on success. */
+    async refresh ({ commit, rootState }) {
       const a = winBindApi()
-      if (!a || hydratedOnce) return
+      if (!a) return false
       try {
         const { bindings } = await a.winBindList()
         const known = new Set(((rootState && rootState.todo && rootState.todo.todoList) || []).map(x => x && x.taskId).filter(Boolean))
@@ -86,11 +107,21 @@ export default {
           if (b && b.taskId && known.has(b.taskId) && b.ref) map[b.taskId] = b.ref
         }
         commit('SET_BINDINGS', map)
-        hydratedOnce = true
+        return true
       } catch (e) {
-        // hydration failure is non-fatal and retried on the next row mount (flag stays unset)
         console.error('[winbind] list failed:', e)
+        return false
       }
+    },
+    /** Mount-time hydration: first successful pull settles the session (failed pulls retry on
+     *  the next row mount). Also the single arming point of the win-bind-changed subscription
+     *  (armed regardless of hydration outcome — changeSubscribed is its own session-once guard). */
+    async initFromList ({ dispatch }) {
+      const a = winBindApi()
+      if (!a) return
+      armChangeSubscription(a, dispatch)
+      if (hydratedOnce) return
+      if (await dispatch('refresh')) hydratedOnce = true
     },
     /** The ONLY binding entry: called from TodoItem.onDragEnd when the release was
      *  outside the window. window==null (BUTTON_DOWN/NO_WINDOW/DESKTOP/OWN_WINDOW/

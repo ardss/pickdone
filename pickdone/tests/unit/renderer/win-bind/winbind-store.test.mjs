@@ -43,6 +43,11 @@ function makeCtx ({ todoList = [], state: stOver = {} } = {}) {
     async dispatch () {},
     _commits: commits
   }
+  // route module-local dispatches to the REAL actions (initFromList dispatches 'refresh')
+  ctx.dispatch = async (type, payload) => {
+    const fn = mod.actions[type]
+    return fn ? fn(ctx, payload) : undefined
+  }
   return ctx
 }
 
@@ -227,7 +232,31 @@ test('module shape: namespaced, contract state fields present', () => {
   const s = mod.state()
   assert.deepEqual(Object.keys(s).sort(), ['activating', 'bindings', 'identifying', 'lastFeedback'])
   for (const m of ['SET_BINDINGS', 'SET_BINDING', 'REMOVE_BINDING', 'PATCH_STATUS', 'SET_FEEDBACK']) assert.ok(mod.mutations[m], 'mutation ' + m)
-  for (const a of ['initFromList', 'releaseOutside', 'activate', 'unbind']) assert.ok(mod.actions[a], 'action ' + a)
+  for (const a of ['initFromList', 'refresh', 'releaseOutside', 'activate', 'unbind']) assert.ok(mod.actions[a], 'action ' + a)
+})
+
+/* [QA r1 #4] the win-bind-changed broadcast finally has a renderer consumer: initFromList arms
+ * a session-once onWinBindChanged subscription (arming does NOT depend on hydration state — the
+ * hydration test above may already have settled hydratedOnce); a main-side bind/unbind broadcast
+ * (any window, including echoes) re-pulls the list through 'refresh' with the same orphan filter. */
+test('initFromList arms onWinBindChanged: main-side broadcast refreshes bindings (orphan-filtered)', async () => {
+  let cb = null
+  stubApi({ list: async () => ({ bindings: [{ taskId: 'a', ref: REF }] }) })
+  globalThis.window.todoAPI.onWinBindChanged = fn => { cb = fn; return () => {} }
+  const ctx = makeCtx({ todoList: [{ taskId: 'a' }, { taskId: 'b' }] })
+  await mod.actions.initFromList(ctx)
+  assert.equal(typeof cb, 'function', 'subscription armed even when hydration already settled')
+  await mod.actions.refresh(ctx) // seed the initial binding state through the shared action
+  assert.deepEqual(Object.keys(ctx.state.bindings), ['a'])
+  // simulate the broadcast after a main-side change: one new binding + one orphan of a deleted task
+  globalThis.window.todoAPI.winBindList = async () => ({ bindings: [{ taskId: 'a', ref: REF }, { taskId: 'b', ref: REF }, { taskId: 'gone', ref: { x: 1 } }] })
+  await cb()
+  assert.deepEqual(Object.keys(ctx.state.bindings).sort(), ['a', 'b'], 'broadcast re-pulled with orphan filter')
+  // a second initFromList (next row mount) must not re-arm (session-once)
+  let cb2 = null
+  globalThis.window.todoAPI.onWinBindChanged = fn => { cb2 = fn; return () => {} }
+  await mod.actions.initFromList(makeCtx({ todoList: [{ taskId: 'a' }] }))
+  assert.equal(cb2, null, 'subscription armed exactly once per session')
 })
 
 test('store/index.js registers the winbind module', async () => {
