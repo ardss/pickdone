@@ -73,7 +73,10 @@ function stagedFiles () {
   try {
     // W17 fix(2026-10-28): ACMR — `git mv 源文件 + 文档` 的 staged 集在 ACM 下只剩文档条目,
     // 被误判 docs-only → 单测整级 skip。R(改名)与 W16 其余门对齐。
-    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
+    // W18 fix(2026-10-28): quotePath=false — git 默认把非 ASCII 路径引成八进制转义,
+    // `docs/界面指南.md` 变成 `"\347\225\214..."`,DOCS_ONLY 白名单匹配不上 → 文档提交被误判
+    // code/unmapped → 整级 full。与 W16 其余门禁同一 pin(`-c` 每次调用生效,不会传播,故此处也要)。
+    const out = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
       cwd: ROOT, encoding: 'utf8',
     })
     return out.split(/\r?\n/).filter(Boolean).map(f => f.split(path.sep).join('/'))

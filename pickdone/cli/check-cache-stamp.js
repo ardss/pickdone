@@ -26,7 +26,11 @@ const path = require('path')
 const ROOT = path.join(__dirname, '..')
 const WATCHED = ['assets/css', 'assets/vendor-lib']
 const ASSET_EXT = /\.(css|js|mjs|woff2?|ttf|svg|png|ico)$/i
-const git = (args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim()
+// W18 fix(2026-10-28): pin core.quotePath=false on EVERY call through this helper. git 默认把
+// 非 ASCII 路径引成八进制转义(`assets/css/"\347\225\214..."`),ls-files 的输出过不了 ASSET_EXT
+// /tsOf 的路径匹配 → 非 ASCII 资源文件从 stale 检查面静默消失,tsOf 恒 0,永不判 stale(假绿)。
+// `-c` 是每次调用生效,不会传播进子进程,故统一在 helper 处 pin(与 W16 其余门禁同一手法)。
+const git = (args) => execFileSync('git', ['-c', 'core.quotePath=false', ...args], { cwd: ROOT, encoding: 'utf8' }).trim()
 
 const dirty = git(['status', '--porcelain', '--', ...WATCHED]).split('\n').filter(Boolean)
 if (dirty.length) {

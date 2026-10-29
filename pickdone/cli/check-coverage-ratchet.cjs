@@ -260,6 +260,15 @@ if (force) {
   process.exit(0)
 }
 if (!hasBaseline) {
+  // W18 fix (2026-10-28): 首次校准分支此前无条件 writeBaseline(measured) 再事后警告口径不符 —
+  // 错误口径的全量/legacy 读数被固化进基线,后续 unit 口径实测永远"低于基线"假红,只能人工删基线。
+  // 与 W17 槽守卫同一教义:明确口径的基线只接受校准 suite 的读数 — summary 存在但 suite 非
+  // unit(tier 情形已在上面的槽守卫先行报红,此处兜 unknown/legacy 与其它命名 suite)→ 拒绝落
+  // 基线并报红,操作者重跑本门禁(自身 runCoverage 即 --suite=unit)后自然落正确基线。
+  if (measuredFromSummary && !suiteMatchesCalibration(measuredFromSummary)) {
+    console.error(`✗ [check-coverage-ratchet] first calibration refused: coverage-summary.json suite="${summarySuite(measuredFromSummary) || 'unknown/legacy'}" is not "${CALIBRATION_SUITE}" — a first baseline must only be calibrated from ${CALIBRATION_SUITE}-suite evidence (coverage differs per suite; writing a mismatched reading would permanently mis-set the floor). Re-run this gate standalone so its own run (--suite=${CALIBRATION_SUITE}) produces the summary.`)
+    process.exit(1)
+  }
   // First full-green run on this platform@node combo: calibrate, don't compare — comparing
   // against another instrument's numbers is exactly the 2026-09-29 86-vs-73 failure mode.
   writeBaseline(measured)

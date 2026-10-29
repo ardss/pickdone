@@ -27,7 +27,11 @@ const VISIBLE_RE = /\$?(message|msgbox|confirm|alert|success|error|warning|info)
 // reads WHOLE dirty files, not hunks). browser-dev/todo-browser-shim.js is the 5175 DEBUG
 // host: its Chinese strings are developer throw messages, never shipped UI copy.
 const IGNORE_FILES = new RegExp([
-  'i18n[/\\\\]|check-i18n|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
+  // 2026-10-28 W18: the i18n exemption was an UNANCHORED substring (`i18n[/\\]`) — any path
+  // CONTAINING it was skipped, so a legit `renderer/js/vue-i18n-ext/` or `my-i18n/` subtree
+  // silently left the scan surface (same rot the walk-side filter at line ~75 had already
+  // fixed). Anchor to a whole path segment: `(^|[/\\])i18n[/\\]`.
+  '(^|[/\\\\])i18n[/\\\\]|check-i18n|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
   'src[/\\\\]main[/\\\\]db\\.js$',
   'src[/\\\\]main[/\\\\]scheduler\\.js$',
   'browser-dev[/\\\\]todo-browser-shim\\.js$',
@@ -121,7 +125,11 @@ if (process.argv.includes('--all')) {
       const f = l.slice(3).trim().replace(/\\/g, '/')
       // Deletions (status X/Y = D) are legitimately unscannable — --diff-filter=d already
       // dropped them above; counting them here would false-red a deletion-only worktree.
-      return SCAN_EXT(f) && !f.endsWith('/') && !l.slice(0, 2).includes('D')
+      // 2026-10-28 W18: also drop `../` (out-of-repo) paths, same as the scan filter above —
+      // `git status --porcelain` prints REPO-ROOT-relative paths, so a dirty js file outside
+      // pickdone/ shows up as `../foo.js`; counting it here made the dirtyJs self-check fire
+      // whenever any sibling-repo js file was dirty → whole-gate fake red.
+      return SCAN_EXT(f) && !f.startsWith('../') && !f.endsWith('/') && !l.slice(0, 2).includes('D')
     })
     if (dirtyJs.length) {
       console.error('✗ 增量扫描面塌缩：工作树有 ' + dirtyJs.length + ' 个 js/vue 脏文件却一个都没进扫描（路径归一化失效），拒绝假绿')
