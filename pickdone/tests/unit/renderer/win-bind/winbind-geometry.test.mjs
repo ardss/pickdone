@@ -13,7 +13,7 @@ import '../../../setup.mjs'
 import { test } from '../../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 
-const { isReleaseOutsideViewport, isCompletedDragRelease } = await import('../../../../renderer/js/utils/winbindGeometry.js')
+const { isReleaseOutsideViewport, isCompletedDragRelease, isRejectedDropRelease } = await import('../../../../renderer/js/utils/winbindGeometry.js')
 
 const WIN = { screenX: 100, screenY: 200, outerWidth: 800, outerHeight: 600 } // spans x[100,900] y[200,800]
 
@@ -56,10 +56,9 @@ test('non-finite or missing coordinates never claim outside (fail-closed: no acc
   assert.equal(isReleaseOutsideViewport({ screenX: Infinity, screenY: 500 }, WIN), false)
 })
 
-/* [QA r1 #3] completed-vs-cancelled gate: dragend.dropEffect discriminates a real outside
- * release ('move', the source's effectAllowed set in TodoItem.onDragStart) from an Esc-cancel
- * ('none' — HTML dnd spec forces none on a cancelled drag; measured live on Electron 39). */
-test('isCompletedDragRelease: move = completed release, none = Esc-cancel (fail-closed)', () => {
+/* [QA r1 #3] accepted-release gate: dragend.dropEffect 'move' = the OLE target under the cursor
+ * accepted the text/move offer → dispatch immediately. */
+test('isCompletedDragRelease: move = accepted release, none = not accepted (fail-closed)', () => {
   assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'move' } }), true, 'outside release reports move')
   assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'none' } }), false, 'Esc-cancel reports none')
   // fail-closed: missing/odd shapes never claim completion
@@ -69,4 +68,30 @@ test('isCompletedDragRelease: move = completed release, none = Esc-cancel (fail-
   assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: undefined } }), false)
   assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'copy' } }), false, 'foreign-accepted copy also fails closed')
   assert.equal(isCompletedDragRelease({ dataTransfer: { dropEffect: 'link' } }), false)
+})
+
+/* [QA r1-P1] rejected-release gate: dropEffect 'none' is NOT only the Esc cancel — it is
+ * negotiated with the release-point OLE target, so a REAL release onto a target that refuses
+ * text/move (measured live: mspaint) reports 'none' too. The predicate flags the case; the
+ * cancelled-vs-completed split is TodoItem's Escape-key evidence + the store's re-check window
+ * (this event object alone cannot decide it — that is the whole point of the fix). */
+test('isRejectedDropRelease: none = the ambiguous case (rejected release OR Esc-cancel), anything else false', () => {
+  assert.equal(isRejectedDropRelease({ dataTransfer: { dropEffect: 'none' } }), true, 'mspaint-style rejected release / Esc cancel')
+  assert.equal(isRejectedDropRelease({ dataTransfer: { dropEffect: 'move' } }), false, 'accepted release is NOT rejected')
+  // fail-closed on odd shapes: never flag what is not a clear 'none'
+  assert.equal(isRejectedDropRelease({}), false)
+  assert.equal(isRejectedDropRelease(null), false)
+  assert.equal(isRejectedDropRelease({ dataTransfer: null }), false)
+  assert.equal(isRejectedDropRelease({ dataTransfer: { dropEffect: undefined } }), false)
+  assert.equal(isRejectedDropRelease({ dataTransfer: { dropEffect: 'copy' } }), false)
+  assert.equal(isRejectedDropRelease({ dataTransfer: { dropEffect: 'link' } }), false)
+})
+
+/* The two predicates partition the dropEffect space: exactly one of them fires for any well-formed
+ * dragend, none for a malformed one. */
+test('isCompletedDragRelease and isRejectedDropRelease are mutually exclusive', () => {
+  for (const eff of ['move', 'none', 'copy', 'link', undefined]) {
+    const e = { dataTransfer: { dropEffect: eff } }
+    assert.ok(!(isCompletedDragRelease(e) && isRejectedDropRelease(e)), 'both fired for dropEffect=' + eff)
+  }
 })

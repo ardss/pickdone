@@ -124,15 +124,33 @@ export default {
       if (await dispatch('refresh')) hydratedOnce = true
     },
     /** The ONLY binding entry: called from TodoItem.onDragEnd when the release was
-     *  outside the window. window==null (BUTTON_DOWN/NO_WINDOW/DESKTOP/OWN_WINDOW/
-     *  ADAPTER_ERROR/TIMEOUT — Esc-outside, desktop, taskbar drops) is a silent cancel. */
-    async releaseOutside ({ state, commit }, taskId) {
+     *  outside the window. Payload { taskId, wasCancelled?, cancelRecheckDelayMs? } (object
+     *  shape: Vuex dispatch drops third args, so the probe rides inside the payload).
+     *  window==null (BUTTON_DOWN/NO_WINDOW/DESKTOP/OWN_WINDOW/ADAPTER_ERROR/TIMEOUT —
+     *  Esc-outside, desktop, taskbar drops) is a silent cancel.
+     *
+     *  [QA r1-P1] wasCancelled (optional, fn -> boolean|Promise<boolean>): for a
+     *  dropEffect==='none' outside release the drag may STILL be a completed one — the OLE
+     *  target under the cursor simply refused text/move (mspaint & friends), which is
+     *  indistinguishable from an Esc cancel inside the dragend event itself. TodoItem passes
+     *  an Escape-key probe here; we hold the identify snapshot (taken immediately, cursor
+     *  still at the release point) for a short re-check window before binding. Live probe
+     *  2026-10-29: Esc-cancel delivers Escape keydown to the drag-source DOM ~12ms AFTER
+     *  dragend; the identify roundtrip alone is 50-100ms, so the default 200ms re-check
+     *  (cancelRecheckDelayMs, injectable for tests) covers it with >5x margin. A cancel
+     *  verdict is a SILENT drop of the snapshot — same contract as a null-window reason. */
+    async releaseOutside ({ state, commit }, payload) {
       const a = winBindApi()
+      const taskId = payload && payload.taskId
       if (!a || !taskId) return
       commit('PATCH_STATUS', { key: 'identifying', value: taskId })
       try {
         const r = await a.winBindIdentify()
         if (!r || !r.window) return // silent cancel — every null-window reason is user-intent or nothing-to-bind
+        if (typeof payload.wasCancelled === 'function') {
+          await new Promise(resolve => setTimeout(resolve, Number.isFinite(payload.cancelRecheckDelayMs) ? payload.cancelRecheckDelayMs : 200))
+          if (await payload.wasCancelled()) return // Esc-cancelled after all — drop the snapshot, stay silent
+        }
         const b = await a.winBindBind(taskId, r.window)
         if (b && b.ok) {
           commit('SET_BINDING', { taskId, ref: r.window })

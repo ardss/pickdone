@@ -105,7 +105,7 @@ test('releaseOutside: identify -> window -> bind ok = SET_BINDING + bound feedba
     bind: async (taskId, ref) => ({ ok: true, binding: { taskId, ref } })
   })
   const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
-  await mod.actions.releaseOutside(ctx, 'a')
+  await mod.actions.releaseOutside(ctx, { taskId: 'a' })
   assert.deepEqual(ipc.map(c => c[0]), ['identify', 'bind'], 'identify then bind, zero extra IPC')
   assert.equal(ipc[1][1], 'a'); assert.equal(ipc[1][2], REF, 'ref passed through verbatim (identify returnee)')
   assert.equal(ctx.state.bindings.a, REF)
@@ -120,7 +120,7 @@ test('releaseOutside: bind !ok = bind-failed feedback with reason (never silent)
     bind: async () => ({ ok: false, reason: 'STALE_REF' })
   })
   const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
-  await mod.actions.releaseOutside(ctx, 'a')
+  await mod.actions.releaseOutside(ctx, { taskId: 'a' })
   assert.equal(ctx.state.bindings.a, undefined, 'no binding written on failure')
   assert.deepEqual(ctx.state.lastFeedback, { taskId: 'a', kind: 'bind-failed', reason: 'STALE_REF' })
   assert.equal(toasts[0][0], 'error')
@@ -130,7 +130,7 @@ test('releaseOutside: window=null across ALL cancel reasons = silent, bind never
   for (const reason of ['BUTTON_DOWN', 'NO_WINDOW', 'DESKTOP', 'OWN_WINDOW', 'ADAPTER_ERROR', 'TIMEOUT']) {
     stubApi({ identify: async () => ({ window: null, reason }) })
     const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
-    await mod.actions.releaseOutside(ctx, 'a')
+    await mod.actions.releaseOutside(ctx, { taskId: 'a' })
     assert.deepEqual(ipc.map(c => c[0]), ['identify'], reason + ': identify only, no bind')
     assert.equal(ctx.state.lastFeedback, null, reason + ': no feedback (silent cancel)')
     assert.equal(toasts.length, 0, reason + ': no toast')
@@ -141,7 +141,7 @@ test('releaseOutside: window=null across ALL cancel reasons = silent, bind never
 test('releaseOutside: identify rejection surfaces as bind-failed (F8 doctrine: no silent swallow)', async () => {
   stubApi({ identify: async () => { throw new Error('ipc broken') } })
   const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
-  await mod.actions.releaseOutside(ctx, 'a')
+  await mod.actions.releaseOutside(ctx, { taskId: 'a' })
   assert.equal(ctx.state.lastFeedback.kind, 'bind-failed')
   assert.equal(toasts[0][0], 'error')
   assert.equal(ctx.state.identifying, null)
@@ -150,9 +150,61 @@ test('releaseOutside: identify rejection surfaces as bind-failed (F8 doctrine: n
 test('releaseOutside: missing API = feature off, zero IPC, zero feedback', async () => {
   dropApi()
   const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
-  await mod.actions.releaseOutside(ctx, 'a')
+  await mod.actions.releaseOutside(ctx, { taskId: 'a' })
   assert.equal(ctx.state.lastFeedback, null)
   assert.equal(ctx.state.identifying, null)
+})
+
+/* [QA r1-P1] dropEffect==='none' outside release: a real release onto an OLE target that refuses
+ * text/move (mspaint) reports 'none' just like an Esc cancel — the event alone cannot split them.
+ * TodoItem dispatches with opts.wasCancelled (Escape-key evidence); the store snapshots identify
+ * immediately, then holds the snapshot for a re-check window (cancelRecheckDelayMs injectable
+ * for tests; production default 200ms, live probe: Escape keydown lands ~12ms after dragend). */
+test('releaseOutside: wasCancelled=true drops the identify snapshot silently (Esc-cancel after all)', async () => {
+  stubApi({
+    identify: async () => ({ window: REF, reason: null }),
+    bind: async () => ({ ok: true, binding: { taskId: 'a', ref: REF } })
+  })
+  const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
+  await mod.actions.releaseOutside(ctx, { taskId: 'a', wasCancelled: () => true, cancelRecheckDelayMs: 0 })
+  assert.deepEqual(ipc.map(c => c[0]), ['identify'], 'identify only — the snapshot is never bound')
+  assert.equal(ctx.state.bindings.a, undefined, 'no binding written')
+  assert.equal(ctx.state.lastFeedback, null, 'silent cancel — same contract as a null-window reason')
+  assert.equal(toasts.length, 0)
+  assert.equal(ctx.state.identifying, null, 'identifying flag cleared even on the cancel path')
+})
+
+test('releaseOutside: wasCancelled=false (async probe ok) proceeds to bind the snapshot', async () => {
+  stubApi({
+    identify: async () => ({ window: REF, reason: null }),
+    bind: async (taskId, ref) => ({ ok: true, binding: { taskId, ref } })
+  })
+  const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
+  await mod.actions.releaseOutside(ctx, { taskId: 'a', wasCancelled: async () => false, cancelRecheckDelayMs: 0 })
+  assert.deepEqual(ipc.map(c => c[0]), ['identify', 'bind'], 'no Esc evidence → the rejected release still binds')
+  assert.equal(ctx.state.bindings.a, REF)
+  assert.deepEqual(ctx.state.lastFeedback, { taskId: 'a', kind: 'bound' })
+  assert.equal(toasts[0][0], 'success')
+})
+
+test('releaseOutside: null-window cancel reasons still short-circuit BEFORE the re-check window', async () => {
+  stubApi({ identify: async () => ({ window: null, reason: 'BUTTON_DOWN' }) })
+  let asked = false
+  const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
+  await mod.actions.releaseOutside(ctx, { taskId: 'a', wasCancelled: () => { asked = true; return false }, cancelRecheckDelayMs: 0 })
+  assert.equal(asked, false, 'BUTTON_DOWN (main process saw the button still held) already cancelled — probe never consulted')
+  assert.deepEqual(ipc.map(c => c[0]), ['identify'])
+})
+
+test('releaseOutside: without opts the accepted-release path is byte-identical (no timer, no probe)', async () => {
+  stubApi({
+    identify: async () => ({ window: REF, reason: null }),
+    bind: async () => ({ ok: true, binding: { taskId: 'a', ref: REF } }) })
+  const ctx = makeCtx({ todoList: [{ taskId: 'a' }] })
+  const t0 = Date.now()
+  await mod.actions.releaseOutside(ctx, { taskId: 'a' })
+  assert.ok(Date.now() - t0 < 150, 'no 200ms hold on the accepted (dropEffect=move) path')
+  assert.deepEqual(ipc.map(c => c[0]), ['identify', 'bind'])
 })
 
 test('activate: ok = activated feedback + success toast', async () => {
@@ -291,9 +343,17 @@ test('contract lock: store win-bind key usage matches the preload exposed surfac
 test('TodoItem.onDragEnd dispatches winbind/releaseOutside only through the geometry gate', async () => {
   const fs = await import('node:fs')
   const src = fs.readFileSync(new URL('../../../../renderer/js/components/TodoItem.vue', import.meta.url), 'utf8')
-  assert.match(src, /import \{ isReleaseOutsideViewport, isCompletedDragRelease \} from '\.\.\/utils\/winbindGeometry\.js'/, 'gates imported')
-  // [QA r1 #3] BOTH gates on the dispatch line: outside geometry AND completed (not Esc-cancelled) drag
-  assert.match(src, /isReleaseOutsideViewport\(e,\s*window\)\s*&&\s*isCompletedDragRelease\(e\)[^\n]*winbind\/releaseOutside/, 'gated dispatch on the same line')
+  assert.match(src, /import \{ isReleaseOutsideViewport, isCompletedDragRelease, isRejectedDropRelease \} from '\.\.\/utils\/winbindGeometry\.js'/, 'gates imported')
+  // [QA r1 #3] accepted gate (dropEffect=move) on the dispatch line — unchanged fast path
+  assert.match(src, /isReleaseOutsideViewport\(e,\s*window\)\s*&&\s*isCompletedDragRelease\(e\)[^\n]*winbind\/releaseOutside[^\n]*taskId:/, 'accepted-release dispatch, OBJECT payload (Vuex drops third args)')
+  // [QA r1-P1] rejected gate (dropEffect=none, mspaint-class targets): same dispatch target but
+  // with the Escape-key cancel probe — this is the branch that used to be a silent dead end
+  assert.match(src, /isRejectedDropRelease\(e\)[^\n]*winbind\/releaseOutside[^\n]*taskId:[^\n]*wasCancelled/, 'rejected-release dispatch carries the Esc-cancel probe inside the object payload')
+  assert.match(src, /wasCancelled:\s*\(\)\s*=>\s*lastEscKeyAt\s*>=\s*dragStartedAt/, 'probe = Escape seen since this drag started (baseline at dragstart)')
+  // the Escape evidence tracker itself: capture-phase key listeners + dragstart baseline
+  assert.match(src, /document\.addEventListener\('keydown',\s*escKeyTracker,\s*true\)/, 'keydown tracker armed (capture)')
+  assert.match(src, /document\.addEventListener\('keyup',\s*escKeyTracker,\s*true\)/, 'keyup tracker armed (capture)')
+  assert.match(src, /dragStartedAt = performance\.now\(\)/, 'dragstart baseline recorded')
   // scope freeze: the reorder path must stay untouched
   assert.match(src, /async onDrop \(e\)/, 'onDrop still present')
   assert.match(src, /_writeSort \(list\)/, '_writeSort still present')

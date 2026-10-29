@@ -128,7 +128,7 @@ import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js
 import { taskContextMenu } from '../utils/taskMenu.js' // [maint-0925 A16] one menu builder for all views
 import { descLineClampStyle } from '../utils/descLines.js' // [B6 fix] consumes settings.todoDescriptionDisplayLineNumber
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
-import { isReleaseOutsideViewport, isCompletedDragRelease } from '../utils/winbindGeometry.js' // [win-bind T8] pure release-point gate + [QA r1 #3] completed-vs-cancelled gate
+import { isReleaseOutsideViewport, isCompletedDragRelease, isRejectedDropRelease } from '../utils/winbindGeometry.js' // [win-bind T8] pure release-point gate + [QA r1 #3] accepted-release gate + [QA r1-P1] rejected-release gate
 import WinBindBadge from './WinBindBadge.vue' // [win-bind T8] bound-window chip in the meta strip
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
@@ -138,6 +138,23 @@ let dragActive = false
 // ignored there) — suppresses the drop-time duplicate of the sortIgnored toast in _writeSort;
 // reset in onDragEnd, which always fires after a drag (drop included)
 let dragSortBlocked = false
+// [QA r1-P1] Escape-key evidence for the dropEffect==='none' outside release. That value is
+// ambiguous BY NATURE: an Esc cancel and a real release onto an OLE target that refuses
+// text/move (mspaint & friends) both report 'none' at dragend — nothing inside the event
+// object separates them (buttons is synthesized 0 in both, measured in QA r1 #3). Live probe
+// 2026-10-29 (isolated instance + real SendInput drags): an Esc cancel delivers the Escape
+// keydown/keyup to the drag-source DOM ~12ms AFTER dragend (Chromium re-routes the OLE
+// drag-loop keys once the modal loop exits), while a rejected real release delivers no key
+// events at all. Capture-phase document tracker, armed once per renderer session; a key seen
+// BEFORE this drag's dragstart (last row's cancel, a closed dialog) must not poison this drag,
+// hence the dragStartedAt baseline recorded in onDragStart.
+let lastEscKeyAt = -Infinity
+let dragStartedAt = 0
+function escKeyTracker (e) { if (e && e.key === 'Escape') lastEscKeyAt = performance.now() }
+try {
+  document.addEventListener('keydown', escKeyTracker, true)
+  document.addEventListener('keyup', escKeyTracker, true)
+} catch (err) { /* non-DOM host (source-anchor tests never execute this module) — tracker stays inert */ }
 
 // [maint-0924 A1] Cross-day move patch builder moved to utils/crossDayMove.js (single source now
 // shared with DayDeck.onDrop and TodoBoxView.batchToday — same time-of-day preservation rules,
@@ -262,6 +279,7 @@ export default {
       e.dataTransfer.setData('text/plain', this.todo.taskId)
       this.dragging = true
       dragActive = true
+      dragStartedAt = performance.now() // [QA r1-P1] baseline: an Escape seen before this drag is not this drag's cancel
     },
     onDragOver (e) {
       if (!dragActive) return
@@ -282,10 +300,20 @@ export default {
       // Release OUTSIDE the window bounds = bind intent; inside (or Esc-drag-back) keeps the
       // original behavior untouched. The gate is a pure predicate; cancel semantics (button still
       // down / desktop / own window) are resolved by the main process and cancel silently.
-      // [QA r1 #3] isCompletedDragRelease (dragend.dropEffect === 'move') kills the Esc path
-      // BEFORE any IPC: an Esc-cancelled drag reports 'none' (measured live), so identify is
-      // never dispatched and the fast-Esc-release button race in the main process cannot mis-bind.
-      if (e && isReleaseOutsideViewport(e, window) && isCompletedDragRelease(e)) this.$store.dispatch('winbind/releaseOutside', this.todo.taskId)
+      // [QA r1 #3] isCompletedDragRelease (dropEffect === 'move') is the ACCEPTED-release fast
+      // path: an Esc-cancelled drag reports 'none', and the identify would race a fast
+      // Esc→release — so the accepted case is dispatched with zero extra ceremony.
+      // [QA r1-P1] the 'none' case is NO LONGER a hard no-op: dropEffect is negotiated with the
+      // OLE drop target under the cursor, so a REAL release onto a target that refuses text/move
+      // (mspaint & friends — the whole class of non-text drop targets) also reports 'none',
+      // which used to make the bind silently dead there. The dispatch still leaves immediately
+      // (identify snapshots the cursor while it is still at the release point, and the main
+      // process's buttonDown probe still catches a cancel while the button is held); the store
+      // then holds that snapshot for a short re-check window during which the Esc evidence
+      // recorded by the module-level tracker above decides cancelled-vs-completed (Escape keydown
+      // arrives ~12ms after dragend on a cancel; never on a rejected release).
+      if (e && isReleaseOutsideViewport(e, window) && isCompletedDragRelease(e)) this.$store.dispatch('winbind/releaseOutside', { taskId: this.todo.taskId })
+      else if (e && isReleaseOutsideViewport(e, window) && isRejectedDropRelease(e)) this.$store.dispatch('winbind/releaseOutside', { taskId: this.todo.taskId, wasCancelled: () => lastEscKeyAt >= dragStartedAt })
     },
     async onDrop (e) {
       e.preventDefault()
