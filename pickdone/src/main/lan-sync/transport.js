@@ -393,12 +393,10 @@ function wireConnection(socket, { deviceId, pairingSecret, secretFor, getHandler
           }
           confirmTimer = setTimeout(() => finish(false), pairConfirmTimeoutMs || PAIR_CONFIRM_TIMEOUT_MS)
           confirmTimer.unref?.()
-          // Round-5 P2: if the respondent's socket dies mid-confirm-window (peer walked away,
-          // network drop), the 60s confirmTimer used to stay armed — firing finish(false) against
-          // a dead socket and holding the closure (and the pending-pair UI reference) alive for
-          // nothing. Clear it on early close; a settled flow is unaffected (timer already fired
-          // or finish already cleared it).
-          socket.once('close', () => { if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null } })
+          // Round-5 P2: clear the confirmTimer if the respondent's socket dies mid-confirm-window
+          // (peer walked away) — a settled flow is unaffected. W20 (P3, 2026-10-30): timer-clear
+          // alone left finish() un-run (pendingPair hung); finish(false) is dead-socket safe.
+          socket.once('close', () => { if (confirmTimer) { clearTimeout(confirmTimer); confirmTimer = null } finish(false) })
           if (!onPairRequest) { finish(false); return }
           onPairRequest({
             deviceId: typeof msg.deviceId === 'string' ? msg.deviceId : '',
