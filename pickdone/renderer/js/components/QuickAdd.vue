@@ -191,7 +191,12 @@ export default {
       // [F4] snapshot the effective date BEFORE the loop (same pattern as the tag/catId
       // snapshots above): re-reading the live computed per line meant a mid-loop change (or
       // the cleared chip below) could land later lines on a different day than the toast claims.
-      const effDate = this.effDate
+      // [w21] snapshot the MANUAL chip only, not effDate: effDate folds in the draft's NL-parsed
+      // date (parsed.date), and the contract above says NL parsing applies to the whole draft,
+      // never to pasted lines — leaking it here stamped every pasted line with the draft's
+      // parsed date. pickedDate covers all three states the paste path needs (null = default,
+      // 0 = explicitly undated, ts = chip day).
+      const effDate = this.pickedDate
       let done = 0 // lines already dispatched successfully (read by the catch below)
       try {
         for (const raw of lines) {

@@ -138,14 +138,17 @@ test('F4-9 completeAction undo has a re-entry guard (behavior)', async () => {
   if (hadDoc) globalThis.document = prevDoc; else delete globalThis.document
 })
 
-test('F4-10 QuickAdd createLines snapshots effDate before the loop', () => {
+test('F4-10 QuickAdd createLines snapshots the date before the loop', () => {
   const start = QUICKADD.indexOf('async createLines')
   const fn = QUICKADD.slice(start, QUICKADD.indexOf('} catch (err) {', start))
-  assert.match(fn, /const effDate = this\.effDate/, 'pre-loop snapshot exists')
-  const afterSnap = fn.slice(fn.indexOf('const effDate = this.effDate') + 'const effDate = this.effDate'.length)
+  // [w21] the snapshot is the MANUAL chip (pickedDate), not effDate: effDate folds in the
+  // draft's NL-parsed date, and pasted lines never inherit NL parsing (createLines contract)
+  assert.match(fn, /const effDate = this\.pickedDate/, 'pre-loop snapshot exists (manual chip only)')
+  const afterSnap = fn.slice(fn.indexOf('const effDate = this.pickedDate') + 'const effDate = this.pickedDate'.length)
   assert.match(fn, /pickedDate: effDate/, 'payload uses the snapshot')
   assert.match(fn, /let d = effDate/, 'toast reports the same snapshot')
   assert.ok(!/this\.effDate/.test(afterSnap), 'no live re-reads after the snapshot')
+  assert.ok(!/this\.effDate/.test(fn), 'pasted lines never touch effDate (no NL-date leak)')
 })
 
 test('F4-11a DayRail wraps the data() LS read in try', () => {

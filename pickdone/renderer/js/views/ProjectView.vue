@@ -147,11 +147,11 @@
  * The header answers four questions: when it started (earliest task creation time) / how it progresses (progress bar) / how much was invested (focus minutes = sum of estimate) / when it was last advanced.
  * Task list reuses the category list view's grouping semantics (past completed/expired uncompleted/today/tomorrow/day after tomorrow/later/no date) + a fully collapsed final "completed" group.
  */
-import {dayjs, DAY_MS, rescheduleExpired, FMT } from '../utils/core.js'
+import {dayjs, DAY_MS, rescheduleExpired, FMT, rangeDays } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { crossDayRevertPatch } from '../utils/crossDayMove.js' // [reschedule-undo-reminder fix]
-import { buildExpiryGroups } from '../utils/expiryGroups.js'
+import { buildExpiryGroups, staleDoneExclusive } from '../utils/expiryGroups.js'
 import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf, newMilestoneId } from '../utils/milestones.js'
 import { COLOR_PALETTE } from '../store/category.js'
 import { PROJECT_STATUSES, statusI18nKey } from '../utils/projectStatus.js'
@@ -360,8 +360,10 @@ export default {
           noDate: 'statsB.ProjectView.noDate'
         },
         // [D13 A2] today's completions moved into the shared catTodayDone bucket (exactly-one-group
-        // invariant) — projDone keeps covering only completions OUTSIDE the today bucket
-        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== this.todayTs, props: { showDate: true } }]
+        // invariant) — projDone keeps covering only completions OUTSIDE the today bucket.
+        // [w21] exclusive predicate (see CategoryView): also excludes catExpDone / catTomorrow /
+        // catDat members so no completed row double-renders.
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => staleDoneExclusive(t, this.todayTs, rangeDays(this.settings.expiredCompletedTodoRange, 7)), props: { showDate: true } }]
       })
     }
   },

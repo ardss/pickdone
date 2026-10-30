@@ -195,8 +195,14 @@ export default {
       const sel = this.$store.state.ui.daySelectedTs
       const target = sel ? dayStart(+sel) : this.today0
       if (nDays[this.front] === target) return // already fronting the selection/today
+      // [w21] `front` is an INDEX, so value-equality across windows is meaningless: after a
+      // midnight shrink the previously fronted calendar day sits at a different index, and the
+      // old `nDays[idx] !== oDays[this.front]` guard treated that same day as "already fronted"
+      // — front kept pointing at a different day than the store selection (highlight decoupled).
+      // The line above already guarantees the currently fronted day is NOT the selection, so any
+      // index drift means re-anchor; the shifted-window-stays case is exactly the early return.
       const idx = anchorFrontIndex(nDays, this.today0, sel || 0)
-      if (idx !== this.front && nDays[idx] !== (oDays ? oDays[this.front] : undefined)) {
+      if (idx !== this.front) {
         this._selSync = true
         this.front = idx
       }

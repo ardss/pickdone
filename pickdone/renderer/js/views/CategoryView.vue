@@ -26,7 +26,8 @@
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { crossDayRevertPatch } from '../utils/crossDayMove.js' // [reschedule-undo-reminder fix]
 import { rescheduleExpired } from '../utils/core.js'
-import { buildExpiryGroups } from '../utils/expiryGroups.js'
+import { buildExpiryGroups, staleDoneExclusive } from '../utils/expiryGroups.js'
+import { rangeDays } from '../utils/core.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
 import EmptyState from '../components/EmptyState.vue'
 
@@ -70,7 +71,9 @@ export default {
         // R1 window (or today's completion when the builder predates the shared catTodayDone
         // bucket) must never be dropped — the "no completed task vanishes" invariant now holds
         // for category pages too.
-        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== this.todayTs, props: { showDate: true } }]
+        // [w21] exclusive predicate: exclude today / past-within-R1 (catExpDone) / day+1 / day+2
+        // (catTomorrow/catDat) so a completed row renders in exactly ONE group, never twice.
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => staleDoneExclusive(t, this.todayTs, rangeDays(this.settings.expiredCompletedTodoRange, 7)), props: { showDate: true } }]
       })
     }
   },
