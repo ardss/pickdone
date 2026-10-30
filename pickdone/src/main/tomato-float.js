@@ -80,8 +80,18 @@ function noteRenderHandshake (now = Date.now()) {
   lastHandshakeAt = now
   crashRebuild.reset() // proof of health = card DOM alive, not ready-to-show (W16)
 }
-/** Pure decision (exported via __renderHealth for unit tests): did a handshake arrive since armedAt? */
-function handshakeHealthySince (armedAt) { return lastHandshakeAt >= armedAt }
+/** Pure decision (exported via __renderHealth for unit tests): is the last handshake RECENT?
+ * W20 fix (2026-10-30): the previous "handshake arrived since armedAt" semantics deadlocked on the
+ * real boot sequence — vue-router's post-mount same-document navigations fire a SECOND did-finish-load
+ * ~50ms AFTER the one-shot handshake (the channel repositions the window, so it must stay one-shot),
+ * which re-arms armedAt ABOVE lastHandshakeAt; every 10s check then fails → destroy+rebuild loop at
+ * ~11s cadence, self-sustaining because each cycle's own handshake calls crashRebuild.reset(). The
+ * health fact the handshake proves ("card DOM mounted, page JS running") does not expire because a
+ * later arm happened, so health is now RECENCY-based: any handshake within 2× the timeout window.
+ * A genuinely dead window never handshakes → its age grows unbounded → still caught. */
+function handshakeHealthySince (_armedAt, now = Date.now()) {
+  return now - lastHandshakeAt < HANDSHAKE_TIMEOUT_MS * 2
+}
 
 /* ---- W16: bounded recovery exhaustion report (one structured message per session per cause) ----
  * Emitted over the EXISTING 'syncEvent' Device-Center channel to the MAIN window (window-ref — no

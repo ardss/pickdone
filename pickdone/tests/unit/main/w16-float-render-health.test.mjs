@@ -78,11 +78,23 @@ test('W16 P0-2: handshake seam — fresh handshake counts as health, stale/missi
   const h = tomatoFloat.__renderHealth
   assert.ok(h && typeof h.note === 'function', '__renderHealth seam exported')
   assert.equal(h.timeoutMs > 0, true, 'a positive handshake timeout constant exists')
-  const armedAt = 50_000
-  assert.equal(h.healthySince(armedAt), false, 'no handshake yet → not healthy (the blank-window case)')
-  h.note(armedAt + 10)
-  assert.equal(h.healthySince(armedAt), true, 'handshake after arm → healthy')
-  assert.equal(h.healthySince(armedAt + 100), false, 'handshake BEFORE this arm → stale, not healthy')
+  const T = 1_000_000
+  h.note(T)
+  // [w20] health is RECENCY-based: the vue-router post-mount same-document navigation fires a second
+  // did-finish-load ~50ms AFTER the one-shot handshake, so armedAt can legitimately sit above
+  // lastHandshakeAt — that ordering must NOT read as unhealthy (it deadlocked the rebuild loop).
+  assert.equal(h.healthySince(T, T + 10_000), true, 'handshake 10s ago (armed right after it) → healthy')
+  assert.equal(h.healthySince(T, T + 21_000), false, 'handshake older than 2× timeout → not healthy (the blank-window case)')
+  h.note(Date.now()) // leave the module in a harmless state
+})
+
+test('W20: the production rebuild-loop shape — arm AFTER the one-shot handshake stays healthy for the full check window', () => {
+  const h = tomatoFloat.__renderHealth
+  const T = 2_000_000
+  h.note(T) // page mounts and sends the one-shot handshake
+  const armedAt = T + 50 // 50ms later a hash-navigation did-finish-load re-arms the watch
+  assert.equal(h.healthySince(armedAt, armedAt + 10_000), true, 'check at arm+10s: handshake 10.05s old → healthy (was the deadlock: every cycle rebuilt)')
+  assert.equal(h.healthySince(armedAt, armedAt + 25_000), false, 'beyond 2× timeout with no fresh handshake → unhealthy')
   h.note(Date.now()) // leave the module in a harmless state
 })
 
