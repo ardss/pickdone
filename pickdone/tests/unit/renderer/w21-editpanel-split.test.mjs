@@ -70,6 +70,17 @@ test('W21 split: host keeps setDate (today/tomorrow/none -> applyDate) and the d
   assert.match(host, /async restoreFromBin \(\) \{/, 'restore contract stays in the host (w20/d17-dom3)')
 })
 
+test('W21 split (B): subtask mechanics + panel setup ride vm-taking modules; anchors stay in host', () => {
+  const host = read(HOST)
+  assert.match(host, /initSubSortable \(\) \{ return subtaskOps\.initSubSortable\(this\) \}/)
+  assert.match(host, /toggleSub \(s\) \{ return subtaskOps\.toggleSub\(this, s\) \}/)
+  assert.match(read('renderer/js/components/editpanel/subtaskOps.js'), /window\.Sortable\.create\(el, \{/, 'sortable setup moved verbatim')
+  assert.match(read('renderer/js/components/editpanel/subtaskOps.js'), /subsCompleteTarget\(vm\.subList, vm\.task\.complete\)/, 'parent-complete linkage moved verbatim')
+  assert.match(read('renderer/js/components/editpanel/panelSetup.js'), /dynamicSpellcheckGuard/)
+  assert.match(read('renderer/js/components/editpanel/panelSetup.js'), /maybeRunTour\('editpanel', 600\)/, 'spotlight tour moved verbatim')
+  assert.match(host, /this\._onFocusin = panelSetup\.dynamicSpellcheckGuard\(\)/)
+})
+
 test('W21 split: line-count ratchet (new children strict档, host at its achievable bound)', () => {
   // new files: warn 400 / error 600 per cli/check-file-size.cjs NEW_FILE_LIMITS — keep far below
   for (const f of [BANNER, CHIPS]) {
@@ -77,7 +88,7 @@ test('W21 split: line-count ratchet (new children strict档, host at its achieva
     assert.ok(n <= 400, `${f} at ${n} lines (cap 400)`)
   }
   const host = lineCount(HOST)
-  // Tightened per commit: 799 pre-split → (A) banner+chips extracted → (B) lifecycle+subtask ops
+  // Tightened per commit: 799 pre-split → (A) 769 banner+chips → (B) 740 subtask+setup ops
   // → (C) reminder ops. See the header for why the original 560 target is unreachable.
-  assert.ok(host <= 780, `EditPanel.vue at ${host} lines (achievable ratchet, was 799 pre-split)`)
+  assert.ok(host <= 745, `EditPanel.vue at ${host} lines (achievable ratchet, was 799 pre-split)`)
 })

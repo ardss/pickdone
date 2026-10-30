@@ -152,7 +152,7 @@ import {dayjs, FMT, reportError } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
-import { subsCompleteTarget, isRenderableAttachmentUrl } from '../utils/core.js'
+import { isRenderableAttachmentUrl } from '../utils/core.js' // [W21] subsCompleteTarget rides with editpanel/subtaskOps.toggleSub now
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
@@ -176,6 +176,8 @@ import * as repeat from './edit-panel/repeat.js'
 import { catOutsideClose, FIELD_MAP } from './edit-panel/interactions.js'
 import EpDateChips from './editpanel/EditPanelDateChips.vue' // W21 split: date chips + hidden picker
 import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recycle-bin banner markup
+import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
+import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
 
 
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
@@ -310,8 +312,8 @@ export default {
     // Review P2 (2026-09-22): expose the save queue's flush to the ui store — closeEditCleanup's inline-create orphan cleanup awaits it instead of racing the 350ms debounce with a fixed sleep
     this._flushHook = () => this.flushSave()
     window.__editPanelFlushSave = this._flushHook
-    // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching)
-    this.$nextTick(() => { import('../utils/onboardingTours.js').then(mod => mod.maybeRunTour('editpanel', 600)).catch(() => {}) })
+    // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching) — W21: mechanics in editpanel/panelSetup.js
+    panelSetup.runEditpanelTour()
     this._onKeydown = (e) => {
       if (e.key !== 'Escape') return
       if (this.catOpen) { this.catOpen = false; return }
@@ -336,15 +338,9 @@ export default {
       }
     }
     window.addEventListener('keydown', this._onKeydown)
-    // Disable the browser's native spell check (English correction squiggles interfere with typing over Chinese content)
-    this.$nextTick(() => {
-      this.$el.querySelectorAll('textarea, input').forEach(el => el.setAttribute('spellcheck', 'false'))
-    })
-    // Dynamically created inputs (subtasks etc.) also get spell check disabled; named handler removed in beforeUnmount (listener accumulation when nodes are replaced after hydrate)
-    this._onFocusin = e => {
-      const t = e.target
-      if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t.hasAttribute('spellcheck')) t.setAttribute('spellcheck', 'false')
-    }
+    // W21 split: static + dynamic spellcheck suppression moved to editpanel/panelSetup.js
+    panelSetup.disableSpellcheck(this)
+    this._onFocusin = panelSetup.dynamicSpellcheckGuard()
     this.$el.addEventListener('focusin', this._onFocusin)
     // (W21 split) the hidden date-picker input's tabindex demotion moved with the picker into EditPanelDateChips.mounted
   },
@@ -382,26 +378,8 @@ export default {
     onDeadlineRowKey: roleButtonActivate(function () { this.openDeadlinePick() }),
     onDelTaskKey: roleButtonActivate(function () { this.delTask() }),
     markDirty (k) { if (this._save) this._save.markDirty(k) },
-    /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback). The panel body is under v-if="e", so the nodes do not exist at mounted time -- called after hydrate; old instances become invalid when nodes are replaced, destroy before rebuilding */
-    initSubSortable () {
-      if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed with the node */ } this._sortable = null }
-      this.$nextTick(() => {
-        const el = this.$el && this.$el.querySelector('.ep-subs')
-        if (!el || !window.Sortable) return
-        this._sortable = window.Sortable.create(el, {
-          handle: '.ep-sub-drag',
-          animation: 150,
-          onEnd: (evt) => {
-            const { oldIndex, newIndex } = evt
-            if (oldIndex === newIndex || oldIndex == null || newIndex == null) return
-            const item = this.subList.splice(oldIndex, 1)[0]
-            this.subList.splice(newIndex, 0, item)
-            this.markDirty('subtasks')
-            this.queueSave({})
-          }
-        })
-      })
-    },
+    // W21 split: drag-sort mechanics moved to editpanel/subtaskOps.initSubSortable (verbatim)
+    initSubSortable () { return subtaskOps.initSubSortable(this) },
     hydrate (force) {
       const s = this.$store.state.ui.rightSidebarTodoEdit
       if (!s.visible || !s.taskId) return
@@ -615,14 +593,8 @@ export default {
       this.subList.push({ text, checked: false, _key: ++this._subKeySeq })
       this.markDirty('subtasks'); this.queueSave({})
     },
-    toggleSub (s) {
-      s.checked = !s.checked; this.markDirty('subtasks'); this.queueSave({})
-      // Subtask <-> parent linkage (consistent with the list page's TodoItem behavior)
-      if (this.task) {
-        const target = subsCompleteTarget(this.subList, this.task.complete)
-        if (target !== null) this.toggleComplete()
-      }
-    },
+    // W21 split: toggle + parent-complete linkage moved to editpanel/subtaskOps.toggleSub (verbatim)
+    toggleSub (s) { return subtaskOps.toggleSub(this, s) },
     delSub (i) {
       const sub = this.subList[i]
       removeWithUndo(this,
