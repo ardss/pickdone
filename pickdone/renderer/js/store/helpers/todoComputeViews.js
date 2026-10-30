@@ -119,8 +119,16 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
   // Sort mode: stable-key normalization + comparator extracted to utils/sortMode.js (pure function, unit-testable)
   const applySort = arr => sortByMode(arr, settings.sortMode)
 
-  // Yesterday's unfinished (day-rollover leftovers)
-  const yesterday = live.filter(t => !t.complete && t.dayStart === +dayjs(today).subtract(1, 'day'))
+  // w21 P3: the "yesterday's unfinished" filter used to compare dayStart strictly (===) against
+  // startOf-day-1 while the main loop above buckets with the coarse round((dayStart-today)/DAY_MS).
+  // A clock-drifted dayStart a few hours off midnight rounds to -1 in the loop but fails === here
+  // (or vice versa: rounds to -2 yet equals day-1 exactly at a DST boundary), so the row silently
+  // switched groups or dropped out between surfaces. Use the SAME coarse diff caliber as the loop.
+  const yesterday = live.filter(t => {
+    if (t.complete) return false
+    const dsNum = (typeof t.dayStart === 'number' && Number.isFinite(t.dayStart)) ? t.dayStart : 0
+    return Math.round((dsNum - today) / DAY_MS) === -1
+  })
 
   commit('setViews', {
     recent: {
