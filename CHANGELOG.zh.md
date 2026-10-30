@@ -4,6 +4,9 @@ System.Object[]
 
 ## [Unreleased]
 
+- 运维：三机发版更新脚本（scripts/ops/update-machine.sh + README）——一个分发器覆盖本机/win64/板机，固定备份→确认门→停应用→换装→启动→健康验证流程，失败自动打印回滚指引；破坏性步骤默认需交互确认。发版不再需要逐台手工操作。
+- 重构：src/main/index.js 860→790 行——按内聚拆出 tray-lease.js / broadcast.js / critical-backup-restore.js，显式依赖注入、行为等价（含源码形状锚测试在内单测全绿，启动顺序与 ESM 图门禁通过，dev 启动冒烟干净）。退出确认簇与 quit flush 链因测试钉形与闭包网过深暂不拆，已在代码注释记录。
+
 ## [0.4.0-beta.22] - 2026-10-30
 - 窗口绑定（win-bind）：把任务行拖出 PickDone 窗口、释放在任意外部 Windows 窗口上即完成绑定；任务行出现窗口徽标——点徽标（或任务菜单项）一键唤回绑定窗口（还原+置前），原地可解绑，绑定关系应用重启后保留。窗口身份绝不信任过期 HWND：重定位沿「带 pid 守卫的 HWND 快路径 → 进程 → 精确标题」梯级攀升，同名歧义时拒绝猜测（返回 AMBIGUOUS 附候选清单，绝不激活错窗口）；共用 applicationframehost 宿主 pid 的 UWP 窗口仅按标题匹配；对拒绝 text/move 拖放的 OLE 目标（画图等整类）的释放，与 Esc 取消靠按键事件证据加 200ms 复查窗口区分，两种语义互不劫持。激活对 OS 前台锁逐级升级（直接 SetForegroundWindow → AttachThreadInput + ALT 伪装 → 任务栏闪烁），每种失败原因都有 fail-closed 的用户反馈。窗口探测用常驻 PowerShell 子进程内嵌 user32 P/Invoke——Windows 通用能力，不要求任何目标应用装插件，不新增依赖；持久化为主进程自有存储，渲染端 dbCall 白名单分毫未动。全程测试先行（6 份 RED 测试在实现前因契约模块不存在而失败，证据存档）；7 份测试文件落位回归池（94 用例，含常驻 PS 适配器活体套件）；由独立 QA 以真实 OS 级拖拽注入与激活链在隔离用户数据目录下实机验收——绑定、最小化/后台唤回、同名歧义、目标关闭与重启重定位、取消拖拽、重启持久化、F5 回归——并以 sha1 核验真实用户数据库全程未变。
 
