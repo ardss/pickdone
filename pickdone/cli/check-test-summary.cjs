@@ -19,13 +19,17 @@ const os = require('node:os')
 const path = require('node:path')
 
 // skip 棘轮基线 —— 2026-09-13 全平台收紧并由 CI 实证校准:
-//   linux:2 = f6-round6-fixes 的跨盘符 file:// 语义测试(纯 Windows 概念,`WIN ? test : test.skip`)
+//   linux:7 = 2(见下) + 5(2026-10-30 e2e-exit-close 遵循 CHECK_ALL_SKIP_LIVE 的 CI 守卫:
+//             该套件是真拉起 Electron、断言托盘行为的 live 测试,xvfb 无托盘无法满足其验收,
+//             ubuntu 上按设计 skip 1 主测+2 子测;连同 run 41060199845 的实测计数校准;
+//             live 全量仍由 windows runner 实跑覆盖,覆盖无缺口)
+//             其中 2 = f6-round6-fixes 的跨盘符 file:// 语义测试(纯 Windows 概念,`WIN ? test : test.skip`)
 //             + lan-sync-journey 套件级 skip(ubuntu CI 设 CHECK_ALL_SKIP_LIVE=1,live electron 类
 //             测试在 ubuntu 上按设计跳过,由 windows runner 实跑覆盖;PR #160 实证)
 //   darwin:1 = 推断值(WIN 条件在 darwin 同为 false 必跳这条),无 darwin CI 实证——门禁只在 ubuntu+windows 跑
 //   win32:0 = windows 实测 0 skip
 // 新增 skip 会被棘轮拦下并打印用例名;确属平台性合理 skip 时,在此处带注释给对应平台加基线。
-const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 2, darwin: 1 }
+const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 7, darwin: 1 }
 // [fail-closed 2026-10-26] the raw env override voided the skip ratchet from ANY stray
 // exported env var (CI job env, a dev shell rc file) — a silent ratchet bypass. It is now
 // gated: honored only alongside CHECK_TEST_SUMMARY_SELFTEST=1 (the script's own self-test);

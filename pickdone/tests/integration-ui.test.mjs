@@ -323,7 +323,9 @@ t('integration: settings change -> persists across a process restart (the strong
   // Open settings -> pomodoro tab -> change "daily pomodoro target" to 12
   await click('.sn-account-gear:not(.sn-account-trash)')
   await sleep(900)
-  const openedPomodoroTab = await evalJson(`(()=>{const tab=[...document.querySelectorAll('.setting_tabs .el-tabs__item')].find(x=>/番茄/.test(x.textContent));if(!tab)return false;tab.click();return true})()`)
+  // match by Element Plus pane id (tab-tomato), not text: the runner's system locale is en-US
+  // and getLocale() defaults the whole UI to the en surface, where the label is not 番茄
+  const openedPomodoroTab = await evalJson(`(()=>{const tab=[...document.querySelectorAll('.setting_tabs .el-tabs__item')].find(x=>/tomato$/.test(x.id)||/番茄|Pomodoro/i.test(x.textContent));if(!tab)return false;tab.click();return true})()`)
   assert.ok(openedPomodoroTab, 'pomodoro settings tab should be present and clickable')
   await sleep(600)
   const setNum = await evalJson(`(()=>{const labels=[...document.querySelectorAll('.modal--settings .form-item__label')];
