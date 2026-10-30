@@ -24,6 +24,10 @@ const tomatoTaskbar = require('./tomato-taskbar')
 const quickAdd = require('./quick-add')
 const updater = require('./updater')
 const appAudit = require('./audit')
+// Extracted clusters (DI factories; constructed below once their injected deps exist)
+const { createBroadcasts } = require('./broadcast')
+const { createTrayCluster } = require('./tray-lease')
+const { createCriticalBackupRestore } = require('./critical-backup-restore')
 
 app.setName('pickdone') // standalone userData directory, does not affect the project baseline
 // Windows toast notifications resolve the app name/icon via the AppUserModelID; without this they show "electron.app". // Must match package.json build.appId — the electron-builder Start Menu shortcut carries the same AUMID.
@@ -60,7 +64,8 @@ try {
   if (c.enableHardwareAcceleration === false) app.disableHardwareAcceleration()
 } catch (e) { /* no config on first launch */ }
 
-let tray = null
+// tray handle + display lease live in tray-lease.js; thin delegators below keep every call site and test anchor unchanged
+const trayCluster = createTrayCluster({ Tray, Menu, log, i18n: i18nM, tomatoTaskbar, tomatoFloat, showMainOrLock, quitFromTray })
 const state = { quitByUser: false } // shared with windows.js close handler (was a module var in the pre-split index.js)
 
 const { readConfig, writeConfig } = require('./config-store')
@@ -98,7 +103,7 @@ const windowManager = createWindowManager({
   readConfig, writeConfig, i18n: i18nM, log, windowRef, closeBehavior,
   tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
   isLocked, lockAppNow, showMainOrLock,
-  isQuitting: () => quitting, getState: () => state, getTray: () => tray,
+  isQuitting: () => quitting, getState: () => state, getTray: trayCluster.getTray,
   // F1 (2026-10-22): exit-mode X must reach the same guarded quit chain as the tray (quitFromTray is a hoisted declaration — safe to reference here)
   requestUserQuit: quitFromTray,
   // D10 (2026-09-27): renderer-death hooks — clear the stale tomato countdown lease and let the // crash counter health window live in windows.js (see crashRelaunchDecision in handlers/shared).
@@ -107,60 +112,15 @@ const windowManager = createWindowManager({
 const createMainWindow = windowManager.createMainWindow
 function getMainWindow () { return windowManager.getMainWindow() }
 
-/* ---------------- Broadcast DB changes to all windows (reference: todos-changed) ---------------- */
-function broadcastTomatoRecordsChanged (reason, excludeWebContents) {
-  for (const w of BrowserWindow.getAllWindows()) {
-    try {
-      if (w.isDestroyed()) continue
-      if (excludeWebContents && w.webContents === excludeWebContents) continue
-      w.webContents.send('tomato-records-changed', { reason, at: Date.now() })
-    } catch {}
-  }
-}
-function broadcastTodosChanged (reason, excludeWebContents) {
-  for (const w of BrowserWindow.getAllWindows()) {
-    try {
-      if (w.isDestroyed()) continue
-      if (excludeWebContents && w.webContents === excludeWebContents) continue
-      w.webContents.send('todos-changed', { reason, at: Date.now() })
-    } catch {}
-  }
-}
-function broadcastWhiteNoiseUpdated () {
-  for (const w of BrowserWindow.getAllWindows()) {
-    try { if (w && !w.isDestroyed()) w.webContents.send('white-noise-updated') } catch {}
-  }
-}
+/* ---------------- Broadcast DB changes to all windows (reference: todos-changed) — impl in broadcast.js ---------------- */
+const { broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated } = createBroadcasts({ BrowserWindow })
 
 /* ---------------- Tiered recovery from DB corruption (P0 data-loss prevention) — implementation extracted to dbRecovery.cjs (independently testable) ---------------- */
 function attemptDbRecovery (ud, retryInit) { return dbRecovery.attemptDbRecovery(ud, retryInit) }
-// Phase-2 command bus: the critical-backup restore pipeline commits through the bus (todo.putMany / category.put / tomato.appendMany) like every other write path, preserveStamp: restore replays the backup's own row ages verbatim — re-stamping would skew LWW against peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the startup recovery path commits with no fanout, exactly as before.
-const busCommit = (entity, verb, payload) => require('./command-bus').commit(entity, verb, payload, { preserveStamp: true })
-// F11 (dw wave6) + Sync-3 (D12): startup recovery re-imports the SAME segment set the UI restore accepts (filter/plan/meta/habits ride the same command-bus doors, idempotent by id) and the wrapper returns the per-segment REPORT (tasks / imported / failedSegments / unconsumedSegments / proved) — the plain-bak cleanup gate needs to know whether EVERY segment was consumed, not just that todoState imported rows.
-// [F4 #9] recovery-dialog disclosure of a degraded dump (mirrors renderer todoBackup.describeDegradedSegments; the main process cannot require the ESM renderer module, so the segment→surface map is duplicated here on purpose)
-const describeRecoveryDegraded = segs => (Array.isArray(segs) ? segs.filter(s => s === 'planState' || s === 'metaState').map(s => s === 'planState' ? 'planState (schedule chips)' : 'metaState (repeat rules/estimates/project meta)').join(', ') : '')
-function restoreFromCriticalBackup (ud) {
-  const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud,
-    list => busCommit('todo', 'putMany', list),
-    c => busCommit('category', 'put', c),
-    rows => busCommit('tomato', 'appendMany', rows),
-    {
-      filterPutMany: rows => busCommit('filter', 'putMany', rows),
-      planPutMany: chips => busCommit('plan', 'putMany', chips),
-      habitsPut: pair => busCommit('meta', 'put', pair),
-      // metaState (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
-      metaPut: pair => busCommit('meta', 'put', pair),
-      // F1 (2026-10-17) sync-identity restore: sync.deviceId / sync.pairingSecret live in settings_rows
-      // (lan-sync-bootstrap reads settingsRowsAll), NOT the meta table — without this door the whitelist-preserved
-      // identity keys would land in the wrong table (inert) and a JSON restore would mint a fresh deviceId.
-      settingsPut: pair => busCommit('setting', 'put', { key: pair[0], value: pair[1] })
-    })
-  // [Sync-13 reader + F4 #9] a degraded dump's missing segments must be visible: logged here and surfaced in the recovery dialog below (describeRecoveryDegraded).
-  if (r && Array.isArray(r.degradedSegments) && r.degradedSegments.length) {
-    log.warn('[Init] critical backup was collected degraded — segments missing from this dump:', r.degradedSegments.join(', '))
-  }
-  return r
-}
+// Segment-replay wiring (busCommit doors + degraded-dump disclosure) moved verbatim to
+// critical-backup-restore.js; the caller-side gates below (jsonRestoreAllowed, sentinel
+// lifecycle, watermark invalidation) stay here — they are the recovery-dialog policy.
+const { restoreFromCriticalBackup, describeRecoveryDegraded } = createCriticalBackupRestore({ dbRecovery, log })
 
 /* ---------------- External-write listener: when the CLI writes the DB directly, the running App refreshes automatically ----------------
    Implementation moved verbatim to external-db-watch.js (factory carries the closure state the
@@ -185,33 +145,8 @@ const { attachDir } = attachments
 // TQ-1 (2026-10-03): durable running-session ownership — created in registerIpc (db handle is // module-initialized before whenReady). From here on the tray-text lease below is DISPLAY-ONLY: // quit guards and startup reconciliation consult the durable 'tomatoRunningSession' meta row.
 let tomatoSession = null
 
-/* ================= Tray ================= */
-function createTray () {
-  const iconPath = path.join(__dirname, '../../assets/tray/tray.png')
-  const usedPath = fs.existsSync(iconPath) ? iconPath : path.join(__dirname, '../../assets/icon.png')
-  // headless Linux (xvfb/CI) throws inside new Tray; boot must survive — whenReady catch treats any throw as fatal
-  try {
-    tray = new Tray(usedPath)
-  } catch (e) {
-    log.warn('[Tray] unavailable on this desktop, continuing without tray:', e && e.message)
-    return
-  }
-  tomatoTaskbar.attachTray(tray, usedPath) // during a pomodoro the tray is redrawn as a progress ring; restores the original icon when idle
-  rebuildTrayMenu()
-  tray.setToolTip(i18nM.mt('appName'))
-  tray.on('click', () => { showMainOrLock() })
-}
-// Tray carries pomodoro state: the tooltip is composed solely by the main process (single writer; shows just the app name when text is empty)
-let tomatoLiveText = '' // non-empty = a focus/rest pomodoro is live (per-second push from the renderer; the main process's only running-state signal)
-// D10 (2026-09-27): wired into windows.js's render-process-gone hook — a crashed renderer clears // its own lease immediately (TQ-1: the quit-confirm GATE reads the durable session row, not this // display-only lease, so no timestamp reader is needed).
-function clearTomatoLiveText () { tomatoLiveText = '' }
-function updateTomatoTray (text) {
-  const t = String(text || '').trim()
-  tomatoLiveText = t
-  if (tray) { try { tray.setToolTip(i18nM.mt('appName') + (t ? ' · ' + t : '')) } catch (e) { /* empty */ } }
-}
-
-/* ================= Tray quit with focus-in-progress confirmation ================= */
+/* ================= Tray: creation/menu/tooltip/lease live in tray-lease.js; the quit-confirm chain stays here (source-shape-pinned) ================= */
+// Tray quit with focus-in-progress confirmation
 async function quitFromTray () {
   // D10 (2026-09-27): re-entrancy guard — a second tray-quit click while the confirm dialog is // open used to enter again (two dialogs, two quit chains, quitByUser race). Rejected before the // first await.
   if (!quitFromTrayGuard.enter()) return
@@ -232,7 +167,7 @@ async function quitFromTrayInner () {
         type: 'question',
         title: i18nM.mt('quitFocusActiveTitle'),
         message: i18nM.mt('quitFocusActiveTitle'),
-        detail: i18nM.mt('quitFocusActiveMsg') + '\n\n' + tomatoLiveText,
+        detail: i18nM.mt('quitFocusActiveMsg') + '\n\n' + trayCluster.getTomatoLiveText(),
         buttons: [i18nM.mt('quitFocusQuit'), i18nM.mt('quitFocusCancel')],
         cancelId: 1,
         defaultId: 1,
@@ -254,21 +189,17 @@ async function quitFromTrayInner () {
   // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight // out of the tray-menu click handler. The tray was already destroyed below, so the quit died // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
   // F4 #5 (2026-10-21): windows.js persistBoundsState — getBounds() on a MAXIMIZED window returns the full-screen rect, which used to be stamped as the next launch's restore size (giant non-maximized window + lost maximized state). Same normalized shape as close.
   if (qw) { windowManager.persistBoundsState(qw) }
-  // Destroy the tray icon first: the icon only disappears on Windows when the process exits, // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
-  if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
+  // Destroy the tray icon first (why: see tray-lease.js destroyTray) — the icon only disappears on Windows when the process exits, while the quit path can take seconds
+  trayCluster.destroyTray()
   app.quit()
 }
 
-function rebuildTrayMenu () {
-  if (!tray) return
-  const tpl = []
-  tpl.push({ label: tomatoFloat.isDocked() ? i18nM.mt('trayShowFloat') : i18nM.mt('trayDockFloat'),
-    click: () => { tomatoFloat.isDocked() ? tomatoFloat.undock() : tomatoFloat.dock(); rebuildTrayMenu() } })
-  tpl.push({ label: i18nM.mt('trayOpen'), click: () => { showMainOrLock() } })
-  tpl.push({ type: 'separator' })
-  tpl.push({ label: i18nM.mt('trayQuit'), click: () => { quitFromTray() } })
-  tray.setContextMenu(Menu.buildFromTemplate(tpl))
-}
+// Thin delegators onto tray-lease.js — call sites (whenReady createTray, hctx, windowManager,
+// second-instance flows) and the tq1/round6 source-shape test anchors keep working unchanged.
+function createTray () { return trayCluster.createTray() }
+function clearTomatoLiveText () { return trayCluster.clearTomatoLiveText() }
+function updateTomatoTray (text) { return trayCluster.updateTomatoTray(text) }
+function rebuildTrayMenu () { return trayCluster.rebuildTrayMenu() }
 
 /* Custom protocol privileges: moved to ./protocol-privileges (required at module top, timing unchanged — must run before 'ready') */
 require('./protocol-privileges')
@@ -813,7 +744,7 @@ function registerIpc () {
     resyncDbWatch: () => extWatch.currentResyncDbWatch(),
     notifySyncChange: op => { try { require('./lan-sync-bootstrap').kickSyncRound('local-write:' + op) } catch { /* sync lazy-not-init */ }  try { require('./relay-sync-bootstrap').kickRelayRound('local-write:' + op) } catch { /* relay lazy-not-init */ } },
     broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated,
-    rebuildTrayMenu, getTray: () => tray, updateTomatoTray,
+    rebuildTrayMenu, getTray: trayCluster.getTray, updateTomatoTray,
     applyShortcuts
     // NOTE: no `getState` here — none of the 9 handler modules read app state
     // (verified 2026-09-12); windowManager keeps its own getState for tray-close

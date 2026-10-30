@@ -11,6 +11,16 @@ const path = require('path')
 const DEFAULT_SKIP_DIRS = new Set(['node_modules', 'dist', 'renderer-dist'])
 const DEFAULT_EXTS = ['.js', '.vue', '.cjs', '.mjs']
 
+/** Build-artifact directories are never source: anything named `dist` or `dist-<suffix>`
+ *  (electron-builder outputs like dist-b22/dist-b22-linux, one-off verification copies like
+ *  dist-verify-20261030 / dist-maintenance-20261014) contains packaged copies of src/main and
+ *  cli that would otherwise re-enter every scan surface as "new files" (caught live 2026-10-31:
+ *  the size gate red on dist-b22/win-unpacked/resources/** copies of files that pass at source).
+ *  Extend this rule, not per-dir names, when a new output dir pattern appears. */
+function isBuildArtifactDir (name) {
+  return DEFAULT_SKIP_DIRS.has(name) || name === 'dist' || /^dist[-_]/.test(name)
+}
+
 /** Recursively list source files under dir (absolute paths).
  *  opts.skipDirs: directory basenames to prune (dot-directories are always pruned).
  *  opts.exts: extensions to include; `.d.ts` is always excluded.
@@ -22,7 +32,7 @@ function listFiles (dir, { skipDirs = DEFAULT_SKIP_DIRS, exts = DEFAULT_EXTS, ou
   for (const e of entries) {
     const full = path.join(dir, e.name)
     if (e.isDirectory()) {
-      if (skipDirs.has(e.name) || e.name.startsWith('.')) continue
+      if (isBuildArtifactDir(e.name) || e.name.startsWith('.')) continue
       listFiles(full, { skipDirs, exts, out })
     } else if (e.isFile() && exts.includes(path.extname(e.name)) && !e.name.endsWith('.d.ts')) {
       out.push(full)
