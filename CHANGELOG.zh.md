@@ -17,6 +17,16 @@ System.Object[]
   - 锁屏密码验证改走与锁标志同款的「写版本号失效 TTL 缓存」（D18 口径）：config.json 被 AV 持锁时每次解锁尝试不再卡顿主进程数秒；仅缓存不透明的存储串，解密与比对仍逐次执行。
   - 门禁补洞 5 处：i18n 门扫描多行用户可见调用（`ElMessage.error(...)` 内独立成行的中文串曾永久漏检）；`--all` 真正覆盖 `src/`；双写台账捕获跨行与动态键的 localStorage/safeSet 写点；许可证审计封禁 `UNLICENSED` / `SEE LICENSE IN` / LGPL-2.1；token 门的组件 `<style>` 半边跟随 GATE_ROOT（金标夹具可达）。
 
+- 第 20 波维护批次（15 项修复，4 个切片，全部带回归测试）：
+  - 编辑任务后 350ms 防抖窗口内点「从回收站恢复」不再静默丢编辑（恢复路径先冲刷保存队列，而不是只取消定时器）。
+  - 多任务保存部分失败时不再「失败横幅闪现即灭」（任一条目失败即跳过成功回调，重试横幅保持可见）。
+  - 撤销重复任务的完成现在同时回收自动续期的「下一次」实例（撤销路径此前绕过续期清理，日历上留下幽灵实例）。
+  - 日历切到时间块视图再切回后，格子内键盘建任务与右上角「+」/展开按钮不再永久失效（委托监听器原一次性绑在会被视图切换替换的元素上，现跨重建重绑）。
+  - CSV/XLSX 导出：渲染端可控的文件名先清洗（basename+非法字符替换+强制 .xlsx）再拼进保存对话框默认路径。
+  - 审计日志可从瞬时 mkdir 失败中恢复（目录就绪标志仅成功时置位，下次 flush 重试而非静默丢弃整个会话的审计行）。
+  - 局域网同步：配对请求方在确认窗内断线不再卡死 pendingPair 槽位（socket close 现在收尾流程）；冲突备份恢复对对象值的 meta 备份在触碰任何存储前拒绝（对象值曾被 String() 成 "[object Object]" 且唯一副本被删——B16 同款损坏形态，现于恢复边界 fail-closed）。
+  - 门禁补洞 7 处：lint-staged 钉 core.quotePath=false（非 ASCII 暂存源文件曾静默绕过 ESLint）；IPC 主窗守卫检查锚进通道自身注册块（文件后部任意 handler 的守卫曾可顶替）；操作反馈白名单改相对路径键（同名声文件不再互相保活豁免）；ui-coverage 快捷添加种子断言自身增量而非脱钩的「总数≥3」；pre-commit 语法阶段对部分路径塌缩报红（此前只防全灭）；a11y-scan 找主窗不再死写路由哈希；品牌名指纹正则接受多空格/连字符/大小写变体（Day-Todo、DAY TODO、Todo清单…）。
+
 ## [0.4.0-beta.21] - 2026-10-29
 - 更新器修复（当日热修已落三台存量机器与已发布安装包）：9 月 19 日为修 beta.yml 404 把更新通道钉死在 `latest`，而 electron-updater 6.8.9 的 GitHubProvider 预发布匹配器要求通道为 null 或 alpha/beta（`shouldFetchVersion`）——通道一钉，此后所有 beta 版本对应用内更新器永久不可见（永远报 "No published versions on GitHub"），这正是存量机器一个月来只能手动升级的根因。现在通道保持不设：beta 版本号自动解析出 beta 通道正常匹配标签，beta.yml 404 在 allowPrerelease 下回落 latest.yml。三台机器实测：已装版本能正确解析已发布版本。
 - 第十八波每日循环（三域挖掘，23 项修复，4 个零重叠修复代理）：渲染端——右键共享菜单（taskMenu.js）自持一份延后基点副本，w17 的 TodoItem 修复没覆盖到，纯日期未来任务在任意视图右键仍被拉回（base 同样改为优先归一化 dayStart）；今天页逾期分组键用原始 dayStart，同步来的字符串/漂移值渲染出 "Invalid Date" 组头且同日行裂成两组（分组键归一，与 w17 选中日分支同口径）；日历卡片视图 created() 对齐在 idx===front 时也置 _selSync，残留标志吞掉下一次本地翻页的 store 回写，日期条高亮脱节一次（与两个 watcher 同款守卫）；折叠态日侧栏迷你时间轴只 push 第一条专注记录就返回（折叠态测量路径永为 null）——现在渲染全部记录；月历弹窗「有任务」圆点与补录卡任务候选用严格相等匹配漂移 dayStart，这些行双双消失（均归一化）。主进程——CSV 导入的单次授权门在入口检查、清授权却在全部 await 之后，解析窗口内并发 import:run 把同一批字节导入两次（过门即消耗授权）；local://aliases.json 与 .att-tmp-* 在 serve 边界已 404，但 open-file/delete-file 无簿记守卫——别名表可被编辑器打开或被 unlink，LAN 冲突 re-pull 被静默破坏（两处复用 isLocalBookkeepingFile）；w17 的 get-settings 锁门把存活的番茄浮窗也锁死（锁屏只隐藏主窗/quick-add）——浮窗 sender 现获豁免；206 Content-Range 的 total 取自读取前的 stat，附件被并发截断时客户端续传命中 416（total 以实际读到为准）；claimSlot 循环穷尽后的兜底 openSync('wx') 裸抛 EEXIST（改结构化错误）；拔显示器回夹对最大化窗口直接 setBounds 破坏最大化态（最大化时跳过）；备份去重比对违反 O(chunk) 契约一次性分配全量 Buffer（64MB 载荷 ~128MB 峰值，改 ≤1MB 切片比较——第一版逐字符实现在多字节文本上实测 O(n²) 卡死后换二分字符边界）。门禁——ESM 图从不收录 `export { x } from './y'` 的边，目标被删/改名是白屏级盲区（命名再导出现在与 import 同待遇：解析、存在性、大小写）；单行 <script> 的 SFC 整文件静默脱检（正则放宽）；check-boot-order 把解构 KEY 注册成绑定名（{ a: b } 造出幻影 `a`，上方同名 import 即假红——现只取 value，数组/剩余/赋值模式一并处理）；其 --staged 分支仍继承 GIT_DIR 等 env（照 file-size 剥除）；check-i18n 增量的 dirty 兜底不滤 ../ 路径，pickdone 外任何脏 js 触发「扫描面塌缩」假红阻断所有提交（IGNORE_FILES 的 i18n 匹配还是未锚定子串，my-i18n 类目录在两种模式下被静默剔除）；test-scope 是最后一个没 pin quotePath 的 git 调用，cache-stamp 的 ls-files 把非 ASCII 资源名引号化成永不 stale（假绿——两处都 pin）；token 门的白 hex 正则漏 4/8 位形态（#fff8、#ffffffee），深色模式白块回归可绕过 R1（覆盖 3/4/6/8 位并补自检样本）；覆盖率棘轮首次校准先落基线再警告口径不符（非 unit suite 现在首次校准即拒绝）。
