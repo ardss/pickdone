@@ -278,7 +278,10 @@ test('D2#9: watchdog arms on the auto-download entry into downloading (zero prog
     availHandler({ version: '9.9.9' })
     assert.equal(updater.getStatus().status, 'downloading')
     // NO download-progress ever fires (hang before first byte). The watchdog must still fire.
-    await sleep(150)
+    // Poll instead of a fixed sleep: STALL_MS=40 inside a 150ms sleep raced red on loaded CI
+    // runners (timers starve under the parallel unit pool) — the watchdog fires, just late.
+    const deadline = Date.now() + 5000
+    while (updater.getStatus().status !== 'error' && Date.now() < deadline) await sleep(20)
     assert.equal(updater.getStatus().status, 'error', 'RED before the fix: only download-progress armed the watchdog — zero-progress hangs were invisible forever')
     assert.match(updater.getStatus().info.message, /stalled/)
   } finally {

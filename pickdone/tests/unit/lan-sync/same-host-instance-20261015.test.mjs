@@ -16,13 +16,16 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import os from 'node:os'
 import { createRequire } from 'node:module'
 
 const require = createRequire(import.meta.url)
 const { createLanSyncNode } = require('../../../src/main/lan-sync/index.js')
 
 const SECRET = 'same-host-shared-secret'
-const OWN = '192.168.31.232'
+// Own address must come from a live local interface: a hardcoded dev-LAN IP dialed into the
+// void on every other network (CI runners included) and only passed on the author's machine
+const OWN = (Object.values(os.networkInterfaces()).flat().find((i) => i && !i.internal && i.family === 'IPv4') || {}).address || '127.0.0.1'
 
 const settle = () => new Promise((r) => setImmediate(() => setImmediate(r)))
 const fakeDiscovery = () => ({ startAdvertising() {}, discover() {}, stop() {}, getPeers: () => [] })

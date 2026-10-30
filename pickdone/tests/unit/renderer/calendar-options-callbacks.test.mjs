@@ -20,6 +20,10 @@ globalThis.localStorage = globalThis.localStorage || {
 }
 // getLocale() reads window.localStorage — point it at the same shim
 globalThis.window.localStorage = globalThis.localStorage
+// Pin the zh surface: Node >=21 exposes a global navigator whose language follows the ICU
+// default locale (en-US on CI Linux with LANG=C), and getLocale() would otherwise fall into
+// its system-language branch and render the en surface
+globalThis.localStorage.setItem('appLocale', 'zh-CN')
 
 const { wdLabel, buildCalendarOptions } = await import('../../../renderer/js/views/calendarOptions.js')
 
