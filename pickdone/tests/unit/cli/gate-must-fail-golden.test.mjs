@@ -326,3 +326,34 @@ test('W19 GOLDEN tokens: a component <style> violation in the GATE_ROOT fixture 
   const rg = runGate('check-tokens.js', good.root)
   assert.equal(rg.code, 0, 'token-using component style must pass: ' + rg.out)
 })
+
+test('W20 GOLDEN lint-staged: a staged NON-ASCII source file reaches the eslint runner (quotePath pin)', () => {
+  // W20 hole: `git diff --cached` ran WITHOUT -c core.quotePath=false, so non-ASCII paths came
+  // back as quoted octal escapes; startsWith('pickdone/') and the scope regex matched nothing
+  // and the gate fell into the fail-closed tripwire for every CJK-named staged source file.
+  // Fixtures mirror the real nested layout (repo toplevel + pickdone/, GATE_ROOT=pickdone).
+  // The eslint runner is a fixture shim that records its invocation into a marker file, so the
+  // assertions pin BOTH legs: detection (the shim actually linted the non-ASCII file) and
+  // enforcement (a lint error in it must red the gate).
+  const mk = (name, body, shimExit) => {
+    const { root, write } = mkTree(name)
+    write('pickdone/renderer/js/ok.js', 'let ok = () => {}\n')
+    write('pickdone/node_modules/eslint/bin/eslint.js',
+      "require('fs').appendFileSync(__dirname + '/../../lint-marker.txt', process.argv.slice(2).join(' ') + String.fromCharCode(10))\nprocess.exit(" + shimExit + ")\n")
+    execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+    fs.writeFileSync(path.join(root, 'pickdone/renderer/js/启动.js'), body)
+    execSync('git add pickdone/renderer/js/启动.js', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+    return root
+  }
+  const pd = path.join('pickdone') // GATE_ROOT anchor
+
+  const good = mk('ls-nonascii-good', 'let qd = () => {}\nqd()\n', 0)
+  const rg = runGate('lint-staged.mjs', path.join(good, pd))
+  assert.equal(rg.code, 0, 'staged non-ASCII in-scope source must be linted and pass: ' + rg.out)
+  const markerGood = fs.readFileSync(path.join(good, 'pickdone/node_modules/lint-marker.txt'), 'utf8')
+  assert.match(markerGood, /启动\.js/, 'the non-ASCII staged file must have reached the eslint runner (quotePath silent drop = 0 selected): ' + markerGood)
+
+  const bad = mk('ls-nonascii-bad', 'let qd = () => {}\nqd()\n', 1)
+  const rb = runGate('lint-staged.mjs', path.join(bad, pd))
+  assert.equal(rb.code, 1, 'a lint error in the staged non-ASCII file must red the gate: ' + rb.out)
+})

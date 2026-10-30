@@ -13,7 +13,12 @@ const ROUTE = process.argv[2] || '#/todo-list'
 
 async function main () {
   const list = await getJSON(PORT, '/json/list').catch(() => { throw new Error('App 未在 CDP 模式运行（参考 cli/ui-smoke.js 的锁诊断）') })
-  const page = list.find(t => t.type === 'page' && t.url.includes('#/todo-list'))
+  // W20 fix (2026-10-30): the target lookup demanded `#/todo-list` in the URL, but the ROUTE
+  // argument below can navigate anywhere (e.g. #/todo-list/recycle-bin or any future route) —
+  // scanning such a route could not even find the main window. Match the first real page target
+  // regardless of hash (devtools/service-worker targets excluded); route selection stays with
+  // the existing location.hash assignment.
+  const page = list.find(t => t.type === 'page' && !/devtools|extension/i.test(t.url))
   if (!page) throw new Error('未找到主窗口 target')
   const { send, evalJS, open } = cdpConnect(page.webSocketDebuggerUrl)
   await open

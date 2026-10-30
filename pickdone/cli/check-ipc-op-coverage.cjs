@@ -89,9 +89,23 @@ for (const op of allowed) {
 ok(`白名单 ${allowed.size} 个 op 全部存在于 db.js OPS`)
 
 // (3) Dedicated dangerous channels must exist in handlers and carry the main-window guard
+// W20 fix (2026-10-30): the old `[^]*?` window spanned the WHOLE file, so a channel whose own
+// registration block lost its assertMainWindow(e) stayed "guarded" as long as ANY later handler
+// in handlers/todo.js carried one (first-match-wins across the whole source). Anchor the guard
+// into the channel's own registration block: the `'channel': (e) => {` key, then require
+// assertMainWindow(e) within a bounded window right after it.
 for (const ch of ['db:purge-recycle-bin', 'db:purge-seed-todos']) {
-  if (!idxSrc.includes(`'${ch}'`)) bad(`危险通道 ${ch} 从 handlers 消失（渲染端 todoAPI.purge* 将悬空）`)
-  else if (!(idxSrc.match(new RegExp(`'${ch.replace(/:/g, '\\:')}'[^]*?assertMainWindow\\(e\\)`)) )) bad(`危险通道 ${ch} 缺 assertMainWindow(e) 主窗守卫`)}
+  if (!idxSrc.includes(`'${ch}'`)) { bad(`危险通道 ${ch} 从 handlers 消失（渲染端 todoAPI.purge* 将悬空）`); continue }
+  // Slice the channel's OWN registration block (from its key to the next sibling key at the
+  // same 4-space indent) so the guard can never be satisfied by a LATER handler's
+  // assertMainWindow(e); within the block, the guard must appear in the handler's opening
+  // window (current source: 1 line after `(e) => {`).
+  const from = idxSrc.indexOf(`'${ch}'`)
+  const rest = idxSrc.slice(from)
+  const nextKey = rest.slice(1).search(/\n {4}'/)
+  const block = nextKey === -1 ? rest : rest.slice(0, nextKey + 1)
+  if (!/^'[^']*'\s*:\s*\(e\)\s*=>\s*\{[\s\S]{0,120}?assertMainWindow\(e\)/.test(block)) { bad(`危险通道 ${ch} 缺 assertMainWindow(e) 主窗守卫`); continue }
+}
 ok('purge 专用通道存在且带主窗守卫')
 
 if (failed) { console.error(`✗ IPC op 覆盖门禁：${failed} 处失配`); process.exit(1) }

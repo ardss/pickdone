@@ -10,7 +10,13 @@ import process from 'node:process'
 // gate against a temp checkout; real pre-commit usage never sets it and keeps the script-dir
 // anchor.
 const root = process.env.GATE_ROOT ? resolve(process.env.GATE_ROOT) : join(dirname(fileURLToPath(import.meta.url)), '..')
+// W20 fix (2026-10-30): pin -c core.quotePath=false. Without it git emits non-ASCII paths as
+// quoted octal escapes ("\346\226\207..."), so startsWith('pickdone/') and the scope regex
+// matched nothing while real staged source existed — the inScopeUnselected fail-closed tripwire
+// below caught it, but the gate degenerated to that path for every CJK-named file (same family
+// as the W17/W18 quotePath pins in check-i18n.js / check-boot-order.cjs / pre-commit stage 1).
 const staged = execFileSync('git', [
+  '-c', 'core.quotePath=false',
   'diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'
 ], { cwd: root }).toString('utf8').split('\0').filter(Boolean)
 const selected = staged

@@ -30,20 +30,24 @@ const DELETE_ALLOWLIST = [
 
 // R2: files allowed to dispatch todo/updateTodoFields directly (each entry documents why it
 // qualifies under the three-layer rule; new files must go through the same review, not copy-paste)
+// W20 fix (2026-10-30): entries are scan-surface-RELATIVE paths (e.g. 'views/DepView.vue'), not
+// basenames — basename matching let same-named files in components/ and views/ vouch for each
+// other (one dispatched op silently keeped the other's exemption alive, and a violation in one
+// was excused by the allowlist entry meant for its namesake).
 const UPDATE_FIELDS_ALLOWLIST = [
-  'DepView.vue', // dependency linking (moveWithUndo undo exit; the edge is drawn by dragging one card onto another)
-  'SnManageTagsModal.vue', // manage-tags dialog: rename/delete rewrites #tags with confirm flows
-  'TodoItem.vue', // drag across days (hand-written undo toast) + subtask check persistence (inline visible state)
-  'MatrixGrid.vue', // four-quadrant drag to swap cells (drag exemption)
-  'DayDeck.vue', // card-stack drag to change day (moveWithUndo)
-  'CalendarView.vue', // event drag / page-flip compensation / time-block drag (all moveWithUndo or drag exemption + toast)
-  'calendarOptions.js', // extracted from CalendarView.vue (pure move, aaf510c5): eventDrop / page-flip writes all inside moveWithUndo (drag gesture)
-  'TodoBoxView.vue', // batch move-to-today / recategorize (batchMoveWithUndo) + restore (confirm-box context)
-  'categoryDelete.js', // D6: shared category-delete exit — reassignment writes run inside the undo-toast flow (whole delete is one undoable step)
-  'CategoryView.vue', // expired move-to-today (rescheduleExpired+batchMoveWithUndo; only the revertOf callback here)
-  'TagView.vue', // same as CategoryView (only the revertOf callback)
-  'ProjectView.vue', // same as CategoryView (only the revertOf callback)
-  'RepeatModal.vue', // stamps the group repeatId onto the template task inside the modal's own confirm flow (failure folded into the single summary toast, D6-F7) — metadata annotation, not a user-content mutation
+  'components/DepView.vue', // dependency linking (moveWithUndo undo exit; the edge is drawn by dragging one card onto another)
+  'components/side-nav/SnManageTagsModal.vue', // manage-tags dialog: rename/delete rewrites #tags with confirm flows
+  'components/TodoItem.vue', // drag across days (hand-written undo toast) + subtask check persistence (inline visible state)
+  'components/MatrixGrid.vue', // four-quadrant drag to swap cells (drag exemption)
+  'components/DayDeck.vue', // card-stack drag to change day (moveWithUndo)
+  'views/CalendarView.vue', // event drag / page-flip compensation / time-block drag (all moveWithUndo or drag exemption + toast)
+  'views/calendarOptions.js', // extracted from CalendarView.vue (pure move, aaf510c5): eventDrop / page-flip writes all inside moveWithUndo (drag gesture)
+  'views/TodoBoxView.vue', // batch move-to-today / recategorize (batchMoveWithUndo) + restore (confirm-box context)
+  'components/side-nav/categoryDelete.js', // D6: shared category-delete exit — reassignment writes run inside the undo-toast flow (whole delete is one undoable step)
+  'views/CategoryView.vue', // expired move-to-today (rescheduleExpired+batchMoveWithUndo; only the revertOf callback here)
+  'views/TagView.vue', // same as CategoryView (only the revertOf callback)
+  'views/ProjectView.vue', // same as CategoryView (only the revertOf callback)
+  'components/RepeatModal.vue', // stamps the group repeatId onto the template task inside the modal's own confirm flow (failure folded into the single summary toast, D6-F7) — metadata annotation, not a user-content mutation
 ]
 
 // Retirement path for BOTH allowlists: an entry whose basename no longer has a matching dispatch
@@ -68,7 +72,10 @@ for (const dir of SCAN_DIRS) {
       const p = path.join(dir, name)
       if (fs.statSync(p).isDirectory()) walkSfc(p, out)
       else if (name.endsWith('.js') || name.endsWith('.vue')) {
-        const rel = dir === abs ? dir + '/' + name : dir + '/' + path.relative(abs, p).split(path.sep).join('/')
+        // W20 fix (2026-10-30): allowlist keys are the path relative to the scan surface
+        // (e.g. 'components/DepView.vue'), not the basename — same-named files can no longer
+        // vouch for each other across components/ and views/.
+        const rel = path.basename(abs) + '/' + path.relative(abs, p).split(path.sep).join('/')
         out.push({ dir, name, p, rel })
       }
     }
@@ -77,12 +84,13 @@ for (const dir of SCAN_DIRS) {
   files.push(...walkSfc(abs))
 }
 
-// which basenames still carry each kind of dispatch (kind-keyed sets)
+// which scan-surface paths still carry each kind of dispatch (kind-keyed sets); rel is already
+// the scan-surface-relative key ('components/DepView.vue') — the exact form the allowlists use
 const allowlistedHits = { deleteTodo: new Set(), updateTodoFields: new Set() }
-for (const { name, p } of files) {
+for (const { rel, p } of files) {
   const src = fs.readFileSync(p, 'utf8')
-  if (/dispatch\(\s*['"]todo\/deleteTodo['"]/.test(src)) allowlistedHits.deleteTodo.add(name)
-  if (/dispatch\(\s*['"]todo\/updateTodoFields['"]/.test(src)) allowlistedHits.updateTodoFields.add(name)
+  if (/dispatch\(\s*['"]todo\/deleteTodo['"]/.test(src)) allowlistedHits.deleteTodo.add(rel)
+  if (/dispatch\(\s*['"]todo\/updateTodoFields['"]/.test(src)) allowlistedHits.updateTodoFields.add(rel)
 }
 for (const name of deadEntries(DELETE_ALLOWLIST, 'deleteTodo')) {
   hits.push(`${name}  [R1b 死条目: DELETE_ALLOWLIST 中已无对应 dispatch('todo/deleteTodo') — 自动退役该白名单项]`)
@@ -91,18 +99,18 @@ for (const name of deadEntries(UPDATE_FIELDS_ALLOWLIST, 'updateTodoFields')) {
   hits.push(`${name}  [R2 死条目: UPDATE_FIELDS_ALLOWLIST 中已无对应 dispatch('todo/updateTodoFields') — 自动退役该白名单项]`)
 }
 
-for (const { rel, name, p } of files) {
+for (const { rel, p } of files) {
   const src = fs.readFileSync(p, 'utf8')
   // R1a: completion must go through toggleCompleteWithUndo (zero tolerance)
   if (/dispatch\(\s*['"]todo\/toggleComplete['"]/.test(src)) {
     hits.push(`${rel}  [R1a 完成绕过统一出口 → toggleCompleteWithUndo(completeAction.js)]`)
   }
   // R1b: delete allowlist
-  if (/dispatch\(\s*['"]todo\/deleteTodo['"]/.test(src) && !DELETE_ALLOWLIST.includes(name)) {
+  if (/dispatch\(\s*['"]todo\/deleteTodo['"]/.test(src) && !DELETE_ALLOWLIST.includes(rel)) {
     hits.push(`${rel}  [R1b 删除绕过统一出口 → deleteWithUndo(confirm.js),特批进 DELETE_ALLOWLIST]`)
   }
   // R2: updateTodoFields allowlist
-  if (/dispatch\(\s*['"]todo\/updateTodoFields['"]/.test(src) && !UPDATE_FIELDS_ALLOWLIST.includes(name)) {
+  if (/dispatch\(\s*['"]todo\/updateTodoFields['"]/.test(src) && !UPDATE_FIELDS_ALLOWLIST.includes(rel)) {
     hits.push(`${rel}  [R2 updateTodoFields 不在白名单 → 先对号三层规范(撤销出口/确认框/拖拽豁免),再进 check-op-feedback.js UPDATE_FIELDS_ALLOWLIST]`)
   }
 }

@@ -52,12 +52,19 @@ try {
 
   console.log('[1] 任务种子（快捷添加真实输入链）')
   await goto('#/todo-list/today')
+  // 2026-10-30 (W20): the seed assertion used >=3 against the "today" count — always true once
+  // any earlier seed exists, so a silently broken quick-add chain still passed. Take a baseline
+  // BEFORE seeding and require EXACTLY +3; the input-chain helpers must also return 'ok'.
+  const seedBefore = await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete&&t.dayStart===new Date().setHours(0,0,0,0)).length`)
+  let seedChainOk = true
   for (const name of ['苹果搜索甲', '苹果搜索乙 #测试标签', '重复模板甲']) {
-    await typeIn('.qa-input', name)
-    await enterIn('.qa-input')
+    const t = await typeIn('.qa-input', name)
+    const e = await enterIn('.qa-input')
+    if (t !== 'ok' || e !== 'ok') { seedChainOk = false; console.error('  ⚠ 种子输入链失败: ' + name + ' type=' + t + ' enter=' + e) }
     await sleep(500)
   }
-  ok('快捷添加创建 3 条任务', (await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete&&t.dayStart===new Date().setHours(0,0,0,0)).length`)) >= 3)
+  ok('快捷添加输入链无失败', seedChainOk)
+  ok('快捷添加创建 3 条任务', (await storeGet(`$s.state.todo.todoList.filter(t=>!t.delete&&t.dayStart===new Date().setHours(0,0,0,0)).length`)) === seedBefore + 3, 'before=' + seedBefore)
   ok('按文本完成 苹果搜索乙', (await evalJson(ctx, `(()=>{const c=[...document.querySelectorAll('.td-item')].find(e=>e.textContent.includes('苹果搜索乙'));if(!c)return 'no';const k=c.querySelector('.td-check');if(!k)return 'nochk';k.click();return 'ok'})()`)) === 'ok')
   await sleep(600)
 

@@ -23,15 +23,23 @@ trap 'rm -f "$jslist" "$errfile" 2>/dev/null' EXIT
 # -c core.quotePath=false 防非 ASCII 文件名被打成八进制串致 [ -f ] 漏检(假红/漏检)。
 git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR | tr -d '\r' | grep -E '\.[cm]?js$' > "$jslist" || true
 checked=0
+missing=0
 # 2026-10-27 堵漏检:pickdone/ 前缀剥掉后按 pickdone 相对路径检查;仓根其他目录的 JS
 # (qa/**、analysis/**、test/** 等)原样加 ../ 前缀检查——旧逻辑只剥前缀,非 pickdone 路径
 # 的 [ -f ] 判不存在被静默跳过(混合提交时外部 JS 漏检)。
+# W20 fix(2026-10-30):被 git 列出却过不了 [ -f ] 的文件以前是 continue 静默跳过——阶段1
+# 的熔断只防"全灭"(checked==0),部分路径归一化失效时其余文件照常检查、整段照常绿。missing
+# 计数后大声报红(与 checked==0 同款拒绝)。
 while IFS= read -r f; do
   case "$f" in
     pickdone/*) rel="${f#pickdone/}" ;;
     *) rel="../$f" ;;
   esac
-  [ -f "$rel" ] || continue
+  if [ ! -f "$rel" ]; then
+    echo "  ✗ 路径归一化失效: staged 文件在磁盘上找不到 \"$rel\"（git 报 \"$f\"）"
+    missing=$((missing + 1))
+    continue
+  fi
   if ! node --check "$rel" 2>"$errfile"; then
     echo "  ✗ 语法错误: $f"
     cat "$errfile"
@@ -44,8 +52,13 @@ done < "$jslist"
 # 熔断只对"确实存在 staged js"生效:列表为空(如纯文档提交)检查 0 个是正常绿;
 # 列表非空却 0 个通过存在性判断 = 路径归一化失效,拒绝假绿(参照 check-file-size.cjs 2026-10-10 修复)。
 # 判断必须发生在 rm 之前。
+# W20 fix(2026-10-30):部分失效同样拒绝——missing>0 时上面已逐条点名,这里汇总报红退出。
 jslist_nonempty=0; [ -s "$jslist" ] && jslist_nonempty=1
 rm -f "$jslist"
+if [ "$missing" -gt 0 ]; then
+  echo "  ✗ 有 $missing 个 staged 的 js/cjs/mjs 文件在磁盘上找不到（路径归一化部分失效）——拒绝假绿"
+  exit 1
+fi
 if [ "$jslist_nonempty" -eq 1 ] && [ "$checked" -eq 0 ]; then
   echo "  ✗ 有 staged 的 js/cjs/mjs 文件但 0 个通过了语法检查（路径归一化失效）——拒绝假绿（参照 check-file-size.cjs 2026-10-10 修复）"
   exit 1

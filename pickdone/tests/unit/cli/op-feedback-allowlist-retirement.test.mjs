@@ -53,7 +53,7 @@ test('dead UPDATE_FIELDS_ALLOWLIST entry (no matching dispatch anywhere) fails t
   let gate = fs.readFileSync(gatePath, 'utf8')
   gate = gate.replace(
     "const UPDATE_FIELDS_ALLOWLIST = [",
-    "const UPDATE_FIELDS_ALLOWLIST = [\n  'StaleModal.vue',"
+    "const UPDATE_FIELDS_ALLOWLIST = [\n  'components/StaleModal.vue',"
   )
   writeSfc(tmp, 'renderer/js/components/StaleModal.vue', '<template><div /></template>\n')
   fs.writeFileSync(gatePath, gate)
@@ -70,7 +70,7 @@ test('dead DELETE_ALLOWLIST entry fails the gate (file gone entirely)', () => {
   let gate = fs.readFileSync(gatePath, 'utf8')
   gate = gate.replace(
     "const DELETE_ALLOWLIST = [",
-    "const DELETE_ALLOWLIST = [\n  'GhostView.vue',"
+    "const DELETE_ALLOWLIST = [\n  'views/GhostView.vue',"
   )
   fs.writeFileSync(gatePath, gate)
   // GhostView.vue does not exist anywhere in the tree
@@ -87,7 +87,7 @@ test('live allowlist entry (matching dispatch present) keeps the gate green', ()
   // dead here by design) and keep exactly one live entry
   let gate = fs.readFileSync(path.join(tmp, 'cli/check-op-feedback.js'), 'utf8')
   gate = gate.replace(/const UPDATE_FIELDS_ALLOWLIST = \[[\s\S]*?\]/,
-    "const UPDATE_FIELDS_ALLOWLIST = [\n  'LiveModal.vue',\n]")
+    "const UPDATE_FIELDS_ALLOWLIST = [\n  'views/LiveModal.vue',\n]")
   fs.writeFileSync(path.join(tmp, 'cli/check-op-feedback.js'), gate)
   writeSfc(tmp, 'renderer/js/views/LiveModal.vue',
     "<script setup>\nimport { useStore } from 'vuex'\nconst store = useStore()\nstore.dispatch('todo/updateTodoFields', {})\n</script>\n")
@@ -118,9 +118,9 @@ test('cross-kind staleness fails the gate: a file dispatching todo/deleteTodo mu
   let gate = fs.readFileSync(path.join(tmp, 'cli/check-op-feedback.js'), 'utf8')
   gate = gate
     .replace(/const UPDATE_FIELDS_ALLOWLIST = \[[\s\S]*?\]/,
-      "const UPDATE_FIELDS_ALLOWLIST = [\n  'CrossView.vue',\n]")
+      "const UPDATE_FIELDS_ALLOWLIST = [\n  'views/CrossView.vue',\n]")
     .replace(/const DELETE_ALLOWLIST = \[[\s\S]*?\]/,
-      "const DELETE_ALLOWLIST = [\n  'CrossView.vue',\n]")
+      "const DELETE_ALLOWLIST = [\n  'views/CrossView.vue',\n]")
   fs.writeFileSync(path.join(tmp, 'cli/check-op-feedback.js'), gate)
   const r = runGate(tmp)
   assert.equal(r.status, 1, `expected exit 1 (stale update-kind entry), got ${r.status}: ${r.stderr}`)
