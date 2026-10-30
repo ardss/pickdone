@@ -81,6 +81,18 @@ test('W21 split (B): subtask mechanics + panel setup ride vm-taking modules; anc
   assert.match(host, /this\._onFocusin = panelSetup\.dynamicSpellcheckGuard\(\)/)
 })
 
+test('W21 split (C): reminder emit handlers ride editpanel/reminderOps.js (close-verify stays in host)', () => {
+  const host = read(HOST)
+  assert.match(host, /onRemindersCommit \(mainTs, extras\) \{ return reminderOps\.onRemindersCommit\(this, mainTs, extras\) \}/)
+  assert.match(host, /onRemindersClear \(\) \{ return reminderOps\.onRemindersClear\(this\) \}/)
+  assert.match(host, /onRemindersOffsets \(sorted\) \{ return reminderOps\.onRemindersOffsets\(this, sorted\) \}/)
+  // store-sync-echo-round anchors the taskAbsentIn close-verify guard on the host — it stays
+  assert.match(host, /taskAbsentIn\(/)
+  const ops = read('renderer/js/components/editpanel/reminderOps.js')
+  assert.match(ops, /reminderPastTip/, 'past-reminder toast moved verbatim')
+  assert.match(ops, /offsets are anchored to the main reminder/, 'clear-offsets invariant comment moved verbatim')
+})
+
 test('W21 split: line-count ratchet (new children strict档, host at its achievable bound)', () => {
   // new files: warn 400 / error 600 per cli/check-file-size.cjs NEW_FILE_LIMITS — keep far below
   for (const f of [BANNER, CHIPS]) {
@@ -89,6 +101,7 @@ test('W21 split: line-count ratchet (new children strict档, host at its achieva
   }
   const host = lineCount(HOST)
   // Tightened per commit: 799 pre-split → (A) 769 banner+chips → (B) 740 subtask+setup ops
-  // → (C) reminder ops. See the header for why the original 560 target is unreachable.
-  assert.ok(host <= 745, `EditPanel.vue at ${host} lines (achievable ratchet, was 799 pre-split)`)
+  // → (C) ~722 reminder ops (close-verify had to stay: store-sync anchor). See the header for
+  // why the original 560 target is unreachable (legacy anchors pin ~200+ lines in the host).
+  assert.ok(host <= 725, `EditPanel.vue at ${host} lines (achievable ratchet, was 799 pre-split)`)
 })

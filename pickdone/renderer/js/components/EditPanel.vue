@@ -178,6 +178,7 @@ import EpDateChips from './editpanel/EditPanelDateChips.vue' // W21 split: date 
 import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recycle-bin banner markup
 import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
 import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
+import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder emit handlers + close-verify timer
 
 
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
@@ -282,7 +283,8 @@ export default {
     task (t) {
       // P1 (2026-10-01): a full reload transiently evaluates `task` to null while the row array is
       // swapped; the old immediate closeEdit slammed the panel shut and silently lost that window's
-      // edits. Verify absence in the post-reload lists instead; a reappearing row cancels the close.
+      // edits. Verify absence in the post-reload lists instead (store-sync anchor keeps the
+      // taskAbsentIn guard in-host); a reappearing row cancels the close.
       if (t && this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
       if (!t && !this.inRecycle && this.$store.state.ui.rightSidebarTodoEdit.visible) {
         if (this._closeVerifyTimer) clearTimeout(this._closeVerifyTimer)
@@ -533,28 +535,10 @@ export default {
       this.queueSave(patch)
     },
     onPickDate (ts) { this.applyDate(ts || 0) },
-    /* ===== Reminders: EpReminders emits; the task snapshot + persistence stay here ===== */
-    onRemindersCommit (mainTs, extras) {
-      if (!this.e) return
-      const mainChanged = mainTs !== this.e.remindTs
-      this.e.remindTs = mainTs
-      this.e.reminderExtra = extras
-      if (mainChanged && mainTs < Date.now()) this.$message.warning(this.$t('statsJ.EditPanel.reminderPastTip'))
-      if (!this.e.dateTs) this.e.dateTs = dayjs(mainTs).startOf('day').valueOf()
-      this.queueSave({ reminderTime: this.e.remindTs, reminderExtra: this.e.reminderExtra, todoTime: this.e.dateTs })
-    },
-    onRemindersClear () {
-      if (!this.e) return
-      this.e.remindTs = 0
-      this.e.reminderExtra = []
-      this.e.reminderOffsets = [] // offsets are anchored to the main reminder; clearing the main reminder must clear them too, otherwise stale offsets silently revive when reminders are re-set
-      this.queueSave({ reminderTime: 0, reminderExtra: [], reminderOffsets: [] })
-    },
-    onRemindersOffsets (sorted) {
-      if (!this.e) return
-      this.e.reminderOffsets = sorted
-      this.queueSave({ reminderOffsets: sorted })
-    },
+    /* ===== Reminders: EpReminders emits; the task snapshot + persistence stay here (W21: bodies in editpanel/reminderOps.js) ===== */
+    onRemindersCommit (mainTs, extras) { return reminderOps.onRemindersCommit(this, mainTs, extras) },
+    onRemindersClear () { return reminderOps.onRemindersClear(this) },
+    onRemindersOffsets (sorted) { return reminderOps.onRemindersOffsets(this, sorted) },
     toggleComplete () {
       // Same feedback semantics as checking in the list: completing shows a "completed + undo" toast, un-completing is only announced
       toggleCompleteWithUndo({ store: this.$store, message: this.$message, todo: this.task, announce: this.$announce })
