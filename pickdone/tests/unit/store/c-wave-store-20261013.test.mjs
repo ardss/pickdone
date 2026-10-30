@@ -230,7 +230,9 @@ test('C5b: ensureNextRepeatInstance skips the round (no addTodo) when the rule r
 /* ---------------- C6: todoTime-only add sorts into the effective-day pool ---------------- */
 test('C6: addTodo with only todoTime takes taskSort from the todoTime-derived day pool', async () => {
   clearLS()
-  const dayTs = 1760284800000 // 2025-10-13 00:00 local
+  // local midnight of 2025-10-13 in the RUNNING timezone — a fixed epoch (1760284800000) is
+  // 00:00 local only in UTC+8 and broke on UTC runners (and TZ= is not honored by node 22 on Windows)
+  const dayTs = new Date(2025, 9, 13).getTime()
   const withinDay = dayTs + 3600 * 1000 * 14
   const state = {
     todoList: [

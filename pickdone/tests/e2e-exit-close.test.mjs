@@ -33,6 +33,13 @@ let electronBin = null
 let electronMissing = null
 try { electronBin = require('electron') } catch (e) { electronMissing = 'electron binary unavailable: ' + (e && e.message) }
 if (electronBin && !existsSync(electronBin)) { electronMissing = 'electron binary path does not exist: ' + electronBin; electronBin = null }
+// Honor the same live-pool split as check-all.js: the SKIP_LIVE CI job (ubuntu = static + unit
+// regression) must not run a boot-Electron tray E2E — xvfb has no tray host to assert against,
+// the windows job owns the full live pool on a real desktop. CI-guarded so it can never become
+// a local silent-downgrade switch (same red-team rule as check-all's own guard).
+if (electronMissing === null && process.env.CI && process.env.CHECK_ALL_SKIP_LIVE === '1') {
+  electronMissing = 'CHECK_ALL_SKIP_LIVE CI job: live Electron pool owned by the desktop-OS job'
+}
 
 // CDP port is per-boot EPHEMERAL (2026-10-24 night): the fixed 9377 collided with any
 // concurrent file's instance in the conc-4 pool — the boot then hung until the 5min
