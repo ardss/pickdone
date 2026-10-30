@@ -85,3 +85,4 @@ nul
 qa/
 pickdone/.dsh/
 pickdone/qa/
+pickdone/dist-verify-*/
