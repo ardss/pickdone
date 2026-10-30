@@ -1,6 +1,9 @@
 import { tt } from './core.js'
 import { flyPaperPlane } from './paperPlane.js'
 import { showUndoToast } from './undoToast.js'
+import { removeRenewedInstance } from './repeatUndo.js'
+import { safeUpsert } from '../store/helpers/todoPendingUpserts.js'
+import { snapshotForDelete } from '../store/helpers/planChips.js'
 /**
  * Unified entry point for complete/un-complete — all completion interactions (list checkbox, edit panel,
  * context menu, todo-box dot) share the same feedback semantics: on completion show a "completed + undo" toast (3s),
@@ -68,7 +71,16 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
       // [J17] restore the exact pre-toggle snapshot (complete/completedAt/subtasks) through the
       // unified write channel — a REVERT, not a second toggle. Awaitable: callers/tests can wait
       // for the restore to land instead of racing the fire-and-forget flip.
-      return Promise.resolve(store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...snap } })).then(() => {
+      return Promise.resolve(store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...snap } })).then(async () => {
+        // [w20 P2 fix 2026-10-30] ghost renewed instance: completing the last live instance of a
+        // repeat group mints the "下一次" instance (todo/ensureNextRepeatInstance), but this undo
+        // path used to revert ONLY the completion fields — bypassing toggleComplete's `!target`
+        // branch that recycles the renewal via removeRenewedInstance — so a phantom next
+        // instance stayed on the calendar forever. Mirror the store's cleanup here (best-effort:
+        // the helper swallows its own errors, and the undo itself already landed).
+        if (cur.repeatId) {
+          await removeRenewedInstance({ todo: cur, state: store.state.todo, commit: store.commit, dispatch: store.dispatch, safeUpsert, snapshotForDelete })
+        }
         if (announce) announce(tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content }))
         // [uiux-2026-10-01 J2 P3] The undo is the feedback moment this toast exists for: leaving the
         // stale "已完成：… 撤销" toast on screen read as if the click never registered (and invited a

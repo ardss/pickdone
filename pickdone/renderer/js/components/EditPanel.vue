@@ -616,8 +616,9 @@ export default {
     /** Restore the currently edited task from the recycle bin (keeping the edited fields); after restore the banner disappears and the complete row returns */
     async restoreFromBin () {
       if (!this.e || !this.e.taskId) return
-      // queueSave is a 350ms debounce timer (returns no promise); before restoring, synchronously flush unsaved dirty fields and clear the timer to prevent double writes
-      this._save.clearTimer()
+      // [w20 P2 fix 2026-10-30] flush (not just clearTimer) before takeDirty: clearTimer left queueSave's
+      // IMMEDIATE setPending slot unconsumed — an edit <350ms before 恢复 was silently dropped (H1 caliber)
+      await this._save.flushSave()
       const all: any = this._save.takeDirty(['subtasks', 'imgs', 'files'])
       try {
         // [restore single-path fix] this banner used to dispatch a bare updateTodoFields

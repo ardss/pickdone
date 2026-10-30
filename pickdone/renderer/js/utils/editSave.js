@@ -100,6 +100,7 @@ export function createSaveQueue (store, opts) {
       const taskId = getTaskId()
       if (opts.onSaving) opts.onSaving(true)
       let drainedKeys = []
+      const failedEntries = []
       try {
         const { keys: drained, patch: dirtyPatch } = drain()
         drainedKeys = drained
@@ -115,7 +116,6 @@ export function createSaveQueue (store, opts) {
           // null; dirty fields drained meanwhile go to the CURRENT task, never merged onto an old
           // one (same split as flushSave's task-switched branch). Per-entry failure isolation: a
           // failed dispatch requeues only ITS OWN patch (w16 fix).
-          const failedEntries = []
           for (const ent of entries) {
             if (!ent.taskId || !Object.keys(ent.patch).length) continue
             try {
@@ -131,7 +131,12 @@ export function createSaveQueue (store, opts) {
             if (opts.onFail) opts.onFail()
           }
         }
-        if (opts.onDone) opts.onDone()
+        // [w20 P2 fix 2026-10-30] onDone must not fire when the multi-task branch just failed:
+        // it used to run unconditionally, so a per-entry failure lit the onFail banner and then
+        // extinguished it in the same tick ("已保存" while the writes were only requeued). The
+        // sameTask success path still lands here (failedEntries stays empty; a sameTask dispatch
+        // failure throws into the outer catch, which also skips onDone).
+        if (!failedEntries.length && opts.onDone) opts.onDone()
       } catch (e) {
         // The dispatch failed: re-mark the drained keys (merged with anything marked since, same order
         // as flushSave) so a later queueSave/flushSave retries them. Without this the drained batch was
