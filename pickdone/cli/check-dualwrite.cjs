@@ -86,17 +86,44 @@ function classifyKey (arg, src) {
 
 function scan () {
   const hits = []
-  const re = /(localStorage\.(?:setItem|removeItem)|safeSet)\(/g // no \s before ( — `safeSet (` is the function DEFINITION, not a write point (old head semantics kept)
+  // W21 (2026-10-30) call-head widening, two passes over each file:
+  //   pass A (primary): `localStorage . ?. setItem/removeItem (` — \s* around the dot and the
+  //     optional-chaining `?.` were both invisible to the old `localStorage\.` head, so
+  //     `localStorage?.setItem(k,v)` and a wrapped `localStorage\n  .setItem(...)` never entered
+  //     the scan. `safeSet(` keeps its exact no-space head: `safeSet (` is the DEFINITION.
+  //   pass B (fallback): a bare `setItem(`/`removeItem(` not preceded by `.` or a word char —
+  //     catches aliased/destructured write calls the localStorage-prefixed head can never see.
+  //     Comment false-positives (e.g. prose "raw setItem (TQ-6)") are killed by blanking comments
+  //     to same-length whitespace BEFORE matching, so string indexes and line numbers stay true.
+  //     A B-hit overlapping an A span is dropped (no double registration of the same call).
+  const reA = /(localStorage\s*\??\.\s*(?:setItem|removeItem)|safeSet)\(/g
+  const reB = /[^.\w](setItem|removeItem)\s*\(/g
   for (const file of walk(RENDERER)) {
     const rel = path.relative(ROOT, file).replace(/\\/g, '/')
     const src = fs.readFileSync(file, 'utf8')
+    // blank comments in place (same length → indexes/line numbers unchanged). ONE alternating
+    // scan: `/\*...\*/` and `//...` compete left-to-right, so a `/*` that only appears INSIDE a
+    // line comment (e.g. "locales/*.js") is consumed by the line-comment arm first instead of
+    // opening a phantom block comment that would blank real code up to the next `*/`.
+    const stripped = src.replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g, mm => mm.replace(/[^\n]/g, ' '))
+    const aSpans = []
     let m
-    while ((m = re.exec(src))) {
-      const res = extractFirstArg(src, re.lastIndex - 1)
+    while ((m = reA.exec(stripped))) {
+      aSpans.push([m.index, m.index + m[0].length])
+      const res = extractFirstArg(stripped, reA.lastIndex - 1)
       if (!res || !res.arg) continue
       const { key, dynamic } = classifyKey(res.arg, src)
       const line = src.slice(0, m.index).split('\n').length
       hits.push({ file: rel, key, line, dynamic: !!dynamic })
+    }
+    while ((m = reB.exec(stripped))) {
+      const callStart = m.index + m[0].indexOf(m[1])
+      if (aSpans.some(([s, e]) => callStart >= s && callStart < e)) continue // already caught by pass A
+      const res = extractFirstArg(stripped, m.index + m[0].length - 1)
+      if (!res || !res.arg) continue
+      const { key, dynamic } = classifyKey(res.arg, src)
+      const line = src.slice(0, m.index).split('\n').length
+      hits.push({ file: rel, key, line, dynamic: !!dynamic, viaFallback: true })
     }
   }
   if (SELFTEST) hits.push({ file: 'renderer/js/__selftest__.js', key: 'dualwriteSelftestFakeKey', line: 1 })

@@ -357,3 +357,67 @@ test('W20 GOLDEN lint-staged: a staged NON-ASCII source file reaches the eslint 
   const rb = runGate('lint-staged.mjs', path.join(bad, pd))
   assert.equal(rb.code, 1, 'a lint error in the staged non-ASCII file must red the gate: ' + rb.out)
 })
+
+// —— W21 (2026-10-30) additions: rhetorical-compliance ratchet + staged missing-file fail-close ——
+
+// The 653a9000 hole: a 2-line comment pressed onto 1 line took EditPanel.vue 801→800 across the
+// error cap with ZERO real code removed. The gate now measures netCodeChars (comments/blank lines
+// stripped, .vue script-only) against git HEAD: a line-count drop across the cap without a
+// proportional net-char drop is "rhetorical compliance" = red.
+test('W21 GOLDEN file-size rhetoric: comment-compression across the cap is red; a real shrink is green', () => {
+  const codeLine = i => 'const v' + i + ' = ' + i
+  // HEAD file: 801 content lines, lines 6-8 (1-based) are a THREE-line comment; all else code.
+  // The gate's line metric counts the trailing-newline element (801 content → 802), so the
+  // HEAD version sits just above the renderer/js error cap (800) and the bad case below lands
+  // EXACTLY on it — the same off-by-shave shape as 653a9000's EditPanel.vue 801→800.
+  const lines = []
+  for (let i = 1; i <= 801; i++) {
+    if (i === 6) lines.push('// split comment part one')
+    else if (i === 7) lines.push('// split comment part two')
+    else if (i === 8) lines.push('// split comment part three')
+    else lines.push(codeLine(i))
+  }
+  const mk = (name) => {
+    const { root, write } = mkTree(name)
+    write('pickdone/renderer/js/near.js', lines.join('\n') + '\n')
+    execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+    return root
+  }
+
+  // BAD: merge the three comment lines into one → 799 content lines (metric 800 = at-cap),
+  // net code chars UNCHANGED (comments are stripped from the metric) → rhetorical red
+  const bad = mk('fs-rhet-bad')
+  const badLines = lines.filter((_, i) => i !== 6 && i !== 7) // drop comment parts two and three
+  badLines[5] = '// split comment part one two three'
+  fs.writeFileSync(path.join(bad, 'pickdone/renderer/js/near.js'), badLines.join('\n') + '\n')
+  execSync('git add pickdone/renderer/js/near.js', { cwd: bad, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  const rb = runGate('check-file-size.cjs', path.join(bad, 'pickdone'), ['--staged'])
+  assert.equal(rb.code, 1, 'comment-compression across the cap must be red (rhetorical compliance): ' + rb.out)
+  assert.match(rb.out, /修辞合规/, 'must name the rhetorical-compliance verdict: ' + rb.out)
+
+  // GOOD: remove 12 REAL code lines (3-line comment kept) → net chars drop proportionally → green
+  const good = mk('fs-rhet-good')
+  const exact = lines.filter(l => /^const v\d+ =/.test(l)).slice(12)
+  const goodBody = ['// split comment part one', '// split comment part two', '// split comment part three', ...exact].join('\n') + '\n'
+  fs.writeFileSync(path.join(good, 'pickdone/renderer/js/near.js'), goodBody)
+  execSync('git add pickdone/renderer/js/near.js', { cwd: good, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  const rg = runGate('check-file-size.cjs', path.join(good, 'pickdone'), ['--staged'])
+  assert.equal(rg.code, 0, 'a real code shrink across the cap must stay green: ' + rg.out)
+})
+
+test('W21 GOLDEN file-size --staged: a staged file missing from the worktree is named and red (silent-drop pin)', () => {
+  // 2026-10-30 hole: the --staged name list was filtered by fs.existsSync, so a staged path
+  // deleted from the worktree silently LEFT the scan surface (shrink-to-fake-green).
+  const { root, write } = mkTree('fs-staged-missing')
+  write('pickdone/renderer/js/ok.js', 'let ok = () => {}\n')
+  write('pickdone/renderer/js/vanish.js', 'let gone = () => {}\n')
+  execSync('git init -q && git config user.email t@t && git config user.name t && git add -A && git commit -qm init', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  fs.writeFileSync(path.join(root, 'pickdone/renderer/js/ok.js'), 'let ok2 = () => {}\nok2()\n')
+  execSync('git add pickdone/renderer/js/ok.js', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  fs.writeFileSync(path.join(root, 'pickdone/renderer/js/vanish.js'), 'let gone2 = () => {}\n')
+  execSync('git add pickdone/renderer/js/vanish.js', { cwd: root, env: GIT_SAFE_ENV, stdio: 'ignore' })
+  fs.rmSync(path.join(root, 'pickdone/renderer/js/vanish.js')) // staged but vanished from worktree
+  const rb = runGate('check-file-size.cjs', path.join(root, 'pickdone'), ['--staged'])
+  assert.equal(rb.code, 1, 'a staged-but-vanished file must fail the gate closed: ' + rb.out)
+  assert.match(rb.out, /vanish\.js/, 'the vanished file itself must be named: ' + rb.out)
+})

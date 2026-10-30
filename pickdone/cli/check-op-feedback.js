@@ -18,6 +18,11 @@
  */
 const fs = require('fs')
 const path = require('path')
+// W21 (2026-10-30) P3: the hand-rolled walker's bare fs.statSync(p) is a TOCTOU crash — a file
+// (or dir) deleted between readdirSync and statSync (concurrent build/clean, editor save) threw
+// and the gate died with a raw stack instead of a verdict. listFiles (lib-filescan.cjs) uses the
+// readdir Dirent kinds (no per-entry stat) and skips vanished entries; ext set (.js/.vue) matches.
+const { listFiles } = require('./lib-filescan.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const SCAN_DIRS = ['renderer/js/components', 'renderer/js/views']
@@ -67,21 +72,15 @@ for (const dir of SCAN_DIRS) {
   // 2026-09-23 P3: a missing scan dir previously meant R1a/R1b/R2 scanned NOTHING and the gate
   // exited GREEN — scan-surface collapse. Fail closed like check-css-freeze.mjs.
   if (!fs.existsSync(abs)) { hits.push(`${dir}  [扫描面缺失: 目录不存在 — 拒绝假绿]`); continue }
-  const walkSfc = (dir, out = []) => {
-    for (const name of fs.readdirSync(dir)) {
-      const p = path.join(dir, name)
-      if (fs.statSync(p).isDirectory()) walkSfc(p, out)
-      else if (name.endsWith('.js') || name.endsWith('.vue')) {
-        // W20 fix (2026-10-30): allowlist keys are the path relative to the scan surface
-        // (e.g. 'components/DepView.vue'), not the basename — same-named files can no longer
-        // vouch for each other across components/ and views/.
-        const rel = path.basename(abs) + '/' + path.relative(abs, p).split(path.sep).join('/')
-        out.push({ dir, name, p, rel })
-      }
-    }
-    return out
+  // scan-surface-relative key ('components/DepView.vue') — the exact form the allowlists use
+  for (const p of listFiles(abs, { exts: ['.js', '.vue'] })) {
+    files.push({
+      dir: abs,
+      name: path.basename(p),
+      p,
+      rel: path.basename(abs) + '/' + path.relative(abs, p).split(path.sep).join('/')
+    })
   }
-  files.push(...walkSfc(abs))
 }
 
 // which scan-surface paths still carry each kind of dispatch (kind-keyed sets); rel is already

@@ -32,6 +32,9 @@ function makeTree () {
   fs.mkdirSync(path.join(tmp, 'renderer/js/components'), { recursive: true })
   fs.mkdirSync(path.join(tmp, 'renderer/js/views'), { recursive: true })
   fs.copyFileSync(GATE, path.join(tmp, 'cli/check-op-feedback.js'))
+  // W21: the gate now delegates its walker to the shared lib-filescan.cjs — the fixture copy
+  // needs the dependency alongside or the gate dies with MODULE_NOT_FOUND
+  fs.copyFileSync(path.join(import.meta.dirname, '../../../cli/lib-filescan.cjs'), path.join(tmp, 'cli/lib-filescan.cjs'))
   return tmp
 }
 
