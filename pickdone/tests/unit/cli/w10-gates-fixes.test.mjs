@@ -177,8 +177,8 @@ test('GOLDEN lint-staged breaker: staged in-scope js with empty selection is red
 
 test('GOLDEN check-test-summary: stray SKIP_BASELINE override warns + is ignored; with SELFTEST=1 honored', () => {
   const { dir } = mkSandbox('summary-override')
-  // skip=5 exceeds EVERY platform baseline (win32 0 / linux 2 / darwin 1) so this pins on any host
-  const tap = 'TAP version 13\n1..7\nok 1 - a\nok 2 - b # SKIP p1\nok 3 - c # SKIP p2\nok 4 - d # SKIP p3\nok 5 - e # SKIP p4\nok 6 - f # SKIP p5\nok 7 - g\n# pass 2\n# fail 0\n# cancelled 0\n# skip 5\n# todo 0\n'
+  // skip=9 exceeds EVERY platform baseline (win32 0 / darwin 1 / linux 7) so this pins on any host
+  const tap = 'TAP version 13\n1..11\nok 1 - a\nok 2 - b # SKIP p1\nok 3 - c # SKIP p2\nok 4 - d # SKIP p3\nok 5 - e # SKIP p4\nok 6 - f # SKIP p5\nok 7 - g # SKIP p6\nok 8 - h # SKIP p7\nok 9 - i # SKIP p8\nok 10 - j # SKIP p9\nok 11 - k\n# pass 2\n# fail 0\n# cancelled 0\n# skip 9\n# todo 0\n'
   const tapFile = path.join(dir, 'skip5.tap')
   fs.writeFileSync(tapFile, tap)
   const run = env => spawnSync(process.execPath, [SUMMARY_GATE, tapFile], {
