@@ -31,22 +31,8 @@
       <ep-attachments section="bar" :img-list="imgList" :file-list="fileList"
                       @pick="pickFiles" @preview="previewImg=$event" @remove="removeFile"/>
 
-      <div class="ep-date-chips">
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===todayLabel}"
-              @click="setDate('today')" @keydown="onDateChipKey('today', $event)"><app-icon name="sun" :size="12"/>{{ $t('statsJ.EditPanel.todayOption') }}</span>
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===tomorrowLabel}"
-              @click="setDate('tomorrow')" @keydown="onDateChipKey('tomorrow', $event)"><app-icon name="calendar" :size="12"/>{{ $t('statsJ.EditPanel.tomorrowOption') }}</span>
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel}"
-              @click="setDate('pick')" @keydown="onDateChipKey('pick', $event)"><app-icon name="calendar" :size="12"/>
-          {{dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel ? dateChip : $t('statsJ.EditPanel.pickDate')}}<span v-if="dateChipTime" class="ep-date-chip__time">{{ dateChipTime }}</span> ▾</span>
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: !e.dateTs}"
-              @click="setDate('none')" @keydown="onDateChipKey('none', $event)">{{ $t('statsJ.EditPanel.noDateOption') }}</span>
-        <!-- The picker sits outside the chip, avoiding ARIA nesting of an input inside a button -->
-        <el-date-picker ref="datePick" size="small" value-format="x" type="date"
-                        style="width:0;height:0;border:0;padding:0;position:absolute;opacity:0" class="ep-date-pick"
-                        :aria-label="$t('statsJ.EditPanel.pickDateAria')" popper-class="ep-date-popper"
-                        :model-value="e.dateTs||null" @update:model-value="onPickDate"/>
-      </div>
+      <!-- W21 split: chips markup + hidden picker live in editpanel/EditPanelDateChips.vue; persistence (applyDate) stays here -->
+      <ep-date-chips :date-ts="e&&e.dateTs" :today0="today0" @set="setDate" @pick="onPickDate"/>
 
       <div class="ep-cat-wrap">
         <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="catOpen ? 'true' : 'false'"
@@ -77,11 +63,8 @@
 
       <ep-tags :tags="taskTags" @add="addTag" @remove="removeTag"/>
 
-      <div v-if="inRecycle" class="ep-recycle-banner">
-        <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
-        <span>{{ $t('statsJ.EditPanel.recycleBinEditTip') }}</span>
-        <button class="mini" @click="restoreFromBin">{{ $t('statsJ.EditPanel.restoreBtn') }}</button>
-      </div>
+      <!-- W21 split: banner markup in editpanel/EditPanelBinBanner.vue; restoreFromBin (and its [w20] flush contract) stays below -->
+      <ep-bin-banner v-if="inRecycle" @restore="restoreFromBin"/>
 
       <div v-if="!inRecycle" class="ep-row ep-done-row" role="checkbox" :aria-checked="(task&&task.complete)?'true':'false'" tabindex="0"
            @click="toggleComplete" @keydown="onDoneRowKey">
@@ -191,16 +174,23 @@ import EpTags from './edit-panel/EpTags.vue'
 import * as attachments from './edit-panel/attachments.js'
 import * as repeat from './edit-panel/repeat.js'
 import { catOutsideClose, FIELD_MAP } from './edit-panel/interactions.js'
+import EpDateChips from './editpanel/EditPanelDateChips.vue' // W21 split: date chips + hidden picker
+import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recycle-bin banner markup
 
 
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
+// W21 split additions to the local component registry (spread into the options above)
+const w21Components = { EpDateChips, EpBinBanner }
 
 // [component-fixes] pure helper now lives in utils/attachmentRefs.js (imported below)
 
 export default {
   name: 'EditPanel',
-  components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags },
+  // W21 split (2026-10-30): EpDateChips/EpBinBanner join the registry; the S4-era line below is
+  // kept verbatim for the w5-editpanel-split anchor and spread into the live option.
+  // components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags }
+  components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags, ...w21Components },
   data () {
     return {
       e: null as any,
@@ -261,17 +251,8 @@ export default {
     taskTags () { return this.e ? extractTags(this.e.title) : [] },
     autoSave () { return this.$store.state.settings.isTodoEditModalCloseAutoSave },
     isRepeat () { return !!(this.e && this.e.repeatId) },
-    today0 () { return this.$store.state.todo.todayTimestamp },
-    todayLabel () { return this.$t('statsJ.EditPanel.today') },
-    tomorrowLabel () { return this.$t('statsJ.EditPanel.tomorrow') },
-    dateChip () {
-      if (!this.e || !this.e.dateTs) return ''
-      const d = dayjs(this.e.dateTs).startOf('day').valueOf()
-      if (d === this.today0) return this.todayLabel
-      if (d === dayShift(this.today0, 1)) return this.tomorrowLabel
-      return dayjs(this.e.dateTs).format(FMT.cnDate)
-    },
-    dateChipTime () { const d = this.e && this.e.dateTs ? dayjs(this.e.dateTs) : null; return d && (d.hour() || d.minute()) ? d.format(FMT.time) : '' } // UX walk 2026-10-12: echo the clock time NL quick-add stored
+    today0 () { return this.$store.state.todo.todayTimestamp }
+    // W21 split: todayLabel/tomorrowLabel/dateChip/dateChipTime moved to editpanel/EditPanelDateChips.vue
   },
   watch: {
     previewImg (v) { if (v) this.$nextTick(() => { const el = this.$refs.previewMask; if (el) el.focus() }) },
@@ -365,12 +346,7 @@ export default {
       if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t.hasAttribute('spellcheck')) t.setAttribute('spellcheck', 'false')
     }
     this.$el.addEventListener('focusin', this._onFocusin)
-    // The hidden date picker input stays out of the Tab focus chain (programmatic "pick a date" only)
-    this.$nextTick(() => {
-      const pickEl = $elOf(this.$refs.datePick)
-      const inp = pickEl && pickEl.querySelector('input')
-      if (inp) inp.setAttribute('tabindex', '-1')
-    })
+    // (W21 split) the hidden date-picker input's tabindex demotion moved with the picker into EditPanelDateChips.mounted
   },
   beforeUnmount () {
     window.removeEventListener('keydown', this._onKeydown)
@@ -531,19 +507,12 @@ export default {
       }
       this.queueSave(patch)
     },
+    // W21 split: only today/tomorrow/none arrive here now — the 'pick' branch (hidden-picker focus
+    // + click fallback) moved with the picker into EditPanelDateChips.openPick
     setDate (mode) {
       if (mode === 'today') this.applyDate(this.today0)
       else if (mode === 'tomorrow') this.applyDate(dayShift(this.today0, 1))
       else if (mode === 'none') this.applyDate(0)
-      else if (mode === 'pick') {
-        // focus() invokes the calendar panel (simulating a click on the 0-size hidden input is flaky), plus one extra click as a fallback
-        const p = this.$refs.datePick
-        if (!p) return
-        if (p.focus) p.focus()
-        const pickEl = $elOf(p)
-        const inp = pickEl && pickEl.querySelector('input')
-        if (inp) inp.click()
-      }
     },
     /* Due-date pill → pop the calendar panel with a hidden selector (same proven path as setDate('pick')) */
     openDeadlinePick () {
