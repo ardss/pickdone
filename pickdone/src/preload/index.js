@@ -51,6 +51,17 @@ contextBridge.exposeInMainWorld('todoAPI', {
   readAutoBackup: (backupDir, fileName) => invoke('read-auto-backup', backupDir, fileName),
   pickBackupDir: () => invoke('pick-backup-dir'),
   getDefaultBackupDir: () => invoke('get-default-backup-dir'),
+  // F-RELOC data storage location: read-only info + relocate (main pops the dir picker when
+  // targetDir is omitted; migration closes the DB, copies, writes the boot file and relaunches)
+  getDataLocationInfo: () => invoke('data:location-info'),
+  relocateDataDir: targetDir => invoke('data:relocate', { targetDir }),
+  // Migration progress push (data-migrate-progress): the relocate modal renders
+  // {phase:'copy'|'verify'|'boot', done?, total?} and blocks closing while it runs
+  onMigrateProgress: fn => {
+    const h = (_e, p) => fn(p)
+    ipcRenderer.on('data-migrate-progress', h)
+    return () => ipcRenderer.removeListener('data-migrate-progress', h)
+  },
   encryptSecret: plain => invoke('encrypt-secret', plain),
   // r3 dead-channel removal (2026-09-28): decryptSecret had zero renderer callers while keeping
   // a reachable main-window IPC door to the lock-screen plaintext — deleted on both ends.
@@ -87,6 +98,30 @@ contextBridge.exposeInMainWorld('todoAPI', {
   isMaximized: () => invoke('is-maximized'),
   closeRequest: () => invoke('close-main-window-request'),
 
+  // ---- Window binding (T7 win-bind) ----
+  // Dedicated channels (NOT dbCall — same dedicated-channel precedent as purgeRecycleBin, so
+  // the ALLOWED_RENDERER_OPS three-way whitelist stays untouched). identify takes ZERO args:
+  // the physical cursor position never leaves the main process's PowerShell probe.
+  // IdentifyResult: { window: WinBindWindowRef|null, reason: 'NO_WINDOW'|'OWN_WINDOW'|'DESKTOP'|
+  // 'BUTTON_DOWN'|'ADAPTER_ERROR'|'TIMEOUT'|null } — window non-null ⟹ reason null.
+  winBindIdentify: () => invoke('win-bind:identify'),
+  // ref must be the identify result verbatim (main re-verifies hwnd+pid against a fresh
+  // snapshot before persisting — forged/closed windows come back STALE_REF).
+  winBindBind: (taskId, ref) => invoke('win-bind:bind', taskId, ref),
+  // ActivationResult: { ok:true } | { ok:false, reason, flashed?, candidates? } — flashed=true
+  // means main degraded to a taskbar flash; candidates only on AMBIGUOUS.
+  winBindActivate: taskId => invoke('win-bind:activate', taskId),
+  // idempotent: a missing taskId resolves { ok:true, removed:false }, never rejects.
+  winBindUnbind: taskId => invoke('win-bind:unbind', taskId),
+  // hydration pull; the renderer filters orphan bindings by its known taskIds.
+  winBindList: () => invoke('win-bind:list'),
+  // Multi-window badge sync: main broadcasts { reason:'bind'|'unbind', taskId } to all windows.
+  onWinBindChanged: fn => {
+    const h = (_e, p) => fn(p)
+    ipcRenderer.on('win-bind-changed', h)
+    return () => ipcRenderer.removeListener('win-bind-changed', h)
+  },
+
   // ---- Attachments ----
   uploadAttachment: payload => invoke('upload-attachment', payload), // {taskId,name,dataBase64}
   openFile: url => invoke('open-file', url),
@@ -115,6 +150,8 @@ contextBridge.exposeInMainWorld('todoAPI', {
   // Erase DWM ghost residue after content transitions (called on expand/collapse of the abandon popover)
   flushTomatoFloat: () => invoke('flush-tomato-float'),
   setTomatoFloatBounds: () => invoke('set-tomato-float-bounds'),
+  // W16 (2026-10-28) diagnostics: layered float self-check (route/DOM/paint) — main window only.
+  tomatoFloatDiagnose: () => invoke('tomato-float-diagnose'),
   startTomatoFloatDrag: () => invoke('start-tomato-float-drag'),
   stopTomatoFloatDrag: () => invoke('stop-tomato-float-drag'),
   ensureWindowWidth: w => invoke('ensure-window-width', w),
@@ -154,6 +191,14 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('shortcut-conflict', h)
     return () => ipcRenderer.removeListener('shortcut-conflict', h)
   },
+  // D6 (P2 2026-10-22): reminder-notification click locate — the main process pushes {taskId}
+  // after the lock-aware focus; the renderer routes to the task's view and opens the edit panel
+  // (same wrapper/disposer contract as onShortcutConflict above)
+  onReminderOpenTask: fn => {
+    const h = (_e, p) => fn(p)
+    ipcRenderer.on('reminder-open-task', h)
+    return () => ipcRenderer.removeListener('reminder-open-task', h)
+  },
   onShortcutAction: fn => {
     const h = (_e, action) => fn(action)
     ipcRenderer.on('shortcut-action', h)
@@ -190,9 +235,10 @@ contextBridge.exposeInMainWorld('todoAPI', {
     ipcRenderer.on('tomato-records-changed', h)
     return () => ipcRenderer.removeListener('tomato-records-changed', h)
   },
-  // CLI settings set hot-sync: the main process watcher pushes this event after diffing changed keys, and the renderer dispatches settings/update
+  // CLI settings set hot-sync: the main process watcher pushes this event after diffing changed keys, and the renderer dispatches settings/update.
+  // [J-audit P2 fix] the 2nd arg is the origin blob's _savedAt — the renderer suppresses its own mirror's echoes (stale-generation bounce).
   onExternalSettingsChanged: fn => {
-    const h = (_e, patch) => fn(patch)
+    const h = (_e, patch, originSavedAt) => fn(patch, originSavedAt)
     ipcRenderer.on('external-settings-changed', h)
     return () => ipcRenderer.removeListener('external-settings-changed', h)
   },

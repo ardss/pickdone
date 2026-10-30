@@ -990,7 +990,7 @@ blockquote { border-left: 3px solid var(--brand); padding-left: 12px; color: var
 
 
 
-.rm-row { display: grid; grid-template-columns: 44px 1fr; align-items: center; gap: 6px 8px; margin-bottom: 12px; font-size: var(--fs-md); }
+.rm-row { display: grid; grid-template-columns: min-content 1fr; align-items: center; gap: 6px 8px; margin-bottom: 12px; font-size: var(--fs-md); } /* [F3-UX] was fixed 44px: en labels (Interval) overflowed */
 
 
 
@@ -2027,7 +2027,11 @@ img { -webkit-user-drag: none; }
   position:relative;overflow:hidden;color:var(--brand-dark);font-size: var(--fs-sm);font-weight:400;line-height:16px;
   padding:5px 10px;background-color:var(--tomato-bg);border:none;cursor:pointer;
 }
-.todo-list .todo-box-list-item__tools .btn:focus,.todo-list .todo-box-list-item__tools .btn:hover{filter:brightness(.9);outline:0}
+.todo-list .todo-box-list-item__tools .btn:hover{filter:brightness(.9)}
+/* [F3-UX] the old combined rule zeroed the focus ring (outline:0 at a specificity that outran
+   the global :focus-visible rule) - hover keeps the brightness dim, focus gets a visible ring */
+.todo-list .todo-box-list-item__tools .btn:focus{filter:brightness(.9)}
+.todo-list .todo-box-list-item__tools .btn:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
 .todo-list .todo-box-list-item__tools .btn:active{filter:brightness(.8)}
 /* 彻底删除（原版无此钮、我方补充）：红字浅红底，与组内药丸同形 */
 .todo-list .todo-box-list-item__category-dot svg{width:12px;height:12px;display:block}

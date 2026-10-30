@@ -3,18 +3,14 @@
   <aside class="day-rail" :class="{ collapsed: railCollapsed }" :style="{ width: railCollapsed ? '48px' : '236px', padding: railCollapsed ? '26px 4px 10px' : '14px 12px 16px' }" :aria-label="$t('statsG.DayRail.label')" :title="railCollapsed ? $t('statsG.DayRail.label') : ''"
          v-bind="railCollapsed ? { role: 'button', tabindex: 0, 'aria-label': $t('statsG.DayRail.foldAria') } : {}"
          @click="onRailClick" @keydown="onRailKey">
-    <!-- Collapsed = whole rail is the expand button. Expanded = clicking blank areas (padding/slot gaps/hour labels)
-         also collapses, so the gesture is symmetric; clicks on interactive content (fact segments, plan chips,
-         entry card, the fact axis itself, controls) pass through untouched. While a pomodoro is running the
-         rail never collapses on blank clicks (user-finalized 2026-09-06: the running block must stay visible). -->
+    <!-- Collapsed = whole rail is the expand button. Expanded = clicking blank areas (padding/slot gaps/hour labels) also collapses, so the gesture is symmetric; clicks on interactive content (fact segments, plan chips, entry card, the fact axis itself, controls) pass through untouched. While a pomodoro is running the rail never collapses on blank clicks (user-finalized 2026-09-06: the running block must stay visible). -->
     <!-- Collapse action = the whole header block is clickable + hover highlight (aligned with the sidebar brand-row approach, user-finalized); « is only a visual indicator -->
     <div class="dr-head" role="button" tabindex="0" :aria-expanded="!railCollapsed"
          :aria-label="$t('statsG.DayRail.foldAria')" @click.stop="toggleRail" @keydown.enter.prevent="toggleRail">
       <div class="dr-head__text">
         <b>{{ headLabel }}</b>
         <span>{{ $t('statsG.DayRail.hint') }}</span>
-        <!-- Schedule-load warning (v0.2): same task selection the capacity band documents (today's + overdue
-             incomplete), so the warning and the band can never disagree. Threshold 0 = 'off' -> no warning UI. -->
+        <!-- Schedule-load warning (v0.2): same task selection the capacity band documents (today's + overdue incomplete), so the warning and the band can never disagree. Threshold 0 = 'off' -> no warning UI. -->
         <span v-if="loadWarn.active" class="dr-load-warn" :title="loadWarn.tip" :aria-label="loadWarn.tip">{{ loadWarn.badge }}</span>
       </div>
       <i class="dr-fold-ico" aria-hidden="true"><app-icon name="chevron-left" :size="14"/></i>
@@ -40,8 +36,7 @@
            @drop.stop="onSegDrop(s, $event)" @dblclick.stop
            :class="{ 'pd-is-over': dragOverSeg === s.tomatoId, 'pd-is-dim': hoverTaskId && s.taskId !== hoverTaskId }"></i>
       </div>
-      <!-- Entry card: unified correction panel for fact entries (start-end/duration/status/attachment/delete);
-           Esc closes without saving (focus card on open so a single Esc works from anywhere in the panel) -->
+      <!-- Entry card: unified correction panel for fact entries (start-end/duration/status/attachment/delete); Esc closes without saving (focus card on open so a single Esc works from anywhere in the panel) -->
       <div v-if="entryDraft" class="dr-card" :style="{ top: cardTop }" tabindex="-1" ref="drCard"
            @dblclick.stop @contextmenu.prevent.stop @keydown.esc.stop.prevent="entryDraft = null">
         <!-- [D19] the close X advertised itself as "Focus record" (the card title key); use a close label -->
@@ -106,8 +101,7 @@
 <script lang="ts">
 /** Today time rail (V2 timeline-style today page) -- left column vertical hour track:
  *  (1) Completed pomodoros/breaks land on the rail at their real times (data = tomato store records)
- *  (2) Pre-planning: dragging a todo from the right list onto the rail = "planned for around this time"; temporary, draggable to adjust, deletable
- *  Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+366d] */
+ *  (2) Pre-planning: dragging a todo onto the rail = "planned for around this time"; temporary, draggable to adjust, deletable. Plan data lives in SQLite plan_chips rows (2026-09-03 root fix), all writes via utils/dayPlans.js atomic ops; bucketed by date, pruned outside [-7d,+366d] */
 import { FMT, dayjs } from '../utils/core.js'
 import { FOCUS_INPUT_MAX_MINUTES } from '../../../shared/limits.mjs'
 import { localDayKey } from '../../../shared/date-key.mjs'
@@ -125,6 +119,15 @@ const DAY_END_H = 23
 
 /* Stable per-instance id: selection/drag-move/delete all anchor to that specific chip, not the taskId */
 function planUid () { return 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7) }
+
+/* [F7 P3] same-ms drops could mint a duplicate planUid and the db-plan-ops upsert would then rewrite an unrelated chip; dedup against loaded chip ids, extend randomness after 5 rolls */
+function uniquePlanUid (usedIds) {
+  for (let i = 0; i < 5; i++) {
+    const id = planUid()
+    if (!usedIds.has(id)) return id
+  }
+  return planUid() + Math.random().toString(36).slice(2, 9)
+}
 
 /* mm validity: a time string starting with a two-digit 00-23 hour (e.g. "15:00"/"09:30"); invalid entries are dropped outright to keep ghost data from persisting forever */
 function validPlanMm (mm) { return typeof mm === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(mm) }
@@ -157,7 +160,7 @@ const V1_CSS = `
 .today-v1 .today-main { flex: 1; min-width: 0; align-self: stretch; display: flex; flex-direction: column; }
 .today-v1 .today-body .day-rail { width: 236px; flex-shrink: 0; position: sticky; top: 0; height: calc(100vh - 120px); display: flex; flex-direction: column; overflow-y: auto; transition: width .2s cubic-bezier(.2,.8,.2,1); }
 /* Collapsed state = the whole rail is the expand button: no separate expand button; hover uses an outer edge line + a slight background tint to hint clickability */
-.today-v1 .today-body .day-rail.collapsed { cursor: pointer; transition: border-color .15s, background .15s; }
+.today-v1 .today-body .day-rail.collapsed { cursor: pointer; transition: border-color .15s, background .15s, width .2s cubic-bezier(.2,.8,.2,1); }
 .today-v1 .today-body .day-rail.collapsed:hover { border-color: var(--brand, #0f9d8f); background: var(--hover-bg, #fbfbfb); }
 .day-rail.collapsed .dr-head, .day-rail.collapsed .dr-plan, .day-rail.collapsed .dr-blk, .day-rail.collapsed .dr-rail { display: none; }
 .day-rail.collapsed .dr-track { flex: 0 0 auto; }
@@ -262,11 +265,14 @@ function injectV1Style () {
 
 export default {
   name: 'DayRail',
-  data: () => ({ plans: {}, dragOverHour: -1, dragOverSeg: null, axisPx: null, entryDraft: null, activePlanId: null, nowH: new Date().getHours(), nowTs: Date.now(), railCollapsed: localStorage.getItem('dayRailCollapsed') === '1', focusInputMax: FOCUS_INPUT_MAX_MINUTES }),
+  // [F4] LS read is try-wrapped (repo convention: stub hosts / blocked storage fall back to the default false instead of throwing inside data())
+  data () {
+    let rc = false; try { rc = localStorage.getItem('dayRailCollapsed') === '1' } catch (e) { /* storage-disabled host: default false, no data() throw */ }
+    return { plans: {}, dragOverHour: -1, dragOverSeg: null, axisPx: null, entryDraft: null, activePlanId: null, nowH: new Date().getHours(), nowTs: Date.now(), railCollapsed: rc, focusInputMax: FOCUS_INPUT_MAX_MINUTES }
+  },
   async mounted () {
     injectV1Style()
-    // Storage-layer root fix (2026-09-03): chips = SQLite plan_chips rows, reads = planAll atomic read, writes = atomic ops (see dayPlans.js).
-    // Mounted load with backoff retry (the bridge/library may not be ready at startup); the LS snapshot is a one-time fallback import only and never participates afterward.
+    // Storage-layer root fix (2026-09-03): chips = SQLite plan_chips rows, reads = planAll atomic read, writes = atomic ops (see dayPlans.js). Mounted load with backoff retry (the bridge/library may not be ready at startup); the LS snapshot is a one-time fallback import only and never participates afterward.
     for (let i = 0; i < 6; i++) {
       if (this.$.isUnmounted) return // 卸载守卫:Vue3 普通卸载不清空 $el,$el===null 恒不触发;$.isUnmounted 在 unmount 时同步置真(复核 P1)
       try {
@@ -277,19 +283,14 @@ export default {
         await new Promise(r => setTimeout(r, 400 * (i + 1)))
       }
     }
-    // Crossing midnight: the tick refreshes both the hour highlight and the "today" key -- today is a plain non-reactive function,
-    // without going through the tick the whole rail would freeze on the previous day's bucket after midnight
+    // Crossing midnight: the tick refreshes both the hour highlight and the "today" key -- today is a plain non-reactive function, without going through the tick the whole rail would freeze on the previous day's bucket after midnight
     this._tick = setInterval(() => {
       this.nowH = new Date().getHours()
       this.nowTs = Date.now()
     }, 60000)
-    // Measure the rail height: CSS constants (100vh-N) cannot cover the real height taken by the app shell + page header,
-    // any hardcoded constant overflows on one side; use the scroll container's clientHeight; sticky top stays 0 so the pinned position equals the flow position (a nonzero threshold made the rail jump on view switches)
+    // Measure the rail height: CSS constants (100vh-N) cannot cover the real height taken by the app shell + page header, any hardcoded constant overflows on one side; use the scroll container's clientHeight; sticky top stays 0 so the pinned position equals the flow position (a nonzero threshold made the rail jump on view switches)
     this.fitRail()
-    // round3-ux-perf-4: coalesce resize work to one animation frame — uncoalesced, each resize
-    // event read offsetTop/offsetHeight right after fitRail's style.height write (layout thrash
-    // during window drag). Final layout is identical: fitRail/measureAxis re-read the live DOM
-    // at execution time, so deferring by ≤1 frame cannot change the values.
+    // round3-ux-perf-4: coalesce resize work to one animation frame — uncoalesced, each resize event read offsetTop/offsetHeight right after fitRail's style.height write (layout thrash during window drag). Final layout is identical: fitRail/measureAxis re-read the live DOM at execution time.
     window.addEventListener('resize', this._onResize = () => {
       if (this._resizeRaf) return
       this._resizeRaf = requestAnimationFrame(() => { this._resizeRaf = 0; this.fitRail(); this.measureAxis() })
@@ -306,9 +307,7 @@ export default {
     // Expired day-bucket cleanup (db atomic op, idempotent): [-7d,+366d] window; planning the future is a finalized feature, so only expired buckets are pruned, never future ones (future bound covers the reachable planning horizon — see prune)
     // [d21-A15] handle stored so beforeUnmount can clear it (an unmount <5s after mount used to fire prune into a dead component)
     this._pruneTimer = setTimeout(() => { try { this.prune() } catch {} }, 5000)
-    // 渐进折叠(2026-09-03 用户定稿): minWidth 放开到 750 的代价——窗口 <1140 时自动折叠抽屉
-    // (日期条视图切换行单行需要 614px,抽屉展开时最坏组合 1140 才放得下);加宽回 ≥1140 恢复进入前的偏好。
-    // 侧栏 <920 有自己的折叠断点,两级递进:先折抽屉、再折侧栏。手动收起的(_railAutoFolded=false)加宽后不弹开。
+    // 渐进折叠(2026-09-03 用户定稿): minWidth 放开到 750 的代价——窗口 <1140 时自动折叠抽屉(日期条单行需要 614px,抽屉展开时最坏组合 1140 才放得下);加宽回 ≥1140 恢复进入前的偏好。侧栏 <920 有自己的折叠断点,两级递进:先折抽屉、再折侧栏。手动收起的(_railAutoFolded=false)加宽后不弹开。
     this._railNarrowMql = window.matchMedia('(max-width: 1139px)')
     this._onRailNarrow = e => {
       if (e.matches) {
@@ -321,6 +320,10 @@ export default {
     if (this._railNarrowMql.matches && !this.railCollapsed) { this._railAutoFolded = true; this.setRailCollapsed(true) }
     if (this._railNarrowMql.addEventListener) this._railNarrowMql.addEventListener('change', this._onRailNarrow)
     else this._railNarrowMql.addListener(this._onRailNarrow)
+    // [F3-UX] Esc during a drag cancels the drop: the drop-target highlight (dragOverHour) used to survive until another dragover because only the success path (onDrop) cleared it
+    window.addEventListener('keydown', this._onDragEsc = e => {
+      if (e.key === 'Escape') { this.dragOverHour = -1; this._dragPlan = null }
+    })
   },
   beforeUnmount () {
     clearInterval(this._tick)
@@ -329,6 +332,7 @@ export default {
     // round3-ux-perf-4: drop a pending coalesced resize frame
     if (this._resizeRaf) cancelAnimationFrame(this._resizeRaf)
     window.removeEventListener('day-plans-changed', this._onPlansChanged)
+    window.removeEventListener('keydown', this._onDragEsc) // [F3-UX]
     if (this._offTodosChanged) this._offTodosChanged()
     if (this._railNarrowMql) {
       if (this._railNarrowMql.removeEventListener) this._railNarrowMql.removeEventListener('change', this._onRailNarrow)
@@ -345,7 +349,7 @@ export default {
       return list
     },
     /* Follow the right column's date strip (user-finalized): the time rail shows the selected day, not just today — can review history / plan the future */
-    selTs () { return this.$store.state.ui.daySelectedTs || today0() },
+    selTs () { void this.nowTs; return this.$store.state.ui.daySelectedTs || today0() }, // [w17] nowTs dependency: with daySelectedTs === 0 (main path) the fallback today0() froze at yesterday across midnight
     isViewingToday () { return this.selTs === today0() },
     headLabel () {
       if (this.isViewingToday) return this.$t('statsA.core.today')
@@ -355,8 +359,7 @@ export default {
       return this.$t('statsA.core.calMd', { m: d.month() + 1, d: d.date(), w: this.$t('statsA.core.weekOf', { w: this.$t('statsA.core.wd' + d.day()) }) })
     },
     today () { void this.nowTs; void this.selTs; return dayjs(this.selTs).format(FMT.date) },
-    /* Selected day as a day-start ts — the project-wide bucketing caliber (dayStart/todoTime are
-       day-anchored ms timestamps); the `today` string computed stays for the date-keyed plans map */
+    /* Selected day as a day-start ts — the project-wide bucketing caliber (dayStart/todoTime are day-anchored ms timestamps); the `today` string computed stays for the date-keyed plans map */
     selDayStart () { void this.nowTs; return +dayjs(this.selTs).startOf('day') },
     hoverTaskId () { return this.$store.state.ui.hoverTaskId },
     /* Entry card's owning-task candidates: today's (including due-today) incomplete first */
@@ -365,12 +368,12 @@ export default {
       return (Math.max(2, Math.min(68, this.entryDraft.startMin / 1440 * 100))) + '%'
     },
     taskOptions () {
-      /* [dw-wave6 F5] compare in ms-timestamp caliber: `t.dayStart === 'YYYY-MM-DD'` was always false,
-         so pure day-scheduled (no todoTime) tasks vanished from the entry-card candidates */
+      /* [dw-wave6 F5] compare in ms-timestamp caliber: `t.dayStart === 'YYYY-MM-DD'` was always false, so pure day-scheduled (no todoTime) tasks vanished from the entry-card candidates */
       const day = this.selDayStart
       const cands = this.$store.state.todo.todoList.filter(t => {
         if (t.delete) return false
-        return t.dayStart === day || (t.todoTime ? +dayjs(t.todoTime).startOf('day') === day : false)
+        /* [w18] normalize dayStart to midnight too: a drifted/string dayStart failed strict equality and the row vanished from the entry-card candidates */
+        return (t.dayStart ? +dayjs(t.dayStart).startOf('day') === day : false) || (t.todoTime ? +dayjs(t.todoTime).startOf('day') === day : false)
       })
       const rank = t => (t.complete ? 1 : 0)
       return cands.sort((a, b) => rank(a) - rank(b))
@@ -411,12 +414,14 @@ export default {
         const to = Math.max(0, Math.min(endMin, 1440))
         if (to <= from) continue
         if (!this.axisPx) {
-          // Collapsed mini rail = whole-day proportional container, positioned by 1440-minute percentages (expanded state not yet measured on first frame stays empty awaiting re-measure)
+          // Collapsed mini rail = whole-day proportional container, positioned by 1440-minute percentages.
+          // [w18] continue, not return: the old in-loop return stopped after the FIRST record — the collapsed rail rendered only one focus block per day
           if (this.railCollapsed) {
             segs.push({
               style: { top: (from / 1440 * 100) + '%', height: Math.max(0.2, (to - from) / 1440 * 100) + '%', background: segColor },
               tip, taskId: r.focusTaskId, tomatoId: r.tomatoId
             })
+            continue
           }
           return segs // Expanded state not yet measured; re-rendered by the watcher/timer after measurement
         }
@@ -463,15 +468,11 @@ export default {
       for (const t of this.$store.state.todo.todoList) m.set(t.taskId, t)
       return m
     },
-    /* Schedule-load warning (v0.2 loadWarn util): planned = estimated tomatoes of today's + overdue incomplete
-       tasks (views.todayTodoList + views.recent.expiredUncompleted — the same selection the Today groups and the
-       capacity band concept use). Level 'warn' only when planned is strictly above the threshold; threshold 0
-       ('off') or browsing another day renders no warning UI at all. */
+    /* Schedule-load warning (v0.2 loadWarn util): planned = estimated tomatoes of TODAY's scheduled tasks only (views.todayTodoList). 2026-10-26 root fix (user-reported): the old input also concat'd views.recent.expiredUncompleted, so up-to-30d of overdue backlog made the badge scream 过载 132/10 forever even on a lightly-planned day — alert fatigue, and it disagreed with ProjectOverviewView's load badge which already counts today-only (t.dayStart === today0). Overdue backlog stays visible as the Today page's expired groups; it just no longer counts as today's plan. Level 'warn' only when planned is strictly above the threshold; threshold 0 ('off') or browsing another day renders no warning UI at all. */
     loadWarn () {
       if (!this.isViewingToday) return { active: false, badge: '', tip: '' }
       const v = this.$store.state.todo.views || {}
-      const todos = [].concat(v.todayTodoList || [], (v.recent && v.recent.expiredUncompleted) || [])
-      const planned = dayPlannedLoad(todos, t => getEstimate(t.taskId))
+      const planned = dayPlannedLoad(v.todayTodoList || [], t => getEstimate(t.taskId))
       const th = Math.round(Number(this.$store.state.settings.dailyLoadWarnThreshold) || 0)
       if (loadLevel(planned, th) !== 'warn') return { active: false, badge: '', tip: '' }
       return {
@@ -562,15 +563,22 @@ export default {
       this._dragPlan = null
       // On write failure (lock screen/library busy), read back with the library as source of truth, eliminating drift between optimistic UI and the library (async errors can't be caught by sync try/catch)
       const resync = () => { this.reportPlanFail(); this._onPlansChanged() }
+      /* [F7 P3] a fresh chip must not reuse a loaded chip id (the upsert would rewrite it) */
+      const usedIds = new Set()
+      for (const dayPlansMap of Object.values(this.plans)) {
+        for (const chips of Object.values(dayPlansMap || {})) {
+          if (Array.isArray(chips)) chips.forEach(c => { if (c && c.id) usedIds.add(c.id) })
+        }
+      }
       if (move && move.taskId === taskId && Array.isArray(day[taskId])) {
         day[taskId].splice(move.idx, 1, { mm, id: move.planId }) /* In-rail chip drag = move that instance (id unchanged) */
         dayPlans.updateChip(move.planId, this.today, mm).catch(resync)
       } else if (Array.isArray(day[taskId])) {
-        const id = planUid()
+        const id = uniquePlanUid(usedIds)
         day[taskId].push({ mm, id }) /* Second drop = append */
         dayPlans.addChips([{ taskId, day: this.today, mm, id }]).catch(resync)
       } else {
-        const id = planUid()
+        const id = uniquePlanUid(usedIds)
         day[taskId] = [{ mm, id }]
         dayPlans.addChips([{ taskId, day: this.today, mm, id }]).catch(resync)
       }
@@ -587,7 +595,8 @@ export default {
          dropping onto an existing chip only determines the time — never mistake the dropped-on chip for the dragged item (otherwise same-task in-place replacement = looks like nothing was added) */
       this.onDrop(h, e)
     },
-    onChipDragEnd () { this._dragPlan = null },
+    // [F3-UX] dragend fires on cancel/drop-outside too: clear the highlight there, not just the plan
+    onChipDragEnd () { this._dragPlan = null; this.dragOverHour = -1 },
     removePlan (p) {
       const day = this.plans[this.today]
       if (!day || !Array.isArray(day[p.taskId])) return

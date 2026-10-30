@@ -85,9 +85,18 @@ export default defineComponent({
     },
     isProject (id) { return this.$store.state.category.projectIds.includes(id) },
     /** Set/unset as project (secondary path; the primary entry is "New Project" on the project overview page) */
-    toggleProject (c) {
+    async toggleProject (c) {
       const flag = !this.isProject(c.categoryId)
       this.$store.commit('category/setProject', { id: c.categoryId, flag })
+      // [F3 fix] same confirmed-write gate as ProjectView.removeFromProject: setProject is a SYNC
+      // mutation (Vuex commit discards the handler's return) whose durable flag write settles
+      // asynchronously; the store's onFail revert of the in-memory projectIds is its failure
+      // signal. Wait out the immediate-failure window, then only toast success when the in-memory
+      // list agrees with the requested flag (a later rejection still reverts via the store).
+      await new Promise(r => setTimeout(r, 0))
+      if (this.$store.state.category.projectIds.includes(c.categoryId) !== flag) {
+        return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+      }
       this.$message.success(flag ? this.$t('statsG.SideNav.setProject', { name: c.categoryName }) : this.$t('statsG.SideNav.unsetProject', { name: c.categoryName }))
     },
     startMgrEdit (c) {
@@ -100,7 +109,7 @@ export default defineComponent({
         if (inp) { inp.focus(); inp.select() }
       })
     },
-    saveMgrEdit (c) {
+    async saveMgrEdit (c) {
       if (this.mgrEditing !== c.categoryId) return
       // D14-A12: a blank name used to silently restore the old name — warn instead (same
       // inline-rename convention as HabitView's renameEmpty) and keep the editor open for a fix.
@@ -123,7 +132,21 @@ export default defineComponent({
       // state, re-focus so the user can pick another name (dialog is append-to-body: query at
       // document level, per startMgrEdit).
       try {
-        this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
+        // [F3 fix] the mutation's persist() resolves false when the SQLite write failed; that used
+        // to be ignored (the toast-less inline rename just closed on a silently-dropped write).
+        // On a failed persist: error toast, keep the editor open on the OLD name (same refocus
+        // convention as the duplicate-name branch below) so the user can retry or Esc-cancel.
+        const ok = await this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
+        if (ok === false) {
+          this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+          this.mgrName = c.categoryName
+          this.$nextTick(() => {
+            const inp = document.querySelector('.cat-mgr-dialog input.sn-cat-edit')
+            if (inp) { /* @ts-ignore duck-typed focus (tests stub a plain object) */
+            inp.focus() }
+          })
+          return
+        }
       } catch (e) {
         if (e && e.code === 'CATEGORY_EXISTS') {
           this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn'))

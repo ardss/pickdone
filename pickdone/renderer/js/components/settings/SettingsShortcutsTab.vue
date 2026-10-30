@@ -19,7 +19,7 @@
           </div>
         </div>
       </template>
-      <div class="form-item" v-if="capturing"><span class="form-item__hint">{{ $t('statsE.SettingsModal.scCaptureHint') }}</span></div>
+      <div class="form-item" v-if="capturing"><span class="form-item__hint">{{ $t('statsE.SettingsModal.scCaptureHint') }} {{ $t('statsE.w7.scClearHint') }}</span></div>
       <div class="form-item"><span class="form-item__label"></span>
         <div class="form-item__control"><button class="primary mini-lg" :disabled="!shortcutsLoaded" @click="saveShortcuts">{{ $t('statsE.SettingsModal.saveShortcutBtn') }}</button></div></div>
       <div class="form-item"><span class="form-item__label"></span>
@@ -156,6 +156,14 @@ export default {
       e.stopPropagation()
       const k = (e.key || '').toLowerCase()
       if (k === 'escape') { this.stopCapture(); return } // Esc = cancel capture
+      // [w7] Delete/Backspace during capture CLEAR the binding ('' = unset). The empty value is
+      // a first-class state the whole chain already accepts (formatShortcut renders scEmpty,
+      // hasConflict ignores it, the factory table ships empty bindings, settings/update persists it).
+      if (k === 'delete' || k === 'backspace') {
+        this.shortcutForm[key] = ''
+        this.stopCapture()
+        return
+      }
       if (!k || k === 'control' || k === 'alt' || k === 'shift' || k === 'meta') return // do not commit when only modifier keys are pressed
       const combo = captureCombo(e, k)
       // D10 domain-B (#3): reject modifier-less typing keys (bare letters/digits) — a saved bare

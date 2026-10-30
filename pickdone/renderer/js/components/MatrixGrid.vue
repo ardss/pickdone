@@ -3,7 +3,7 @@
   <div class="matrix-wrap">
     <div class="matrix-grid">
     <div v-for="q in quadrants" :key="q.key" class="matrix-quadrant" :class="[q.cls, { 'over': overKey===q.key }]"
-         @dragover.prevent="overKey=q.key" @dragleave="overKey===q.key&&(overKey=null)" @drop.prevent="dropOn(q, $event)">
+         @dragover.prevent="overKey=q.key" @dragleave="onDragLeave($event)" @drop.prevent="dropOn(q, $event)">
       <div class="matrix-quadrant__head">
         <span class="matrix-quadrant__title">{{ q.title }}</span>
         <em class="matrix-quadrant__count">{{ q.tasks.length }}</em>
@@ -12,12 +12,12 @@
         <div v-for="t in q.tasks" :key="t.taskId" class="matrix-task" draggable="true"
              :class="{ dragging: dragId===t.taskId }"
              @dragstart="dragStart(t,$event)" @dragend="endDrag"
-             @click="openEdit(t)" @keydown="onRowKey(t, $event)"
-             @keydown.ctrl.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.2.prevent="kbdQuadrant(t, 1)"
-             @keydown.ctrl.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.4.prevent="kbdQuadrant(t, 3)"
+             @click="openEdit(t)" @keydown.exact="onRowKey(t, $event)"
+             @keydown.ctrl.alt.1.prevent="kbdQuadrant(t, 0)" @keydown.ctrl.alt.2.prevent="kbdQuadrant(t, 1)"
+             @keydown.ctrl.alt.3.prevent="kbdQuadrant(t, 2)" @keydown.ctrl.alt.4.prevent="kbdQuadrant(t, 3)"
              @contextmenu="taskContextMenu(t, $event)"
              tabindex="0" role="button" :title="taskTip(t)" :aria-label="$t('statsA.MatrixGrid.taskPrefix')+(t.taskContent||$t('statsA.MatrixGrid.noTitle'))"
-             aria-keyshortcuts="Control+1 Control+2 Control+3 Control+4">
+             aria-keyshortcuts="Control+Alt+1 Control+Alt+2 Control+Alt+3 Control+Alt+4">
           <span class="td-check" :class="{on: isComplete(t)}" :style="isComplete(t) ? { background: chkColor(t), borderColor: chkColor(t) } : {}" role="checkbox"
                 :aria-checked="isComplete(t) ? 'true' : 'false'" :aria-label="$t('statsJ.TodoItem.markDone')"
                 tabindex="0" @click.stop="completeTask(t)" @keydown="onCheckKey(t, $event)">
@@ -151,12 +151,23 @@ export default {
       // [fix 2026-10-09] cross-view drops: TodoItem drags set text/plain = taskId and the calendar
       // time-blocks already accept them, so a drop with no internal dragId must resolve the task
       // from the store (mirrors DayRail.onDrop) instead of silently no-oping
-      if (!t && !id && e && e.dataTransfer) {
-        const droppedId = e.dataTransfer.getData('text/plain')
+      // [fix 2026-10-27] the `!id` gate dead-ended a row that left this.tasks mid-drag (the store
+      // swap during drag removed it from the rendered set): dragId was set, `!t && !id` was false,
+      // drop silently no-oped. Fall back to the dataTransfer id whenever `!t`, not only when `!id`.
+      if (!t && e && e.dataTransfer) {
+        const droppedId = id != null ? String(id) : e.dataTransfer.getData('text/plain')
         if (droppedId) t = this.$store.state.todo.todoList.find(x => String(x.taskId) === droppedId)
       }
       if (!t || ((t.important || 0) === q.important && (t.urgent || 0) === q.urgent)) return
       this.moveQuadrant(t, q)
+    },
+    /* [fix 2026-10-27] dragleave fires when the pointer crosses onto a CHILD element (task row,
+       empty-slot label) inside the quadrant; the old inline `overKey=null` killed the 'over'
+       highlight mid-hover (flicker). Only clear when the pointer actually left the quadrant. */
+    onDragLeave (e) {
+      const rel = e && e.relatedTarget
+      if (rel && e.currentTarget && e.currentTarget.contains(rel)) return
+      this.overKey = null
     },
     /* [maint-0924 A3] keyboard path (WCAG 2.1.1): Ctrl+1..4 = the four quadrants, same moveWithUndo
      * exit and priority ledger as the drag path — the matrix had zero keyboard move before */
@@ -208,7 +219,8 @@ export default {
 
 
 
-.matrix-task:hover { box-shadow: 0 1px 4px rgba(0, 0, 0, .08); }
+/* [F5 2026-10-21] the hover box-shadow rule moved to the single .matrix-task:hover below
+   (line ~277): the box-shadow is now in the transition list so it fades with the background */
 
 /* 四象限视图 */
 .matrix-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -268,13 +280,13 @@ export default {
 
 .matrix-task {
   position: relative; padding: 8px 10px; background: var(--gray-bg); border-radius: var(--radius-md); font-size: var(--fs-md);
-  display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background .15s, transform .1s;
+  display: flex; align-items: center; gap: 8px; cursor: pointer; transition: background var(--dur-fast), transform var(--dur-fast), box-shadow var(--dur-fast);
 }
 
 
 
 
-.matrix-task:hover { background: var(--hover-bg); }
+.matrix-task:hover { background: var(--hover-bg); box-shadow: 0 1px 4px rgba(0, 0, 0, .08); }
 
 
 

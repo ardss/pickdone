@@ -114,18 +114,22 @@ test('F7: svg uploads are rejected at the whitelist (script-capable type via she
 
 // ---- F8: updater channels gated ----
 const systemHandlers = require_('../../../src/main/handlers/system.js')
-test('F8: updater check/download/quit-and-install reject auxiliary windows', () => {
+test('F8: updater check/download/quit-and-install reject auxiliary windows', async () => {
   const api = systemHandlers(ctxBase)
-  for (const ch of ['updater:check', 'updater:download', 'updater:quit-and-install']) {
+  // F4 (2026-10-21): quit-and-install became async for the pomodoro confirm, so its gate now
+  // rejects the promise instead of throwing synchronously - assert.rejects for it.
+  for (const ch of ['updater:check', 'updater:download']) {
     assert.throws(() => api[ch](eAux), /forbidden: main window only/, ch + ' must be main-window-only')
   }
+  await assert.rejects(() => api['updater:quit-and-install'](eAux), /forbidden: main window only/, 'updater:quit-and-install must be main-window-only')
   assert.deepEqual(updaterCalls, [], 'no updater action may run for a rejected sender')
 })
 test('F8: updater channels honor the locked-state gate; main window passes; status stays open', async () => {
   const api = systemHandlers({ ...ctxBase, isLocked: () => true })
-  for (const ch of ['updater:check', 'updater:download', 'updater:quit-and-install']) {
+  for (const ch of ['updater:check', 'updater:download']) {
     assert.throws(() => api[ch](eMain), /locked/, ch + ' must refuse while locked')
   }
+  await assert.rejects(() => api['updater:quit-and-install'](eMain), /locked/, 'updater:quit-and-install must refuse while locked')
   const open = systemHandlers(ctxBase)
   assert.deepEqual(await open['updater:check'](eMain), { active: false })
   assert.deepEqual(updaterCalls, ['check'])

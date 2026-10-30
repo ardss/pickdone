@@ -111,7 +111,7 @@ test('forged or malformed payloads are refused without writing any row', () => {
     null, undefined, 'start', 7,
     {}, { transition: 'unknown' },
     { transition: 'start', startedAt: 0 },                       // zero startedAt
-    { transition: 'start', status: 'startTomatoTime', startedAt: NOW + 120_000 }, // >60s in the future
+    { transition: 'start', status: 'startTomatoTime', startedAt: NOW + 660_000 }, // beyond the shared 10min STAMP_CLAMP_MS window (W15: clock-skew-legit stamps stay accepted)
     { transition: 'start', status: 'idleFake', startedAt: NOW }  // non-running status
   ]
   for (const payload of bad) assert.equal(s.applyTransition(payload), false, JSON.stringify(payload))

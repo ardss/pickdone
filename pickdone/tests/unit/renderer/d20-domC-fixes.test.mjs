@@ -194,15 +194,19 @@ test('[A8] removeTag captures the index per call; the shared _removedTagAt slot 
 
 /* ---------- [A9] QuickAdd busy paste ---------- */
 
-test('[A9] onPaste checks _submitting BEFORE preventDefault', () => {
+// d-wave 2026-10-14: the OLD contract (busy check BEFORE preventDefault, native paste falls
+// through) is itself the bug — the native paste folded multi-line text into the single-line
+// draft. The new contract: multi-line paste is always intercepted; while a submit is in
+// flight the lines are queued into _pendingLines instead of being dropped.
+test('[A9] onPaste always preventDefaults multi-line; busy queues into _pendingLines', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
   const m = src.match(/async onPaste \(e\) \{[\s\S]*?\n {4}\},/)
   assert.ok(m, 'onPaste found')
   const body = m[0]
-  const guard = body.indexOf('if (this._submitting) return')
   const prevent = body.indexOf('e.preventDefault()')
-  assert.ok(guard > -1 && prevent > -1 && guard < prevent,
-    'the busy check must precede preventDefault so an in-flight submit keeps the native paste')
+  assert.ok(prevent > -1, 'multi-line paste is always intercepted (the native fold is the bug)')
+  assert.ok(/_submitting[\s\S]{0,400}_pendingLines/.test(body),
+    'an in-flight submit queues the pasted lines into _pendingLines instead of folding them')
 })
 
 /* ---------- [A10] DepView wires z-order ---------- */
@@ -254,7 +258,7 @@ test('[A14] addDependency builds the cycle-traversal pool from the full live lis
   const src = read('renderer/js/components/DepView.vue')
   const m = src.match(/addDependency \(target, prereqId, prereqTask, dependentTask\) \{[\s\S]*?\n {4}\},/)
   assert.ok(m, 'addDependency found')
-  assert.match(m[0], /var byId = this\.allLiveById\(\)/)
+  assert.match(m[0], /const byId = this\.allLiveById\(\)/)
   assert.ok(!/this\.inScope\.forEach\(x => \{ byId\[x\.taskId\] = x \}\)/.test(m[0]),
     'the inScope-only pool must be gone')
 })

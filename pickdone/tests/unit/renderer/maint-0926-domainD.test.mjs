@@ -32,6 +32,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import path from 'node:path'
+import { readAnchorSet } from '../../lib/source-anchors.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => readFileSync(path.join(ROOT, p), 'utf8')
@@ -194,7 +195,7 @@ test('[delFile] deleteFile rejection reaches reportError (no bare catch(() => {}
   globalThis.window.todoAPI = { deleteFile: url => Promise.reject(new Error('delete-file failed: EPERM ' + url)) }
   const fn = new Function('undone', 'item', 'attachmentUrlPresent', 'reportError', m[1])
   await fn.call(
-    { $store: { state: { todo: { todoList: [{ taskId: 't1' }] } } } },
+    { $store: { state: { todo: { todoList: [{ taskId: 't1' }], recycleList: [] } } } },
     false, { url: 'att://x' }, () => false,
     (where, err) => reported.push([where, err])
   )
@@ -441,7 +442,7 @@ test('[chipsnapshot-backup] collectMetaState gathers planChipsSnapshot and both 
   // without the restore whitelists the collector fix is dead code
   const tab = read('renderer/js/components/settings/SettingsDataTab.vue')
   assert.match(tab, /'planChipsSnapshot:',/, 'SettingsDataTab META_RESTORE_PREFIXES accepts planChipsSnapshot')
-  const rec = read('src/main/dbRecovery.cjs')
+  const rec = readAnchorSet('dbRecoveryFamily') // restore-family split 2026-10-24
   assert.match(rec, /'planChipsSnapshot:',/, 'dbRecovery META_RESTORE_PREFIXES accepts planChipsSnapshot')
 })
 

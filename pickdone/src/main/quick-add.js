@@ -14,6 +14,7 @@ const H = 64
 
 let win = null
 let ignoreBlur = false // toggle path: while show→focus is still in flight the blur event is untrustworthy; swallow it once to prevent a flash-hide
+let ignoreBlurTimer = null // handle of the armed latch-expiry timer (c-wave fix 2026-10-13)
 let lockProbe = null // lock-screen probe, injected by index.js (setLockProbe): while locked, the global shortcut does not summon the quick-add window (a submit would be rejected = silently lost task)
 
 /** Pure helper (unit-testable): center the 480×64 bar on the given display's work area.
@@ -122,7 +123,13 @@ function toggle () {
     ignoreBlur = true // prevent the first press's in-flight show/focus blur from self-hiding when the shortcut is pressed twice quickly
     // P2 2026-09-19: the flag must not latch when no blur follows (e.g. a --no-focus summon never
     // blurs). Time-box the latch: after it expires the next blur is a real one and must hide.
-    setTimeout(() => { ignoreBlur = false }, 1000).unref?.()
+    // c-wave fix (2026-10-13): the expiry timer is now tracked and CLEARED before re-arming.
+    // Previously a fast second toggle left the first timer running — it fired mid-way through the
+    // new latch window and dropped ignoreBlur early, so the in-flight show/focus blur of the
+    // second summon self-hid the window and the user's typed input was lost.
+    if (ignoreBlurTimer) clearTimeout(ignoreBlurTimer)
+    ignoreBlurTimer = setTimeout(() => { ignoreBlur = false; ignoreBlurTimer = null }, 1000)
+    ignoreBlurTimer.unref?.()
     // --no-focus test instances: park inactive on the secondary display / off-screen (same policy as the main window)
     if (process.argv.includes('--no-focus')) {
       require('./window-ref').parkForTest(win, { screen })
@@ -130,7 +137,12 @@ function toggle () {
       win.show()
       win.focus()
     }
-    win.webContents.send('quick-add-focus')
+    // F4 P3 (2026-10-18): the toggle's send-back had no isDestroyed recheck — a window torn
+    // down between show() and here (or one still inside the aux-load-guard failure window,
+    // parked on an error page) silently dropped the send and with it the user's typed input
+    // path. Same guard caliber as the did-finish-load re-send above (:95-96): destroy/visibility
+    // recheck + try/catch, so a dying window can never wedge the toggle.
+    try { if (win && !win.isDestroyed() && win.isVisible()) win.webContents.send('quick-add-focus') } catch (e2) { try { log.warn('[QuickAdd] focus re-send skipped:', e2 && e2.message) } catch {} }
   } catch (e) {
     log.error('[QuickAdd] 唤起失败', e)
   }

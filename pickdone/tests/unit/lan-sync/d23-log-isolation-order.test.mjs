@@ -53,3 +53,18 @@ test('C8/QC: lan-sync/att-transfer.js loads log-isolation at module top, before 
   assert.ok(!/require\('\.\.\/log-isolation'\)\s*\/\/\s*test isolation/.test(src),
     'inline after-the-write isolation requires are the bug shape — removed')
 })
+
+/* W21 (2026-10-30): peer-extras.js still had the C8 residue — log-isolation was required only
+ * AFTER the electron-log warn in missingAttachmentKeys (inside the catch). Hoisted to module
+ * load; the order contract is pinned here like the four modules above. */
+test('W21: lan-sync/peer-extras.js loads log-isolation at module top, before any electron-log write', () => {
+  const src = read('peer-extras.js')
+  const firstLogWrite = src.indexOf("require('electron-log')")
+  const firstIsolation = src.indexOf("require('../log-isolation')")
+  assert.ok(firstIsolation !== -1, 'module must pull in log-isolation')
+  assert.ok(firstIsolation < firstLogWrite,
+    `log-isolation (${firstIsolation}) must precede the first electron-log write (${firstLogWrite})`)
+  // the stale AFTER-the-fact inline requires must be gone (they masked the ordering bug)
+  assert.ok(!/require\('\.\.\/log-isolation'\)\s*\}\s*catch/.test(src),
+    'inline after-the-write isolation requires are the bug shape — removed')
+})

@@ -10,7 +10,8 @@
  * 用法:
  *   node cli/check-test-summary.cjs             # 自跑 node tests/run-all.mjs,TAP 写临时文件,exit code + 摘要双重校验
  *   node cli/check-test-summary.cjs <tapfile>   # 校验已有 TAP 输出文件(离线/测试复用同一套逻辑)
- * 环境变量 CHECK_TEST_SUMMARY_SKIP_BASELINE 可覆盖 skip 基线(仅供本脚本自测,门禁调用方不得设置)
+ * 环境变量 CHECK_TEST_SUMMARY_SKIP_BASELINE 可覆盖 skip 基线——仅当 CHECK_TEST_SUMMARY_SELFTEST=1
+ * 同时设置时生效(本脚本自测);单独出现时判定为环境泄漏,大声告警并忽略(见下方 SKIP_BASELINE 计算)。
  */
 const { spawnSync } = require('node:child_process')
 const fs = require('node:fs')
@@ -18,16 +19,32 @@ const os = require('node:os')
 const path = require('node:path')
 
 // skip 棘轮基线 —— 2026-09-13 全平台收紧并由 CI 实证校准:
-//   linux:2 = f6-round6-fixes 的跨盘符 file:// 语义测试(纯 Windows 概念,`WIN ? test : test.skip`)
+//   linux:7 = 2(见下) + 5(2026-10-30 e2e-exit-close 遵循 CHECK_ALL_SKIP_LIVE 的 CI 守卫:
+//             该套件是真拉起 Electron、断言托盘行为的 live 测试,xvfb 无托盘无法满足其验收,
+//             ubuntu 上按设计 skip 1 主测+2 子测;连同 run 41060199845 的实测计数校准;
+//             live 全量仍由 windows runner 实跑覆盖,覆盖无缺口)
+//             其中 2 = f6-round6-fixes 的跨盘符 file:// 语义测试(纯 Windows 概念,`WIN ? test : test.skip`)
 //             + lan-sync-journey 套件级 skip(ubuntu CI 设 CHECK_ALL_SKIP_LIVE=1,live electron 类
 //             测试在 ubuntu 上按设计跳过,由 windows runner 实跑覆盖;PR #160 实证)
 //   darwin:1 = 推断值(WIN 条件在 darwin 同为 false 必跳这条),无 darwin CI 实证——门禁只在 ubuntu+windows 跑
 //   win32:0 = windows 实测 0 skip
 // 新增 skip 会被棘轮拦下并打印用例名;确属平台性合理 skip 时,在此处带注释给对应平台加基线。
-const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 2, darwin: 1 }
-const SKIP_BASELINE = Number(
-  process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE ?? PLATFORM_SKIP_BASELINE[process.platform] ?? 0
-)
+const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 7, darwin: 1 }
+// [fail-closed 2026-10-26] the raw env override voided the skip ratchet from ANY stray
+// exported env var (CI job env, a dev shell rc file) — a silent ratchet bypass. It is now
+// gated: honored only alongside CHECK_TEST_SUMMARY_SELFTEST=1 (the script's own self-test);
+// an override without the self-test flag prints a loud warning and is IGNORED.
+const SKIP_BASELINE_OVERRIDE = process.env.CHECK_TEST_SUMMARY_SKIP_BASELINE
+const SELFTEST_ENABLED = process.env.CHECK_TEST_SUMMARY_SELFTEST === '1'
+let SKIP_BASELINE
+if (SKIP_BASELINE_OVERRIDE !== undefined && SELFTEST_ENABLED) {
+  SKIP_BASELINE = Number(SKIP_BASELINE_OVERRIDE)
+} else {
+  if (SKIP_BASELINE_OVERRIDE !== undefined) {
+    console.error(`⚠ [check-test-summary] CHECK_TEST_SUMMARY_SKIP_BASELINE=${SKIP_BASELINE_OVERRIDE} 已设置但未同时设置 CHECK_TEST_SUMMARY_SELFTEST=1 —— 判定为环境泄漏,覆盖被忽略,使用平台基线(棘轮不被绕过)`)
+  }
+  SKIP_BASELINE = PLATFORM_SKIP_BASELINE[process.platform] ?? 0
+}
 const TAIL_LINES = 30
 
 function parseSummary (tap) {
@@ -54,6 +71,16 @@ function parseSummary (tap) {
 function red (msg, tapFile) {
   console.error(`✗ [check-test-summary] ${msg}`)
   if (tapFile) {
+    // Failure TAP lands IN THE REPO TREE (tests/.artifacts/last-failed-unit.tap), not just
+    // %TEMP%: a tmpdir path nobody can find cost a whole diagnostic cycle on 2026-10-22 (a
+    // budget-killed run left zero accessible diagnostics and burned three gate re-runs).
+    // Overwrite per run — it is a pointer to the LATEST failure, not an archive.
+    try {
+      const repoTap = path.join(__dirname, '..', 'tests', '.artifacts', 'last-failed-unit.tap')
+      fs.mkdirSync(path.dirname(repoTap), { recursive: true })
+      fs.copyFileSync(tapFile, repoTap)
+      console.error(`  —— full failing TAP copied to ${repoTap} ——`)
+    } catch { /* best effort — the tmpdir original below is still there */ }
     const lines = fs.readFileSync(tapFile, 'utf8').split(/\r?\n/)
     if (lines.length) {
       console.error(`  —— TAP 输出尾部 ${TAIL_LINES} 行 ——`)
@@ -85,17 +112,59 @@ let exitCode = 0
 if (arg) {
   if (!fs.existsSync(arg)) red(`TAP 文件不存在: ${arg}`)
 } else {
-  // 主管道模式:跑全量单测,TAP 重定向进临时文件(不靠管道,exit code 不被吞)
+  // 主管道模式:跑单测层,TAP 重定向进临时文件(不靠管道,exit code 不被吞)
   tapFile = path.join(os.tmpdir(), `check-test-summary-${process.pid}-${Date.now()}.tap`)
-  const fd = fs.openSync(tapFile, 'w')
   // --with-coverage: forward --experimental-test-coverage so run-all also writes the coverage
   // summary for the ratchet gate (avoids a second concurrent full-suite run)
-  const extra = process.argv.includes('--with-coverage') ? ['--experimental-test-coverage'] : []
-  const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
-    cwd: path.join(__dirname, '..'),
-    stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部
-  })
-  fs.closeSync(fd)
+  // --core: forward --tier=core (pure in-process specs; deep suites — live Electron, two-instance
+  // lan-sync journeys, loopback drills — stay with the full check:all gate)
+  // --affected: consult cli/check-test-scope.cjs; scoped → --dirs run, full → plain --core,
+  // skip → docs-only change, unit stage not meaningful (loud, never silent).
+  const extra = [
+    ...(process.argv.includes('--with-coverage') ? ['--experimental-test-coverage'] : []),
+    ...(process.argv.includes('--core') ? ['--tier=core'] : []),
+  ]
+  if (process.argv.includes('--affected')) {
+    const { scopeFor } = require('./check-test-scope.cjs')
+    const verdict = scopeFor() // no args: reads git staged set itself
+    if (verdict.verdict === 'skip') {
+      console.log(`✓ [check-test-summary] SKIPPED: ${verdict.reason}`)
+      process.exit(0)
+    }
+    if (verdict.verdict === 'scoped') {
+      extra.push(`--dirs=${verdict.dirs.join(',')}`)
+      console.log(`[check-test-summary] affected scope: ${verdict.reason}`)
+    } else {
+      console.log(`[check-test-summary] affected scope unavailable → full core tier (${verdict.reason})`)
+    }
+  }
+  const runOnce = tapPath => {
+    const fd = fs.openSync(tapPath, 'w')
+    // run-all is streaming now: the tap file grows live, so a hung/budget-killed run leaves
+    // diagnostics instead of a 0-byte mystery.
+    const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
+      cwd: path.join(__dirname, '..'),
+      stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部
+    })
+    fs.closeSync(fd)
+    return r
+  }
+  let r = runOnce(tapFile)
+  // --retry-once (2026-10-23, load-flake doctrine): on a loaded dev host a DIFFERENT
+  // timing-sensitive suite dies per run (2026-10-22/23 evidence: purge family at conc 4,
+  // +tombstone at conc 8, updater-metadata in a third run — each green in isolation). Same
+  // doctrine as run-all's native-crash retry and the CI rerun-failed rule: a single rerun;
+  // green second pass = pass with a loud note, red again = real red. The first TAP is kept
+  // as *.prev for forensics either way.
+  if (process.argv.includes('--retry-once')) {
+    const firstTap = tapFile + '.prev'
+    const judge = rr => rr.status ?? (rr.error ? 1 : 1)
+    if (judge(r) !== 0) {
+      try { fs.copyFileSync(tapFile, firstTap) } catch { /* forensics best-effort */ }
+      console.error('[check-test-summary] red on pass 1 — retry-once (load-flake doctrine); pass-1 TAP kept at ' + firstTap)
+      r = runOnce(tapFile)
+    }
+  }
   exitCode = r.status ?? (r.error ? 1 : 1)
   if (r.error) console.error(`  [warn] spawn 异常: ${r.error.message}`)
 }

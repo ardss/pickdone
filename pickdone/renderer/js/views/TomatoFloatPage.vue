@@ -24,7 +24,8 @@
 
       <div class="tomato__corner">
         <button type="button" class="corner-btn" :title="$t('statsP.TomatoFloatPage.titleMin')" @click="minimize"><i class="btn-min"></i></button>
-        <button type="button" class="corner-btn corner-btn--muted" :title="abandoning ? $t('statsB.TomatoFloatPage.close') : $t('statsP.TomatoFloatPage.titleReset')" @click="abandoning ? cancelAbandon() : reset()"><i class="btn-close"></i></button>
+        <!-- ✕: abandon-confirm open = cancel; idle = close the floater (hide-tomato-float close path); focus/rest = give-up flow via reset() -->
+        <button type="button" class="corner-btn corner-btn--muted" :title="abandoning ? $t('statsB.TomatoFloatPage.close') : (isIdle ? $t('statsP.TomatoFloatPage.titleClose') : $t('statsP.TomatoFloatPage.titleReset'))" @click="abandoning ? cancelAbandon() : (isIdle ? closeFloat() : reset())"><i class="btn-close"></i></button>
         <button ref="menuBtn" type="button" class="corner-btn" :class="{'corner-btn--on': menuOpen, 'corner-btn--off': abandoning}"
                 :title="$t('statsP.TomatoFloatPage.titleMenu')"
                 :aria-expanded="menuOpen ? 'true' : 'false'"
@@ -152,7 +153,10 @@ export default {
       if (this.remaining == null) return '--:--'
       return formatMMSS(this.remaining)
     },
-    knobIcon () { return this.working ? '❚❚' : '▶' },
+    /* J3 (2026-10-22 journey audit): the old ❚❚ glyph promised a pause that does not exist
+       (pomodoro has no pause — user-finalized); the running knob's real action is the give-up
+       confirm, so it wears a stop glyph. ▶ stays the idle "start" affordance. */
+    knobIcon () { return (this.working || this.resting) ? '■' : '▶' },
     // A13: formula single-sourced in utils/tomatoShared.js focusedMinutesText
     focusedMinText () {
       const s = this.st
@@ -175,7 +179,7 @@ export default {
     },
     /* Ring arc remaining ratio 0-100 (ready = full ring); pathLength=100 draws directly by percentage */
     ringPct () {
-      const s = this.st || {}
+      const s = this.st || {}; if (this.remaining == null) return 100 // [w19] same first-frame null guard as clock() — a starting pomodoro used to flash an empty 0% ring
       if (this.working) {
         const total = (s.tomatoTime || 25) * 60
         return Math.max(0, Math.min(100, this.remaining / total * 100))
@@ -186,8 +190,10 @@ export default {
       }
       return 100
     },
+    /* Idle (ready) state: the ✕ corner button closes the floater — nothing to reset at a full ring */
+    isIdle () { return !!(this.st && this.st.status === 'default') },
     /* Ready = menu footer is "start now"; running = footer is "clear attachment" */
-    canPickTask () { return !!(this.st && this.st.status === 'default') },
+    canPickTask () { return this.isIdle },
     /* Today's pomodoro beads: done = completed today, total = daily target (capped 8–12 to prevent overflow) */
     beadsDone () { return Math.min(this.st ? (this.st.todayTomatoCount || 0) : 0, this.beadsTotal) },
     beadsTotal () {
@@ -202,7 +208,7 @@ export default {
     },
     noiseCurrent () { return (this.$store.state.settings.whiteNoiseAudio || '') },
     /* Today's todo candidates (same pool as TomatoBar.attachCandidates). D14-A7: shared builder so
-    the slice cap and the truncation notice read the same pool */
+    the slice cap and the truncation notice read the same pool. W9 (2026-10-26): the pool is a computed Array — tasks/tasksTruncated below read it as a property; a method-style call crashed the ⋮ task menu render with "not a function". */
     taskPool () {
       const root = this.$store.state.todo || {}
       let list = (root.views && root.views.todayTodoList) || []
@@ -214,11 +220,11 @@ export default {
       return list.filter(t => t && !t.complete)
     },
     tasks () {
-      return this.taskPool().slice(0, 30)
+      return this.taskPool.slice(0, 30)
     },
-    /* D14-A7: was the pool bigger than the 30-item render cap? Drives the truncation notice */
+    /* D14-A7: was the pool bigger than the 30-item render cap? Drives the truncation notice. W9: property access, same mis-invocation trap as tasks() above */
     tasksTruncated () {
-      return this.taskPool().length > 30
+      return this.taskPool.length > 30
     }
   },
   methods: {
@@ -282,7 +288,17 @@ export default {
       this.abandoning = true
     },
     persist (patch) { this.$store.commit('tomato/patch', patch); this.st = this.$store.state.tomato },
-    minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat() },
+    minimize () { if (window.todoAPI) window.todoAPI.hideTomatoFloat(); this.pingVisClosed() },
+    /* ✕ while idle = close the floater (same 'hide-tomato-float' close path). The persist-reset it
+       replaced was a visual no-op at a full ring — read as a dead close button (2026-10-22). */
+    closeFloat () { if (window.todoAPI) window.todoAPI.hideTomatoFloat(); this.pingVisClosed() },
+    /* J2 (2026-10-22 journey audit): this window's own hides bypassed TomatoBar's toggle sync —
+       the bar kept 小窗=on for up to 15s and swallowed the first reopen click (hide-on-hidden).
+       The ping is a signal token only (value never read): TomatoBar's storage listener re-queries
+       the authoritative visibility over IPC. Same-origin cross-window storage event = instant. */
+    pingVisClosed () {
+      try { localStorage.setItem('tomatoFloatVisPing', String(Date.now())) } catch (e) { /* degraded LS: the 15s poll fallback still applies */ }
+    },
     // [D22 P2] giveUp is awaited (same fix as TomatoAbandonModal): the layer collapses only on success.
     async confirmAbandon () {
       if (this.abandonBusy) return
@@ -378,7 +394,7 @@ export default {
       document.documentElement.classList.add('widget-transparent')
       // document.title is what DWM ghost repaints draw — clear it to cut the ghost off at the root
       document.title = ''
-      if (window.todoAPI) window.todoAPI.setTomatoFloatBounds()
+      this.$nextTick(() => { if (!document.querySelector('.tomato')) return; if (window.todoAPI) window.todoAPI.setTomatoFloatBounds() }) // W16 render-health handshake via existing 'set-tomato-float-bounds': sent ONLY after the card (.tomato) is really mounted — ready-to-show/did-finish-load are fake health ("window alive, screen blank" incident); a handshake missing in the guard's 10s window drives the bounded rebuild (design notes: tomato-float.js noteRenderHandshake)
     }
     this.refresh()
     this._onStorage = () => this.refresh()

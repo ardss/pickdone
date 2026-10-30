@@ -50,3 +50,36 @@ test('f6-date: calendar-invalid M月D日 still rejected (no carry-over March dat
   assert.equal(r.date, null, 'Feb 30 must not parse into a carry-over March date')
   assert.equal(r.label, '')
 })
+
+// ===== [J2 journey-audit 2026-10-22] M月D日 + content: the date must survive trailing content =====
+// Was: the $-anchored branch missed "10月30日 交房租" entirely — date silently dropped, task
+// created today with the date text left inside the title (quick-add audit evidence j2-0*.png).
+test('j2-date: M月D日 + content keeps the date and strips it from the content', () => {
+  const r = parseChineseNaturalDate('10月30日 交房租', base)
+  assert.equal(fmt(r), '2026-10-30 00:00', 'date parsed (rolls past Sep 12 base into October, same year)')
+  assert.equal(r.restText, '交房租', 'content is what remains after the date phrase')
+})
+
+test('j2-date: M月D日 + content without a space (no-space CJK writing)', () => {
+  const r = parseChineseNaturalDate('10月30日交房租', base)
+  assert.equal(fmt(r), '2026-10-30 00:00')
+  assert.equal(r.restText, '交房租')
+})
+
+test('j2-date: M月D日 + time + content composes all three', () => {
+  const r = parseChineseNaturalDate('10月30日15:00 交房租', base)
+  assert.equal(fmt(r), '2026-10-30 15:00')
+  assert.equal(r.restText, '交房租')
+})
+
+test('j2-date: mid-token digit continuation stays unmatched (guard)', () => {
+  const r = parseChineseNaturalDate('10月30日100元', base)
+  assert.equal(r.date, null, 'digit continuation must not silently split into a date')
+  assert.equal(r.restText, '10月30日100元')
+})
+
+test('j2-date: date-only input still yields empty restText (guard)', () => {
+  const r = parseChineseNaturalDate('10月30日', base)
+  assert.equal(fmt(r), '2026-10-30 00:00')
+  assert.equal(r.restText, '')
+})

@@ -28,7 +28,9 @@ const SESSION = 'vweb'
 // 专用浏览器 profile(每次 run 开跑前清空重建):--session 只隔离会话不隔离 profile,
 // 默认 profile 的 localStorage 跨运行持久——并行会话的探针标签页在同 profile 写 colorMode/showNoDate
 // 等设置,轻则主题翻转重则内容缺失(2026-09-10 实锤:早间并行会话把 6 张基线拍成同主题 + box 整列空)。
-const PROFILE_DIR = path.join(DIR, 'browser-profile')
+// [determinism 2026-10-25] profile 目录带 pid:两个 visual 进程并发(手动并行/双 worktree)
+// 会互踩 Chromium profile 锁;pid 隔离让每次运行拿到自己的 profile。
+const PROFILE_DIR = path.join(DIR, 'browser-profile-' + process.pid)
 const STAMP = 'v' + Date.now()
 // 冻结时刻(本地时区):宿主 index.html 的 ?pdFreeze 会把页面时钟钉死在此。
 // 2026-09-09 实锤:种子/视图全按真实「今天」渲染,本地过午夜必红 6 图(today/calendar/statistics)。
@@ -75,10 +77,25 @@ if (SPAWN) {
   try {
     const out = execSync('netstat -ano | findstr :' + PORT + ' | findstr LISTENING', { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })
     for (const pid of [...new Set(out.split(/\r?\n/).map(l => l.trim().split(/\s+/).pop()).filter(p => /^\d+$/.test(p)))]) {
+      // [safety 2026-10-25, determinism audit #10] fingerprint BEFORE killing: only a host
+      // anchored at THIS repo (vite serving our ROOT) may be shot. 5175 is also the
+      // browser-dev host's legal port — the user's own dev server must never die to a gate.
+      // An unidentified occupier fails the gate loudly with the pid instead.
+      let cmd = ''
+      try {
+        cmd = String(execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`, { encoding: 'utf8', shell: true, stdio: ['ignore', 'pipe', 'ignore'] })).trim()
+      } catch { /* gone between netstat and query */ }
+      const ours = cmd && cmd.toLowerCase().includes(ROOT.toLowerCase()) && /vite|node/i.test(cmd)
+      if (!ours) {
+        console.error(`[visual-web] port ${PORT} held by pid ${pid} which is NOT this repo's vite host (cmd: ${cmd.slice(0, 140) || 'unreadable'}) — refusing to kill; free the port or pass --port`)
+        process.exit(1)
+      }
       execSync(`taskkill /pid ${pid} /T /F`, { shell: true, stdio: 'ignore' })
     }
     await new Promise(r => setTimeout(r, 1000))
-  } catch { /* 端口空闲 */ }
+  } catch (e) {
+    if (e && e.__handled) throw e
+    /* 端口空闲 */ }
   // 等端口真正释放(2026-09-25 check:all 实锤):taskkill 返回后旧宿主的子进程树可能还要几秒才退净,
   // 新 vite 立即 EADDRINUSE 静默退场,而轮询却短暂探到垂死的旧宿主"就绪"——随后 preflight 报
   // "宿主未启动"。杀完必须轮询到 LISTENING 彻底消失再 spawn。
@@ -97,17 +114,23 @@ if (SPAWN) {
   viteChild = cpSpawn('npm', ['run', 'dev', '--', '--port', PORT, '--strictPort'], { cwd: path.join(ROOT, 'browser-dev'), shell: true, stdio: ['ignore', viteLog, viteLog] })
   // 就绪判定须连续 3 次探活成功(2026-09-25 check:all 实锤:残留旧宿主垂死期间仍能应答 1 次,
   // 单次 OK 即判 up → preflight 时宿主已死,"宿主未启动"。连续探活+短间隔排除垂死宿主假信号)
+  // 2026-10-23: per-fetch timeout 2s -> 5s, window 40s -> 90s. In-gate the three pools race for
+  // CPU (live Electron boots + unit tier); vite's FIRST on-demand transform regularly blew the
+  // 2s budget, the abort re-triggered the transform, and the starve loop burned the whole 40s
+  // window — while the same lane passed standalone every time. A warmed vite answers in ms, so
+  // the streak completes quickly once the first fetch lands; true death still goes red (90s of
+  // consecutive failures inside a 30min stage budget).
   let upStreak = 0
-  for (let t = 0; t < 40000 && upStreak < 3; t += 500) {
+  for (let t = 0; t < 90000 && upStreak < 3; t += 500) {
     await new Promise(r => setTimeout(r, 500))
     let ok = false
-    try { ok = (await fetch(BASE, { signal: AbortSignal.timeout(2000) })).ok } catch { /* retry */ }
+    try { ok = (await fetch(BASE, { signal: AbortSignal.timeout(5000) })).ok } catch { /* retry */ }
     upStreak = ok ? upStreak + 1 : 0
   }
   const up = upStreak >= 3
   try { fs.closeSync(viteLog) } catch { /* already closed */ }
   if (!up) {
-    console.error('✗ visual-web --spawn: 40s 内 port '+PORT+' 宿主未就绪(vite 启动失败?日志: tests/.artifacts/visual-web/vite-spawn.log)')
+    console.error('✗ visual-web --spawn: 90s 内 port '+PORT+' 宿主未就绪(vite 启动失败?日志: tests/.artifacts/visual-web/vite-spawn.log)')
     killVite()
     process.exit(2)
   }
@@ -158,17 +181,57 @@ async function setEnv (theme) {
       try { boot = readBoot(); if (boot && boot !== 'undefined') break } catch (e) { /* retry */ }
     }
   }
-  ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
-  ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
-  // reload 同样断言纪元变化(未变则重试一次)
-  for (let i = 0; i < 2; i++) {
-    let changed = false
-    for (let t = 0; t < 8000; t += 400) {
-      await new Promise(r => setTimeout(r, 400))
-      try { if (readBoot() !== boot) { changed = true; break } } catch (e) { /* retry */ }
-    }
-    if (changed) break
+  // 2026-10-23: pin and onboarding-click used to share ONE eval. On a cold profile the wizard
+  // button exists, and completing it persists the CURRENT locale (zh-CN on a fresh host) OVER the
+  // just-pinned appLocale — the reload then booted Chinese and every scene failed at a uniform
+  // ~0.6% pixel diff (main's old profile had the wizard already dismissed, so it never showed).
+  // Order is now: dismiss onboarding FIRST, then write the locale keys LAST so nothing re-stamps
+  // them before the reload.
+  // 2026-10-23 evening (second fix, same day): the pin was FIRE-AND-FORGET — when the boot
+  // readiness window expired (three-pool contention slows the app boot), the pin evals fired
+  // into a not-yet-live tab, swallowed their own failure, and the lane compared zh-CN captures
+  // against en-US baselines (final8: today 1.57%, calendar 6.55% — the first-day-of-week column
+  // also moves, so NOT the uniform ~0.6% of a pure string flip). The pin is now VERIFIED:
+  // after the reload, read appLocale back through the same eval channel (which doubles as the
+  // tab-liveness probe) and retry the pin+reload cycle up to 3 times; a still-unpinned lane
+  // reds NAMED here instead of ghost-diffing 14 scenes for 13 minutes.
+  let pinned = false
+  for (let attempt = 1; attempt <= 3 && !pinned; attempt++) {
+    ab(['--session', SESSION, 'eval', `(() => { const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
+    ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} return 'ok' })()`])
+    // The LS write is only the BOOT CACHE — the locale's authority is the synced settings
+    // blob (Y1): first boot persists a zh-CN default into the DB, and every later boot's
+    // store hydration re-applies it over the LS pin (deterministic Chinese despite the
+    // pin - final8/final13 evidence). Commit through the app's own store channel so the
+    // DB truth flips too (same path setLocale itself uses).
+    ab(['--session', SESSION, 'eval', `(() => { try { const st = window.appUI && window.appUI.$store; if (st) { st.commit('settings/updateSettings', { appLocale: 'en-US' }); return 'ok' } return 'nostore' } catch (e) { return 'err' } })()`])
     ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
+    // reload 同样断言纪元变化(未变则重试一次)
+    for (let i = 0; i < 2; i++) {
+      let changed = false
+      for (let t = 0; t < 8000; t += 400) {
+        await new Promise(r => setTimeout(r, 400))
+        try { if (readBoot() !== boot) { changed = true; break } } catch (e) { /* retry */ }
+      }
+      if (changed) break
+      ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
+    }
+    // VERIFY: an unreadable locale means the tab still isn't live — keep polling.
+    // Read form is quote-free by necessity: abOnce JSON.stringify-wraps every arg,
+    // and inner double quotes terminate the outer quoting through cmd (first
+    // verify attempt kept erroring silently — property access has no quotes to break).
+    for (let t = 0; t < 8000 && !pinned; t += 400) {
+      await new Promise(r => setTimeout(r, 400))
+      try {
+        const v = ab(['--session', SESSION, 'eval', 'String(localStorage.appLocale)']).trim().replace(/"/g, '')
+        if (v === 'en-US') pinned = true
+      } catch (e) { /* retry */ }
+    }
+    if (!pinned) console.error(`  [visual] locale pin not verified after attempt ${attempt}/3 — re-pinning`)
+  }
+  if (!pinned) {
+    console.error('✗ [visual] appLocale pin failed after 3 attempts — captures would ghost-diff the en-US baselines; red NAMED instead of silent drift')
+    process.exit(1)
   }
 }
 
@@ -183,10 +246,22 @@ try { execSync('agent-browser close --all', { shell: true, stdio: 'ignore', time
 // daemon(agent-browser-win32-x64.exe,专属二进制,误伤不了用户 Chrome)存活时 profile 目录被锁、
 // --profile 也会被忽略——必须整段杀掉让下一次 open 以专用 profile 重启(机器独占门禁,与 5175 清场同级)
 try { execSync('taskkill /IM agent-browser-win32-x64.exe /T /F', { shell: true, stdio: 'ignore', timeout: 30000 }) } catch { /* 无实例 */ }
+// 2026-10-24 night (final17): killing the daemon and immediately opening races the OLD
+// daemon's control-port teardown — the fresh daemon's browser configure then gets
+// connection-refused (10061) and the whole lane crashes. Wait for the process to be
+// GONE before any respawn, same discipline as the vite port poll above.
+for (let i = 0; i < 20; i++) {
+  let alive = false
+  try { execSync('tasklist /FI "IMAGENAME eq agent-browser-win32-x64.exe" /NH', { encoding: 'utf8', timeout: 15000, shell: true }).includes('agent-browser-win32-x64') && (alive = true) } catch { /* gone */ }
+  if (!alive) break
+  await new Promise(r => setTimeout(r, 750))
+}
 // 孤儿托管 chrome(crashpad/gpu 子进程靠继承句柄锁 profile,命令行里没有 profile 字样,/T 也可能
-// 因父已死够不着)——按 .agent-browser 自带浏览器路径特征补杀;用户 Chrome 装在别处,绝不误伤
+// 因父已死够不着)——按本脚本的专用 profile 路径特征补杀(2026-10-24 实勘:agent-browser 在本机用
+// 系统 Chrome,根本没有 '*agent-browser*browsers*' 布局,旧过滤器是死码;且宽匹配 --remote-debugging
+// 会误伤用户的 BrowserOS 会话)。visual-web 路径串只存在于本脚本拉起的 chrome,零误伤面。
 {
-  const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*agent-browser*browsers*' } | ForEach-Object { taskkill /pid $($_.ProcessId) /T /F }`
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" | Where-Object { $_.CommandLine -like '*visual-web*' } | ForEach-Object { taskkill /pid $($_.ProcessId) /T /F }`
   const enc = Buffer.from(ps, 'utf16le').toString('base64')
   try { execSync(`powershell -NoProfile -EncodedCommand ${enc}`, { shell: true, stdio: 'ignore', timeout: 60000 }) } catch { /* 无实例 */ }
 }
@@ -213,7 +288,7 @@ if (probe.includes('--profile ignored')) {
   killVite()
   process.exit(2)
 }
-ab(['--session', SESSION, 'close'])
+try { ab(['--session', SESSION, 'close']) } catch { /* probe tab closes with the first scene's open anyway; a flaky daemon close must not crash the run (final17 pass-1 crash was exactly here) */ }
 
 async function runAll () {
   // 硬期限:自愈(宿主重生/场景重试)必须让位于 check:all 的看门狗——超 20min 自断,

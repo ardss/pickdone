@@ -105,10 +105,12 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
   // subtraction comparator return NaN (implementation-defined order); missing numbers now fall
   // back to 0 so rows keep a deterministic position instead of reshuffling every recompute.
   const tsOf = t => (typeof t.createTime === 'number' && Number.isFinite(t.createTime)) ? t.createTime : 0
-  const dueOf = t => (typeof (t.todoTime || t.createTime) === 'number' && Number.isFinite(t.todoTime || t.createTime)) ? (t.todoTime || t.createTime) : 0
   box.sort((a, b) => {
     switch (settings.todoBoxSortMethod) {
-      case 'due': return (dueOf(a) - dueOf(b)) * dir
+      // [J3 2026-10-22] 'due' removed: the box holds only undated rows, so the old case sorted by
+      // orphaned drifted todoTime (a state DB hydration never produces for dayStart 0) and for the
+      // normal population merely duplicated the created sort. A legacy persisted 'due' now falls
+      // to the default (createTime) — same order users ever actually saw, honestly labeled.
       case 'difficulty': return (getEstimate(a.taskId) - getEstimate(b.taskId)) * dir // Difficulty retired: by estimated workload = estimated tomatoes
       default: return (tsOf(a) - tsOf(b)) * dir
     }
@@ -117,8 +119,16 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
   // Sort mode: stable-key normalization + comparator extracted to utils/sortMode.js (pure function, unit-testable)
   const applySort = arr => sortByMode(arr, settings.sortMode)
 
-  // Yesterday's unfinished (day-rollover leftovers)
-  const yesterday = live.filter(t => !t.complete && t.dayStart === +dayjs(today).subtract(1, 'day'))
+  // w21 P3: the "yesterday's unfinished" filter used to compare dayStart strictly (===) against
+  // startOf-day-1 while the main loop above buckets with the coarse round((dayStart-today)/DAY_MS).
+  // A clock-drifted dayStart a few hours off midnight rounds to -1 in the loop but fails === here
+  // (or vice versa: rounds to -2 yet equals day-1 exactly at a DST boundary), so the row silently
+  // switched groups or dropped out between surfaces. Use the SAME coarse diff caliber as the loop.
+  const yesterday = live.filter(t => {
+    if (t.complete) return false
+    const dsNum = (typeof t.dayStart === 'number' && Number.isFinite(t.dayStart)) ? t.dayStart : 0
+    return Math.round((dsNum - today) / DAY_MS) === -1
+  })
 
   commit('setViews', {
     recent: {
@@ -132,7 +142,10 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
     },
 
     todayTodoList: applySort(todayList),
-    todayXNext: todayXNext.sort((x, y) => (x.dayStart - y.dayStart) || (x.todoTime - y.todoTime)),
+    // [w19 NaN-guard] same ||0 fallback caliber as the Review-P3 comparators above — the array
+    // itself only ever holds rows with a finite numeric dayStart (the dsNum gate), but a drifted
+    // NaN todoTime made the second subtraction return NaN (implementation-defined order).
+    todayXNext: todayXNext.sort((x, y) => ((x.dayStart || 0) - (y.dayStart || 0)) || ((x.todoTime || 0) - (y.todoTime || 0))),
     todayXOpen,
     // Completed-group sort matches the grouping basis (completedAt first, avoiding sort misplacement when editing after completion)
     // [nan-comparator fix] same ||0 fallback as the Review-P3 (2026-09-22) comparators above —

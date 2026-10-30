@@ -26,21 +26,31 @@ const dbm = require('../src/main/db.js')
 // untouched, but an explicit stamp more than STAMP_CLAMP_MS into the future is still clamped to now // (shared forgery guard — see command-bus.stampPayload).
 const bus = require('../src/main/command-bus')
 // open() first: several call sites used `open().call(op, …)` as their only DB touch — the bus // commit must keep guaranteeing an initialized handle in pure-CLI sessions.
-const commit = (entity, verb, payload) => { open(); ensureTomatoMigrated(); return bus.commit(entity, verb, payload, { preserveStamp: true }) }
+// C2 P2: SQLITE_BUSY/LOCKED (App connection holds the write lock; busy_timeout already waited)
+// folded into a structured retryable CliError DB_BUSY instead of an opaque CLI_ERROR (CLI-side wrap;
+// src/main/db.js is out of this fix's scope).
+const commit = (entity, verb, payload) => {
+  open(); ensureTomatoMigrated()
+  try { return bus.commit(entity, verb, payload, { preserveStamp: true }) } catch (e) {
+    if (e && (e.code === 'SQLITE_BUSY' || e.code === 'SQLITE_BUSY_SNAPSHOT' || e.code === 'SQLITE_LOCKED')) {
+      throw new CliError(`database busy (${e.code}): the desktop App is writing — wait a few seconds and retry the same command (${e.message})`, 'DB_BUSY')
+    }
+    throw e
+  }
+}
 const core = require('../src/main/core/todo-core.js')
 // Round-3 P1: ownership guard for attachment filenames (single source with the App's purge path — // pure, electron-free; D3 2026-09-24 now required directly from its electron-free domain module // src/main/attachment-ownership.js instead of through handlers/shared.js + its electron-log require).
 const { ownsAttachmentFile } = require('../src/main/attachment-ownership.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
-const { nextSort, moveWithin } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm))
-
-const { localDayKey } = require('../src/main/fix-util.js') // P3-8: single source for the local YYYY-MM-DD key (same require the lib-attachments module already uses)
+const { nextSort, moveWithin, reorderScale } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm)); F2: reorderScale for the sortTask gap-exhaustion rewrite
+// W7 P1 (2026-10-23): undo renewal discriminator single-sourced with renderer/js/utils/repeatUndo.js via shared/repeat-undo-core.mjs — the hand-copied day-only heuristic below still soft-deleted `repeat on` PRE-GENERATED future instances on undo (the 2026-10-09 P1 renderer root fix never landed CLI-side). require(esm), same pattern as limits.mjs.
+const { findRenewedNextInstance } = require('../shared/repeat-undo-core.mjs')
 
 let opened = false
 // P3-9 (dw wave): the userData directory has ONE source — src/main/user-dir.js (no third copy; // audit.js defaultDirResolver reads the same module). Env priority: TODO_DB_DIR > TODO_USER_DATA_DIR > platform default.
 const { userDataDir, hasIsolationEnv } = require('../src/main/user-dir.js')
-
 /* ================= data-safety isolation gate (P0, single point) =================
  * Structural rule: without an explicitly declared isolation dir, no CLI entry may touch the real
  * user database (%APPDATA%/pickdone). Path resolution is single-sourced in src/main/user-dir.js;
@@ -56,10 +66,7 @@ function assertIsolationForWrite ({ allowReal = false } = {}) {
 }
 
 /** Open the database (idempotent). The TODO_DB_DIR env var can point to an isolated directory (for tests); defaults to the App's userData.
- *  Runs the one-shot tomato ledger migration sentinel (r5-4 contract: at open(), BEFORE any read or
- *  write — a CLI-only `tomato list` after the ledger upgrade must see the migrated rows, and a CLI
- *  backfill landing rows first must not make tomatoMigrateFromMeta's table-not-empty guard throw the
- *  old meta blob away forever). Idempotent by design: "meta blob absent" is the migrated marker. */
+ *  Runs the one-shot tomato ledger migration sentinel (r5-4 contract: at open(), BEFORE any read or write — a CLI-only `tomato list` after the ledger upgrade must see the migrated rows, and a CLI backfill landing rows first must not make tomatoMigrateFromMeta's table-not-empty guard throw the old meta blob away forever). Idempotent by design: "meta blob absent" is the migrated marker. */
 function open () {
   if (opened) return dbm
   // Main process reuse: when the App itself has already opened the DB with the same directory (CSV import goes through the main process IPC), init must not be run a second time to rebuild the connection
@@ -86,9 +93,7 @@ class CliError extends Error {
   constructor (message, code = 'CLI_ERROR') { super(message); this.code = code }
 }
 
-/* ---------------- Split sub-modules (2026-09-23, #132 skipped P3-11 continuation; 2026-09-27 size-ratchet continuation) ----------------
-   Read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs /
-   lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
+/* ---------------- Split sub-modules: read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs / lib-projects.cjs; deps injected so db/bus/audit seams stay single-sourced here. ---------------- */
 const { parseDate, dayStartOf, lunarOf, lunarAnnotate, dateChangeReminderPatch } = require('./lib-date.cjs')({ CliError, dayjs, nlDate })
 // D18-DOM2 size-ratchet: dateChangeReminderPatch moved verbatim into lib-date.cjs (dayjs-only helper).
 
@@ -150,9 +155,7 @@ function guessUserId () {
  *  The previous update-command comparator split on '.' and coerced to Number, so every prerelease
  *  segment became NaN, collapsed to 0 through `|| 0` — a 0.4.0-beta.15 user was told v0.4.0 was
  *  not newer (up to date) even though semver puts 0.4.0 strictly above 0.4.0-beta.15.
- *  Rules (semver §11): numeric core segments first; a version WITH a prerelease outranks nothing —
- *  release > prerelease of the same core; prerelease identifiers compare numerically when both are
- *  numeric, otherwise lexicographically, and numeric < alphanumeric; fewer identifiers loses. */
+ *  Rules (semver §11): numeric core segments first; a version WITH a prerelease outranks nothing — release > prerelease of the same core; prerelease identifiers compare numerically when both are numeric, otherwise lexicographically, and numeric < alphanumeric; fewer identifiers loses. */
 function compareVersions (a, b) {
   const parse = v => {
     const s = String(v).replace(/^v/, '')
@@ -183,9 +186,8 @@ function compareVersions (a, b) {
 
 const genTaskId = core.genTaskId
 
-/* ---------------- Split sub-modules (2026-09-23, #132 skipped P3-11 continuation) ----------------
-   Read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs /
-   lib-projects.cjs; deps are injected so the db/bus/audit seams stay single-sourced here. */
+/* ---------------- Split sub-modules: read commands and the projects/milestones/status block moved verbatim to lib-tasks.cjs / lib-projects.cjs; deps injected so db/bus/audit seams stay single-sourced here. ---------------- */
+/* ---------------- Split sub-modules (2): lib-tasks/lib-focus/lib-projects (deps injected, seams single-sourced here) ---------------- */
 const {
   listTodos, getCategories, resolveCategory, stats, overview,
 } = require('./lib-tasks.cjs')({ open, CliError, parseDate, dayjs, normKey }) // F-B5: normKey injected (resolveCategory's copy removed)
@@ -200,7 +202,6 @@ const {
   PROJECT_STATUS_VALUES, explicitStatus, setProjectStatus,
   PROJECT_IDS_KEY, projectFlagKey, projectStatusKey, MS_KEY,
 } = require('./lib-projects.cjs')({ open, CliError, dayjs, commit, audit, resolveCategory, resolveTask, liveTasks, tomatoRecords, parseDate, dayStartOf, parseMilestoneDateCore })
-
 
 // ---- Task dependencies (mirror of renderer store/todo.js helpers; both writers bypass each other) ----
 function parsePredecessors (v) {
@@ -229,8 +230,7 @@ function normalizePreds (db, taskId, preds) {
   if (wouldCycle(db, taskId, next)) throw new CliError('dependency-cycle: this predecessor set closes a loop', 'DEP_CYCLE')
   return next.length ? JSON.stringify(next) : null
 }
-/** F3 (2026-09-21): sort convention — baseline 1024 for the first row, ±512 step (addToTop → max+512, else min-512).
- *  P3-7: the CLI's verbatim nextSortCli copy is gone; shared/sort-core.mjs is imported as nextSort above. */
+/** F3 (2026-09-21): sort convention — baseline 1024 for the first row, ±512 step (addToTop → max+512, else min-512); P3-7: the CLI's verbatim nextSortCli copy is gone, shared/sort-core.mjs is imported as nextSort above. */
 function addTodo ({ content, desc, date, reminder, category, difficulty, priority, important, urgent, repeatId = null, createTime = null, after = null }) {
   if (!content || !String(content).trim()) throw new CliError('task content required', 'EMPTY_CONTENT')
   // B10-P3 (App parity EditPanel): the App bounds priority/difficulty to 0-3 — an unbounded CLI value
@@ -245,6 +245,9 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     const targetDay = +dayjs(todoTime).startOf('day')
     const existing = db.call('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(existing) && existing.length) return existing[0]
+    // [F2 2026-10-17 renewal dedupe includes the recycle bin, renderer parity: store/todo.js addTodo pre-check] a twin the user soft-deleted on the SAME rid+day blocks the generation — the deleted:0 pre-check alone re-minted a deliberately removed day.
+    const binned = db.call('queryTodos', { deleted: 1, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
+    if (Array.isArray(binned) && binned.length) return null
   }
   // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, shared nextSort): the side (top/bottom) follows newTodoDefaultSort; the ±32 jitter keeps concurrently identical sorts distinct.
   const targetDay = todoTime ? +dayjs(todoTime).startOf('day') : 0
@@ -259,17 +262,13 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     complete: false, createTime: createdTs, delete: false,
     reminderTime: reminder ? parseDate(reminder) : 0,
     estimate: 0, difficulty: difficulty != null ? Number(difficulty) : 0,
-    // App addTodo parity: NO priority⇔important derivation at create time — the quadrant coupling
-    // belongs to EDIT only (EditPanel fieldPatch); the App's addTodo defaults both to 0
+    // App addTodo parity: NO priority⇔important derivation at create time — the quadrant coupling belongs to EDIT only (EditPanel fieldPatch); the App's addTodo defaults both to 0
     priority: priority != null ? Number(priority) : 0,
     important: important != null ? Number(important) : 0,
     urgent: urgent != null ? Number(urgent) : 0,
     repeatId, subtasks: null, image: null, files: null,
     predecessors: (after && after.length) ? JSON.stringify(after) : null,
-    // D18-DOM2 (#5, App parity store/todo.js addTodo `categoryId = settings.newTodoCategoryId || 0`):
-    // with no explicit --category, the App defaults to the user's settings.newTodoCategoryId; the CLI
-    // used to hard-default to 0 and silently ignored the setting. A 0/absent setting stays "unset"
-    // (0) — resolveCategory(0) would otherwise throw NO_CATEGORIES on a category-less DB.
+    // D18-DOM2 (#5, App parity store/todo.js addTodo `categoryId = settings.newTodoCategoryId || 0`): with no explicit --category the App defaults to the user's settings.newTodoCategoryId; the CLI used to hard-default to 0. A 0/absent setting stays "unset" (0) — resolveCategory(0) would otherwise throw NO_CATEGORIES on a category-less DB.
     categoryId: resolveCategory(category != null && String(category).trim() !== ''
       ? category
       : ((Number(settingsDoc().newTodoCategoryId) || 0) || null)) || 0,
@@ -284,10 +283,7 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
   commit('todo', 'put', t)
   const rowAfter = db.call('getById', t.taskId)
   audit.record({ action: 'add', targets: [t], changes: [{ after: rowAfter }] })
-  // D18-DOM2 (#7, App parity): NO schedule chip is minted at add time — the App's addTodo writes no
-  // planAdd (the old comment here claiming a timeline chip was "user-finalized 2026-09-03" was wrong;
-  // chips are set explicitly via `plan <task> <HH:mm>` / the App's day-plan UI). D17 already removed
-  // the mint from `edit`; this removes it from `add` so both CLI verbs match the App.
+  // D18-DOM2 (#7, App parity): NO schedule chip is minted at add time — the App's addTodo writes no planAdd (chips are set explicitly via `plan <task> <HH:mm>` / the App's day-plan UI). D17 already removed the mint from `edit`; this removes it from `add` so both CLI verbs match the App.
   return rowAfter
 }
 
@@ -314,18 +310,9 @@ function patchTodo (input, patch, { action, note } = {}) {
   return after
 }
 
-/** Clear a task's date → back to the todo box (`edit --date none|clear`). Field shape mirrors the App's
- *  date-removed path exactly (EditPanel.setDate('none') → applyDate(0) → queueSave → store/todo.js
- *  updateTodoFields): todoTime=0 with derived dayStart=0, and the main reminder drops to 0 along with the
- *  date (the App's applyDate(0) zeroes remindTs; reminders are date-anchored — scheduleReminder gates on
- *  dayStart). B3/B13: reminderOffsets are dropped along with the main reminder (offsets are anchored to it
- *  — keeping them revives stale early-warning chips when a reminder is re-added; the reminder-clear
- *  lifecycle rule in EditPanel.onRemindersClear). Schedule chips cannot survive without a
- *  day to live on: same snapshot→clear cascade as the App's rowChipSync date-removed branch
- *  (snapshotForDelete + clearTaskChips = snapshot to meta, then planDeleteTask) — the snapshot stays in
- *  meta so a later `restore` can still backfill. B13 exact shape (EditPanel.applyDate(0), offsetsCleared):
- *  reminderTime drops to 0 and BOTH reminder arrays empty — offsets AND extras are anchored to the main
- *  reminder and die with it (the old "extras kept as-is" sentence here contradicted the code below).
+/** Clear a task's date → back to the todo box (`edit --date none|clear`). Field shape mirrors the App's date-removed path exactly (EditPanel.setDate('none') → applyDate(0) → queueSave → store/todo.js updateTodoFields): todoTime=0 with derived dayStart=0, and the main reminder drops to 0 along with the date (the App's applyDate(0) zeroes remindTs; reminders are date-anchored).
+ *  B3/B13: reminderOffsets are dropped along with the main reminder (offsets are anchored to it); B13 exact shape (EditPanel.applyDate(0), offsetsCleared): reminderTime drops to 0 and BOTH reminder arrays empty — offsets AND extras are anchored to the main reminder and die with it.
+ *  Schedule chips cannot survive without a day to live on: same snapshot→clear cascade as the App's rowChipSync date-removed branch — the snapshot stays in meta so a later `restore` can still backfill.
  *  Already-undated task → no-op ({changed:false}, nothing written, no audit entry). */
 function clearTodoDate (input) {
   const t = resolveTask(input, liveTasks())
@@ -337,10 +324,7 @@ function clearTodoDate (input) {
 }
 
 /**
- * Complete/undo complete (semantics aligned with store/todo.js toggleComplete):
- * - On complete, writes completedAt and, per isCompleteWithSubtasks (default on), also checks all subtasks
- * - When completing the latest instance in a repeat group (repeatId), renews per the meta 'repeatRule:<rid>' rule to generate the next instance
- */
+ * Complete/undo complete (semantics aligned with store/todo.js toggleComplete): on complete, writes completedAt and, per isCompleteWithSubtasks (default on), also checks all subtasks; when completing the latest instance in a repeat group (repeatId), renews per the meta 'repeatRule:<rid>' rule to generate the next instance */
 function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
   const db = open()
   const t = resolveTask(input)
@@ -365,23 +349,18 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
       } catch { /* skip the cascade when subtask JSON is malformed */ }
     }
     const undone = patchTodo(t.taskId, undoPatch, { action: 'undo' })
-    // F3 P2 (2026-09-21): undoing an auto-renewed completion used to leave the renewed next instance
-    // behind — an accidental `done` on the group's last instance permanently seeded a phantom
-    // future instance. The renewal below only fires when the completed row is the group's LAST live
-    // instance, so on undo remove the instance renewal created (same rid, nearest later dayStart,
-    // still last, not itself completed); any earlier sibling is left alone. D18-DOM2 (#12): row
-    // shape aligned with the renderer's deleteTodo/deleteTodosMany — `delete: true` (not 1),
-    // version 0; `deleting` is a UI-dialect flag the App strips, so the CLI never sets it. Known
-    // CLI-side differences (not ported): no critical/writeEvent backup and no view recompute on
-    // this channel (backups land via the purge event snapshot, cli/lib-eventbackup.cjs).
+    // F3 P2 (2026-09-21): undoing an auto-renewed completion used to leave the renewed next instance behind — an accidental `done` on the group's last instance permanently seeded a phantom future instance. The renewal below only fires when the completed row is the group's LAST live instance, so on undo remove the instance renewal created (same rid, nearest later dayStart, still last, not itself completed); any earlier sibling is left alone.
+    // D18-DOM2 (#12): row shape aligned with the renderer's deleteTodo/deleteTodosMany — `delete: true` (not 1), version 0; `deleting` is a UI-dialect flag the App strips, so the CLI never sets it. Known CLI-side differences (not ported): no critical/writeEvent backup and no view recompute on this channel (backups land via the purge event snapshot, cli/lib-eventbackup.cjs).
     try {
       if (t.repeatId && t.dayStart) {
         const group = db.call('queryTodos', { deleted: 0, repeatId: t.repeatId })
           .filter(x => x.taskId !== t.taskId && x.dayStart > 0)
           .sort((a, b) => a.dayStart - b.dayStart)
-        const lastDay = group.length ? group[group.length - 1].dayStart : 0
-        const renewedNext = group.find(x => x.dayStart > t.dayStart)
-        if (renewedNext && !renewedNext.complete && renewedNext.dayStart === lastDay) {
+        // W7 P1 (2026-10-23): shared discriminator (renderer repeatUndo parity) — day heuristic plus
+        // the createTime >= completedAt check so a `repeat on` PRE-GENERATED future instance is NOT
+        // deleted; legacy rows without createTime/completedAt keep the old day-only behavior.
+        const renewedNext = findRenewedNextInstance(t, group)
+        if (renewedNext) {
           const now = Date.now()
           // version: 0 (deleteTodo parity) so the soft delete re-enters the sync snapshot
           commit('todo', 'put', Object.assign({}, renewedNext, { delete: true, deletedAt: now, updateTime: now, version: 0, status: 'delete' }))
@@ -417,6 +396,8 @@ function toggleComplete (input, target, { withSubtasks, completedAt } = {}) {
 
 /** Soft delete → recycle bin (deletedAt drives the 30-day auto hard-delete and recycle-bin ordering, aligned with the renderer) */
 function deleteTodo (input) {
+  // [F2 2026-10-17 focus detach, renderer parity: store/todo.js deleteTodo] the App detaches a focus-bound task BEFORE the delete so the completion record never books to a taskId now in the recycle bin (renderer twin: dispatch('tomato/attach', null)). The CLI equivalent door is the tomato command channel — writeTomatoCmd({action:'attach', taskId:null}) makes the running App dispatch the SAME tomato/attach(null) action. Fire-and-forget; the durable running-session row (tomatoRunningSession, TQ-1) plus the last cliTomatoState receipt detect the binding, so a quit/dead App's stale row never triggers a phantom detach write.
+  detachFocusedTomato(resolveTask(input).taskId)
   // version reset to 0 (renderer parity: store/todo.js deleteTodo, P3 2026-09-12): syncTodos excludes
   // delete rows already acked with version > 0, so keeping the old version meant a re-delete after
   // restore never re-entered the sync snapshot and the deletion silently never propagated.
@@ -425,53 +406,6 @@ function deleteTodo (input) {
   return after
 }
 
-/** Snapshot all of a task's chips into meta (planChipsSnapshot:<taskId>) before clearing its rows.
- *  D18-DOM2 (#11): a cascade failure used to be a SILENT bare catch — orphan chips with zero
- *  signal. It now warns to stderr with the task id and the deletion still proceeds (App parity:
- *  warn + continue). */
-function chipsSnapshotForDelete (taskId) {
-  try {
-    const rows = open().call('planAll', []).filter(r => r.taskId === taskId)
-    if (rows.length) commit('meta', 'put', ['planChipsSnapshot:' + taskId, JSON.stringify(rows)])
-    commit('plan', 'deleteTask', taskId)
-  } catch (e) {
-    // snapshot failure must not block deletion — but it must be loud (orphan-chip signal)
-    console.error(`warning: chip snapshot/cascade failed for task ${taskId} (${e && e.message ? e.message : e}) — schedule chips may be orphaned`)
-  }
-}
-
-/** P3-10 (dw wave): chipsRemoveTask deleted — dead export (zero callers repo-wide; deleteTodo goes
- *  through chipsSnapshotForDelete, purgeRecycleBin relies on the db-layer cascade). */
-
-/** Day-change chip migration (same semantics as the UI's moveTaskChips and the `edit --date` follow-up):
- *  existing chips keep their times and follow the task to the new day. Best-effort — never blocks the patch. */
-function migrateChipsOnDayChange (taskId, oldDay, newDay) {
-  if (!oldDay || !newDay || oldDay === newDay) return 0
-  try {
-    if (localDayKey(oldDay) === localDayKey(newDay)) return 0
-    commit('plan', 'moveTask', { taskId, fromDay: localDayKey(oldDay), toDay: localDayKey(newDay) })
-    return 1
-  } catch { return 0 }
-}
-
-/** Restore a task: backfill the schedule chips snapshotted before deletion.
- *  LWW re-stamp on restore (renderer twin: renderer/js/utils/dayPlans.js restoreSnapshot): the
- *  snapshot rows carry their PRE-DELETE updatedAt (planAddMany preserves explicit stamps) while
- *  the delete stamped a FRESH tombstone — over LAN the restored chips lost every LWW round
- *  against newer peer chip-tombstones and were silently re-deleted; re-stamp fresh instead. */
-function chipsRestoreSnapshot (taskId) {
-  try {
-    const raw = open().call('getMeta', 'planChipsSnapshot:' + taskId)
-    if (!raw) return 0
-    const rows = JSON.parse(raw)
-    if (Array.isArray(rows) && rows.length) commit('plan', 'putMany', rows.map(r => ({ ...r, updatedAt: Date.now() })))
-    // Round-3 P1: '' → deleteMeta (file-wide convention, renderer clearSnapshot parity) — a ''
-    // value is NOT a tombstone here, it is a stale meta row a later task-id collision could
-    // misread as an (empty) snapshot; deleteMeta propagates the removal to peers too.
-    commit('meta', 'delete', 'planChipsSnapshot:' + taskId)
-    return rows.length
-  } catch { return 0 }
-}
 
 /** Restore from the recycle bin */
 function restoreTodo (input) {
@@ -481,11 +415,18 @@ function restoreTodo (input) {
   // lost the snapshot. The row update alone is harmless to retry; only after it succeeds do we spend it.
   const db = open()
   const t = resolveTask(input, recycleTasks())
+  // [F2 2026-10-17 restore twin guard, renderer parity: store/todo.js restoreFromRecycle] the schema-v9 partial UNIQUE index idx_todos_repeat_day (recurGroupId + scheduledDay, live rows) rejects a restore whose repeat group already has a LIVE instance on the same day (the chain was renewed while this instance sat in the bin) — the raw put used to surface a bare UNIQUE stack.
+  // Pre-check and refuse with a structured error; the row stays in the recycle bin (the user's delete decision is preserved; a later `repeat off`/manual repeatId edit is the exit).
+  if (t.repeatId && t.dayStart > 0) {
+    const twins = db.call('queryTodos', { deleted: 0, repeatId: t.repeatId, dayStartFrom: t.dayStart, dayStartTo: t.dayStart })
+    if (Array.isArray(twins) && twins.some(x => x && x.taskId !== t.taskId)) {
+      throw new CliError(
+        `cannot restore ${t.taskId}: repeat group ${t.repeatId} already has a live instance on the same scheduled day (${t.dayStart}) — restore refused to avoid a duplicate-scheduled-day collision (idx_todos_repeat_day)`,
+        'REPEAT_TWIN_EXISTS')
+    }
+  }
   const merged = { ...t, delete: false, deletedAt: 0, updateTime: Date.now(), status: 'update' }
-  // B5 guard (renderer parity: store/todo.js restoreFromRecycle): startup meta GC may have purged
-  // `repeatRule:<rid>` while the row sat in the bin — restoring the dangling repeatId used to let
-  // completion fall into ensureNextRepeatInstance's silent !rule return (chain just dies). Demote to
-  // non-repeating with the same console warning semantics as the App.
+  // B5 guard (renderer parity: store/todo.js restoreFromRecycle): startup meta GC may have purged `repeatRule:<rid>` while the row sat in the bin — restoring the dangling repeatId used to let completion fall into ensureNextRepeatInstance's silent !rule return (chain just dies). Demote to non-repeating with the same console warning semantics as the App.
   if (t.repeatId) {
     let rule = null
     try { rule = JSON.parse(db.call('getMeta', 'repeatRule:' + t.repeatId) || 'null') } catch { /* treated as gone */ }
@@ -502,12 +443,8 @@ function restoreTodo (input) {
 function purgeRecycleBin () {
   open() // ensure the DB is open — the purge commits through the bus, which resolves this same module
   const rows = recycleTasks()
-  // D18-DOM2 (#9, App parity store/todo.js purgeIds → writeEventBackup('purge')): write a
-  // best-effort pre-purge event snapshot (evt-purge-*.json) BEFORE anything is deleted — the App
-  // refuses to purge silently without one, so does the CLI now (loud failure, purge still proceeds:
-  // blocking a user's explicit destructive command on a backup IO failure trades one bug for worse).
-  // The snapshot is the CLI-side port (renderer ESM/IPC is unreachable from pure Node) — see
-  // cli/lib-eventbackup.cjs for the shape/directory contract.
+  // D18-DOM2 (#9, App parity store/todo.js purgeIds → writeEventBackup('purge')): write a best-effort pre-purge event snapshot (evt-purge-*.json) BEFORE anything is deleted — the App refuses to purge silently without one, so does the CLI now (loud failure, purge still proceeds: blocking a user's explicit destructive command on a backup IO failure trades one bug for worse).
+  // The snapshot is the CLI-side port (renderer ESM/IPC is unreachable from pure Node) — see cli/lib-eventbackup.cjs for the shape/directory contract.
   {
     const db = open()
     const liveRows = db.call('queryTodos', { deleted: 0 })
@@ -520,18 +457,8 @@ function purgeRecycleBin () {
     const snap = writePurgeEventSnapshot({ dir: backupDir, rows, liveRows, metaEntries, reason: 'purge' })
     if (!snap.ok) console.error(`warning: purge proceeded WITHOUT its pre-purge event snapshot (${snap.error}) — no evt-purge-*.json was written to ${backupDir}`)
   }
-  // cli-4 (root-cause ordering invariant): IRREVERSIBLE side effects must come AFTER the
-  // transactional state change, never before. The old files-first order deleted attachment
-  // files and THEN committed the purge — if the commit failed (bus rejection, mid-way error),
-  // live recycle-bin rows were left pointing at files that no longer exist: unrecoverable data
-  // loss. Rows now die first; a best-effort file pass that fails midway only leaves ORPHANED
-  // files (recoverable garbage), never a live row without its files.
-  // D18-DOM2 (#10, documented divergence): the MAIN process deliberately does the OPPOSITE order —
-  // files BEFORE rows (src/main/handlers/todo.js 'db:purge-recycle-bin', main-ipc-8 invariant:
-  // a failed file delete after the commit orphans a private attachment nothing can ever reach,
-  // while rows surviving a failed commit merely show "not yet synced"). Each channel's order is
-  // load-bearing for its own failure model (CLI = bus commit; main = IPC with a renderer
-  // missing-file guard); DO NOT "align" either side without re-deriving both failure models.
+  // cli-4 (root-cause ordering invariant): IRREVERSIBLE side effects must come AFTER the transactional state change, never before. The old files-first order deleted attachment files and THEN committed the purge — if the commit failed (bus rejection, mid-way error), live recycle-bin rows were left pointing at files that no longer exist: unrecoverable data loss. Rows now die first; a best-effort file pass that fails midway only leaves ORPHANED files (recoverable garbage), never a live row without its files.
+  // D18-DOM2 (#10, documented divergence): the MAIN process deliberately does the OPPOSITE order — files BEFORE rows (src/main/handlers/todo.js 'db:purge-recycle-bin', main-ipc-8 invariant: a failed file delete after the commit orphans a private attachment nothing can ever reach, while rows surviving a failed commit merely show "not yet synced"). Each channel's order is load-bearing for its own failure model (CLI = bus commit; main = IPC with a renderer missing-file guard); DO NOT "align" either side without re-deriving both failure models.
   commit('todo', 'purgeBin')
   // Attachment files die after the rows (files/<taskId>_<ts>_<name>, same prefix rule as the
   // App's purgeAttachmentFiles in src/main/index.js).
@@ -551,6 +478,24 @@ function purgeRecycleBin () {
   // planChipsSnapshot:<id>, the CLI purge left the meta behind — a later task-id collision could
   // backfill a purged task with someone else's chips, and the meta rows just leaked.
   for (const r of rows) { try { commit('meta', 'delete', 'planChipsSnapshot:' + r.taskId) } catch { /* absent is fine */ } try { commit('meta', 'delete', ESTIMATE_KEY_PREFIX + r.taskId) } catch { /* M-11: estimate key dies with the row too */ } }
+  // W7 P3 (2026-10-23, computeMetaGc parity — src/main/handlers/shared.js): the purge snapshot also
+  // captures `repeatRule:<rid>` (maint/d23 P3) but the cleanup never deleted it — a fully-purged
+  // group's rule leaked forever (and the App-side rule lifecycle keys repeatRule to LIVE rows only,
+  // deliberate P1 decision 2026-09-19: a rule referenced only by recycle-bin rows is dead, so
+  // recycle-bin remnants do NOT keep the rule alive). For every repeatId on a purged row: delete
+  // the rule meta when no live (deleted:0) row still references it; keep it when a survivor exists.
+  try {
+    const purgedRids = [...new Set(rows.map(r => r.repeatId).filter(Boolean))]
+    for (const rid of purgedRids) {
+      const stillLive = open().call('queryTodos', { deleted: 0, repeatId: rid, limit: 1 })
+      if (!Array.isArray(stillLive) || !stillLive.length) {
+        try { commit('meta', 'delete', 'repeatRule:' + rid) } catch { /* absent is fine */ }
+      }
+    }
+  } catch (e) {
+    // Best-effort like the rest of the meta cleanup — a missed rule is orphaned garbage, never data loss
+    console.error(`warning: purge could not GC orphaned repeatRule meta (${e && e.message ? e.message : e})`)
+  }
   // F3 P2 (2026-09-21, D5 renderer parity — store/todo.js scrubMilestonesForPurged, the renderer got
   // this fix on both purge paths while the CLI twin kept the bug): purge used to leave the purged
   // taskIds inside projectMilestones:<catId> blobs. A past milestone whose last link was purged then
@@ -563,8 +508,8 @@ function purgeRecycleBin () {
     if (purgedIds.size) {
       for (const k of open().call('listMetaKeys') || []) {
         if (!String(k).startsWith('projectMilestones:')) continue
-        let list
-        try { list = JSON.parse(open().call('getMeta', k) || '[]') } catch { continue /* corrupt blob → leave alone */ }
+        let list, firstRaw
+        try { firstRaw = open().call('getMeta', k); list = JSON.parse(firstRaw || '[]') } catch { continue /* corrupt blob → leave alone */ }
         if (!Array.isArray(list)) continue
         let changed = false
         for (const m of list) {
@@ -573,7 +518,20 @@ function purgeRecycleBin () {
             changed = true
           }
         }
-        if (changed) { commit('meta', 'put', [k, JSON.stringify(list)]); msScrubbed++ }
+        if (changed) {
+          // C2 P2: re-read before the whole-key put; a peer blob that moved since the first read
+          // is UNIONed by id (peer-NEW ids survive, ids we scrubbed are never resurrected).
+          let freshList = null
+          try { freshList = JSON.parse(open().call('getMeta', k) || '[]') } catch { /* corrupt → write our cleaned copy (loud path belongs to getMilestones) */ }
+          if (Array.isArray(freshList)) {
+            const ours = new Set(list.map(m => m && m.id))
+            const firstIds = new Set(JSON.parse(firstRaw || '[]').map(m => m && m.id))
+            for (const m of freshList) {
+              if (m && m.id != null && !ours.has(m.id) && !firstIds.has(m.id)) { list.push(m); ours.add(m.id) }
+            }
+          }
+          commit('meta', 'put', [k, JSON.stringify(list)]); msScrubbed++
+        }
       }
     }
   } catch { /* best-effort: the purge itself must not fail on meta scrubbing */ }
@@ -597,6 +555,13 @@ const {
   writeSyncCmd, readSyncState, waitForSyncAck,
 } = require('./lib-channels.cjs')({ open, commit, audit })
 
+/** Chips/focus snapshot family — split to lib-chips.cjs (size-ratchet); factory-injected
+ *  with the db facade AND the tomato state probes (this block must stay AFTER the
+ *  lib-channels destructure above — focusBoundTo reads readTomatoState at call time). */
+const {
+  detachFocusedTomato, chipsSnapshotForDelete, migrateChipsOnDayChange, chipsRestoreSnapshot,
+} = require('./lib-chips.cjs')({ commit, open, readTomatoState, writeTomatoCmd })
+
 /* Categories write: extracted verbatim to lib-categories.cjs (2026-09-27 size-ratchet split) */
 const {
   addCategory, renameCategory, deleteCategory, moveCategory, categoryRows, categoryHierarchy, cleanupEmptyCategories,
@@ -615,12 +580,8 @@ const {
 /* ---------------- Focus ledger + per-task tomato estimates: extracted verbatim to lib-focus.cjs (2026-09-27 size-ratchet split) ---------------- */
 
 /* ---------------- Manual ordering (taskSort midpoint insertion — same semantics as renderer todo/reorderTodos drag)
-   F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the
-   renderer's TodoItem._writeSort reorderScale rewrite); the ±100 no-beyond margin is precision
-   degradation only — order can no longer drift between the two ends' scales.
-   B2 (2026-09-24): pool + dayOrder are in APP DISPLAY order (taskSort DESCENDING — sortMode.js
-   custom mode). moveWithin's `sorts` contract is display order now, so `sort top` lands max+100
-   (visually first) instead of the old min-100 (visually last, P1 cross-end inversion). */
+   F-B2 (dw wave 3): the score math moved to shared/sort-core.mjs moveWithin (single source with the renderer's TodoItem._writeSort reorderScale rewrite); the ±100 no-beyond margin is precision degradation only — order can no longer drift between the two ends' scales.
+   B2 (2026-09-24): pool + dayOrder are in APP DISPLAY order (taskSort DESCENDING — sortMode.js custom mode). moveWithin's `sorts` contract is display order now, so `sort top` lands max+100 (visually first) instead of the old min-100 (visually last, P1 cross-end inversion). */
 /** Reorder <task> relative to: top|bottom|up|down (within its day) or before|after <otherTask> (must share the day/no-date pool) */
 function sortTask (input, pos, refInput) {
   const t = resolveTask(input, liveTasks())
@@ -638,11 +599,42 @@ function sortTask (input, pos, refInput) {
     if (pos === 'up' || pos === 'down') throw new CliError('task is already at the ' + (pos === 'up' ? 'top' : 'bottom') + ' of its list', 'ALREADY_AT_EDGE')
     throw new CliError('position must be top|up|down|bottom, or before|after <task>', 'USAGE')
   }
-  const newSort = mv.sort
-  patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
-  // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position).
-  // Reported in App display order (taskSort descending) — B2: the old ascending readout was the
-  // App's list printed upside-down.
+  // F2 fix: moveWithin's midpoint insertion HALVES the adjacent gap on every up/down/before/after move, so a dozen consecutive `sort up` calls degraded the landing gap below precision and the move silently stopped changing the order (the App never hits this — TodoItem._writeSort rewrites the whole 9999→-9999 scale on every move).
+  // Same recovery here: when the landing gap would drop below the threshold, rewrite the whole pool onto reorderScale's linear scale first (shared single source) and land the mover on that scale instead.
+  const sorts = pool.map(x => x.taskSort)
+  let newSort = mv.sort
+  let rescaleRows = null
+  if (sorts.some(s => s != null && Math.abs((s || 0) - newSort) < 2)) {
+    // C2 fix: scores now map onto the POST-move display order — the old mapping handed the mover
+    // AND the displaced neighbor the same slot (tie-break luck). Build the new order explicitly.
+    const order = pool.filter(x => x.taskId !== t.taskId)
+    let insertAt
+    if (pos === 'top') insertAt = 0
+    else if (pos === 'bottom') insertAt = order.length
+    else if (pos === 'up') insertAt = Math.max(0, idx - 1)
+    else if (pos === 'down') insertAt = Math.min(order.length, idx)
+    else if (pos === 'before') insertAt = refIdx > idx ? Math.max(0, refIdx - 1) : refIdx
+    else insertAt = refIdx > idx ? refIdx : refIdx + 1
+    insertAt = Math.max(0, Math.min(order.length, insertAt))
+    order.splice(insertAt, 0, t)
+    const scores = reorderScale(pool.length)
+    rescaleRows = order.map((x, i) => ({ ...x, taskSort: scores[i], updateTime: Date.now(), status: 'update' }))
+    newSort = scores[insertAt]
+  }
+  // C2 P2: the whole-pool rescale rewrite is ONE bus commit (todo.putMany → db.upsertMany single transaction, all-or-nothing) instead of N per-row patchTodo transactions (half-rescale on a mid-loop crash); one audit entry covers the batch.
+  if (rescaleRows) {
+    const byId = new Map(pool.map(x => [x.taskId, x]))
+    commit('todo', 'putMany', rescaleRows)
+    audit.record({
+      action: 'sort',
+      targets: rescaleRows.map(r => ({ taskId: r.taskId, content: r.taskContent })),
+      changes: rescaleRows.map(r => ({ before: { taskSort: byId.get(r.taskId) ? byId.get(r.taskId).taskSort : null }, after: { taskSort: r.taskSort } })),
+      note: `sort rescale: ${rescaleRows.length} row(s) rewritten onto the linear scale in one transaction`
+    })
+  } else {
+    patchTodo(t.taskId, { taskSort: newSort }, { action: 'sort' })
+  }
+  // Re-read the real persisted order (cannot reuse the pool above — it is a pre-move snapshot; the ★ marker would show at the old position). Reported in App display order (taskSort descending) — B2: the old ascending readout was the App's list printed upside-down.
   const after = liveTasks()
     .filter(x => x.dayStart === t.dayStart)
     .sort((a, b) => (b.taskSort || 0) - (a.taskSort || 0))

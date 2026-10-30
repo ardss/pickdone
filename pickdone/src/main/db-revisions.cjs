@@ -255,7 +255,12 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     // stalling every write behind maintenance work. It already runs strictly AFTER the commit, and
     // exportToStore tolerates pruned payloads (ancestry-only rows are skipped), so deferring it to
     // setImmediate keeps the write hot path clean without changing retention semantics.
-    setImmediate(() => prunePayloads(d))
+    // The deferred maintenance can run after the app has closed or switched DBs.
+    // A closed SQLite handle must never be used or logged against removed userData.
+    setImmediate(() => {
+      if (!d.open) return
+      prunePayloads(d)
+    })
     return { recorded }
   }
 
@@ -429,10 +434,19 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
    * swallowing the error would re-create the silent-loss gap this seam closes.
    * @param {{envelope: object, isCurrent?: boolean}[]} items
    */
-  function ingestRemote (items) {
-    if (!items || !items.length) return { ingested: 0 }
+  // The inbound revision DAG and its business-row materialization must share one
+  // SQLite commit. Otherwise a crash after ingestRemote but before the business
+  // flush makes the revision look known on retry while the todo is still absent.
+  function withTransaction (fn) {
     const d = getDb()
-    if (!d || !d.open) return { ingested: 0 }
+    if (!d || !d.open) throw new Error('revision transaction requires an open database')
+    return d.transaction(fn)()
+  }
+
+  function ingestRemote (items) {
+    if (!items || !items.length) return { ingested: 0, knownIds: [] }
+    const d = getDb()
+    if (!d || !d.open) return { ingested: 0, knownIds: [] }
     const insertRev = d.prepare(`INSERT OR IGNORE INTO sync_revisions
       (revisionId, entity, entityId, authorDeviceId, hlcPhysical, hlcLogical, parents, payloadHash, status, createdAt)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`)
@@ -444,6 +458,11 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
     const bumpCurrent = d.prepare('INSERT INTO sync_revision_current (entityId, revisionId) VALUES (?, ?) ON CONFLICT(entityId) DO UPDATE SET revisionId = excluded.revisionId')
     const getCurrent = d.prepare('SELECT s.* FROM sync_revision_current c JOIN sync_revisions s ON s.revisionId = c.revisionId WHERE c.entityId = ?')
     let ingested = 0
+    // d-wave 2026-10-14: ids that ALREADY existed (INSERT OR IGNORE lost) — the relay pull
+    // path uses this to recognize a REPLAY (cursor held below a blocked envelope re-pulls
+    // applied envelopes every round) and skip the business re-fold, whose LWW/conflict
+    // machinery must not re-run over content the local tables already hold.
+    const knownIds = []
     const run = d.transaction(() => {
       for (const item of items) {
         const env = item && item.envelope
@@ -457,6 +476,7 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
           env.revisionId, env.entity, String(env.entityId), env.authorDeviceId || '',
           hlc.physical, hlc.logical, JSON.stringify(env.parents || []), env.payloadHash, Date.now())
         if (res.changes) ingested++
+        else knownIds.push(env.revisionId)
         if (env.payload != null) insertPayload.run(env.revisionId, JSON.stringify(env.payload))
         if (env.dvv && insertDvv) insertDvv.run(env.revisionId, JSON.stringify(env.dvv))
         if (!item.isCurrent) continue
@@ -469,7 +489,7 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
       }
     })
     run()
-    return { ingested }
+    return { ingested, knownIds }
   }
 
   /** No-arg store snapshot over the REAL sync-core store engine (main-internal read seam,
@@ -512,7 +532,7 @@ module.exports = function createRevisionRecorder ({ getDb, log }) {
   }
 
   return {
-    record, list, exportToStore, exportStore, verifyHash, ingestRemote,
+    record, list, exportToStore, exportStore, verifyHash, ingestRemote, withTransaction,
     flagEnabled, dvvFlagEnabled, adjudicateFlagEnabled, ensureDvvTable, dvvTableExists, dvvState,
     FLAG_KEY, DVV_FLAG_KEY, ADJUDICATE_FLAG_KEY, DVV_TABLE,
     cmpHlc, prunePayloads, payloadKeep, backfillUnrecorded,

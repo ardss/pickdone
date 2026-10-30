@@ -65,15 +65,24 @@ function sleepBackoff (ms, { forceSpin = false, spinCapMs = FALLBACK_SPIN_CAP_MS
   while (Date.now() < end) { /* spin (capped) */ }
   return Date.now() - t0 // elapsed ms, for tests of the cap
 }
+// W15 (2026-10-25): quarantine decision is DECOUPLED from the read-failure gate. The old
+// `if (_readFailed) return` made the gate sticky across failure KINDS: one transient lock
+// timeout set _readFailed, and every later parse-error read (definitive corruption, D10's
+// own quarantine trigger) then skipped quarantine forever — no .bad, no notice, writes
+// permanently gated. A lock timeout must only suppress quarantining AT THE MOMENT of the
+// read failure (D14 C3, handled in readConfig); once the file is READABLE again but parses
+// as garbage, it must be quarantined like any corrupt file. The skip now keys on the last
+// quarantine RENAME failing (file still in place + locked — retrying would fail again over
+// live state), which a successful read clears alongside _readFailed.
+let _quarantineRenameFailed = false
 function quarantineConfig () {
   // P2 2026-09-20: the rename itself used to be swallowed silently; when it FAILS the unreadable
   // file is still in place, so writes must be gated off (no clobber) instead of proceeding.
-  // D10: never re-rename while the read-failure gate is already active — the previous rename
-  // failed (file in place + locked); retrying would just fail again over live state.
-  if (_readFailed) return
+  if (_quarantineRenameFailed) return
   try {
     fs.renameSync(configFile(), configFile() + '.bad')
     _readFailed = false
+    _quarantineRenameFailed = false
     // Round-3 stability (2026-09-26): a SUCCESSFUL quarantine was the one fully silent path —
     // only the failed rename logged. Warn here too and raise the user-visible notice flag.
     _quarantineNotice = true
@@ -81,6 +90,7 @@ function quarantineConfig () {
   } catch (renameErr) {
     console.warn('[config-store] quarantine of unreadable config.json failed:', renameErr && renameErr.message, '- writes are gated off until a read succeeds')
     _readFailed = true
+    _quarantineRenameFailed = true
   }
 }
 function readConfig () {
@@ -92,7 +102,7 @@ function readConfig () {
     try { raw = fs.readFileSync(configFile(), 'utf8') } catch (e) { readErr = e }
     if (readErr) {
       // Only a genuinely missing file is a first install — return defaults silently.
-      if (readErr.code === 'ENOENT') { _readFailed = false; return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } } }
+      if (readErr.code === 'ENOENT') { _readFailed = false; _quarantineRenameFailed = false; return { shortcutKeySettings: { ...DEFAULT_SHORTCUTS } } }
       // D10: transient IO (AV scan / EBUSY lock) — retry before giving up; the file may be fine.
       if (TRANSIENT_READ_CODES.has(readErr.code)) { transientExhausted = attempt === TRANSIENT_ATTEMPTS - 1; continue }
       break // non-transient IO (e.g. EISDIR): quarantining is the only path forward
@@ -104,6 +114,7 @@ function readConfig () {
       // 旧默认值一次性迁移:存量化配置里还钉着冲突键 ctrl+shift+a 的搬到新默认
       if (c.shortcutKeySettings.quickAddGlobal === 'ctrl+shift+a') c.shortcutKeySettings.quickAddGlobal = DEFAULT_SHORTCUTS.quickAddGlobal
       _readFailed = false
+      _quarantineRenameFailed = false
       return c
     } catch (e) {
       // D10: JSON parse error = the content is definitively corrupt — quarantine immediately

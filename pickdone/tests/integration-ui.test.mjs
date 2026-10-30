@@ -13,17 +13,21 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
+import net from 'node:net'
 
 // Failure count: the after hook's forced teardown uses it to decide the exit code.
 // It once hardcoded process.exit(0) - the after hook runs before the runner summarizes, so all-red scenarios were whitewashed into exit 0 (false green).
 // Removing the forced exit in favor of natural draining was also tried - dangling WS/child-process handles hang forever; that path does not work.
 // Hence a local t() wrapper counts failures + the forced exit is kept (negatively verified: injecting a must-fail case -> EXIT 1).
 let uiFailed = 0
+let uiRegistered = 0
+let uiCompleted = 0
 const t = (name, a, b) => {
+  uiRegistered++
   const opts = b === undefined ? undefined : a
   const fn = b === undefined ? a : b
   return test(name, opts, async (...args) => {
-    try { await fn(...args) } catch (e) { uiFailed++; throw e }
+    try { await fn(...args); uiCompleted++ } catch (e) { uiFailed++; throw e }
   })
 }
 
@@ -41,13 +45,19 @@ const pending = new Map()
 let tmpDir = null
 const appCwd = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-const lastSeen = ''
-async function connect (tries = 40) {
+let lastSeen = '(no CDP targets observed)'
+// Network-share cold starts can exceed the local 20s budget due to IO and
+// Chromium sandbox setup; keep the strict 20s limit for normal local runs.
+async function connect (tries = (process.platform === 'win32' && appCwd.startsWith('\\\\') ? 120 : 40)) {
   for (let i = 0; i < tries; i++) {
     try {
       // fetch must carry an AbortSignal: a zombie debug port makes a timeout-less fetch hang forever (once dragged down the whole test file)
       const list = await (await fetch(CDP + '/json/list', { signal: AbortSignal.timeout(1500) })).json()
-      const page = list.find(t => t.type === 'page' && /#\/todo-list/.test(t.url))
+      lastSeen = list.map(t => `${t.type}:${String(t.url || '').slice(0, 160)}`).join(', ') || '(CDP open, no targets)'
+      // The first CDP target is app://app/renderer-dist/index.html; Vue adds
+      // #/todo-list/today only AFTER mount. Requiring the hash before
+      // connecting misreports a healthy boot as 'app not ready'.
+      const page = list.find(t => t.type === 'page' && (/^app:\/\/app\/renderer-dist\/index\.html/.test(t.url) || /#\/todo-list/.test(t.url)))
       if (page) {
         ws = new WebSocket(page.webSocketDebuggerUrl)
         await new Promise((r, j) => { ws.onopen = r; ws.onerror = j })
@@ -72,7 +82,9 @@ const evalJson = async expression => {
     sleep(12000).then(() => null)
   ])
   if (r === null) throw new Error('integration test: Runtime.evaluate timed out after 12s (page wedged or WS disconnected)')
-  return JSON.parse(r.result?.result?.value ?? 'null')
+  const value = r.result?.result?.value
+  if (typeof value !== 'string') throw new Error('CDP Runtime.evaluate returned no JSON value: ' + JSON.stringify(r.result?.exceptionDetails || r.error || r.result || null).slice(0, 500))
+  return JSON.parse(value)
 }
 const click = sel => evalJson(`(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return false;el.click();return true})()`)
 const type = (sel, text) => evalJson(`(()=>{const el=document.querySelector(${JSON.stringify(sel)});if(!el)return false;
@@ -82,26 +94,59 @@ const dbAll = () => evalJson(`(await window.todoAPI.dbCall('getAll', {})).filter
 const vueErr = () => evalJson(`window.__lastVueErr ? (window.__lastVueErr.msg + ' :: ' + (window.__lastVueErr.stack || '').slice(0, 160)) : null`)
 
 async function pickFreePort () {
-  for (let i = 0; i < 12; i++) {
-    const p = 9400 + Math.floor(Math.random() * 400)
-    try { await fetch(`http://127.0.0.1:${p}/json/list`, { signal: AbortSignal.timeout(800) }) } catch { return p } // unreachable = free
-  }
-  throw new Error('no free debug port found')
+  // An unreachable HTTP endpoint is NOT evidence that Windows will permit a
+  // bind: Hyper-V excluded ranges can fail with WSAEACCES (0x271D).
+  // Ask the OS to bind an ephemeral TCP port, then release it for Chromium.
+  return await new Promise((resolve, reject) => {
+    const server = net.createServer()
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      server.close(err => err ? reject(err) : resolve(address.port))
+    })
+  })
 }
 
 async function startApp () {
-  PORT = await pickFreePort()
-  CDP = `http://127.0.0.1:${PORT}`
-  child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + PORT], {
-    cwd: appCwd,
-    env: { ...process.env, TODO_USER_DATA_DIR: tmpDir },
-    // App output goes straight to a file (node:test captures hook consoles; diagnosing startup failures requires the app's own log)
-    stdio: ['ignore', fs.openSync(appCwd + '/tests/.artifacts/it-app.log', 'a'), fs.openSync(appCwd + '/tests/.artifacts/it-app.log', 'a')],
-    detached: false
-  })
-  const ok = await connect()
-  if (!ok) throw new Error('app not ready within 20s (port ' + PORT + ') targets=' + lastSeen)
-  await sleep(1500)
+  // Windows Chromium subprocess sandbox refuses to launch Electron from an
+  // UNC network share (GPU error_code=18). This exception belongs ONLY to the
+  // disposable integration-test child on a UNC source checkout; never to a
+  // local development or packaged production instance.
+  const uncTestFlags = process.platform === 'win32' && appCwd.startsWith('\\\\')
+    ? ['--disable-gpu', '--no-sandbox'] : []
+  let connected = false
+  const failedPorts = []
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    PORT = await pickFreePort()
+    CDP = `http://127.0.0.1:${PORT}`
+    lastSeen = '(no CDP targets observed)'
+    fs.appendFileSync(IT_APP_LOG, `[it] CDP attempt ${attempt}/3 port=${PORT}\n`)
+    child = spawn(ELECTRON, ['.', '--no-focus', ...uncTestFlags, '--remote-debugging-port=' + PORT], {
+      cwd: appCwd,
+      env: { ...process.env, TODO_USER_DATA_DIR: tmpDir, PICKDONE_MULTI: '1' }, // scoped test lock avoids colliding with any running user instance
+      stdio: ['ignore', fs.openSync(IT_APP_LOG, 'a'), fs.openSync(IT_APP_LOG, 'a')],
+      detached: false
+    })
+    child.once('error', e => fs.appendFileSync(IT_APP_LOG, '[it] spawn error: ' + e.message + '\n'))
+    child.once('exit', (code, signal) => fs.appendFileSync(IT_APP_LOG, '[it] child exit code=' + code + ' signal=' + signal + '\n'))
+    connected = await connect()
+    if (connected) break
+    failedPorts.push(`${PORT}: ${lastSeen}; exit=${child.exitCode}`)
+    await stopApp()
+  }
+  if (!connected) throw new Error('CDP unavailable after 3 OS-bound port attempts: ' + failedPorts.join(' | '))
+  // CDP target creation precedes Vue startup. On shared UNC drives the
+  // renderer may need several seconds to mount; don't click an empty page.
+  let shellReady = false
+  for (let attempt = 0; attempt < 120; attempt++) {
+    try {
+      shellReady = await evalJson("!!document.querySelector('.app-shell') && !!document.querySelector('.sn-account-gear') && !!document.querySelector('.qa-input')")
+      if (shellReady) break
+    } catch { /* the renderer may still be navigating or reloading */ }
+    await sleep(500)
+  }
+  if (!shellReady) throw new Error('CDP connected but Vue Today shell never became ready (port ' + PORT + ') targets=' + lastSeen)
+  await sleep(350)
 }
 async function stopApp () {
   // Prefer a graceful Browser.close exit (triggers before-quit/mirror flush);
@@ -124,7 +169,17 @@ async function stopApp () {
   await sleep(2500) // wait for the process tree to exit and SQLite WAL to flush
 }
 
+// 2026-10-26 (W12 Fix 6): the app log used to be appended forever ('a' everywhere, no
+// truncation, no cap) and grew unboundedly across runs. It is truncated ONCE at the start of
+// this run (before-hook) — within a run the 'a' appends stay, because the 3 retry attempts
+// and the restart scenario write into the same file and each other's diagnostics matter.
+const IT_APP_LOG = appCwd + '/tests/.artifacts/it-app.log'
+
 test.before(async () => {
+  try {
+  // W12 2026-10-26: truncate the per-run app log at run start (bounded artifact growth;
+  // see the IT_APP_LOG comment above). Best-effort: a read-only .artifacts dir must not red the suite.
+  try { fs.mkdirSync(path.dirname(IT_APP_LOG), { recursive: true }); fs.writeFileSync(IT_APP_LOG, '') } catch {}
   // Precondition: language-pack chunks must be syntactically valid (a parallel session once wrote half-finished en-US-C/zh-CN-C/D files, taking down the whole renderer page;
   // symptom: "every integration scenario fails" - the real culprit must be reported first, not letting 11 scenarios collectively fake-fall)
   const localesDir = path.join(appCwd, 'renderer', 'js', 'i18n', 'locales')
@@ -138,6 +193,7 @@ test.before(async () => {
   // Pre-seed an empty todos.db: (1) skips the legacy migration (otherwise the machine's real old DB would be copied into the test directory - count pollution + privacy) (2) DB init builds a fresh schema
   fs.writeFileSync(path.join(tmpDir, 'todos.db'), '')
   await startApp()
+  } catch (e) { uiFailed++; throw e } // before-hook failures must never exit 0
 })
 
 test.after(async () => {
@@ -145,7 +201,7 @@ test.after(async () => {
   setTimeout(() => { try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch {} }, 2500)
   // Forced teardown stays (dangling WS/child-process handles hang forever; it cannot be removed), but the exit code follows the real failure count uiFailed:
   // it once hardcoded exit(0) - the after hook runs before the runner summarizes, so all-red scenarios were whitewashed into passing (false green).
-  setTimeout(() => process.exit(uiFailed ? 1 : 0), 300)
+  setTimeout(() => process.exit(uiFailed || uiCompleted !== uiRegistered ? 1 : 0), 300)
 })
 
 t('integration: startup -> app shell ready with zero Vue errors', async () => {
@@ -158,7 +214,7 @@ t('integration: quick add -> list renders -> DB consistency', async () => {
   const okType = await type('.qa-input', '集成测试任务A')
   assert.ok(okType, 'the quick-add input exists')
   await evalJson(`(()=>{const el=document.querySelector('.qa-input');
-    const ev=new KeyboardEvent('keyup',{key:'Enter',keyCode:13,bubbles:true});
+    const ev=new KeyboardEvent('keydown',{key:'Enter',keyCode:13,bubbles:true});
     Object.defineProperty(ev,'isComposing',{value:false});
     el.dispatchEvent(ev);return true})()`)
   await sleep(1000)
@@ -197,8 +253,8 @@ t('integration: check complete -> DB state flips -> undo restores', async () => 
   const undone = await evalJson(`(()=>{const a=[...document.querySelectorAll('.el-message a')].find(x=>/撤销|Undo/.test(x.textContent));if(!a)return false;a.click();return true})()`)
   await sleep(900)
   const restored = (await dbAll()).find(t => t.c.includes('集成测试任务A'))
-  if (undone) assert.equal(restored.done, false, 'after undo the DB complete should return to false')
-  else assert.equal(restored.done, true, 'without an undo link the task should stay complete')
+  assert.ok(undone, 'completing a task must expose an actionable Undo control')
+  assert.equal(restored.done, false, 'after clicking Undo the DB complete should return to false')
 })
 
 t('integration: delete -> recycle bin', async () => {
@@ -267,7 +323,10 @@ t('integration: settings change -> persists across a process restart (the strong
   // Open settings -> pomodoro tab -> change "daily pomodoro target" to 12
   await click('.sn-account-gear:not(.sn-account-trash)')
   await sleep(900)
-  await evalJson(`[...document.querySelectorAll('.setting_tabs .el-tabs__item')].find(x=>/番茄/.test(x.textContent))?.click()`)
+  // match by Element Plus pane id (tab-tomato), not text: the runner's system locale is en-US
+  // and getLocale() defaults the whole UI to the en surface, where the label is not 番茄
+  const openedPomodoroTab = await evalJson(`(()=>{const tab=[...document.querySelectorAll('.setting_tabs .el-tabs__item')].find(x=>/tomato$/.test(x.id)||/番茄|Pomodoro/i.test(x.textContent));if(!tab)return false;tab.click();return true})()`)
+  assert.ok(openedPomodoroTab, 'pomodoro settings tab should be present and clickable')
   await sleep(600)
   const setNum = await evalJson(`(()=>{const labels=[...document.querySelectorAll('.modal--settings .form-item__label')];
     const li=labels.find(l=>/每日番茄目标|Daily/.test(l.textContent));
@@ -287,6 +346,7 @@ t('integration: settings change -> persists across a process restart (the strong
   // Before killing the process, wait for dbMirror/persistence debounces to fully flush (LS+DB dual track), otherwise the restart reads stale values
   await sleep(2500)
   // Kill the process -> reopen with the same data directory (the strongest persistence assertion: cross-process lifecycle).
+  await stopApp() // without this, startApp launches a duplicate while the original holds the singleton lock
   // Re-validate the language pack before restart: the parallel-session write window may have it temporarily broken (unrelated to the code under test; skip explicitly rather than fake-fail)
   {
     const localesDir = path.join(appCwd, 'renderer', 'js', 'i18n', 'locales')
@@ -295,7 +355,7 @@ t('integration: settings change -> persists across a process restart (the strong
       const full = path.join(localesDir, f)
       try { execSync(`"${process.execPath}" --check "${full}"`, { stdio: 'pipe' }) } catch { broken.push(f) }
     }
-    if (broken.length) { console.error('[it] skipping restart persistence: the language pack is being written in parallel and is corrupt: ' + broken.join(', ')); return }
+    if (broken.length) throw new Error('restart persistence cannot be verified: corrupt language packs: ' + broken.join(', '))
   }
 
   // A second start occasionally stalls during main-window init (colliding with the parallel language-pack write window); retry, and degrade to a disk-level assertion if it still fails
@@ -306,6 +366,7 @@ t('integration: settings change -> persists across a process restart (the strong
       if (attempt === 1) { await stopApp(); await sleep(2000) }
     }
   }
+  if (!booted) throw new Error('restart persistence check failed: Electron did not restart')
   if (booted) {
     const persisted = await evalJson(`window.appUI.$store.state.settings.dailyTomatoTarget`)
     assert.equal(persisted, 12, 'the setting must still be 12 after restart')
@@ -324,7 +385,7 @@ t('integration: settings change -> persists across a process restart (the strong
 t('integration: all-route walk + zero-error final backstop', async () => {
   // If the previous scenario's restart failed, the app is shut down: self-heal by relaunching; when environment interference (parallel sessions) prevents launch, skip explicitly
   if (!ws) {
-    try { await startApp() } catch (e) { console.error('[it] skipping the all-route walk: app failed to start (' + e.message + ' )'); return }
+    await startApp() // no silent success when the actual app cannot start
   }
   const routes = ['/todo-list/today', '/todo-list/calendar', '/todo-list/todo-box', '/todo-list/statistics', '/todo-list/completed', '/todo-list/recycle-bin', '/todo-list/habit', '/todo-list/projects']
   for (const r of routes) {

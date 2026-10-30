@@ -11,12 +11,14 @@
            @pointerup="onPointerUp($event)"
            @pointercancel="onPointerUp($event)"
            @dragover.prevent="onDragOver(idx, $event)"
-           @dragleave="dropHover === idx && (dropHover = null)"
+           @dragleave="onDragLeave(idx, $event)"
            @drop.prevent="onDrop(idx, $event)"
            @click.stop="onCardClick(idx)">
+        <!-- [w16-deck] content renders only inside the revealed band; hidden cards are display:none shells -->
+        <template v-if="painted(idx)">
         <div class="pd-day-deck__head">
           <span class="pd-day-deck__label">{{ labelOf(c.ts) }}</span>
-          <span class="pd-day-deck__count">{{ doneOf(c) }}/{{ totalCountOf(c) }}</span>
+          <span class="pd-day-deck__count">{{ doneOf(c) }}/{{ totalCountOf(c) }}<span v-if="c.futureN" class="pd-day-deck__overdue-more" aria-hidden="true">+{{ c.futureN }}</span></span>
         </div>
         <div class="pd-day-deck__wd">{{ fmtMd(c.ts) + ' ' + $t('statsA.core.weekOf', { w: $t('statsA.core.wd' + dayjs(c.ts).day()) }) }}</div>
         <div class="pd-day-deck__bar" aria-hidden="true">
@@ -24,9 +26,9 @@
         </div>
         <div v-if="!c.all.length && !c.overdue.length" class="pd-day-deck__empty">{{ $t('statsE.TodayView.deckEmpty') }}</div>
         <template v-else>
-          <div v-if="c.overdue.length" class="pd-day-deck__overdue-label">{{ $t('statsE.TodayView.deckOverdue', { n: c.overdue.length }) }}</div>
+          <div v-if="c.overdue.length" class="pd-day-deck__overdue-label">{{ $t('statsE.TodayView.deckOverdue', { n: c.overdue.length }) }}<span v-if="c.overdue.length > c.overdueShown.length" class="pd-day-deck__overdue-more" aria-hidden="true">+{{ c.overdue.length - c.overdueShown.length }}</span></div>
           <ul v-if="c.overdue.length" class="pd-day-deck__list pd-day-deck__list--overdue">
-            <li v-for="t in c.overdue" :key="t.taskId" class="overdue"
+            <li v-for="t in c.overdueShown" :key="t.taskId" class="overdue"
                 tabindex="0" draggable="true" @dragstart="onDragStart(t, $event)"
                 @contextmenu="taskContextMenu(t, $event)"
                 @keydown.shift.delete.prevent.stop="del(t)">
@@ -77,6 +79,7 @@
           </li>
         </ul>
         </template>
+        </template>
       </div>
     </div>
   </div>
@@ -97,13 +100,13 @@ import { FMT } from '../utils/core.js'
 import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js' // [maint-0924 A2]
 import { getLocale } from '../i18n/index.js'
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
-import { clampToDayWindow } from '../utils/dayWindow.js' // [A3] out-of-window daySelectedTs clamps to the window edge
+import { deckWindowDays, deckCards, clampToDayWindow, anchorFrontIndex, DECK_SPAN_DAYS } from '../utils/dayWindow.js' // [w16-deck] window build + single-pass bucketing; clamp only fronts beyond-cap edges now; [w17] anchorFrontIndex re-anchors front when the window shifts
 import { dayShift, dayStart } from '../utils/todayBounds.js' // [D19] sanctioned calendar-day stepping (raw ms arithmetic drifts off local midnight across DST)
 
 // Bare dayjs is the window.dayjs global (injected by the browser host); taking an explicit reference satisfies lint and avoids global lookups
 const dayjs = window.dayjs
 
-const SPAN = 7 // 7 days on each side of today
+const SPAN = DECK_SPAN_DAYS // [w16-deck] base window ±30 days (was ±7); extends to cover the selected day, capped in dayWindow.js
 const VISIBLE = 3 // Number of layers revealed on each side of the center
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
@@ -144,22 +147,15 @@ export default {
     days () {
       // Depends on nowTs (30s tick): the window is recomputed after crossing midnight, otherwise the computed cache freezes at mount time
       void this.nowTs
-      const t0 = +this.dayjs().startOf('day')
-      // [D19] dayShift, not raw `t0 + (i-SPAN)*DAY`: across a DST transition the raw product
-      // lands 23:00 of the target day, so the exact-equality dayStart bucketing rendered the cards empty
-      return Array.from({ length: SPAN * 2 + 1 }, (_, i) => dayShift(t0, i - SPAN))
+      // [w16-deck] today ±30d, extended (180d cap) to cover an out-of-window daySelectedTs; reading
+      // the store here makes the extension reactive (dayShift stepping keeps DST midnights exact)
+      return deckWindowDays(this.today0, this.$store.state.ui.daySelectedTs)
     },
     today0 () { void this.nowTs; return +this.dayjs().startOf('day') },
     cards () {
-      const list = this.source
-      return this.days.map(ts => {
-        const card = { ts, all: list.filter(t => !t.delete && t.dayStart === ts), overdue: [] }
-        // Overdue incomplete tasks are grouped at the top of the "today" card (otherwise the card view would show a sudden drop in count, making users think tasks were lost)
-        if (ts === this.today0) {
-          card.overdue = list.filter(t => !t.delete && !t.complete && t.dayStart && t.dayStart < this.today0)
-        }
-        return card
-      })
+      // [w16-deck] single-pass bucketing in dayWindow.js: in-window overdue rows stay on their
+      // OWN date cards; only rows older than the window start join the today card's zone (capped)
+      return deckCards(this.source, this.days, this.today0)
     },
     labelOf () {
       return ts => {
@@ -179,36 +175,66 @@ export default {
     // click set _flipLocal); the daySelectedTs sync path stays silent to avoid double announce
     front (idx) {
       const ts = this.days[idx]
-      if (ts && ts !== (this.$store.state.ui.daySelectedTs || 0)) this.$store.commit('ui/setDaySelected', ts)
+      // [w16-deck] store-driven front changes (_selSync) must NOT write back: the user's strip
+      // selection stays authoritative; local flips still sync the strip (A1 option 2).
+      if (this._selSync) this._selSync = false
+      else if (ts && ts !== (this.$store.state.ui.daySelectedTs || 0)) this.$store.commit('ui/setDaySelected', ts)
       if (this._flipLocal) {
         this._flipLocal = false
         if (this.$announce && ts) this.$announce(this.$t('statsE.TodayView.deckDayAnnounce', { d: this.labelOf(ts) }))
       }
     },
+    // [w17] The card window itself changed (midnight tick recomputed days, or daySelectedTs was
+    // reset to 0 / shifted the window): `front` is a bare INDEX, so a stale value can point outside
+    // the new window — every card display:none (blank board) and the ArrowRight guard dies. Re-anchor
+    // onto a valid index aligned to the current selection (ts=0 → today0). A window that merely
+    // SHIFTED (same calendar day still fronted) stays untouched so the user's day survives the tick;
+    // _selSync suppresses the front watcher's write-back — the store selection stays authoritative.
+    days (nDays, oDays) {
+      if (!Array.isArray(nDays) || !nDays.length) return
+      const sel = this.$store.state.ui.daySelectedTs
+      const target = sel ? dayStart(+sel) : this.today0
+      if (nDays[this.front] === target) return // already fronting the selection/today
+      // [w21] `front` is an INDEX, so value-equality across windows is meaningless: after a
+      // midnight shrink the previously fronted calendar day sits at a different index, and the
+      // old `nDays[idx] !== oDays[this.front]` guard treated that same day as "already fronted"
+      // — front kept pointing at a different day than the store selection (highlight decoupled).
+      // The line above already guarantees the currently fronted day is NOT the selection, so any
+      // index drift means re-anchor; the shifted-window-stays case is exactly the early return.
+      const idx = anchorFrontIndex(nDays, this.today0, sel || 0)
+      if (idx !== this.front) {
+        this._selSync = true
+        this.front = idx
+      }
+    },
     // Reverse sync (fixed 2026-09-02): the date strip's "back to today" / calendar popover day-pick only wrote the store, and the deck had no
-    // listener, so the card stack never moved. Store change → if the target day is within the ±7-day window, rotate that card to the center;
-    // when the front watcher writes back the values are already equal so it won't re-trigger — no loop
-    // [A3] a daySelectedTs OUTSIDE the ±7-day window used to fall through silently (findIndex -1):
-    // the strip highlighted a far day while the stack stayed put. Now it clamps to the nearest
-    // window edge, and the front watcher writes the edge day back so the strip follows — both stay true.
+    // listener, so the card stack never moved. Store change → rotate the matching card to the center.
+    // [w16-deck 2026-10-28] an out-of-window pick EXTENDS the window (days reads the store) instead of
+    // clamping; beyond the 180d cap the cap edge fronts via the clamp. _selSync suppresses the front
+    // watcher's write-back either way — the user's strip choice is never rewritten (old clamp-rewrite yanked it back).
     '$store.state.ui.daySelectedTs' (ts) {
       if (!ts) return
-      const clamped = clampToDayWindow(this.days, +ts)
-      const idx = this.days.findIndex(d => d === clamped)
-      if (idx >= 0 && idx !== this.front) this.front = idx
+      const target = dayStart(+ts)
+      let idx = this.days.findIndex(d => d === target)
+      if (idx < 0) idx = this.days.findIndex(d => d === clampToDayWindow(this.days, target))
+      if (idx >= 0 && idx !== this.front) { this._selSync = true; this.front = idx }
+    }
+  },
+  created () {
+    // Align to the selected day BEFORE the first render (moved from mounted: its front assignment
+    // still fired the watcher write-back [w16-deck] forbids); cap edge fronts beyond-horizon picks.
+    const sel = this.$store.state.ui.daySelectedTs
+    if (sel) {
+      const target = dayStart(+sel)
+      let idx = this.days.findIndex(ts => ts === target)
+      if (idx < 0) idx = this.days.findIndex(ts => ts === clampToDayWindow(this.days, target))
+      // [w18] guard idx !== front like the store watcher below: when already fronting the selection,
+      // a bare _selSync=true is never consumed (equal front fires no watcher) and would swallow the
+      // NEXT local flip's store write-back
+      if (idx >= 0 && idx !== this.front) { this._selSync = true; this.front = idx }
     }
   },
   mounted () {
-    // Align to the currently selected day when entering the view: within the ±7 day window the
-    // matching card fronts; outside it the selection clamps to the nearest window edge ([A3],
-    // same rule as the store watcher) instead of silently staying on today while the strip
-    // highlights a far-away day.
-    const sel = this.$store.state.ui.daySelectedTs
-    if (sel) {
-      const clamped = clampToDayWindow(this.days, +sel)
-      const idx = this.days.findIndex(ts => ts === clamped)
-      if (idx >= 0) this.front = idx
-    }
     // 30s tick: days/today0 are recomputed after crossing midnight (dayjs is non-reactive; without the tick the computed freezes at mount time)
     this._tick = setInterval(() => { this.nowTs = Date.now() }, 30000)
   },
@@ -238,6 +264,8 @@ export default {
     posOf (idx) {
       return idx - this.front + this.dragX / 300
     },
+    /** [w16-deck] content gate at styleOf's visibility threshold: hidden cards need no lists */
+    painted (idx) { return Math.abs(this.posOf(idx)) <= VISIBLE + 0.5 },
     styleOf (idx) {
       const pos = this.posOf(idx)
       const abs = Math.abs(pos)
@@ -282,6 +310,14 @@ export default {
       if (dragged && dayStart(dragged.dayStart || 0) === this.days[idx]) return
       if (this.dropHover !== idx) this.dropHover = idx
       e.dataTransfer.dropEffect = 'move'
+    },
+    /* [fix 2026-10-27] dragleave fires when the pointer crosses onto a CHILD element (task rows,
+       progress bar) inside the card; the old inline `dropHover=null` killed the drop-ok outline
+       mid-hover. Only clear when the pointer actually left the card. */
+    onDragLeave (idx, e) {
+      const rel = e && e.relatedTarget
+      if (rel && e.currentTarget && e.currentTarget.contains(rel)) return
+      if (this.dropHover === idx) this.dropHover = null
     },
     onDrop (idx, e) {
       this.dropHover = null
@@ -440,6 +476,8 @@ export default {
 .pd-day-deck__tomato:hover, .pd-day-deck__tomato.pd-is-active { color: var(--brand); background: var(--brand-light); }
 /* ===== 卡片视图：逾期未完成任务置顶区（deckOverdue） ===== */
 .pd-day-deck__overdue-label { font-size: var(--fs-2xs); color: var(--danger, #f56c6c); padding: 0 2px 4px; font-weight: 600; }
+/* [w16-deck] 封顶后的 +N 数字徽标：纯数字汇总，不加新 i18n 键 */
+.pd-day-deck__overdue-more { margin-left: 6px; font-variant-numeric: tabular-nums; }
 .pd-day-deck__list--overdue { margin-bottom: 6px; padding-bottom: var(--space-1); border-bottom: 1px dashed var(--line, #e7e9ee); }
 .pd-day-deck__list--overdue .pd-day-deck__title { color: var(--danger, #f56c6c); }
 /* 逾期行内的原定日期徽标：回答「这是哪天拖下来的」 */

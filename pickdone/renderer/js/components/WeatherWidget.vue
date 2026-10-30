@@ -248,7 +248,15 @@ export default {
       if (this.loading) { this._pendingFetch = true; return }
       this.fetchWeather()
     },
-    source () { if (this.enabled) this.fetchWeather() }
+    // W12 fix (2026-10-26): a source switch during an in-flight fetch (loading lock up to ~24s
+    // with retries) called fetchWeather() bare, whose re-entry guard silently swallowed the call
+    // — the source change was lost until the next 30-min auto refresh. Mirror the manualCity
+    // [D19] pattern: queue exactly one re-run when loading instead.
+    source () {
+      if (!this.enabled) return
+      if (this.loading) { this._pendingFetch = true; return }
+      this.fetchWeather()
+    }
   },
   mounted () {
     if (this.enabled) this.fetchWeather()

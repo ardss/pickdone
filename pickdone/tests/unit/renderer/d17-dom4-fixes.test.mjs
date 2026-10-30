@@ -101,13 +101,14 @@ test('[F4] TodoItem.moveDay and taskMenu postpone use movedTo with the actual ta
 /* ---------- [F5] Space activation on role=button rows/headers ---------- */
 
 const spaceSites = [
-  ['renderer/js/components/TodoGroups.vue', /@click="toggle\(g\.key\)" @keydown="onHeadKey\(g\.key, \$event\)"/, 'group collapse header'],
-  ['renderer/js/components/TodoGroups.vue', /onHeadKey \(key, e\) \{ roleButtonActivate\(\(\) => \{ this\.toggle\(key\) \}\)\.call\(this, e\) \}/, 'TodoGroups header helper'],
+  // 22951805: toggle/onHeadKey now take the group object (defaultFold groups)
+  ['renderer/js/components/TodoGroups.vue', /@click="toggle\(g\.key, g\)" @keydown="onHeadKey\(g, \$event\)"/, 'group collapse header'],
+  ['renderer/js/components/TodoGroups.vue', /onHeadKey \(g, e\) \{ roleButtonActivate\(\(\) => \{ this\.toggle\(g\.key, g\) \}\)\.call\(this, e\) \}/, 'TodoGroups header helper'],
   ['renderer/js/views/CompletedView.vue', /@click="toggleCol\(g\.key\)" @keydown="onHeadKey\(g\.key, \$event\)"/, 'completed group header'],
   ['renderer/js/views/CompletedView.vue', /onHeadKey \(key, e\) \{ roleButtonActivate\(\(\) => \{ this\.toggleCol\(key\) \}\)\.call\(this, e\) \}/, 'CompletedView header helper'],
   ['renderer/js/components/DayDateStrip.vue', /@click\.stop="showCal=!showCal" @keydown="onLabelKey"/, 'ds-label date trigger'],
   ['renderer/js/components/DayDateStrip.vue', /onLabelKey: roleButtonActivate\(function \(\) \{ this\.showCal = !this\.showCal \}\)/, 'DayDateStrip label helper'],
-  ['renderer/js/components/MatrixGrid.vue', /@click="openEdit\(t\)" @keydown="onRowKey\(t, \$event\)"/, 'matrix task row'],
+  ['renderer/js/components/MatrixGrid.vue', /@click="openEdit\(t\)" @keydown(\.exact)?="onRowKey\(t, \$event\)"/, 'matrix task row'], // 2026-10-21: .exact added (vue/use-v-on-exact) — Enter/Space routing unchanged
   ['renderer/js/components/MatrixGrid.vue', /roleButtonActivate\(function \(\) \{ this\.openEdit\(t\) \}\)\.call\(this, e\)/, 'MatrixGrid row helper']
 ]
 for (const [file, re, what] of spaceSites) {

@@ -51,6 +51,23 @@ export function historyPush (s, snapRaw) {
   const now = Date.now()
   if (now - (s._histLastPushAt || 0) < 400 && s.undoStack.length) {
     const top = s.undoStack.length - 1
+    // w21 P1: only merge when the incoming snapshot EQUALS the stack top. The merge window was
+    // introduced (3f825176) purely as a memory measure for EditPanel debounce bursts, but the
+    // before-hook in store/index.js fires for EVERY dispatch of a HISTORY_ACTION — including ones
+    // nested inside another action (completing a repeat task triggers the renewal addTodo; purge/
+    // restoreFromRecycle trigger internal strips). Those nested pre-mutation snapshots used to
+    // REPLACE the outer action's baseline in the merge branch, so the outer user op vanished from
+    // the undo chain: after completing a repeat task, Ctrl+Z first only removed the renewal
+    // instance (a near no-op) and the second Ctrl+Z jumped two real steps at once. Semantics: the
+    // OUTER user operation's baseline must never be displaced by a nested action's intermediate
+    // snapshot — and a nested intermediate state does not deserve to become an undo point either,
+    // so a differing push inside the window is SKIPPED (not stacked). A genuine new undo point is
+    // not lost by this: real discrete ops (add/delete/purge) call historyBreakMerge, and any push
+    // after an undo/redo/barrier starts outside the window (_histLastPushAt = 0 there). Sequential
+    // fast user edits inside the window collapsing into one undo step (restore pre-first) is the
+    // pre-existing merge intent (one debounced burst = one undo step), merely now bounded to
+    // same-content echoes instead of last-writer-wins.
+    if (snapRaw !== s.undoStack[top]) return
     s._histBytes = Math.max(0, (s._histBytes || 0) + snapRaw.length - s.undoStack[top].length)
     s.undoStack[top] = snapRaw
     s._histLastPushAt = now
@@ -241,9 +258,19 @@ export async function persistSnapshotDiffCore ({ commit }, { from, to, allowDele
         commit('removeLocal', row.taskId)
         continue
       }
-      commit('upsertLocal', row)
-      safeUpsert({ ...row, status: 'update' })
-      changedRows.push(row)
+      // [F2 wave 2026-10-13] single serialization choke point: strip the local-dialect `deleting`
+      // UI flag at snapshot replay, otherwise a delete row inside a snapshot re-writes it back into
+      // memory AND the durable store — the dirty field spreads forever via undo snapshots/sync.
+      const clean = { ...row, status: 'update' }; delete clean.deleting
+      // [W8 fix] restore-wins re-stamp: the snapshot row still carries the updateTime of the state
+      // being restored TO (i.e. the PRE-edit stamp). Writing it verbatim let a LAN peer's newer
+      // LWW round (whose stamp postdates the snapshot) immediately roll the undo back. Re-stamp
+      // here — same discipline as the normal edit path (updateTodoFields' `updateTime: Date.now()`),
+      // so the restored row is the newest writer and wins the next arbitration round.
+      clean.updateTime = Date.now()
+      commit('upsertLocal', clean)
+      safeUpsert(clean)
+      changedRows.push(clean)
       // Snapshot replay bypasses updateTodoFields' chip-sync/snapshot-restore chain — plan the equivalent side effects
       for (const eff of planSnapshotRowSync(before || null, row)) effects.push(eff)
     }

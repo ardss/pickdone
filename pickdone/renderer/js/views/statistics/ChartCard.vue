@@ -80,7 +80,16 @@ const ChartCard = {
       return 'none'
     },
     canvasKind () { return ['3', '4', '5', '6'].includes(this.kind) ? this.kind : null },
-    listAllZero () { const l = this.model.chartList || []; return !l.length || l.every(i => !i.value) },
+    // [w14 P2] modelType 4 is dual-axis: judging emptiness by chartList alone swallowed the card
+    // even when overlayList (focus minutes) carried data. Dual-axis hides only when BOTH axes are
+    // empty; single-axis models (no overlayList field) keep the exact old behavior.
+    listAllZero () {
+      const l = this.model.chartList || []
+      const mainZero = !l.length || l.every(i => !i.value)
+      const ov = this.model.overlayList
+      if (!ov) return mainZero
+      return mainZero && (!ov.length || ov.every(i => !i.value))
+    },
     list () { return this.model.chartList || [] },
     dark () { return this.theme === 'dark' },
     /** Fallback card background when there's no backColor (dark #1c1f26 / light white) */
@@ -101,7 +110,12 @@ const ChartCard = {
   },
   watch: {
     // Legend copy enters the Canvas via chartConfigs' tt(); a locale change requires manual redraw
-    '$i18n.locale' () { this.renderChart() }
+    '$i18n.locale' () { this.renderChart() },
+    // [w14 P1] StatisticsView rebuilds the model objects on every period switch (上周/本月/自定义);
+    // only $i18n.locale was watched, so the canvas stayed frozen on the mount-time data while the
+    // title (plain text, reactive) already showed the new period. Deep-watch the model and re-render;
+    // $nextTick because a listAllZero/empty <-> canvas transition swaps this.$refs.canvas.
+    model: { deep: true, handler () { this.$nextTick(() => this.renderChart()) } }
   },
   mounted () {
     this.renderChart()

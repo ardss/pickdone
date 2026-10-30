@@ -112,32 +112,156 @@ function assertCriticalJsonPlausible (jsonText) {
   }
 }
 
+// F4 P2 (2026-10-18) attachment-loss visibility (DEGRADED manifest scope — see the report):
+// attachments live as local:// keys into userData/files while todo rows travel in the backup
+// JSON; a JSON restore on a machine without the files dir left every attachment dangling with
+// zero diagnostics. Full payload-embedding was rejected twice over: attachment bytes are capped
+// at 64MB aggregate / 50MB per file (embedding would blow every snapshot's size), AND the
+// renderer owns dump building (out of this fix's file scope). Even a manifest inside the JSON
+// was rejected after evaluation: the C7 content-dedup twin compares the incoming payload
+// against the RAW bytes already on disk — injecting a manifest into the payload would break
+// every dedup against pre-existing snapshots (verified red on backup-ingress-cap-dedup-compare
+// and d12-backup-prune-dedup). Degraded closure instead: a SIDECAR manifest
+// `<snapshot>.attachments.json` rides every snapshot (key+size per file, deterministic sort,
+// no timestamps so a re-run stays byte-stable), swept with its snapshot, and the restore side
+// (dbRecovery.missingAttachmentsAfterRestore) reports — never blocks on — missing files.
+// Pure helpers, exported for unit tests.
+const ATT_MANIFEST_SKIP_RE = /^(aliases\.json$|noise-custom\.)/
+const ATT_MANIFEST_TMP_RE = /\.att-tmp-\d+-\d+$/ // D19 crash-residue classifier parity
+// Sidecar naming: 'att-manifest-<snapshot-name>' — MUST stay OUTSIDE the ^(auto|evt)- restore
+// namespace (list-auto-backups / the GFS selection / the restore-read whitelist all gate on that
+// prefix, and the sidecar is bookkeeping, never a restore point).
+const ATT_SIDECAR_PREFIX = 'att-manifest-'
+function attachmentSidecarNameFor (snapshotName) { return ATT_SIDECAR_PREFIX + String(snapshotName || '') }
+function isManifestSkip (f) { return ATT_MANIFEST_SKIP_RE.test(f) || ATT_MANIFEST_TMP_RE.test(f) }
+function buildAttachmentManifest (filesDir, fsMod) {
+  const m = fsMod || fs
+  try {
+    const entries = m.readdirSync(filesDir)
+      .filter(f => !isManifestSkip(f))
+      .map(f => { try { return { key: f, size: m.statSync(path.join(filesDir, f)).size } } catch { return null } })
+      .filter(Boolean)
+      .sort((a, b) => String(a.key).localeCompare(String(b.key)))
+    return { entries }
+  } catch { return null }
+}
+/** Best-effort sidecar write next to a snapshot; NEVER fails the snapshot itself. */
+function writeAttachmentSidecar (fsMod, dir, snapshotName, filesDir) {
+  try {
+    const manifest = buildAttachmentManifest(filesDir, fsMod)
+    if (!manifest) return false
+    const w = atomicWriteJson(fsMod, dir, attachmentSidecarNameFor(snapshotName), JSON.stringify(manifest))
+    return !!w.ok
+  } catch { return false }
+}
+// attachDir() requires the Electron app (userData path); unit-test/CLI callers without a live
+// app skip the manifest instead of crashing the handler (never blocks the JSON write).
+function safeAttachDir () {
+  try { return require('../attachments').attachDir() } catch (e) {
+    log.warn('[Backup] attachment manifest skipped (attachDir unavailable):', e && e.message)
+    return null
+  }
+}
+
 // C7 (2026-10-02): the dedup twin compare used a full readFileSync + whole-string equality on
 // the main thread — two allocations of the entire snapshot per run. Now: (1) size short-circuit —
 // different byte length can never be equal (one statSync, zero content reads); (2) chunked
 // positional compare — 1MB readSync windows compared against the same offsets of the payload
 // buffer, so memory stays O(chunk) instead of O(file) and an unequal prefix bails on the first
 // mismatched chunk. fsMod is injected for tests. Exported for unit tests.
+// W18 fix: the payload side still encoded the WHOLE jsonText into one Buffer (`Buffer.from`
+// = a second full-size allocation), violating the O(chunk) contract this function documents.
+// The string is now encoded chunk-by-chunk: each iteration picks the shortest utf16 slice that
+// is exactly `len` utf8 bytes (never splitting a surrogate pair — a split pair would decode to
+// replacement chars and false-negative the compare), encodes only that slice, and compares.
+// Memory is O(chunk) end to end; a mismatch anywhere still bails on that chunk.
 function twinMatches (fsMod, filePath, jsonText) {
   let st
   try { st = fsMod.statSync(filePath) } catch { return false }
   const expected = Buffer.byteLength(jsonText, 'utf8')
   if (st.size !== expected) return false
-  const buf = Buffer.from(jsonText, 'utf8')
+  const s = String(jsonText)
   const CHUNK = 1024 * 1024
   let fd
   try {
     fd = fsMod.openSync(filePath, 'r')
     const scratch = Buffer.alloc(Math.min(CHUNK, expected))
-    for (let off = 0; off < expected; off += CHUNK) {
-      const len = Math.min(CHUNK, expected - off)
+    let sOff = 0 // utf16 code-unit cursor into s
+    for (let off = 0; off < expected;) {
+      // Pick the largest char-boundary slice [sOff, sOff+c) encoding to at most CHUNK utf8
+      // bytes (binary search — byteLength is monotonic in c). The FILE-side chunk length is
+      // whatever that slice actually encodes, so a 1MB window never needs to land mid-character.
+      const target = Math.min(CHUNK, expected - off)
+      let lo = 1, hi = s.length - sOff, best = 0
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1
+        if (Buffer.byteLength(s.slice(sOff, sOff + mid), 'utf8') <= target) { best = mid; lo = mid + 1 } else hi = mid - 1
+      }
+      // never end a slice between the halves of a surrogate pair (a split pair encodes to
+      // replacement chars != the file bytes and would corrupt the compare)
+      if (sOff + best < s.length) {
+        const lead = s.charCodeAt(sOff + best - 1)
+        if (lead >= 0xD800 && lead <= 0xDBFF) best--
+      }
+      if (best <= 0) return false
+      const piece = s.slice(sOff, sOff + best)
+      const len = Buffer.byteLength(piece, 'utf8') // <= target, so off+len never passes expected
+      if (off + len > expected) return false // defensive
       if (fsMod.readSync(fd, scratch, 0, len, off) !== len) return false
-      if (scratch.compare(buf, off, off + len, 0, len) !== 0) return false // scratch[0..len) vs buf[off..off+len)
+      const chunk = Buffer.from(piece, 'utf8') // O(chunk): only this slice is encoded
+      if (chunk.length !== len) return false // defensive: slice/byte math desynced
+      if (scratch.compare(chunk, 0, len, 0, len) !== 0) return false // scratch[0..len) vs chunk[0..len)
+      sOff += best
+      off += len
     }
     return true
   } catch { return false } finally { try { if (fd != null) fsMod.closeSync(fd) } catch { /* best-effort */ } }
 }
 
+
+/** M2b (P2 2026-10-23): chunked twin of dbRecovery.criticalBackupRowCount for the F1 empty-snapshot
+ *  guard's "newest existing point" read — the guard used to readFileSync the ENTIRE newest snapshot
+ *  (up to the 64MB ingress cap) synchronously on the main thread. Reads in 1MB chunks via fd.readSync
+ *  (same shape as twinMatches below). Files above NEWEST_READ_CAP_BYTES are treated as non-empty
+ *  without reading (an empty todoState snapshot is at most a few KB of metadata; a multi-MB snapshot
+ *  overwhelmingly carries rows — and misreading toward "non-empty" only skips a quarantine, it never
+ *  destroys data). Returns -1 on unreadable/unparsable (conservative quarantine, as before). */
+const NEWEST_READ_CAP_BYTES = 8 * 1024 * 1024
+function newestRowCountChunked (fsMod, filePath) {
+  let st
+  try { st = fsMod.statSync(filePath) } catch { return -1 }
+  if (st.size > NEWEST_READ_CAP_BYTES) return 1 // too large to plausibly be empty — skip the read
+  const CHUNK = 1024 * 1024
+  let fd
+  try {
+    fd = fsMod.openSync(filePath, 'r')
+    const parts = []
+    let off = 0
+    while (off < st.size) {
+      const len = Math.min(CHUNK, st.size - off)
+      const buf = Buffer.alloc(len)
+      if (fsMod.readSync(fd, buf, 0, len, off) !== len) return -1
+      parts.push(buf)
+      off += len
+    }
+    return dbRecovery.criticalBackupRowCount(Buffer.concat(parts).toString('utf8'))
+  } catch { return -1 } finally { try { if (fd != null) fsMod.closeSync(fd) } catch { /* best-effort */ } }
+}
+
+/** M2b (P2 2026-10-23): "is this jsonText a REAL dump whose todo+recycle rows are ALL empty".
+ *  criticalBackupRowCount answers 0 for any payload it does not recognize (no backup.todoState
+ *  segment at all), so gating the empty-snapshot quarantine on `=== 0` alone would quarantine
+ *  foreign/legacy-shaped payloads too. Only a genuine dump shape (backup.todoState present,
+ *  nested string tolerated) with zero todoList AND zero recycleList rows counts as an empty
+ *  snapshot; anything else keeps the historical write/dedup behavior. */
+function emptyRealDump (jsonText) {
+  try {
+    const t = (JSON.parse(jsonText).backup || {}).todoState
+    if (t === undefined) return false // not a real dump shape — never treated as an empty snapshot
+    const s = typeof t === 'string' ? JSON.parse(t) : t
+    return ((s && s.todoList) || []).length === 0 && ((s && s.recycleList) || []).length === 0
+  } catch { return false }
+}
 
 module.exports = function backupHandlers (ctx) {
   const { isLocked, app, getMainWindow } = ctx
@@ -155,7 +279,12 @@ module.exports = function backupHandlers (ctx) {
       // disaster-recovery snapshot — coded rejection, same convention as the size gate above.
       assertCriticalJsonPlausible(jsonText)
       // External default root (userData parent dir / pickdone-backups): separated from todos.db, so disaster backup remains recoverable even if userData is wiped
-      dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
+      const dest = dbRecovery.writeCriticalStateBackupAtomic(defaultBackupRoot(), String(jsonText))
+      // F4 P2: the attachment manifest rides the critical snapshot as a SIDECAR (best-effort;
+      // a sidecar failure never blocks the critical JSON write — see writeAttachmentSidecar).
+      if (typeof dest === 'string' && dest.endsWith('.json')) {
+        writeAttachmentSidecar(fs, path.dirname(dest), path.basename(dest), safeAttachDir())
+      }
       return true
     },
     'get-default-backup-dir': () => defaultBackupRoot(),
@@ -224,6 +353,27 @@ module.exports = function backupHandlers (ctx) {
           }))
           for (const dead of stale) { try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {} }
         } catch { /* sweep is best-effort */ }
+        // F4 P2 hygiene: sidecar manifests whose snapshot was pruned/vanished are orphans — swept
+        // with the stale-tmp housekeeping so they cannot accumulate across rotations.
+        try {
+          for (const f of fs.readdirSync(dir)) {
+            if (!f.startsWith(ATT_SIDECAR_PREFIX)) continue
+            const base = f.slice(ATT_SIDECAR_PREFIX.length)
+            if (!fs.existsSync(path.join(dir, base))) { try { fs.unlinkSync(path.join(dir, f)) } catch {} }
+          }
+        } catch { /* sweep is best-effort */ }
+        // M8B fix 2 (P2): empty-quarantine-*.json side files (the F1 empty-snapshot guard above)
+        // had no cleanup side and accumulated forever. Keep the newest 5 by mtime, sweep the rest
+        // (same keep-N doctrine as dbRecovery.sweepEmptyCriticalBackups).
+        try {
+          const qEntries = fs.readdirSync(dir).map(f => {
+            if (!f.startsWith('empty-quarantine-')) return null
+            try { return { name: f, mtimeMs: fs.statSync(path.join(dir, f)).mtimeMs } } catch { return null }
+          })
+          for (const dead of autoBackup.selectEmptyQuarantinePrunes(qEntries, { keep: 5 })) {
+            try { fs.rmSync(path.join(dir, dead), { force: true }) } catch {}
+          }
+        } catch { /* sweep is best-effort */ }
         // Both tiers, regardless of this run's tag — the two tiers age on ONE shared directory.
         // D18 (2026-10-02) write-then-prune: the prune UNLINKS used to run BEFORE the new
         // snapshot write, so a failed write left the tier strictly thinner with nothing added.
@@ -234,6 +384,32 @@ module.exports = function backupHandlers (ctx) {
         // its tag) always survives.
         const pruneList = existing
         const pruneNow = () => { for (const dead of autoBackup.selectPrunes(pruneList, o)) { try { fs.unlinkSync(path.join(dir, dead)) } catch {} } }
+        // F1 (2026-10-17) empty-snapshot guard — semantic parity with the critical channel's
+        // destroy-guard (dbRecovery.writeCriticalStateBackupAtomic / criticalBackupRowCount===0):
+        // a renderer hydration failure that persists a blank in-memory store must not become the
+        // newest auto/evt backup point, which the restore entry in SettingsDataTab defaults to
+        // selecting. When the incoming snapshot holds ZERO rows while the newest existing point
+        // still holds rows, the empty dump is quarantined to a side file OUTSIDE the ^(auto|evt)-
+        // restore namespace (list-auto-backups filters it out) and the freshest good point is
+        // preserved untouched; no prune runs (D18: an unproven write must not thin the tier).
+        // M2b (P2 2026-10-23): the guard now also covers the FIRST-EVER run — previously gated on
+        // `existing.length`, so on an empty backup dir a 0-row snapshot (renderer hydrated blank at
+        // first boot) landed as the tier's first and newest restore point. An empty dir has no good
+        // point to preserve, but it has even less reason to seed the restore namespace with an empty
+        // snapshot; quarantine it too (the tier simply stays empty until real data exists).
+        // The newest-point read is chunked (see newestRowCountChunked) instead of a full readFileSync.
+        if (emptyRealDump(jsonText)) {
+          const [newestName] = existing // newest of both tiers (sorted newest-first); absent on first run
+          // no existing point (or unreadable newest) → cannot prove a good point exists → quarantine
+          const newestRows = newestName ? newestRowCountChunked(fs, path.join(dir, newestName)) : -1
+          if (newestRows !== 0) {
+            const side = 'empty-quarantine-' + stamp + '-' + d.getTime() + '.json'
+            const wq = atomicWriteJson(fs, dir, side, jsonText)
+            if (!wq.ok) return { ok: false, error: wq.error }
+            log.warn('[Backup] empty snapshot quarantined (newest backup', newestName, 'still holds', newestRows, 'rows):', side)
+            return { ok: true, file: side, emptyQuarantined: true }
+          }
+        }
         // Content dedup: only compare against the newest file OF THE SAME TAG (D11 finding 17 —
         // see newestSameTag). (The original implementation compared against any old file — when the data was changed back to its original state
         // it would return dedup without writing the new snapshot, yet prune would delete that old snapshot → that point in time ends up with no backup)
@@ -247,14 +423,25 @@ module.exports = function backupHandlers (ctx) {
           try {
             if (twinMatches(fs, path.join(dir, twin), jsonText)) {
               pruneNow() // D18 write-then-prune: aging continues on a dedup hit (D12 invariant), twin survives as newest-of-tier
+              // F4 P2: refresh the twin's sidecar manifest — the payload didn't change but the
+              // files dir may have since the twin was written (deterministic manifest keeps
+              // the payload dedup-stable either way).
+              writeAttachmentSidecar(fs, dir, twin, safeAttachDir())
               return { ok: true, file: twin, dedup: true }
             }
-          } catch {}
+          } catch (e) {
+            // M2b (P3 2026-10-23): the catch kept the write path alive (correct — dedup is an
+            // optimization), but it silently swallowed twin-read/compare failures; a persistently
+            // unreadable twin meant unbounded same-content snapshots with no trace. Log and fall
+            // through to the normal write; the return value is unchanged.
+            log.warn('[Backup] dedup twin compare failed, writing a fresh snapshot:', twin, e && e.message)
+          }
         }
         // Atomic write: temp file + rename, prevents corruption on interruption; on failure the temp
         // file is cleaned up inline (P2 2026-09-17) and the structured error is returned
         const w = atomicWriteJson(fs, dir, name, jsonText)
         if (!w.ok) return { ok: false, error: w.error } // D18: a failed write must NOT thin the tier
+        writeAttachmentSidecar(fs, dir, name, safeAttachDir()) // F4 P2: manifest sidecar rides the new snapshot
         pruneNow() // D18 write-then-prune: prune only AFTER the new snapshot landed
         return { ok: true, file: name }
       } catch (err) { return { ok: false, error: String(err && err.message || err) } }
@@ -324,3 +511,7 @@ module.exports.assertIngressSize = assertIngressSize
 module.exports.INGRESS_MAX_BYTES = INGRESS_MAX_BYTES
 module.exports.twinMatches = twinMatches
 module.exports.criticalJsonPlausible = criticalJsonPlausible // D17: unit-test seam
+module.exports.buildAttachmentManifest = buildAttachmentManifest // F4: attachment-loss visibility seam
+module.exports.writeAttachmentSidecar = writeAttachmentSidecar // F4: unit-test seam
+module.exports.ATT_SIDECAR_PREFIX = ATT_SIDECAR_PREFIX
+module.exports.attachmentSidecarNameFor = attachmentSidecarNameFor

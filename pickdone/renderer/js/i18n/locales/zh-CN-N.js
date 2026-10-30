@@ -24,7 +24,8 @@ export default {
     prev: '上一步',
     next: '下一步',
     done: '开始使用',
-    skip: '跳过引导'
+    skip: '跳过引导',
+    escSkipConfirm: '跳过初始设置？未完成的选项将保持默认'
   },
   update: {
     label: '软件更新',

@@ -103,7 +103,10 @@ test('M-6: wireConnection finish is re-entry safe — peer-closed fires exactly 
     onPeer: () => {},
   }))
   const hello = {
-    type: 'hello', enc: 1, salt: cipher.randomToken(),
+    // W16 (2026-10-28): hello without protoVer is the legacy shape and is refused BELOW
+    // MIN_PROTO_VER before auth — the gate needs the CURRENT version to reach the peer-closed
+    // re-entry path this test exercises (see w16-sync-version-gates.test.mjs).
+    type: 'hello', enc: 1, salt: cipher.randomToken(), protoVer: 2,
     deviceId: 'client-1', authCode: deriveAuthCode(SECRET, 'client-1'),
   }
   socket.emit('data', Buffer.from(JSON.stringify(hello) + '\n', 'utf8'))

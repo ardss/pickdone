@@ -173,6 +173,9 @@ export default {
     "repairWarning": "Pairing adopts a new shared secret — existing paired devices will be disconnected and must be paired again.",
     "conflictKept": "Sync conflict: \"{name}\" — the other device's version was kept; your earlier copy is in the recycle bin",
     "conflictApplied": "Sync conflict: \"{name}\" — the other device's version was applied",
+    "degradedOplog": "Failed to queue a local change for sync — this session's increments may not have reached other devices; a restart recovers automatically",
+    "degradedFlush": "A sync segment could not be applied and was quarantined to the conflict-backup area — no data is lost; see sync settings for details",
+    "floatRecoveryExhausted": "The pomodoro floating window failed to recover automatically after repeated attempts and stays hidden — reopen it from Settings → Pomodoro; details are in the diagnostic logs",
     "unpairedByRemote": "Unpaired by the other device — pair again",
     "conflictSection": "Sync conflict backups",
     "conflictHint": "Data overwritten by a sync conflict is backed up here automatically — nothing is truly lost until you confirm, and you can restore anytime.",
@@ -188,6 +191,9 @@ export default {
     "quarantineRows": "{n} rows parked",
     "quarantineHint": "Rows a failed sync flush dropped are parked machine-locally and recover via a full snapshot (read-only view).",
     "oversizedSegmentNotice": "Transfer exceeded the single-sync size cap (oversized segment) — upgrade the peer's app version or split the data, then pair again",
-    "hibernatingNotice": "Repeated connection failures — regular dialing is paused, auto-retry in about {n}s"
+    "hibernatingNotice": "Repeated connection failures — regular dialing is paused, auto-retry in about {n}s",
+    "peerTooNewNotice": "Sync peer is on a newer app version — upgrade this device to resume syncing",
+    "peerTooOldNotice": "Sync peer is on an older app version — upgrade the peer to resume syncing",
+    "snapshotSchemaTooNewNotice": "Peer snapshot format is newer than this device supports — upgrade this device to resume syncing"
   }
 }

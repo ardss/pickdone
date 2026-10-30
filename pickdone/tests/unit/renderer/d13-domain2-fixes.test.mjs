@@ -57,19 +57,20 @@ test('A2 buildExpiryGroups: a task completed TODAY lands in exactly one group (c
 })
 
 test('A1/A2 projDone fallbacks exclude today so the fallback never double-counts the today bucket', async () => {
-  // CategoryView + ProjectView pass a today-excluding fallback filter; assert the source keeps it
+  // CategoryView + ProjectView pass the exclusive staleDoneExclusive fallback filter; assert the
+  // source keeps it ([w21] also excludes catExpDone / catTomorrow / catDat members — no double render)
+  const { buildExpiryGroups, staleDoneExclusive } = await import('../../../renderer/js/utils/expiryGroups.js')
   const catSrc = read('renderer/js/views/CategoryView.vue')
   const projSrc = read('renderer/js/views/ProjectView.vue')
   for (const [name, src] of [['CategoryView', catSrc], ['ProjectView', projSrc]]) {
-    assert.match(src, /filter: t => t\.complete && t\.dayStart !== this\.todayTs/,
-      `${name}'s projDone fallback must exclude today's completions (they own the catTodayDone bucket)`)
+    assert.match(src, /filter: t => staleDoneExclusive\(t, this\.todayTs, rangeDays\(this\.settings\.expiredCompletedTodoRange, 7\)\)/,
+      `${name}'s projDone fallback must be the exclusive predicate (exactly-one-group for every completion)`)
   }
-  const { buildExpiryGroups } = await import('../../../renderer/js/utils/expiryGroups.js')
   const list = [mk(1, { dayStart: today, complete: true }), mk(9, { dayStart: today - 90 * DAY_MS, complete: true })]
   const g = buildExpiryGroups({
     list, settings, today, t,
     keys: { expDone: 'k1', expUndo: 'k2', upcoming: 'k3', noDate: 'k4' },
-    extraGroups: [{ key: 'projDone', titleKey: 'done', filter: x => x.complete && x.dayStart !== today, props: { showDate: true } }]
+    extraGroups: [{ key: 'projDone', titleKey: 'done', filter: x => staleDoneExclusive(x, today, 7), props: { showDate: true } }]
   })
   const hits = g.filter(gr => gr.todos.some(x => x.taskId === 't1'))
   assert.equal(hits.length, 1)
@@ -289,6 +290,7 @@ test('#10 renderer addTodo: a constraint-rejected renewal write adopts the winne
   globalThis.window.todoAPI = {
     dbCall (op, params) {
       if (op === 'queryTodos') {
+        if (params.deleted === 1) return Promise.resolve([]) // [2026-10-17 realign] new binned-twin pre-check queries deleted:1 — the live winner must not leak into it
         emptyQueries++
         if (emptyQueries === 1) return Promise.resolve([]) // pre-write guard: no existing instance yet
         return Promise.resolve([{ taskId: 'winner', repeatId: 'grp9', dayStart: today, taskContent: 'renewal', delete: false, complete: false }])

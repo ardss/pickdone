@@ -92,6 +92,16 @@ export function memoryStore() {
     listDevices: account => [...state.devices.values()].filter(d => d.account === account),
     putSnapshot: (account, snapshot) => {
       const prev = state.snapshots.get(account)
+      // 2026-10-14 (P2): the old max() clamp kept the highest generation but let the
+      // incoming coversSeq/data overwrite it unconditionally — an out-of-order (or
+      // hostile) PUT with a LOWER generation rebranded stale content as the newest
+      // generation, and bootstrap peers restored the stale snapshot believing it fresh.
+      // A regressing PUT is now refused outright (coded 409, same HTTP mapping as the
+      // route's other protocol rejections); an EQUAL generation is accepted (idempotent
+      // re-put of the same snapshot).
+      if (prev && (snapshot.generation || 0) < prev.generation) {
+        throw Object.assign(new Error(`snapshot generation regression: incoming ${snapshot.generation || 0} < current ${prev.generation}`), { status: 409 })
+      }
       const generation = Math.max(prev ? prev.generation : 0, snapshot.generation || 0)
       state.snapshots.set(account, { ...snapshot, generation })
     },

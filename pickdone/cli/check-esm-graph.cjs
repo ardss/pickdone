@@ -30,8 +30,13 @@ const { listFiles } = require('./lib-filescan.cjs')
 
 function vueScript (file, src) {
   if (!file.endsWith('.vue')) return src
-  const m = src.match(/<script[^>]*>\r?\n([\s\S]*?)\r?\n<\/script>/)
-  return m ? m[1] : ''
+  // W18 fix: the old regex required a newline right after `<script ...>`, so a
+  // single-line script SFC (`<script>import ... </script>` on one line) matched
+  // nothing and the WHOLE file silently fell out of the graph (0 edges checked).
+  // Relax to any-body capture; an empty body after trim keeps the old behavior
+  // (no script → no edges → nothing to check).
+  const m = src.match(/<script[^>]*>([\s\S]*?)<\/script>/)
+  return m ? m[1].trim() : ''
 }
 
 /** Resolve an import specifier to an absolute path (tries .js/.vue completion); returns null when missing */
@@ -58,14 +63,31 @@ function caseMatches (file) {
   return true
 }
 
+// W17 fix: collectExports is called per import edge; cache per file so the new star-export
+// bookkeeping is computed once and stays consistent between the default/named checks below.
+const exportCache = new Map()
+
 function collectExports (file) {
+  if (exportCache.has(file)) return exportCache.get(file)
   const src = fs.readFileSync(file, 'utf8')
   const names = new Set()
   let hasDefault = false
+  let hasStarExport = false // `export * from './x'` — this module's export set is NOT enumerable
   for (const node of parse(file, src)) {
     if (node.type === 'ExportDefaultDeclaration') hasDefault = true
-    else if (node.type === 'ExportNamedDeclaration') {
-      for (const s of node.specifiers) names.add(s.exported.name || s.exported.value)
+    else if (node.type === 'ExportAllDeclaration') {
+      // W17 fix (false-red): `export * from` is a legal re-export form — the star surface is
+      // unknown here, so named-import existence checks against this module must be skipped
+      // (see checkFile). The edge itself still gets existence/case-checked at the re-export
+      // target via the module's own ImportDeclaration-equivalent below.
+      hasStarExport = true
+    } else if (node.type === 'ExportNamedDeclaration') {
+      for (const s of node.specifiers) {
+        // W17 fix (false-red): `export { x as default }` is a legal default export form.
+        const exported = s.exported.name || s.exported.value
+        if (exported === 'default') hasDefault = true
+        else names.add(exported)
+      }
       if (node.declaration) {
         const d = node.declaration
         if (d.id) names.add(d.id.name)
@@ -75,7 +97,9 @@ function collectExports (file) {
   }
   // .vue 模块由 @vitejs/plugin-vue 隐式提供组件默认导出
   if (file.endsWith('.vue')) hasDefault = true
-  return { names, hasDefault }
+  const exp = { names, hasDefault, hasStarExport }
+  exportCache.set(file, exp)
+  return exp
 }
 
 function walkNames (id, set) {
@@ -104,9 +128,18 @@ function checkFile (file) {
     return
   }
   for (const node of body) {
-    let spec = null, isDynamic = false
+    let spec = null, isDynamic = false, isReexport = false
     if (node.type === 'ImportDeclaration') spec = node.source.value
     else if (node.type === 'ImportExpression' && typeof node.source.value === 'string') { spec = node.source.value; isDynamic = true }
+    else if (node.type === 'ExportAllDeclaration' && typeof node.source.value === 'string') spec = node.source.value // `export * from './x'` — check the re-export edge too
+    else if (node.type === 'ExportNamedDeclaration' && node.source && typeof node.source.value === 'string') {
+      // W18 fix: `export { x } from './y'` named re-exports previously created NO
+      // graph edge at all — the target's existence/case and the re-exported name's
+      // existence in the target were all unchecked (a broken spec here is the same
+      // white-screen shape as a broken import). Give the edge import-equal treatment.
+      spec = node.source.value
+      isReexport = true
+    }
     if (!spec) continue
     const r = resolveImport(file, spec)
     if (r.external) {
@@ -123,10 +156,35 @@ function checkFile (file) {
     if (!caseMatches(r.file)) errors.push(`${path.relative(ROOT, file)}: import 大小写与磁盘不符 "${spec}"`)
     if (isDynamic) continue // dynamic imports only check existence
     const exp = collectExports(r.file)
-    for (const imp of node.specifiers) {
+    if (isReexport) {
+      // W18 fix: named re-export `export { local as exported } from './y'` — the
+      // LOCAL name must exist in the target's export set (mirrors the import check;
+      // star surfaces stay skipped per the false-red rule below).
+      for (const s of node.specifiers) {
+        if (exp.hasStarExport) continue
+        const want = s.local && (s.local.name || s.local.value)
+        if (want === 'default') {
+          if (!exp.hasDefault) errors.push(`${path.relative(ROOT, file)}: 再导出 default 自 "${spec}" 但目标无 export default（白屏级）`)
+        } else if (!exp.names.has(want)) {
+          errors.push(`${path.relative(ROOT, file)}: 命名再导出 { ${want} } 不在 "${spec}" 的导出中（白屏级）`)
+        }
+      }
+      checkFile(r.file)
+      continue
+    }
+    for (const imp of (node.specifiers || [])) {
       if (imp.type === 'ImportDefaultSpecifier' && !exp.hasDefault) {
+        // `export * from` never re-exports a default, so the default check stays strict even
+        // for star surfaces.
         errors.push(`${path.relative(ROOT, file)}: 默认导入 "${spec}" 但目标无 export default（白屏级）`)
       } else if (imp.type === 'ImportSpecifier') {
+        // W17 fix (false-red): a module that `export * from`s has a NON-enumerable export
+        // surface here — its names may come from the star target, unknown to this static
+        // gate. Skip the named-existence check (existence/case of the re-export chain is
+        // still checked); enumerating the full star closure would duplicate the runtime
+        // resolution Vite already guarantees, and a wrong "not exported" verdict is exactly
+        // the white-screen-class false alarm this gate must not raise on legal code.
+        if (exp.hasStarExport) continue
         const want = imp.imported.name || imp.imported.value
         if (!exp.names.has(want)) errors.push(`${path.relative(ROOT, file)}: 命名导入 { ${want} } 不在 "${spec}" 的导出中（白屏级）`)
       }

@@ -7,9 +7,9 @@
     </div>
     <section v-for="g in groups.filter(x=>x.todos.length||!x.hideEmpty)" :key="g.key" class="tg-group">
       <header class="tg-head" role="button" tabindex="0"
-              :aria-expanded="isOpen(g.key) ? 'true' : 'false'" :aria-label="$t('statsH.TodoGroups.toggleGroup', { label: g.label })"
-              @click="toggle(g.key)" @keydown="onHeadKey(g.key, $event)">
-        <i class="arrow" :class="{open:isOpen(g.key)}" aria-hidden="true"><svg viewBox="0 0 256 512"><path fill="currentColor" d="M143 352.3L7 216.3c-9.4-9.4-9.4-24.6 0-33.9l22.6-22.6c9.4-9.4 24.6-9.4 34 0l96.4 96.4 96.4-96.4c9.4-9.4 24.6-9.4 34 0l22.6 22.6c9.4 9.4 9.4 24.6 0 33.9l-136 136c-9.2 9.4-24.4 9.4-33.8 0z"/></svg></i>
+              :aria-expanded="isOpen(g.key, g) ? 'true' : 'false'" :aria-label="$t('statsH.TodoGroups.toggleGroup', { label: g.label })"
+              @click="toggle(g.key, g)" @keydown="onHeadKey(g, $event)">
+        <i class="arrow" :class="{open:isOpen(g.key, g)}" aria-hidden="true"><svg viewBox="0 0 256 512"><path fill="currentColor" d="M143 352.3L7 216.3c-9.4-9.4-9.4-24.6 0-33.9l22.6-22.6c9.4-9.4 24.6-9.4 34 0l96.4 96.4 96.4-96.4c9.4-9.4 24.6-9.4 34 0l22.6 22.6c9.4 9.4 9.4 24.6 0 33.9l-136 136c-9.2 9.4-24.4 9.4-33.8 0z"/></svg></i>
         <h3 :class="{brand:g.brand}">{{g.label}}</h3>
         <span v-if="weekLabel(g)" class="tg-week">{{weekLabel(g)}}</span>
         <em v-if="g.count!=null">{{g.count}}</em>
@@ -17,7 +17,7 @@
       <transition name="collapse"
                   @before-enter="colBeforeEnter" @enter="colEnter" @after-enter="colAfterEnter"
                   @before-leave="colBeforeLeave" @leave="colLeave" @after-leave="colAfterLeave">
-        <div v-show="isOpen(g.key)" class="tg-body">
+        <div v-show="isOpen(g.key, g)" class="tg-body">
           <transition-group name="listfade" tag="div">
             <todo-item v-for="t in g.todos" :key="t.taskId" :todo="t" :group-key="g.key"
                        :show-date-badge="showDateBadge" :query="query" :project-badge="projectBadge"/>
@@ -68,13 +68,27 @@ export default {
     // Opt-in project badge on rows (today view only; other TodoGroups consumers keep the default off)
     projectBadge: { type: Boolean, default: false }
   },
+  data () {
+    return {
+      // [UX 2026-10-21] session-local toggles for default-collapsed groups (today page overdue
+      // days): they start FOLDED each session - overdue stays visible at a glance via the
+      // collapsed header count but no longer sinks today tasks below screenfuls of past days.
+      // Deliberate expands are not persisted: an overdue day is ephemeral, and the persisted
+      // foldedTodoList machinery (prune cutoffs, other views) stays untouched.
+      sessionFold: {}
+    }
+  },
   computed: {
     folded () { return this.$store.state.settings.foldedTodoList },
     hasAny () { return this.groups.some(g => g.todos.length) }
   },
   methods: {
-    isOpen (key) { return !this.folded.includes(key) },
-    toggle (key) {
+    isOpen (key, g) {
+      if (g && g.defaultFold) return this.sessionFold[key] === true
+      return !this.folded.includes(key)
+    },
+    toggle (key, g) {
+      if (g && g.defaultFold) { this.sessionFold[key] = !this.sessionFold[key]; return }
       const next = this.folded.includes(key) ? this.folded.filter(k => k !== key) : [...this.folded, key]
       // Persist only still-matchable keys: the prune cutoff follows the active expired window
       // (expiredUncompletedTodoRange), so a key stays alive exactly as long as the today view
@@ -84,7 +98,7 @@ export default {
       this.$store.commit('settings/updateSettings', { foldedTodoList: list })
     },
     /* [D17-DOM4] ARIA button pattern on the group header: Space joins Enter as activation keys */
-    onHeadKey (key, e) { roleButtonActivate(() => { this.toggle(key) }).call(this, e) },
+    onHeadKey (g, e) { roleButtonActivate(() => { this.toggle(g.key, g) }).call(this, e) },
     weekLabel (g) {
       // "Today Thu"-style sub-label (reuses DayDateStrip's weekday keys)
       if (!g.weekOf) return ''

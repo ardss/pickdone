@@ -22,7 +22,7 @@ const dayjs = require_('dayjs')
 db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' }))
+const runCli = args => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { timeout: 180000, encoding: 'utf8' }))
 
 let _seq = 0
 function seed (over = {}) {
@@ -157,7 +157,7 @@ test('batch CLI --json envelope is {op, matched, changed, failures, ok}; partial
   const a = seed({ taskContent: '批量信封甲v2' })
   let r
   try {
-    execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'batch', 'done', a.taskId, 'NOPE_x', '--json'], { encoding: 'utf8' })
+    execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), 'batch', 'done', a.taskId, 'NOPE_x', '--json'], { timeout: 180000, encoding: 'utf8' })
     assert.fail('partial failure must exit non-zero')
   } catch (e) {
     r = JSON.parse(e.stdout)
@@ -204,15 +204,23 @@ test('category move: under folder, back to root; folder→folder rejected (App d
   assert.throws(() => lib.moveCategory(cat.categoryId, '可移动分类v2'), e => e.code === 'CATEGORY_CYCLE')
 })
 
-test('category move cycle guard protects legacy nested-folder data', () => {
-  // The CLI never creates nested folders, but legacy/future data may hold some — the guard must still close loops
+test('nested folders are refused at the DB write bottleneck (F4 realign 2026-10-17)', () => {
+  // REALIGN NOTE: the old pin seeded legacy nested-folder rows straight through upsertCategory
+  // to exercise the CLI move cycle guard on pre-existing bad data. F4 sank the CLI's structure
+  // guards into the DB write bottleneck (shared/category-structure.mjs via db-category-ops), so
+  // upsertCategory now REFUSES to introduce nested folders from ANY channel — the new contract
+  // this pin asserts. The CLI moveCategory cycle guard itself is unchanged (it runs at command
+  // level before the commit and keeps throwing CATEGORY_CYCLE); the folder-descendant cycle case
+  // is only reachable through rows that predate the bottleneck guard, which no write channel can
+  // mint anymore. Moving such a legacy nested folder BACK TO ROOT still lands (parentId 0 passes
+  // the guard).
+  const catOps = require_('../../../src/main/db-category-ops.js')
   const grand = { id: 880001, userId: 1, name: '嵌套爷v2', color: '#0f9d8f', createdAt: Date.now(), sort: 880001, isFolder: 1, parentId: 0, deleted: 0 }
   const mid = { id: 880002, userId: 1, name: '嵌套父v2', color: '#0f9d8f', createdAt: Date.now(), sort: 880002, isFolder: 1, parentId: 880001, deleted: 0 }
-  db.call('upsertCategory', grand)
-  db.call('upsertCategory', mid)
-  assert.throws(() => lib.moveCategory(880001, 880002), e => e.code === 'CATEGORY_CYCLE', 'grand folder into its own descendant = cycle')
-  const okMove = lib.moveCategory(880002, 'root') // to root is always fine
-  assert.equal(okMove.folderId, 0)
+  assert.equal(db.call('upsertCategory', grand), true, 'a plain root folder still lands')
+  assert.equal(db.call('upsertCategory', mid), false, 'red on pre-F4: a nested folder landed verbatim')
+  assert.equal(catOps.lastCategoryGuardError && catOps.lastCategoryGuardError.code, 'CATEGORY_NESTED_FOLDER')
+  assert.ok(!db.call('getAllCategories').some(c => c.categoryId === 880002), 'the refused row is not written')
 })
 
 test('categories listing: hierarchy order with folders marked, JSON rows gain additive folderIs/folderId/parentName', () => {

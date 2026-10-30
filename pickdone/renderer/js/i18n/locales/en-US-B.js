@@ -1,6 +1,11 @@
 // i18n shard (Batch X): zh source chunk - do not edit values here for EN; see i18n/README.md
 export default {
   "statsB": {
+  // [F3-UX] DepView milestone load failure state (en side of the bilingual pair)
+  DepView: {
+    msError: "Failed to load milestones",
+    msRetry: "Retry"
+  },
     "TomatoFloatPage": {
       "startFocusTip": "Start a focus session",
       "giveUpFocusTip": "Give up this focus session (confirmation required)",
@@ -157,7 +162,8 @@ export default {
       "restored": "Restored to a regular category",
       "rescheduled": "Overdue unfinished tasks have been rescheduled to today",
       "noOverdue": "No overdue tasks to reschedule",
-      "dateFmtHint": "Formats: YYYY-MM-DD, M-D, today, +14d",
+      // [F3-UX] examples must match the zh-CN shard (+7d in both, was +7d vs +14d)
+      "dateFmtHint": "Formats: YYYY-MM-DD, M-D, today, +7d",
       "deadlineTip": "Target completion date {d}",
       "daysLeftText": "{n} days left",
       "overdueDays": "{n} days overdue",

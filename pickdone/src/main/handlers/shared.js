@@ -130,6 +130,25 @@ function purgeAttachmentFiles (attachDir, ids) {
  *  age and are conservatively kept UNLESS the id is live again (a recovered category deletes its
  *  own backup in recover; a live id with a leftover backup is a stale re-created-id orphan). */
 const CAT_FILTERS_BAK_RETENTION_MS = 30 * 86400000
+// W7 fix (2026-10-23, P2): the sync-state meta families below are REPLICATED state — another
+// device's live row can legitimately reference a repeatRule/project* key that THIS device's
+// local (category/todo) tables cannot see yet (the anchor row is still in flight, or lives only
+// on the peer for a family this device participates in). The local-activity-only rule above then
+// GC'd a peer-referenced meta row and the deletion SYNCED (meta is a sync entity), destroying the
+// peer's rule/deadline/docs. Grace period: a meta row whose updatedAt is younger than
+// SYNC_META_GC_GRACE_MS is never GC'd — a genuinely dead key is re-GC'd on a later startup once
+// it ages past the window, while an in-flight anchor gets its round to land. The stamps arrive
+// via `opts.metaStamps` (Map or object key→updatedAt); callers that omit them keep the exact
+// legacy behavior (age unknown → no grace, nothing loosened).
+const SYNC_META_GC_GRACE_MS = 24 * 3600000
+const SYNC_META_FAMILY_RE = /^(?:repeatRule:|projectDeadline:|projectMilestones:|projectStatus:|projectCategoryFlag:|projectDocs:)/
+function syncMetaStamp (opts, k) {
+  const s = opts && opts.metaStamps
+  if (!s) return null
+  const v = s instanceof Map ? s.get(k) : s[k]
+  const n = Number(v)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
 function computeMetaGc (metaKeys, categories, todos, opts = {}) {
   const now = Number(opts.now) || Date.now()
   const retentionMs = Number(opts.catFiltersBakRetentionMs) || CAT_FILTERS_BAK_RETENTION_MS
@@ -176,7 +195,13 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
     // D15-B6: stamped `catFiltersBak.<deletedAt>.<id>` — bounded by the recover window; the
     // unstamped legacy shape is GC'd only when its id is live again (stale recovered/re-created
     // leftover — recover itself deletes the backup it consumed).
-    m = k.match(/^catFiltersBak\.(\d+)\.(\d+)$/)
+    // W14 (2026-10-27, P2): the id segment used to be digit-only (`\.(\d+)$`), but the
+    // producers write `catFiltersBak.<deletedAt>.<victimId>` with NON-numeric victim ids too
+    // (db-category-ops.js purgeFiltersForCategoryVictims; renderer category.js
+    // catFiltersBakKeyTs) — those stamped keys fell through to the legacy unstamped rule,
+    // whose live-id check never matches a deleted victim, so the key leaked forever. Age is
+    // decided by the timestamp segment alone; accept any dot-free id in the second segment.
+    m = k.match(/^catFiltersBak\.(\d+)\.([^.]+)$/)
     if (m) { if (now - Number(m[1]) > retentionMs) dead.push(k); continue }
     m = k.match(/^catFiltersBak\.(.+)$/)
     if (m && live.has(m[1])) { dead.push(k); continue }
@@ -201,6 +226,19 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
       continue
     }
   }
+  // W7 grace-period filter (see SYNC_META_GC_GRACE_MS above): sync-state families get a last
+  // chance — a row written within the window is skipped, everything else (including unknown
+  // ages and non-sync families) is unchanged. catFiltersBak keys carry their own decidable age
+  // and tomatoRunAnnounce rows are per-device beacons, so neither is shielded.
+  const graceMs = Number(opts.syncMetaGraceMs)
+  const grace = Number.isFinite(graceMs) ? graceMs : SYNC_META_GC_GRACE_MS
+  if (grace > 0 && opts.metaStamps) {
+    return dead.filter(k => {
+      if (!SYNC_META_FAMILY_RE.test(k)) return true
+      const ts = syncMetaStamp(opts, k)
+      return ts == null || now - ts >= grace
+    })
+  }
   return dead
 }
 
@@ -216,7 +254,22 @@ function computeMetaGc (metaKeys, categories, todos, opts = {}) {
  *  input. Exported for unit tests. */
 const FLOAT_FORBIDDEN_SETTINGS_KEYS = new Set([
   'enableSecurityLock', 'securityLockPassword', 'securityLockQuestion',
-  'shortcutKeySettings', 'runWhenComputerStart'
+  'shortcutKeySettings', 'runWhenComputerStart',
+  // W16 (2026-10-28 P2): the original five left every OTHER main-window-consumed config key
+  // writable by a trapped float (verify set: every readConfig() call site — windows.js,
+  // close-behavior.js, i18n.js, index.js, updater.js). Each key below changes next-launch or
+  // window behavior when silently persisted by a compromised float:
+  //   winBounds / winIsMaximized            — main-window geometry on next launch (windows.js)
+  //   hideMainWindowOnStartup               — main window never shows after relaunch (windows.js)
+  //   closeActionMinimize / closeTrayNotified — X quits vs hides / notice suppression (close-behavior.js)
+  //   appLocale                             — app-wide language on next boot (i18n.js boot cache;
+  //                                           the sanctioned write path is the main-only set-app-locale)
+  //   enableHardwareAcceleration            — HW accel off on next launch (index.js)
+  //   autoDownloadUpdates                   — flip updater auto-download consent (updater.js)
+  // The float's legitimate write surface (whiteNoiseAudio / whiteNoiseVolume) stays allowed.
+  'winBounds', 'winIsMaximized', 'hideMainWindowOnStartup',
+  'closeActionMinimize', 'closeTrayNotified',
+  'appLocale', 'enableHardwareAcceleration', 'autoDownloadUpdates'
 ])
 function stripForbiddenSettingsKeys (patch, { float } = {}) {
   const clean = { ...(patch && typeof patch === 'object' ? patch : {}) }

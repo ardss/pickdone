@@ -27,30 +27,66 @@ const VISIBLE_RE = /\$?(message|msgbox|confirm|alert|success|error|warning|info)
 // reads WHOLE dirty files, not hunks). browser-dev/todo-browser-shim.js is the 5175 DEBUG
 // host: its Chinese strings are developer throw messages, never shipped UI copy.
 const IGNORE_FILES = new RegExp([
-  'i18n[/\\\\]|check-i18n|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
+  // 2026-10-28 W18: the i18n exemption was an UNANCHORED substring (`i18n[/\\]`) — any path
+  // CONTAINING it was skipped, so a legit `renderer/js/vue-i18n-ext/` or `my-i18n/` subtree
+  // silently left the scan surface (same rot the walk-side filter at line ~75 had already
+  // fixed). Anchor to a whole path segment: `(^|[/\\])i18n[/\\]`.
+  '(^|[/\\\\])i18n[/\\\\]|check-i18n|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
   'src[/\\\\]main[/\\\\]db\\.js$',
   'src[/\\\\]main[/\\\\]scheduler\\.js$',
   'browser-dev[/\\\\]todo-browser-shim\\.js$',
+  // 2026-10-26: gate-must-fail-golden.test.mjs deliberately carries hardcoded Chinese fixtures —
+  // they are the RED INPUTS proving detection works ("who checks the checks"), never shipped UI
+  // copy. Editing that file makes it dirty → incremental scan → self-inflicted red otherwise.
+  'tests[/\\\\]unit[/\\\\]cli[/\\\\]gate-must-fail-golden\\.test\\.mjs$',
 ].join('|'))
+
+// 2026-10-30 (W19) multi-line call escape: `ElMessage.error(\n  '中文'\n)` puts the Chinese on a
+// line of its own that never matched VISIBLE_RE, so the hardcoded copy escaped the scan forever.
+// Fix: each VISIBLE_RE statement-start line grows a BLOCK — lines are appended (bounded window,
+// bracket-balanced) until the parens opened on the start line close — and the CN scan then runs on
+// the merged block, so Chinese on a continuation line is seen. Per-line filters keep their old
+// semantics: comment lines are dropped from the block, console.*/$t filters are applied to the
+// CN-bearing line itself (so `$t('a')` on one line of a block never launders a raw-CN line on
+// another), and the start line still short-circuits on console.*.
+const BLOCK_MAX_LINES = 5
+function bracketDelta (s) {
+  let d = 0
+  for (const ch of s) { if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) d-- }
+  return d
+}
+const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/
+const T_HELPER = /\$t\(|i18n\.t\(|\bt\(/
+const CONSOLE_RE = /(?:console|log)\.(log|error|warn|info)\(/
 
 function scanFile (p, text, ignoreDebt) {
   const hits = []
   const lines = text.split('\n')
-  lines.forEach((ln, i) => {
-    if (!CN_RE.test(ln)) return
-    if (ln.trim().startsWith('//') || ln.trim().startsWith('*') || ln.trim().startsWith('/*')) return
-    if (!VISIBLE_RE.test(ln)) return
-    if (/console\.(log|error|warn|info)\(/.test(ln)) return // console.* is developer logging, not user-visible
-    // r3 2026-09-28: electron-log call sites (log.warn/error/info) are the same developer-logging
-    // surface as console.* — they surface in log files, never in user-visible UI. These pre-existing
-    // Chinese lines in main-process modules only surfaced once their files went dirty (the
-    // incremental scan reads WHOLE dirty files, not hunks).
-    // browser-dev/todo-browser-shim.js is the 5175 DEBUG host: its Chinese strings are throw
-    // messages for developers, never shipped UI copy.
-    if (!ignoreDebt && KNOWN_DEBT.some(f => p.replace(/\\/g, '/').endsWith(f))) return // legacy utils copy, pending an i18n migration batch
-    if (/\$t\(|i18n\.t\(|\bt\(/.test(ln)) return // defensive fallback already routed through an i18n t() helper
-    hits.push(`${path.relative(ROOT, p)}:${i + 1}: ${ln.trim().slice(0, 100)}`)
-  })
+  for (let i = 0; i < lines.length; i++) {
+    const start = lines[i]
+    if (!VISIBLE_RE.test(start)) continue
+    if (COMMENT_LINE.test(start)) continue
+    if (CONSOLE_RE.test(start)) continue // console.*/electron-log is developer logging, not user-visible (r3 surface, see below)
+    // grow the block while the start line's brackets are still open (bounded window)
+    let end = i
+    let depth = bracketDelta(start)
+    while (depth > 0 && end - i + 1 < BLOCK_MAX_LINES) {
+      end++
+      depth += bracketDelta(lines[end])
+    }
+    const rel = path.relative(ROOT, p)
+    let flagged = false
+    for (let j = i; j <= end && !flagged; j++) {
+      const ln = lines[j]
+      if (!CN_RE.test(ln)) continue
+      if (COMMENT_LINE.test(ln)) continue
+      if (CONSOLE_RE.test(ln)) continue
+      if (T_HELPER.test(ln)) continue // line already routed through an i18n t() helper
+      if (!ignoreDebt && KNOWN_DEBT.some(f => rel.replace(/\\/g, '/').endsWith(f))) continue // legacy utils copy, pending an i18n migration batch
+      hits.push(`${rel}:${j + 1}: ${ln.trim().slice(0, 100)}`)
+      flagged = true // one hit per VISIBLE_RE statement — report the first offending line
+    }
+  }
   return hits
 }
 
@@ -65,14 +101,30 @@ if (process.argv.includes('--all')) {
   const walk = d => {
     for (const f of require('fs').readdirSync(d)) {
       const p = path.join(d, f)
-      if (require('fs').statSync(p).isDirectory()) { if (!/node_modules|vendor|i18n/.test(f)) walk(p); continue }
+      // 2026-10-28 anchor fix (W17): the old unanchored /node_modules|vendor|i18n/ substring
+      // pruned ANY directory whose NAME contained those substrings (e.g. i18n-helpers/, my-vendor-bridge/)
+      // — whole legit subtrees silently left the scan surface. Anchor to whole path segments.
+      if (require('fs').statSync(p).isDirectory()) { if (!/^(node_modules|vendor|i18n)$/.test(f)) walk(p); continue }
       if (SCAN_EXT(f) && !IGNORE_FILES.test(p)) files.push(p)
     }
   }
   walk(path.join(ROOT, 'renderer', 'js'))
   walk(path.join(ROOT, 'shared'))
+  // 2026-10-30 (W19): --all claimed whole-repo coverage but never walked src/ — hardcoded CN in
+  // main-process/other src files only surfaced when a file went dirty (incremental mode), so a
+  // committed file could green-exit --all forever. Same IGNORE_FILES exemptions apply (log text
+  // in src/main/db.js, src/main/scheduler.js etc. stay whitelisted). existsSync guard: trees
+  // without a src/ subtree (fixture trees, non-Electron consumers) simply have nothing to walk.
+  if (require('fs').existsSync(path.join(ROOT, 'src'))) walk(path.join(ROOT, 'src'))
 } else {
   const gitOpts = { cwd: ROOT, encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 }
+  // 2026-10-28 quotePath fix (W17): git quotes non-ASCII paths as octal escapes by default; the
+  // SCAN_EXT regex (no trailing quote) then silently dropped e.g. renderer/js/界面.vue from BOTH
+  // the diff list and the dirtyJs self-check — the two fake-green guards shared the same broken
+  // regex, so the scan collapsed to 0 files and exited green. Pin quotePath=false so raw UTF-8
+  // names flow through (same pin the pre-commit hook applies to ITS OWN calls — the `-c` flag is
+  // per-invocation and does NOT propagate into child gates, hence the pin here too).
+  const QUOTE_PATH_OFF = ['-c', 'core.quotePath=false']
   // 2026-09-23 P2 fix: the previous bare `git diff --name-only HEAD` printed REPO-ROOT-relative paths
   // (pickdone/...) while `git ls-files --others` printed pickdone-RELATIVE ones — the f.startsWith('pickdone')
   // filter then dropped tracked changes via the path.join(ROOT, f) double-prefix and untracked ones via the
@@ -82,12 +134,17 @@ if (process.argv.includes('--all')) {
   // paths (pickdone/...) while `git ls-files --others` printed pickdone-RELATIVE ones. `--relative=.`
   // was tried as the pin, but on git 2.53 it returns an EMPTY diff from a subdirectory (the scan
   // surface silently collapsed to zero). Bare `--relative` yields pickdone-relative paths correctly.
-  const diff = execFileSync('git', ['diff', '--name-only', '--relative', 'HEAD'], gitOpts)
-    + '\n' + execFileSync('git', ['ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
+  // 2026-10-26 P3 fix: `git diff --name-only HEAD` DOES list deleted paths (the old comment
+  // claimed otherwise — it was wrong); a deletion reached statSync, tripped the fail-closed
+  // guard below and made any file deletion a false red. --diff-filter=d (lowercase = exclude
+  // deletions) keeps deleted paths out of the scan list while added/copied/modified/renamed
+  // ones (which all exist on disk) still get scanned.
+  const diff = execFileSync('git', [...QUOTE_PATH_OFF, 'diff', '--name-only', '--relative', '--diff-filter=d', 'HEAD'], gitOpts)
+    + '\n' + execFileSync('git', [...QUOTE_PATH_OFF, 'ls-files', '--others', '--exclude-standard'], gitOpts) // 未跟踪新文件一并查,否则新建文件绕过检查(2026-09-05 复核 P2)
   files = diff.split('\n').map(f => f.trim().replace(/\\/g, '/'))
     .filter(f => SCAN_EXT(f) && !f.startsWith('../'))
   // 假绿防线: stat 失败的文件被静默剔除 = 扫描面静默缩水。diff 里的 js/vue 路径必然在盘上
-  // (git diff --name-only HEAD 不含已删除路径), stat 失败只可能是环境/路径归一化问题 → 红。
+  // (--diff-filter=d 已剔除删除路径,剩余 A/C/M/R 均存在),stat 失败只可能是环境/路径归一化问题 → 红。
   const statFailed = files.filter(f => { try { return !require('fs').statSync(path.join(ROOT, f)).isFile() } catch { return true } })
   if (statFailed.length) {
     console.error('✗ 增量扫描面塌缩:' + statFailed.length + ' 个 diff 中的 js/vue 文件 stat 失败,拒绝静默剔除:\n  ' + statFailed.join('\n  '))
@@ -98,9 +155,15 @@ if (process.argv.includes('--all')) {
     // Self-check (假绿防线): the worktree DOES hold dirty js/vue files but none were scanned — that is
     // scan-surface collapse (filter/normalization rot), not a clean pass. Fail red instead.
     // Same extension set as the scan filter, so dirty shared/*.mjs files count here too.
-    const dirtyJs = execFileSync('git', ['status', '--porcelain'], gitOpts).split('\n').filter(l => {
+    const dirtyJs = execFileSync('git', [...QUOTE_PATH_OFF, 'status', '--porcelain'], gitOpts).split('\n').filter(l => {
       const f = l.slice(3).trim().replace(/\\/g, '/')
-      return SCAN_EXT(f) && !f.endsWith('/')
+      // Deletions (status X/Y = D) are legitimately unscannable — --diff-filter=d already
+      // dropped them above; counting them here would false-red a deletion-only worktree.
+      // 2026-10-28 W18: also drop `../` (out-of-repo) paths, same as the scan filter above —
+      // `git status --porcelain` prints REPO-ROOT-relative paths, so a dirty js file outside
+      // pickdone/ shows up as `../foo.js`; counting it here made the dirtyJs self-check fire
+      // whenever any sibling-repo js file was dirty → whole-gate fake red.
+      return SCAN_EXT(f) && !f.startsWith('../') && !f.endsWith('/') && !l.slice(0, 2).includes('D')
     })
     if (dirtyJs.length) {
       console.error('✗ 增量扫描面塌缩：工作树有 ' + dirtyJs.length + ' 个 js/vue 脏文件却一个都没进扫描（路径归一化失效），拒绝假绿')

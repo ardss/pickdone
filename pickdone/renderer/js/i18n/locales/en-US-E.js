@@ -54,6 +54,7 @@ export default {
       "shortcutSavedMsg": "Shortcut saved",
       "backupLocationUpdatedMsg": "Backup location updated",
       "autoBackupWrittenMsg": "Auto backup written",
+      "backupDegradedToast": "Auto backup failed: {err}. Your data is fine, but no fresh backup point has been written recently; see Settings → Data.",
       "noDataYet": "No data yet",
       "yesLabel": "Yes",
       "exportedPrefix": "Exported: ",
@@ -96,6 +97,7 @@ export default {
       "closeToTrayHint": "On: × minimizes to tray (reminders keep running). Off: × quits the app",
       "hardwareAccelLabel": "Hardware acceleration (restart required):",
       "hwAccelRestartTip": "Takes effect after restarting the app",
+      "hwAccelRestartToast": "Hardware acceleration switched — restart the app to apply",
       "parentChecksSubtasksLabel": "Completing parent checks subtasks:",
       "languageLabel": "Language:",
       "accountSection": "Account",
@@ -188,6 +190,16 @@ export default {
       "recentCopiesLabel": "Recent copies kept:",
       "backupLocationLabel": "Backup location:",
       "changeBtn": "Change…",
+      "dataLocationSection": "Data storage",
+      "dataLocationCurrent": "Current data directory:",
+      "dataLocationRedirected": "Redirected via boot file",
+      "dataLocationChangeBtn": "Change storage location…",
+      "dataLocationDoneToast": "Migration complete — restarting…",
+      "dataLocationFailPrefix": "Migration failed: ",
+      "dataLocProgressTitle": "Migrating data — do not close the app",
+      "dataLocProgressCopy": "Copying data files…",
+      "dataLocProgressVerify": "Verifying the copied data…",
+      "dataLocProgressBoot": "Switching the startup location…",
       "resetDefaultBtn": "Reset to default",
       "backUpNowLabel": "Back up now:",
       "autoBackUpNowBtn": "Back up now",
@@ -440,9 +452,20 @@ export default {
       "freqIntervalClamped": "Interval must be between {min} and {max} days",
       "renameTip": "Click to rename",
       "intervalAria": "Interval days",
-      "renameEmpty": "Habit name cannot be empty"
+      "renameEmpty": "Habit name cannot be empty",
+      "notDueToday": "Not scheduled today"
 
+    },
+
+    /* [w7 ux fixes 2026-10-23] cross-view UX batch */
+    "w7": {
+      "csvExportedSaved": "Exported — the CSV was saved to your browser's default download location",
+      "memorialFutureDate": "An anniversary date cannot be in the future",
+      "accountTimeOverlap": "This interval overlaps another record of the same task — adjust the start time or duration",
+      "accountDiscardConfirm": "The ledger has unsaved changes — discard them?",
+      "scClearHint": "Press Delete/Backspace while recording to clear this shortcut"
     }
+
 
   }
 }

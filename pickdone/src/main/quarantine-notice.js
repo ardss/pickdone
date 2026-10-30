@@ -27,7 +27,14 @@ function showQuarantineNotice (win, log) {
     log.warn('[App] config.json was corrupted and quarantined as config.json.bad; security lock disabled until re-enabled')
     let shown = false
     try {
-      if (Notification.isSupported()) { new Notification({ title: m.title, body: m.body }).show(); shown = true }
+      if (Notification.isSupported()) {
+        // D22 (d-wave 2026-10-14): an unhandled Notification 'failed' event crashes the main
+        // process — attach a warn listener before show() (same guard as handlers/system.js).
+        const n = new Notification({ title: m.title, body: m.body })
+        n.on('failed', err => { try { log.warn('[App] quarantine notification failed:', err && (err.message || err)) } catch { /* noop */ } })
+        n.show()
+        shown = true
+      }
     } catch { /* fall through to the non-modal dialog */ }
     if (!shown) dialog.showMessageBox(win, { type: 'warning', title: m.title, message: m.body, buttons: ['OK'] }).catch(() => {})
   } catch (e) { log.warn('[App] quarantine notice failed:', e && e.message) }

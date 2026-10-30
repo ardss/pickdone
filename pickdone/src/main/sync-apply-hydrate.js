@@ -41,18 +41,15 @@ const isAnnounceMetaKey = key => String(key || '').startsWith(ANNOUNCE_KEY_PREFI
 // SHARED module (domain-3 fix 2026-09-28, same single-sourcing the settings predicate got in
 // F-A1): command-manifest.js's localKeys classifier imports the same function, so the
 // check-command-bus mirror-agreement assert holds by construction instead of by sync'd copies.
-const { isMachineLocalMetaKey, META_CONFLICT_BACKUP_PREFIX } =
+const { isMachineLocalMetaKey, META_CONFLICT_BACKUP_PREFIX, isSyncBlobMetaKey } =
   require('../../shared/machine-local-keys.mjs')
 
 // The settings/habits blobs are deliberately EXCLUDED from meta sync: they already sync
 // FIELD-GRANULAR via the `setting` entity (the db-sync-schema setMeta bridge mirrors every blob
 // field into settings_rows). Syncing the blob itself would apply whole-blob LWW and let the
 // receiving bridge's mergeDoc re-stamp stale field values OVER newer row edits — the §4.2
-// whole-blob clobber the split was built to prevent.
-const isSyncBlobMetaKey = id => {
-  const k = String(id)
-  return k === 'db.settingsState' || k === 'db.habitsState'
-}
+// whole-blob clobber the split was built to prevent. (isSyncBlobMetaKey now lives in the shared
+// module — D2 2026-10-21: db-oplog's ring filter needs it without requiring this file.)
 
 /**
  * Per-hydration-pass entity caches. The first buildSegments after a fresh cursor re-hydrates the
@@ -120,6 +117,14 @@ function hydrateRow (state, ptr, cache) {
   // and pre-2026-09-18 purge rows) are ring-buffer bookkeeping, not records — hydrating one used
   // to materialize a ghost tombstone with taskId '*gc*' on peers.
   if (String(ptr.entityId) === '*gc*') return null
+  // D2 fix (2026-10-21): a legacy/corrupt pointer whose entityId is empty or the LITERAL string
+  // 'undefined'/'null' (String(undefined) from an old writer) hydrated as a ghost row — the todo
+  // branch turned it into a tombstone with id 'undefined' and peers applied junk. Uniform
+  // skip + count (state.egressGhostIds, test-visible) like the '*gc*' guard above.
+  if (ptr.entityId == null || ptr.entityId === '' || ptr.entityId === 'undefined' || ptr.entityId === 'null') {
+    try { state.egressGhostIds = (state.egressGhostIds || 0) + 1 } catch { /* counter is best-effort */ }
+    return null
+  }
   const c = cache || createHydrationCache(state)
   const base = { seq: ptr.seq, entity: ptr.entity, id: ptr.entityId, ts: ptr.ts }
   try {

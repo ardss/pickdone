@@ -222,7 +222,9 @@ test('[6+7] ensureNextRepeatInstance renewal payload carries priority/deadlineTs
   assert.ok(add, 'renewal dispatched an addTodo')
   const p = add[1]
   assert.equal(p.priority, 3, 'priority carried')
-  assert.equal(p.deadlineTs, today0 + 5 * DAY, 'deadlineTs carried')
+  // [2026-10-15] F1 fix: the renewal day-diff shifts deadlineTs like reminderExtra — the
+  // verbatim carry made every renewed instance natively overdue
+  assert.equal(p.deadlineTs, today0 + 5 * DAY + DAY, 'deadlineTs carried, shifted by the renewal day-diff')
   assert.equal(p.important, 1, 'important carried')
   assert.equal(p.urgent, 2, 'urgent carried')
   assert.equal(p.estimate, 4, 'per-task estimate carried')

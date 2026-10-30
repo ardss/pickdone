@@ -75,7 +75,11 @@ const META_FLUSH_QUARANTINE_PREFIX = 'sync.flushQuarantine.'
 // Cap parked entries per op: quarantine is a crash-inspection surface, not a data store; the
 // oplog/snapshot remains the authoritative recovery for large segments.
 const META_FLUSH_QUARANTINE_CAP = 50
-const QUARANTINE_ROW_SAMPLE = 20
+// W8 fix (2026-10-25): 20 lost every row past #20 of a poison batch — a segment-sized poison
+// batch (PENDING_WRITES_CAP allows up to 5000 buffered rows) parked 4980 rows log-only with no
+// recoverable copy. Match the buffer cap's order of magnitude (500 rows sampled, ~0.5MB worst
+// case per entry), and the existing `truncated`/`omitted` marker keeps oversize batches honest.
+const QUARANTINE_ROW_SAMPLE = 500
 
 /** Safely encode one buffered row for the quarantine blob (a poison row may itself be
  *  un-JSON-able — BigInt, circular — so fall back to a string rendering). */
@@ -111,7 +115,33 @@ function quarantineFlushRows (state, op, list, err) {
   }
 }
 
+// F4 fix (2026-10-15): the buffered segments are RETAINED while both the flush and the quarantine
+// parking keep failing (D18), and every later ingest keeps pushing rows on top — an unbounded
+// growth window (long failure stretch = OOM). Cap each buffer at 5000 rows: far above any single
+// legitimate ingest segment (segments are ack-sized, tens of rows), yet bounds worst-case memory
+// to a few MB per op. Dropping is safe under the SAME contract as the poison-row quarantine: the
+// sender's watermark stays BELOW the dropped rows (they were never acked), so the next round
+// re-pushes them, and the oplog/snapshot remains the authoritative recovery surface. Oldest rows
+// are dropped first (shift-side) so the freshest data stays buffered.
+const PENDING_WRITES_CAP = 5000
+
+/** Trim each pendingWrites buffer to PENDING_WRITES_CAP, dropping the OLDEST rows when over.
+ *  Called at flush entry (flush runs after every ingested segment, so growth between calls is
+ *  bounded); every drop is log.error'd — silent data loss is forbidden. */
+function capPendingWrites (state) {
+  if (!state.pendingWrites) return
+  for (const r of flushRoutes) {
+    const list = state.pendingWrites[r.buf]
+    if (Array.isArray(list) && list.length > PENDING_WRITES_CAP) {
+      const dropped = list.length - PENDING_WRITES_CAP
+      state.pendingWrites[r.buf] = list.slice(dropped)
+      log.error(`[LanSync] pendingWrites.${r.buf} exceeded cap ${PENDING_WRITES_CAP} — DROPPED ${dropped} oldest buffered rows (flush/quarantine stalled; rows were never acked, the peer re-pushes them next round; snapshot remains the recovery surface)`)
+    }
+  }
+}
+
 function flushPendingWrites (state) {
+  capPendingWrites(state) // F4: bound the retained-buffer growth before draining
   const buf = state.pendingWrites
   let ok = true
   const quarantined = []
@@ -193,5 +223,7 @@ module.exports = {
   // 2026-09-26 poison-row quarantine: where a failed flush parks its dropped rows.
   META_FLUSH_QUARANTINE_PREFIX,
   QUARANTINE_ROW_SAMPLE,
+  PENDING_WRITES_CAP,
+  capPendingWrites,
   flushPendingWrites,
 }

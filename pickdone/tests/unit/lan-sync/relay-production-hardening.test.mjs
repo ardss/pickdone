@@ -155,6 +155,15 @@ test('usage quota persists across a relay+gate restart — a restart no longer b
   // "restart": brand-new relay/gate/bridge over the SAME durable files
   h = await mkHosted()
   try {
+    // Readiness ping (2026-10-24 night): under full-gate self-load the first fetch
+    // after the restart occasionally hit a one-off socket hiccup (fetch failed at
+    // 105ms, final22) — poll until the relay answers, bounded, instead of reding
+    // on a transient. A relay that never comes up still fails at the deadline.
+    for (let i = 0; i < 40; i++) {
+      const ping = await fetch(h.url + '/v1/health', { method: 'GET' }).then(() => true, () => false)
+      if (ping) break
+      await new Promise(r => setTimeout(r, 250))
+    }
     assert.equal(h.gate.usageBytes('persisted-acc'), 500, 'metering restored from disk')
     assert.equal(h.bridge.bindingOf('persisted-acc') && h.bridge.bindingOf('persisted-acc').accountId != null, true, 'binding restored from disk (no re-provision)')
     // the surviving 100-byte budget rejects a fresh 200-byte push

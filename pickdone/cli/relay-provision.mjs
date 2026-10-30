@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-env node */
 /**
  * Operator provisioning for the HOSTED drill relay (lubancat): binds a relay account
  * onto a fresh billing account with an ACTIVE cloud subscription, through the SAME
@@ -9,7 +10,6 @@
  * Usage on lubancat: node ~/jrelay/provision.cjs <relayAccount>
  * Idempotent: an existing binding for the account is left untouched.
  */
-import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const BASE = '/home/cat/jrelay'

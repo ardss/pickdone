@@ -26,6 +26,11 @@
 
 const { FOCUS_MAX_MINUTES } = require('../../shared/limits.mjs') // require(esm) — Node >= 22.12
 const { localDayKey } = require('../../shared/date-key.mjs')
+// W15 fix (2026-10-25): the running-session future window was a hand-copied 60s — a machine
+// with a clock a few minutes fast had EVERY FSM start rejected, so the durable row never
+// landed and the focus died unrecorded. Align on the single shared clamp constant (same
+// window the command-bus stamp door and sync-apply ingress already agree on).
+const { STAMP_CLAMP_MS } = require('./stamp-clamp.js')
 
 const SESSION_KEY = 'tomatoRunningSession'
 
@@ -41,7 +46,7 @@ function sessionRowFromTransition (payload) {
   if (START_TRANSITIONS.has(transition)) {
     const startedAt = Number(payload.startedAt) || 0
     const status = payload.status
-    if (!startedAt || startedAt > Date.now() + 60_000 || !RUNNING_STATUSES.has(status)) return null
+    if (!startedAt || startedAt > Date.now() + STAMP_CLAMP_MS || !RUNNING_STATUSES.has(status)) return null
     return {
       status,
       startedAt,

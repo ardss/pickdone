@@ -3,7 +3,7 @@
  * Single source for TodoItem drag / DayDeck card drop / TodoBoxView batch move-to-today.
  * Run: node --test tests/unit/utils/cross-day-move.test.mjs
  */
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import dayjs from 'dayjs'
 import { crossDayMovePatch, crossDayRevertPatch } from '../../../renderer/js/utils/crossDayMove.js'
@@ -55,8 +55,9 @@ test('no time / misaligned times: fields not anchored to the old day are omitted
   const oldDay = at('2026-09-10', 0)
   // plain dated task: no todoTime / reminders at all -> the task is day-anchored on the new day
   assert.deepEqual(crossDayMovePatch({ dayStart: oldDay }, newDay, startOfDay), { dayStart: newDay, todoTime: newDay })
-  // todoTime on a DIFFERENT day than dayStart (explicit datetime elsewhere) -> untouched
-  assert.deepEqual(crossDayMovePatch({ dayStart: oldDay, todoTime: at('2026-09-05', 10), reminderTime: at('2026-09-01', 9) }, newDay, startOfDay), { dayStart: newDay })
+  // todoTime on a DIFFERENT day than dayStart (F2-P3: third-day anchor drift) -> re-anchored to
+  // the new day with its time-of-day kept, so the DB scheduledDay derivation can't snap it back
+  assert.deepEqual(crossDayMovePatch({ dayStart: oldDay, todoTime: at('2026-09-05', 10), reminderTime: at('2026-09-01', 9) }, newDay, startOfDay), { dayStart: newDay, todoTime: at('2026-09-24', 10) })
   // revert of a marker-only patch restores dayStart only
   assert.deepEqual(crossDayRevertPatch({ dayStart: oldDay, todoTime: 0 }, { dayStart: newDay }), { dayStart: oldDay })
 })

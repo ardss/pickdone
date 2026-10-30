@@ -151,6 +151,11 @@ test('D21 source pins: windows retry timer cleared on closed; scheduler flush co
   assert.match(wSrc, /closed'.*loadRetryTimer|loadRetryTimer; loadRetryTimer = null/s, "retry timer must clear in the 'closed' handler")
 
   const sSrc = srcOf('src/main/scheduler.js')
-  assert.match(sSrc, /if \(!_persistTimer\) flushFiredNow\(\)/, 'evict-path flush must coalesce behind a pending persist')
-  assert.doesNotMatch(sSrc, /^\s*flushFiredNow\(\)\s*$/, 'no bare hot-path flush left in the eviction branch')
+  // W9 (2026-10-26): M8B fix 5 made BOTH arms identical (flush now either way), so the vacuous
+  // `if (!_persistTimer) flushFiredNow() else flushFiredNow()` collapsed to one unconditional
+  // call. The invariant this pin actually guards is unchanged: the eviction path must FLUSH
+  // inline (never defer the evicted watermark behind the pending persist timer) — now pinned as
+  // "no timer-conditional split around the eviction flush".
+  assert.match(sSrc, /\/\/ M8B fix 5 intent kept[\s\S]{0,200}flushFiredNow\(\)/, 'eviction path must flush inline (M8B fix 5 intent kept comment anchors the call)')
+  assert.doesNotMatch(sSrc, /if \(!_persistTimer\) flushFiredNow\(\)/, 'no vacuous timer-conditional flush split (W9 collapse)')
 })

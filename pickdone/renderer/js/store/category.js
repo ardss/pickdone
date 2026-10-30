@@ -7,6 +7,18 @@ import { today0, dayStart, dayShift } from '../utils/todayBounds.js'
 // judge duplicates the way cli/lib.js resolveCategory addresses them, otherwise UI-created
 // near-duplicates lock the CLI out.
 import { normKey } from '../../../shared/norm-key.mjs'
+// F4 (2026-10-17): the CLI's three structure guards (shared/category-structure.mjs) now also gate
+// the renderer's addCategory/updateCategory patch channel — the same CATEGORY_CYCLE /
+// CATEGORY_NOT_FOLDER / CATEGORY_NESTED_FOLDER / CATEGORY_NOT_FOUND codes the DB write bottleneck
+// (src/main/db-category-ops.js) and the CLI enforce, so the UI can no longer produce (or persist)
+// a nested folder, a parent pointing at a non-folder or a deleted row, or a parent/child cycle.
+import { validateCategoryStructure } from '../../../shared/category-structure.mjs'
+const stateRowView = list => id => {
+  // String-wise id compare: the shared core hands ids back as normalized strings, while the
+  // app shape stores numeric categoryId (row vs app shape drift would silently disable the guard)
+  const r = (list || []).find(c => c && String(c.categoryId) === String(id))
+  return r ? { id: r.categoryId, isFolder: !!r.folderIs, deleted: !!r.delete, parentId: r.folderId || 0 } : null
+}
 /** Category module (offline persistence via localStorage; cloud APIs like getCategoryList reserved) */
 const LS_KEY = 'categoryState'
 export const COLOR_PALETTE = ['#0f9d8f', '#f76e6e', '#f2a63b', '#7ac74f', '#5aa9e6', '#9d8df1', '#eb96c3', '#98a4ae']
@@ -411,23 +423,22 @@ function mergeableLsTombstones (rows, recycleBinAutoDeleteDays) {
     !rows.some(r => r.categoryId === d.categoryId) &&
     (retentionDays === 0 || !d.deletedAt || d.deletedAt > cutoff))
 }
-export { mergeableLsTombstones }
 function deletedFromLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
     return ((d && Array.isArray(d.list)) ? d.list : []).filter(c => c && c.delete)
   } catch { return [] }
 }
-
+/** W16 ghost-row gate: rows with no id / blank name (LS cache loaded verbatim) rendered as empty 32px dropdown options. Pure + exported for tests. */
+function isValidCatRow (c) { return !!(c && c.categoryId != null && c.categoryId !== '' && c.categoryName && String(c.categoryName).trim()) }
+export { isValidCatRow, mergeableLsTombstones }
 export default {
   namespaced: true,
   state: () => ({ list: loadList(), projectIds: [], projectMeta: {} }),
   getters: {
     /** Views' single name/color lookup: a soft-deleted (or missing) categoryId resolves to null so every
-     *  consumer (taskRow color-follow, name chips, …) falls back to the uncategorized default. Matches the
-     *  CLI contract (cli/lib.js deleteCategory: "tasks keep categoryId and fall back to the default
-     *  (uncategorized) in views") — previously a deleted category kept answering byId within the session,
-     *  so its name/color haunted rows that the EditPanel dropdown (sortedAll) already excluded. */
+     *  consumer falls back to the uncategorized default (CLI deleteCategory contract; a deleted category
+     *  used to keep answering byId and haunt rows the EditPanel dropdown already excluded). */
     byId: s => id => s.list.find(c => c.categoryId === id && !c.delete) || null,
     /** Project-type categories (sorted by listSort) — progressive disclosure: empty array when no projects, sidebar renders no entry */
     projects: s => s.list
@@ -438,8 +449,8 @@ export default {
     /** Lifecycle status of one project (normalized: absent/invalid = 'active') */
     projectStatus: s => id => normalizeStatus((s.projectMeta[id] || {}).status),
     roots: s => s.list.filter(c => !c.folderIs && !c.folderId && !c.delete).sort((a, b) => a.listSort - b.listSort),
-    // All non-deleted categories sorted by listSort (shared by EditPanel category dropdown etc.)
-    sortedAll: s => s.list.filter(c => !c.delete).sort((a, b) => a.listSort - b.listSort),
+    // All non-deleted categories sorted by listSort; W16: isValidCatRow = getter-level last line of defense against ghost rows
+    sortedAll: s => s.list.filter(c => !c.delete && isValidCatRow(c)).sort((a, b) => a.listSort - b.listSort),
     folders: s => s.list.filter(c => c.folderIs && !c.delete),
     visibleCount: s => s.list.filter(c => c.delete).length,
     hierarchical (s) {
@@ -461,9 +472,10 @@ export default {
      *  The rows ARE the authoritative DB content, so they also seed the persist diff-baseline: the first
      *  real user edit after load commits just that row, not the whole list re-synced. */
     setListFromDb (state, list) {
-      state.list = list
-      prunePersistBaseline(list)
-      for (const c of list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
+      // W16 ghost-row root fix at the ONLY memory-entry choke point (init DB rows / LS migration / failed-DB cache / tombstone re-merge): drop live rows with no id or blank name; tombstones (delete:true) are recovery metadata and stay.
+      state.list = list.filter(c => (c && c.delete) || isValidCatRow(c))
+      prunePersistBaseline(state.list)
+      for (const c of state.list) lastPersistedRows.set(c.categoryId, JSON.stringify(toRow(c)))
     },
     addCategory (state, { categoryName = 'New Category', categoryColor = COLOR_PALETTE[state.list.length % COLOR_PALETTE.length], folderIs = false, folderId = 0 }) {
       // D19-DOM2 (#9, CLI parity CATEGORY_EXISTS): duplicate LIVE names are rejected — the CLI,      // resolves categories by name, so duplicates produced AMBIGUOUS_MATCH and locked it out,      // (same contract as cli/lib-categories.cjs addCategory; component callers surface,      // catNameExistsWarn via $message.warning). Uniqueness is judged on the CLI's normKey,,      // not the raw string: the raw compare let 'Work' be created next to 'work'/'Ｗｏｒｋ'.
@@ -472,6 +484,13 @@ export default {
         const e = new Error('category "' + categoryName + '" already exists (names must stay unique so the CLI can address them)')
         e.code = 'CATEGORY_EXISTS'
         throw e
+      }
+      // F4: structure parity with the CLI add guard — a parent must be a live folder and a new
+      // row must never be a nested folder (self-cycle is impossible for a fresh id; the shared
+      // core still checks the whole chain for parity). Invalid structure → coded error, no row.
+      if (folderId) {
+        const guard = validateCategoryStructure({ id: 'new-row', isFolder: !!folderIs, parentId: folderId }, stateRowView(state.list))
+        if (guard) { const e = new Error(guard.message); e.code = guard.code; throw e }
       }
       state.list.push({ categoryId: nextId(), userId: 840001, categoryName, categoryColor, createTime: Date.now(), listSort: Math.max(0, ...state.list.map(c => c.listSort)) + 100, folderIs, folderId, delete: false })
       persist(state.list)
@@ -492,6 +511,18 @@ export default {
         }
       }
       const i = state.list.findIndex(c => c.categoryId === patch.categoryId)
+      // F4: structure parity with the DB write bottleneck (db-category-ops upsertCategory) — a
+      // folderId/folderIs patch is validated against the resulting row BEFORE anything mutates or
+      // persists: non-folder/deleted parents (CATEGORY_NOT_FOLDER / CATEGORY_NOT_FOUND), nested
+      // folders (CATEGORY_NESTED_FOLDER) and cycles (CATEGORY_CYCLE) throw a coded error and leave
+      // the list untouched (same coded-error pattern as CATEGORY_EXISTS above).
+      if (i >= 0 && ('folderId' in patch || 'folderIs' in patch)) {
+        const target = { ...state.list[i], ...patch }
+        const guard = validateCategoryStructure(
+          { id: target.categoryId, isFolder: !!target.folderIs, parentId: target.folderId },
+          stateRowView(state.list))
+        if (guard) { const e = new Error(guard.message); e.code = guard.code; throw e }
+      }
       if (i >= 0) { state.list[i] = { ...state.list[i], ...patch }; return persist(state.list) }
       return Promise.resolve(true)
     },

@@ -10,7 +10,11 @@
             <p class="hint">{{ $t('statsD.RepeatDeleteModal.chooseScope') }}</p>
             <el-radio-group v-model="mode" class="rd-vertical">
               <el-radio value="this">{{ $t('statsD.RepeatDeleteModal.onlyThis') }}</el-radio>
-              <el-radio value="from">{{ $t('statsD.RepeatDeleteModal.thisAndAfter') }}</el-radio>
+              <!-- [P2 2026-10-15] "this and after" needs the base instance's dayStart to compute the
+                   cutoff. A base from the recycle bin (or a legacy row) can have dayStart 0/undefined —
+                   the comparison would match nothing, so the scope is meaningless: disable the option
+                   and let confirm() reject it with an explicit error (see confirm's empty-scope guard). -->
+              <el-radio value="from" :disabled="!baseDayValid">{{ $t('statsD.RepeatDeleteModal.thisAndAfter') }}</el-radio>
               <el-radio value="all">{{ $t('statsD.RepeatDeleteModal.allEvents') }}</el-radio>
             </el-radio-group>
           </div>
@@ -42,7 +46,11 @@ export default {
       const id = this.$store.state.ui.showRepeatDeleteConfirm
       return this.$store.state.todo.todoList.find(t => t.taskId === id) ||
              this.$store.state.todo.recycleList.find(t => t.taskId === id) || null
-    }
+    },
+    /* [P2 2026-10-15] the "from" cutoff needs a valid base day: a recycle-bin base (or a legacy
+       row with dayStart cleared to 0) must not silently degrade the scope (see the radio's
+       :disabled above and confirm()'s empty-scope guard) */
+    baseDayValid () { return !!(this.base && this.base.dayStart > 0) }
   },
   methods: {
     async confirm () {
@@ -59,6 +67,14 @@ export default {
         if (this.$message) this.$message.error(this.$t('statsD.RepeatDeleteModal.queryFailed'))
         return
       }
+      // [P2 2026-10-15] defence in depth vs. the disabled radio: without a valid base dayStart the
+      // "from" cutoff is meaningless — `t.dayStart >= undefined` matches nothing, while a cleared
+      // `dayStart: 0` matches EVERY row (the scope would degrade into a whole-group delete).
+      if (this.mode === 'from' && !(b.dayStart > 0)) {
+        console.warn('[repeat] "from" scope rejected: base instance has no valid dayStart')
+        if (this.$message) this.$message.error(this.$t('statsD.RepeatDeleteModal.queryFailed'))
+        return
+      }
       const ids = []
       if (this.mode === 'all') {
         group.forEach(t => ids.push(t.taskId))
@@ -70,6 +86,16 @@ export default {
         // It now goes through the same batch-delete path as the other scopes, so it gets the shared
         // snapshot push, the 5s undo toast and one computeViews for free.
         ids.push(b.taskId)
+      }
+      // [P2 2026-10-15] an empty scope must NOT read as success: with base.dayStart 0/undefined the
+      // old "from" comparison (`t.dayStart >= undefined`) matched nothing — and a recycle-bin base
+      // is absent from the deleted:0 group query entirely — so ids=[] and the old path still ran
+      // deleteTodosMany([]) + fired the success/undo toast. Surface an explicit error instead:
+      // nothing deleted, no undo snapshot pushed.
+      if (!ids.length) {
+        console.warn('[repeat] empty delete scope, nothing to do (base day invalid or group empty)')
+        if (this.$message) this.$message.error(this.$t('statsD.RepeatDeleteModal.queryFailed'))
+        return
       }
       // F-C1: batch delete — ONE snapshot push (one undo restores the whole group), ONE computeViews,
       // ONE putMany write (the per-row loop used to push a whole-table snapshot per instance)

@@ -18,8 +18,8 @@ const oplog = require('./db-oplog')({
   getDb: () => db,
   log,
   getPurgeChips: () => purgeChipsScratch,
-  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible // (peers stop receiving that change until the next full snapshot while the push watermark // advances). Surface it through the Device Center sync-event channel (lazy require:
-  // lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then). onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
+  // r3 fix (2026-09-28): a failed delta-row append used to be log-only — the loss was invisible (peers stop receiving that change until the next full snapshot while the push watermark advances). Surface it through the Device Center sync-event channel (lazy require: lan-sync-bootstrap may not be initialized yet — its emitter is guarded and no-ops then). Regression 2026-10-25: the hook line itself was swallowed by an inline // comment — keep it a REAL object property.
+  onAppendFailure: info => { try { require('./lan-sync-bootstrap').emitOplogAppendFailure(info) } catch { /* surfacing is best-effort */ } },
 }), syncSchema = require('./db-sync-schema')({ getDb: () => db, log })
 // Sync v2 write-path recorder (flag-gated, see db-revisions.cjs): mirrors the oplog // contract — never fails an already-committed write, warn + continue on error.
 const revisions = require('./db-revisions.cjs')({ getDb: () => db, log })
@@ -99,6 +99,10 @@ function migratePlainToEncrypted (dir, file, key) {
     return true
   } catch (e) {
     log.error('[TodoDB] 明文→加密迁移失败，回退明文打开', e)
+    // [H5 2026-10-25, rootcause audit] silent-plaintext degradation: the session now runs
+    // UNENCRYPTED while the user believes their data is encrypted at rest. Flag it so the
+    // whenReady chain surfaces ONE visible notice (quarantine-notice contract).
+    encMigrationDegraded = true
     try { db.close() } catch {}
     try { fs.rmSync(encFile, { force: true }) } catch {}
     // 两步 rename 中途失败的自愈:第一步(file→plain-bak)已成功而第二步(enc→file)失败时, // todos.db 缺位,init 随后的无驱动重开会让 better-sqlite3 静默新建空库——本次会话跑在空库上, // 且下次启动"无 todos.db 才恢复"的预检被跳过,旧数据永不自愈(2026-09-05 终审 P1)。把明文库放回
@@ -115,150 +119,19 @@ function migratePlainToEncrypted (dir, file, key) {
 /** Test-only migration failure injection (C12, 2026-09-24): never set in production. */
 let migrateFailHook = null
 function __setMigrateFailHookForTests (fn) { migrateFailHook = typeof fn === 'function' ? fn : null }
+// [H5 2026-10-25] set when the plaintext->encrypted migration failed and the session fell
+// back to a PLAINTEXT db; consumed once by index.js's whenReady chain for the visible notice.
+let encMigrationDegraded = false
+function consumeEncMigrationDegraded () {
+  const had = encMigrationDegraded
+  encMigrationDegraded = false
+  return had
+}
 /** Test-only migration-list override (C2, 2026-09-24): never set in production. */
 let migrationsOverride = null
 function __setMigrationsForTests (list) { migrationsOverride = Array.isArray(list) ? list : null }
 
-const SCHEMA = `
-CREATE TABLE IF NOT EXISTS todos (
-  id            TEXT PRIMARY KEY,
-  userId        INTEGER,
-  content       TEXT,
-  description   TEXT,
-  complete      INTEGER NOT NULL DEFAULT 0,
-  completedAt   INTEGER NOT NULL DEFAULT 0,
-  deletedAt     INTEGER NOT NULL DEFAULT 0,
-  deleted       INTEGER NOT NULL DEFAULT 0,
-  createdAt     INTEGER NOT NULL DEFAULT 0,
-  updatedAt     INTEGER NOT NULL DEFAULT 0,
-  syncTime      INTEGER NOT NULL DEFAULT 0,
-  scheduledAt   INTEGER NOT NULL DEFAULT 0,
-  scheduledDay  INTEGER NOT NULL DEFAULT 0,
-  remindAt      INTEGER,
-  reminders     TEXT,
-  sort          REAL NOT NULL DEFAULT 0,
-  focusMinutes  INTEGER NOT NULL DEFAULT 0,
-  difficulty    INTEGER,
-  recurGroupId  TEXT,
-  subtasks      TEXT,
-  predecessors  TEXT,
-  imageUrls     TEXT,
-  fileAttach    TEXT,
-  categoryId    INTEGER NOT NULL DEFAULT 0,
-  priority      INTEGER NOT NULL DEFAULT 0,
-  deadlineTs    INTEGER NOT NULL DEFAULT 0,
-  important     INTEGER NOT NULL DEFAULT 0,
-  urgent        INTEGER NOT NULL DEFAULT 0,
-  status        TEXT NOT NULL DEFAULT 'add',
-  version       INTEGER NOT NULL DEFAULT 0,
-  tz            TEXT,
-  -- Row provenance (protocol v3, 2026-09-29): the device whose write produced this row's
-  -- current updatedAt. Lets the merge layer suppress same-writer stale echoes instead of
-  -- minting junk conflict copies. NULL = pre-v7 legacy row (unknown author).
-  syncAuthor    TEXT
-);
-CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
-CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
-CREATE INDEX IF NOT EXISTS idx_todos_repeat    ON todos (recurGroupId);
-CREATE INDEX IF NOT EXISTS idx_todos_category  ON todos (deleted, categoryId, scheduledDay);
-CREATE INDEX IF NOT EXISTS idx_todos_complete  ON todos (deleted, complete, scheduledDay);
-CREATE INDEX IF NOT EXISTS idx_todos_reminder  ON todos (remindAt);
-CREATE TABLE IF NOT EXISTS categories (
-  id            INTEGER PRIMARY KEY,
-  userId        INTEGER,
-  name          TEXT,
-  color         TEXT,
-  createdAt     INTEGER,
-  sort          INTEGER,
-  isFolder      INTEGER DEFAULT 0,
-  parentId      INTEGER DEFAULT 0,
-  deleted       INTEGER DEFAULT 0,
-  deletedAt     INTEGER NOT NULL DEFAULT 0,
-  updatedAt     INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS filters (
-  id        INTEGER PRIMARY KEY AUTOINCREMENT,
-  name      TEXT,
-  conds     TEXT,
-  sort      INTEGER NOT NULL DEFAULT 0,
-  createdAt INTEGER,
-  deleted   INTEGER NOT NULL DEFAULT 0,
-  deletedAt INTEGER NOT NULL DEFAULT 0,
-  updatedAt INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS meta (
-  key   TEXT PRIMARY KEY,
-  value TEXT
-);
-CREATE TABLE IF NOT EXISTS plan_chips (
-  id     TEXT PRIMARY KEY,
-  taskId TEXT NOT NULL,
-  day    TEXT NOT NULL,
-  mm     TEXT NOT NULL,
-  sort   INTEGER NOT NULL DEFAULT 0,
-  deleted   INTEGER NOT NULL DEFAULT 0,
-  deletedAt INTEGER NOT NULL DEFAULT 0,
-  updatedAt INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_plan_chips_day  ON plan_chips (day);
-CREATE INDEX IF NOT EXISTS idx_plan_chips_task ON plan_chips (taskId);
-CREATE TABLE IF NOT EXISTS tomato_records (
-  tomatoId      TEXT PRIMARY KEY,
-  endTime       INTEGER NOT NULL,
-  dateKey       TEXT NOT NULL,
-  focus         TEXT,
-  focusTaskId   TEXT,
-  focusDuration INTEGER NOT NULL DEFAULT 0,
-  rest          INTEGER,
-  restDuration  INTEGER,
-  succeed       INTEGER NOT NULL DEFAULT 1,
-  manual        INTEGER NOT NULL DEFAULT 0,
-  status        TEXT,
-  abandonReason TEXT,
-  extra         TEXT,
-  deleted       INTEGER NOT NULL DEFAULT 0,
-  deletedAt     INTEGER NOT NULL DEFAULT 0,
-  updatedAt     INTEGER NOT NULL DEFAULT 0
-);
-CREATE INDEX IF NOT EXISTS idx_tomato_records_date ON tomato_records (dateKey);
--- Round-3 perf (2026-09-26): tomatoAll's 'WHERE deleted = 0 ORDER BY endTime DESC' reload scan
--- becomes an ordered index search (same row order).
-CREATE INDEX IF NOT EXISTS idx_tomato_records_endtime ON tomato_records (deleted, endTime);
--- Change-capture log (P1 sync groundwork 2026-09-15): one row per successful write op, appended in
--- call() next to the ledger hook. Ring-buffered (see appendOplog); consumers read deltas via the
--- syncOplogSince op and GC coverage comes from periodic full snapshots. commitSyncBatch is the
--- sync-ack echo path and deliberately does NOT log (a real sync engine must not feed itself).
-CREATE TABLE IF NOT EXISTS sync_oplog (
-  seq      INTEGER PRIMARY KEY AUTOINCREMENT,
-  entity   TEXT NOT NULL,
-  entityId TEXT NOT NULL,
-  ts       INTEGER NOT NULL
-);
--- Sync v2 revision store (v8 twin of the migration: fresh databases get the tables from
--- SCHEMA, upgrades get them from MIGRATIONS — same dual-manifest as every other table).
--- Written only while the sync.revisions.v2 flag is on; presence is inert at v1 runtime.
-CREATE TABLE IF NOT EXISTS sync_revisions (
-  revisionId     TEXT PRIMARY KEY,
-  entity         TEXT NOT NULL,
-  entityId       TEXT NOT NULL,
-  authorDeviceId TEXT NOT NULL,
-  hlcPhysical    INTEGER NOT NULL,
-  hlcLogical     INTEGER NOT NULL,
-  parents        TEXT NOT NULL DEFAULT '[]',
-  payloadHash    TEXT NOT NULL,
-  status         TEXT NOT NULL DEFAULT 'pending',
-  createdAt      INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_sync_revisions_entity ON sync_revisions(entityId, hlcPhysical, hlcLogical);
-CREATE INDEX IF NOT EXISTS idx_sync_revisions_hlc ON sync_revisions(hlcPhysical DESC, hlcLogical DESC);
-CREATE TABLE IF NOT EXISTS sync_revision_payloads (
-  revisionId TEXT PRIMARY KEY,
-  payload    TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS sync_revision_current (
-  entityId   TEXT PRIMARY KEY,
-  revisionId TEXT NOT NULL
-);` + syncSchema.DDL
+const SCHEMA = require('./db-schema').SCHEMA + syncSchema.DDL
 
 // D4 2026-09-24: filter conds whitelist/parse live in shared/filter-core.mjs via db-filter-ops.js // (single source with cli/lib.js applyViewConds and renderer FilterView.vue)
 
@@ -279,6 +152,14 @@ function init (userDataPath) {
 function initInner (userDataPath) {
   const file = path.join(userDataPath, 'todos.db')
   fs.mkdirSync(userDataPath, { recursive: true })
+  // [UX 2026-10-21] low-disk guard: near-full volumes make SQLite's first page read surface SQLITE_IOERR, which the boot dialog mislabeled "db.key mismatch" for a HEALTHY db. statfs best-effort (unsupported fs skips the guard).
+  try {
+    const st = fs.statfsSync(userDataPath)
+    if (st.bavail * st.bsize < 256 * 1024 * 1024) {
+      const err = new Error(i18nM.mt('dbDiskFull', { free: Math.floor(st.bavail * st.bsize / 1024 / 1024) }))
+      err.code = 'DB_DISK_FULL'; throw err
+    }
+  } catch (e) { if (e && e.code === 'DB_DISK_FULL') throw e }
   // Open in plaintext first to complete schema migration, then switch to encryption at the end (see "encryption finalization" at the end of init)
   const keyFile = path.join(userDataPath, 'db.key')
   // D18 (2026-10-02): the bare fs.readFileSync here threw on a transient Windows file lock // (EPERM/EBUSY from AV/indexer) — init failed, recovery saw an intact header and answered // 'transient' with NO backoff, and the immediate re-init failure surfaced the reset-data
@@ -312,15 +193,45 @@ function initInner (userDataPath) {
       log.error('[TodoDB] db.key 降级改名失败,按带钥路径继续(预期解密探针失败)', e)
     }
   }
-  db = new loadDriver()(file)
-  if (hadKeyFile) db.pragma(`key='${key}'`)
-  // Protection: explicit read probe (journal_mode does not necessarily throw on a wrong key — actual decryption happens on the first page read)
-  try { db.prepare('SELECT count(*) FROM sqlite_master').get() } catch (e) {
-    // Close the half-open handle before surfacing the error: the reset-data flow closes+unlinks the DB files; an open handle made unlink fail with EPERM on Windows, silently skipping the data destruction (2026-09-09)
-    try { db.close() } catch {}
-    db = null
-    if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
-    throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
+  // [J4 2026-10-24] Transient-hold bounded retry around open+probe. Evidence: a hard-killed
+  // predecessor (or an AV/indexer having the fresh db in hand) can hold the file for seconds;
+  // one busy failure used to degrade the app into the db-less shell (sync status reads
+  // factory-fresh) for the WHOLE session. I/O-class failures back off and reopen; key-mismatch
+  // class keeps its immediate throw (retrying a wrong key is meaningless).
+  const PROBE_RETRIES = 4
+  for (let attempt = 0; ; attempt++) {
+    try {
+      // [J4 2026-10-24] the OPEN itself can throw on a transient hold (predecessor handles /
+      // AV scan) — it must live inside the retry, not just the probe SELECT.
+      db = new loadDriver()(file)
+      if (hadKeyFile) db.pragma(`key='${key}'`)
+      // Protection: explicit read probe (journal_mode does not necessarily throw on a wrong key — actual decryption happens on the first page read)
+      db.prepare('SELECT count(*) FROM sqlite_master').get()
+      break // healthy open
+    } catch (e) {
+      // Close the half-open handle before surfacing the error: the reset-data flow closes+unlinks the DB files; an open handle made unlink fail with EPERM on Windows, silently skipping the data destruction (2026-09-09)
+      try { db && db.close && db.close() } catch {}
+      db = null
+      const msg = String(e.message)
+      const ioLike = /disk i\/o|sqlite_ioerr|i\/o error|database is locked|database table is locked|EBUSY|EPERM|ENOENT|can'?t open|unable to open/i.test(msg)
+      if (!ioLike || attempt >= PROBE_RETRIES) {
+        // [J4 2026-10-24] retries exhausted on a transient hold: surface 'transient' to the
+        // recovery chain instead of the plain error — the recovery path must treat the db as
+        // UNVERIFIED (never quarantine a library it could not open).
+        if (ioLike) {
+          const err = new Error(i18nM.mt('dbDiskIoError', { msg }))
+          err.transientHold = true
+          throw err
+        }
+        if (!hadKeyFile) throw new Error(i18nM.mt('dbEncNoKey'))
+        // [UX 2026-10-21] SQLITE_IOERR at the probe is NOT a key mismatch - the old copy offered reset-data for a healthy db. Name the I/O cause instead.
+        if (/disk i\/o|sqlite_ioerr|i\/o error/i.test(msg)) throw new Error(i18nM.mt('dbDiskIoError', { msg: e.message }))
+        throw new Error(i18nM.mt('dbEncMismatch', { msg: e.message }))
+      }
+      const waitMs = 1500 * (attempt + 1)
+      log.warn(`[TodoDB] db open hit a transient hold (attempt ${attempt + 1}/${PROBE_RETRIES + 1}) — reopening in ${waitMs}ms: ${msg}`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, waitMs)
+    }
   }
   // Connection pragmas (ES1): synchronous/busy_timeout are per-connection state and journal_mode
   // must be re-asserted on a fresh handle — the encryption-finalization block below closes and
@@ -408,7 +319,21 @@ function initInner (userDataPath) {
       // so delete and recreate encrypted. (PRAGMA key on the already-open plaintext handle would NOT
       // encrypt existing pages → the CLI reopening with db.key reads garbage: "file is not a database")
       db.close()
-      for (const f of [file, file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }) } catch {} }
+      // W14 (2026-10-27, P2): the main-file deletion used to be swallowed by the same bare
+      // catch as the wal/shm sidecars — on failure (EPERM/EBUSY on a locked win32 file, AV
+      // scan) the rebuild reopened the OLD PLAINTEXT db, wrote the session into it while the
+      // PRAGMA key was a no-op, and the next boot read db.key against a plaintext file →
+      // dbEncMismatch → the recovery chain reported "all data lost". The main file MUST be
+      // gone before rebuilding: if it survives, abort this init (the throw joins the
+      // migration/recovery chain in index.js) instead of silently running plaintext. The
+      // -wal/-shm sidecars stay tolerable: SQLite recreates them.
+      let mainFileRemoved = false
+      let mainFileErr = null
+      try { fs.rmSync(file, { force: true }); mainFileRemoved = !fs.existsSync(file) } catch (e) { mainFileErr = e }
+      for (const f of [file + '-wal', file + '-shm']) { try { fs.rmSync(f, { force: true }) } catch {} }
+      if (!mainFileRemoved) {
+        throw new Error('[TodoDB] fresh-install encryption rebuild aborted: old plaintext todos.db is un-deletable' + (mainFileErr ? ' (' + mainFileErr.message + ')' : '') + ' - refusing to rebuild over a plaintext db (handed to the recovery chain)')
+      }
       require('./durable-fs').writeFileDurable(keyFile, key) // main-ipc-2 fsync fix (2026-09-22), same rationale as the migration path above
       db = new loadDriver()(file)
       db.pragma(`key='${key}'`)
@@ -430,6 +355,7 @@ function initInner (userDataPath) {
 
 
   const cols = Object.keys(todoToRow({ taskId: '' }))
+  const buildUpsertSql = focusMinutesSetter => db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => c === 'focusMinutes' ? focusMinutesSetter : `${c} = excluded.${c}`).join(', ')}`)
   // B1 (2026-10-03) — focusMinutes accumulate-vs-replace duality. The renderer's contract
   // (store todo.js "U-1 write-once at the DB layer") treats focus minutes as MONOTONIC:
   // the only mutation that ever lowers nothing is bumpSnow's DB-side `focusMinutes = focusMinutes + ?`
@@ -442,12 +368,31 @@ function initInner (userDataPath) {
   // focusMinutes is the only todos column with an accumulate-vs-replace duality (every other
   // column is last-writer-wins by design), so it gets the guard and an explicit contract
   // comment here rather than a per-call-site workaround.
-  stmts.upsert = db.prepare(`INSERT INTO todos (${cols.join(', ')}) VALUES (${cols.map(c => '@' + c).join(', ')}) ON CONFLICT(id) DO UPDATE SET ${cols.filter(c => c !== 'id').map(c => c === 'focusMinutes' ? 'focusMinutes = MAX(todos.focusMinutes, excluded.focusMinutes)' : `${c} = excluded.${c}`).join(', ')}`)
+  stmts.upsert = buildUpsertSql('focusMinutes = MAX(todos.focusMinutes, excluded.focusMinutes)')
+  // W13 (2026-10-26, P2 cross-device ledger divergence): the B1 MAX guard above was baked into
+  // EVERY whole-row write path — including commitSyncBatch (cloud ack) and upsertMany (LAN
+  // snapshot/flush landing). But W7-R's renderer `undo:` compensation legitimately LOWERS
+  // focusMinutes; when that decrease synced to a peer, the peer's MAX guard rejected it (kept its
+  // own stale higher value), so the two ledgers diverged permanently and every snapshot round
+  // re-fought the same row. Root split: there are TWO calibers of whole-row writer.
+  //   - Local-origin (renderer `upsert` op): a writer may carry a STALE in-window snapshot, so it
+  //     keeps the B1 MAX guard.
+  //   - Sync-origin (commitSyncBatch cloud ack, upsertMany LAN landing): rows are
+  //     POST-ADJUDICATION winners — the peer's decrease is authoritative and MUST land, or the
+  //     ledgers can never converge. stmts.upsertSync (plain `= excluded.focusMinutes`) serves
+  //     commitSyncBatch; upsertMany runs the same plain caliber because ALL its callers (sync
+  //     apply flush via todo.putMany, CSV import, backup restore, recovery re-import, CLI pool
+  //     rescale) write freshly-sourced authoritative row sets, never stale renderer snapshots —
+  //     the B1 threat shape only exists on the single-row `upsert` path. Keep the two calibers
+  //     deliberate; do not merge them back.
+  stmts.upsertSync = buildUpsertSql('focusMinutes = excluded.focusMinutes')
   stmts.getById = db.prepare('SELECT * FROM todos WHERE id = ?')
   stmts.hardDelete = db.prepare('DELETE FROM todos WHERE id = ?')
   stmts.getMeta = db.prepare('SELECT value FROM meta WHERE key = ?')
   stmts.setMeta = db.prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
-  stmts.upsertMany = db.transaction(rows => { for (const r of rows) stmts.upsert.run(r) })
+  // W13 (2026-10-26): plain caliber — see the upsertSync block above for why the bulk path
+  // must NOT carry the B1 MAX guard (peer adjudicated decreases must land).
+  stmts.upsertMany = db.transaction(rows => { for (const r of rows) stmts.upsertSync.run(r) })
   // Atomic field increment: a whole-row overwrite from a stale cross-window row loses concurrent increments (estimate from two windows in the same tick); DB-side += avoids the race
   // P1 2026-09-17: focus increments must also flip status to 'update' — the renderer's snapshot
   // filter drops rows with status='sync', so a bump on an already-synced row used to leave the
@@ -493,10 +438,16 @@ function queryTodos ({ deleted = 0, complete = null, categoryId = null, repeatId
   // orderBy is exposed via IPC; whitelist-validate to prevent SQL injection (only column name + ASC/DESC combinations allowed)
   const cols = new Set(['id', 'createdAt', 'updatedAt', 'scheduledDay', 'scheduledAt', 'completedAt', 'complete', 'remindAt', 'sort', 'priority', 'deadlineTs', 'important', 'urgent', 'categoryId', 'recurGroupId', 'status', 'content'])
   const parts = String(orderBy).split(',').map(x => x.trim().split(/\s+/))
+  // Harden (2026-10-26): validate each comma-part AND rebuild the clause from validated
+  // parts only. The old code validated tokens[0]/[1] but spliced the RAW string into the
+  // SQL, so tokens 3+ ('sort ASC; DROP') rode into the statement verbatim. Any part whose
+  // shape isn't exactly [column, dir?] throws with the same message as before.
+  const clauses = []
   for (const part of parts) {
-    if (!cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
+    if (part.length > 2 || !cols.has(part[0]) || (part[1] && !/^(ASC|DESC)$/i.test(part[1]))) throw new Error('queryTodos: 非法 orderBy: ' + orderBy)
+    clauses.push(part[0] + (part[1] ? ' ' + part[1].toUpperCase() : ''))
   }
-  sql += ` ORDER BY ${orderBy}`
+  sql += ` ORDER BY ${clauses.join(', ')}`
   // F2: limit validated on presence (0 = explicit zero rows, negatives throw). D19-DOM1: the SQL LIMIT must not precede the JS keyword filter — window/ceiling/cap in db-rows.keywordLimitWindow.
   const win = keywordLimitWindow(keywordTerms, limit)
   if (win.sqlLimit !== null) sql += ' LIMIT ' + win.sqlLimit
@@ -555,15 +506,24 @@ const OPS = {
     const cur = Number((curRow && curRow.value) || 0)
     if (v < cur) throw new Error('[TodoDB] commitSyncBatch: version ' + v + ' < current todosVersion ' + cur + ' — stale batch rejected')
     const tr = db.transaction(list => {
-      for (const t of list) { assertHasTaskId(t); stmts.upsert.run(todoToRow({ ...t, status: 'sync', version: v })) }
+      // W13 (2026-10-26): plain caliber (stmts.upsertSync) — cloud-ack rows are post-adjudication
+      // winners; a peer's W7-R undo decrease of focusMinutes must land, not be MAX-clamped away.
+      for (const t of list) { assertHasTaskId(t); stmts.upsertSync.run(todoToRow({ ...t, status: 'sync', version: v })) }
       stmts.setMeta.run('todosVersion', String(v))
     })
     tr(rows)
     return true
   },
   bumpSnow: ({ taskId, minutes, dedupKey } = {}) => {
-    // Server-side clamping: arbitrary/negative values from the renderer (including the float window) must not tamper with the focus ledger (a single focus session capped at 600 minutes)
-    const m = Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
+    // W7-R (2026-10-23): a dedupKey prefixed undo: is the renderer succeed->false compensation
+    // (the exact reverse of a prior credit). It takes a NEGATIVE-only clamp mirrored on the
+    // credit-side FOCUS_MAX cap; an undo: key can never credit (positive clamps to 0). Every
+    // other caller keeps the original positive-only clamp (the renderer, incl. the float window,
+    // must not tamper with the focus ledger; a single focus session capped at 600 minutes).
+    const undoRollback = typeof dedupKey === 'string' && dedupKey.startsWith('undo:')
+    const m = undoRollback
+      ? Math.max(-LIMITS.FOCUS_MAX_MINUTES, Math.min(0, Math.floor(Number(minutes) || 0)))
+      : Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
     // P3 2026-10-09: m===0 is a zero-content no-op (the old path still touched updatedAt/status/oplog/sync) — short-circuit before any row touch.
     if (m === 0) return { ok: true, minutes: 0 }
     // P1 2026-09-20 idempotency contract: the renderer replays bumpSnow on an AMBIGUOUS failure
@@ -809,4 +769,4 @@ function close () {
 // Initialized probe: within the same process (the main process's CSV import), reuse the existing connection; a second init rebuilding the handle on the same file is forbidden
 function isOpen () { return !!db }
 
-module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions, __connPragmasForTests: () => (db && db.open ? { journalMode: db.pragma('journal_mode', { simple: true }), synchronous: db.pragma('synchronous', { simple: true }), busyTimeout: db.pragma('busy_timeout', { simple: true }) } : null), __payloadCountForTests: () => db.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n, __currentRevisionIdForTests: entityId => { const r = db.prepare('SELECT revisionId FROM sync_revision_current WHERE entityId = ?').get(entityId); return r && r.revisionId } }
+module.exports = { init, call, queryTodos, normalizeContent, isWriteOp, isOpen, close, setLedgerChangedHook, suppressLedgerHook, consumeEncMigrationDegraded, LEDGER_WRITE_OPS, WRITE_OPS, SCHEMA, __setMigrateFailHookForTests, __setMigrationsForTests, __revisionsForTests: revisions, __connPragmasForTests: () => (db && db.open ? { journalMode: db.pragma('journal_mode', { simple: true }), synchronous: db.pragma('synchronous', { simple: true }), busyTimeout: db.pragma('busy_timeout', { simple: true }) } : null), __payloadCountForTests: () => db.prepare('SELECT COUNT(*) n FROM sync_revision_payloads').get().n, __currentRevisionIdForTests: entityId => { const r = db.prepare('SELECT revisionId FROM sync_revision_current WHERE entityId = ?').get(entityId); return r && r.revisionId } }

@@ -44,7 +44,10 @@ test('B2: UNIQUE(idx_todos_repeat_day) on the renewal insert resolves to the exi
   const db = {
     call: (op, args) => {
       if (op === 'queryTodos') {
-        if (args && args.dayStartFrom != null) return ++phase === 1 ? [] : [twin] // pre-check empty, post-violation read finds the concurrent twin
+        if (args && args.dayStartFrom != null) {
+          if (args.deleted === 1) return [] // [2026-10-17 realign] the new binned-twin pre-check queries deleted:1 — a LIVE twin must not leak into it
+          return ++phase === 1 ? [] : [twin] // live pre-check empty, post-violation read finds the concurrent twin
+        }
         return [{ taskId: t.taskId, dayStart: t.dayStart }] // repeat group (the completed instance is the last)
       }
       if (op === 'getMeta') return JSON.stringify({ repeatType: 'day', repeatInterval: 1, repeatDayCount: 5 })
@@ -229,10 +232,11 @@ test('B2b: timed repeat done twice — midnight-normalized idempotency pre-check
     call: (op, args) => {
       if (op === 'queryTodos') {
         if (args && args.dayStartFrom != null) {
+          if (args.deleted === 1) return [] // [2026-10-17 realign] binned-twin pre-check (deleted:1) sees nothing
           seenQueries.push(args.dayStartFrom)
           // the pre-check MUST be queried with the local midnight, not the timed todoTime
           assert.equal(args.dayStartFrom, nextDay, 'idempotency query uses the midnight-normalized day')
-          return seenQueries.length === 1 ? [] : [twin] // first run: pre-check empty; twin read after the UNIQUE violation
+          return seenQueries.length === 1 ? [] : [twin] // first run: live pre-check empty; twin read after the UNIQUE violation
         }
         return [{ taskId: t.taskId, dayStart: t.dayStart }] // the completed instance is the group's last
       }

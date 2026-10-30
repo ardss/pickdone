@@ -50,7 +50,17 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 // budget per lock-loss relaunch (deadline renewal fix) — then 120s pairing-intact + 60s
 // convergence. The old 175s ceiling could be outrun by exactly the legit relaunch path
 // this suite is designed to survive, so it is raised to 300s to cover the sum.
-const WATCHDOG_MS = 300_000
+// 600s (was 300s, 2026-10-23 evening): the real journeys each run ~60-90s under a
+// LOADED host (boot probes and convergence polls scale with ambient load), so the full
+// gate blew the 300s ceiling mid-J4 and the force-exit red'd the FILE with J1-J3 already
+// green - the budget-doesn't-cover-worst-path law again. Still a hard bound: a wedged run
+// dies named instead of hanging the tier.
+// 900s (same evening, after 600s also fired in-gate): IN-GATE (three pools racing) the
+// suite measured ~2-3x its solo wall, so 600s left no margin against a burst multiplier.
+// 900s covers ~3x the solo worst path while staying a hard named bound inside the 20min
+// stage budget. Note: run-all children carry --test-force-exit, so the post-suite handle
+// leak this watchdog also bounds only bites bare `node --test` invocations.
+const WATCHDOG_MS = 900_000
 const watchdog = setTimeout(() => {
   console.error(`[lan-sync-journey] GLOBAL WATCHDOG (${WATCHDOG_MS}ms) fired — force-exiting (1)`)
   if (process.env.JOURNEY_DIAG && process.report) {
@@ -177,17 +187,22 @@ class Instance {
     // linux CI (ubuntu-latest) has no user namespaces / GPU: electron needs --no-sandbox and
     // --disable-gpu or it dies with code=null before the CDP port ever opens (PR #160 evidence)
     const linuxFlags = process.platform === 'linux' ? ['--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] : []
+    const env = {
+      ...process.env,
+      PICKDONE_MULTI: '1',
+      TODO_USER_DATA_DIR: this.userDir,
+      // keep TODO_DB_DIR out: the data dir is owned by TODO_USER_DATA_DIR (dev-duo contract)
+      TODO_DB_DIR: '',
+      TODO_SYNC_PORT: String(this.syncPort),
+    }
+    // Agent/IDE hosts (DSH/VSCode) export ELECTRON_RUN_AS_NODE=1 — electron.exe then boots as
+    // plain Node and require('electron') resolves to the npm path-string shim (same crash shape
+    // e2e-exit-close.test.mjs strips for; journey-driver.mjs line-145 precedent).
+    delete env.ELECTRON_RUN_AS_NODE
     this.proc = spawn(ELECTRON_BIN, ['.', ...linuxFlags, '--remote-debugging-port=' + this.cdpPort], {
       cwd: PICKDONE_ROOT,
       stdio: 'ignore',
-      env: {
-        ...process.env,
-        PICKDONE_MULTI: '1',
-        TODO_USER_DATA_DIR: this.userDir,
-        // keep TODO_DB_DIR out: the data dir is owned by TODO_USER_DATA_DIR (dev-duo contract)
-        TODO_DB_DIR: '',
-        TODO_SYNC_PORT: String(this.syncPort),
-      },
+      env,
     })
     this.pid = this.proc.pid
     this.proc.on('exit', (code) => { this.exitCode = code })
@@ -203,7 +218,7 @@ class Instance {
     // shared between the original boot and the successor, so a slow relaunch could red
     // purely on spent wall-clock. One renewal per spawned process (exitCode is set once).
     let deadline = Date.now() + bootTimeoutMs
-    let renewed = false
+    let renewals = 0
     for (;;) {
       try {
         this.cdp = await Cdp.connect(this.cdpPort, { targetTimeoutMs: Math.min(15000, deadline - Date.now()) })
@@ -215,7 +230,12 @@ class Instance {
           // relaunches the app with a pre-lock delay; the successor INHERITS this CDP
           // port). Keep polling — the successor's endpoint lands on the same port. A
           // non-zero exit stays a real crash and throws below.
-          if (!renewed) { renewed = true; deadline = Date.now() + bootTimeoutMs }
+          // 2026-10-20: under the full gate the successor's pre-lock delay + electron boot
+          // routinely exceeded one renewal window (observed 82s+ on a busy box) — allow a
+          // second renewal before declaring the successor missing. 2026-10-21: a third
+          // renewal — the full-corpus unit gate still hit 1 miss/run on a saturated box
+          // (solo the suite is 4/4 green, so this is pure wall-clock, not logic).
+          if (renewals < 3) { renewals++; deadline = Date.now() + bootTimeoutMs }
           if (Date.now() > deadline) {
             throw new Error(`[${this.name}] electron exited code=0 (lock-loss relaunch) and no successor CDP came up on port ${this.cdpPort}`)
           }
@@ -276,7 +296,7 @@ class Instance {
   }
 
   /** Production read path: window.todoAPI.dbCall(op, params). */
-  dbCall (op, params, timeoutMs = 20000) {
+  dbCall (op, params, timeoutMs = 45000) {
     return this.cdp.evalExpr(
       `Promise.resolve(window.todoAPI.dbCall(${JSON.stringify(op)}, ${JSON.stringify(params || {})}))` +
       `.then(r => ({ ok: true, r })).catch(e => ({ ok: false, err: String((e && e.message) || e) }))`,
@@ -287,7 +307,7 @@ class Instance {
   }
 
   /** Production write path: window.commands.commit(entity, verb, payload). */
-  commit (entity, verb, payload, timeoutMs = 20000) {
+  commit (entity, verb, payload, timeoutMs = 45000) {
     return this.cdp.evalExpr(
       `Promise.resolve(window.commands.commit(${JSON.stringify(entity)}, ${JSON.stringify(verb)}, ${JSON.stringify(payload || {})}))` +
       `.then(r => ({ ok: true, r })).catch(e => ({ ok: false, err: String((e && e.message) || e) }))`,
@@ -329,12 +349,23 @@ class Instance {
   async stop () {
     this.cdp && this.cdp.close()
     this.cdp = null
-    if (this.proc && this.exitCode === undefined) {
-      try { this.proc.kill() } catch { /* already gone */ }
-      await until(() => this.exitCode !== undefined, 8000, `[${this.name}] graceful exit`).catch(() => {
-        try { this.proc.kill('SIGKILL') } catch { /* best effort */ }
-      })
+    if (!this.proc || !this.pid) return
+    // Windows: tree-kill UNCONDITIONALLY. exitCode set only proves the MAIN pid exited —
+    // renderer/GPU children can outlive it (2026-10-24: two orphans survived a mid-J4 main
+    // death because the exitCode guard skipped the kill). POSIX keeps graceful→SIGKILL.
+    if (process.platform === 'win32') {
+      try {
+        const { execSync } = await import('node:child_process')
+        execSync(`taskkill /T /F /PID ${this.pid}`, { stdio: 'ignore' })
+      } catch { /* tree already gone */ }
+      await until(() => this.exitCode !== undefined, 8000, `[${this.name}] exit after tree kill`).catch(() => { /* best effort */ })
+      return
     }
+    if (this.exitCode !== undefined) return
+    try { this.proc.kill() } catch { /* already gone */ }
+    await until(() => this.exitCode !== undefined, 8000, `[${this.name}] graceful exit`).catch(() => {
+      try { this.proc.kill('SIGKILL') } catch { /* best effort */ }
+    })
   }
 }
 
@@ -347,7 +378,18 @@ const dirB = path.join(scratchRoot, 'instance-b')
 const liveInstances = new Set()
 
 test.after(async () => {
-  for (const inst of liveInstances) await inst.stop()
+  // each-catch: one stuck instance must never stop the reap of the others
+  for (const inst of liveInstances) { try { await inst.stop() } catch { /* keep reaping */ } }
+  // Final orphan sweep: a main process that died MID-run leaves children whose parent link
+  // is already dead — taskkill /T (and the stop() above) cannot see them. Kill every
+  // electron whose command line anchors at THIS worktree and whose parent is gone.
+  // Path-scoped on purpose: never touch electrons outside the worktree by name alone.
+  try {
+    const { execSync } = await import('node:child_process')
+    execSync(
+      `powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'electron.exe' -and $_.CommandLine -match 'journey-audit' -and -not (Get-Process -Id $_.ParentProcessId -ErrorAction SilentlyContinue) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"`,
+      { stdio: 'ignore', timeout: 60000 })
+  } catch { /* best effort */ }
   try { fs.rmSync(scratchRoot, { recursive: true, force: true }) } catch { /* locked files left to the OS */ }
 })
 
@@ -477,7 +519,12 @@ test('J1: boot pair + enable sync + two-way pairing completes on both sides', as
     trace('J1 complete: pair is up and paired both ways')
     pair.ready = true
   } catch (e) {
-    if (/EADDRINUSE|spawn|ENOENT/i.test(String(e.message))) {
+    // [signal-integrity 2026-10-25] EADDRINUSE under a full gate is usually OUR OWN
+    // concurrency contention (the run pools + sibling gates fighting for ports) — that is
+    // a load signal, not a missing sandbox capability; skipping it cascades J2-J4 into
+    // silent greens. Only a true no-spawn sandbox (ENOENT on the electron binary / the
+    // runner's spawn surface) is a legitimate skip; everything else stays a red.
+    if (/ENOENT/i.test(String(e.message))) {
       return t.skip('process spawning unavailable in this sandbox: ' + e.message)
     }
     throw e
@@ -581,6 +628,18 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
   const bSyncPort = b.syncPort
   trace('J4: hard-killing B (pid ' + b.pid + ')')
   await b.killHard()
+  // [J4 2026-10-24] Wait out the dead predecessor's file handles before B2 boots: a boot
+  // that opens the fresh db mid-release fails init ("file held by another process") and the
+  // app degrades into the db-less shell — sync status reads factory-fresh and the pairing
+  // wait below burns out red. Mirror of the db.js open-retry fix, at test pacing level.
+  // Three files: the WAL/SHM siblings ride the same handle set as the main db.
+  await until(() => {
+    const probe = ['todos.db', 'todos.db-wal', 'todos.db-shm']
+      .map(f => path.join(dirB, f))
+      .filter(f => fs.existsSync(f))
+      .every(f => { try { const fd = fs.openSync(f, 'r+'); fs.closeSync(fd); return true } catch { return false } })
+    return probe || null
+  }, 30000, 'todos.db set still held after the hard kill (predecessor handles never released)')
   trace('J4: B dead, restarting on the same data dir + sync port')
 
   const b2 = new Instance({ name: 'B2', cdpPort: bCdpPort, syncPort: bSyncPort, userDir: dirB })
@@ -591,10 +650,19 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
 
   // Pair state survived the crash: sync is still enabled and B still holds A as a
   // paired peer (persisted sync.peers restored on boot).
-  const stB2 = await until(async () => {
-    const s = await b2.status()
-    return s.enabled && (s.peers || []).some(p => p.deviceId === aSelf.deviceId) ? s : null
-  }, 120000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
+  let stB2 = null
+  try {
+    stB2 = await until(async () => {
+      const s = await b2.status()
+      return s.enabled && (s.peers || []).some(p => p.deviceId === aSelf.deviceId) ? s : null
+    }, 120000, '[B2] restarted with pairing intact (enabled + A in the peer table)')
+  } catch (e) {
+    // One-shot diagnostic: dump B2's actual status at the failure instant so the
+    // next move is evidence (budget vs real pairing loss), not attribution.
+    try { console.error('[J4][diag] B2 status at failure: ' + JSON.stringify(await b2.status())) } catch (e2) { console.error('[J4][diag] B2 status unreadable: ' + e2.message) }
+    try { console.error('[J4][diag] A status at failure: ' + JSON.stringify(await a.status())) } catch (e2) { console.error('[J4][diag] A status unreadable: ' + e2.message) }
+    throw e
+  }
   assert.ok(stB2.listening, '[B2] sync node listening again after restart')
 
   // Pending changes converge BOTH ways: A pushes an edit, restarted B pushes a new row.
@@ -612,7 +680,7 @@ test('J4: reconnect — hard-kill B, restart with the same dirs, pair state surv
     ['journey-time-1', 'journey-plain-1', 'journey-post-restart'],
     (row) => (row.taskId === 'journey-time-1' && row.taskContent !== 'post-restart edit from A')
       ? 'A post-restart edit not applied'
-      : null, 60000)
+      : null, 150000)
 
   const byA = new Map(ta.map(r => [r.taskId, r]))
   const byB = new Map(tb.map(r => [r.taskId, r]))

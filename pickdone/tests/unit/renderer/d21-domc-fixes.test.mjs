@@ -69,10 +69,12 @@ test('[A1] _batchDeleteInner counts a failed deleteTodosMany and toasts msgParti
 
 test('[A2] completeAction undo only toasts success after the dispatch resolves; rejection surfaces actionFailedMsg', () => {
   const src = read('renderer/js/utils/completeAction.js').replace(/\r/g, '')
-  assert.match(src, /Promise\.resolve\(store\.dispatch\('todo\/toggleComplete', cur\)\)\.then\(/,
+  // J17 (journey-audit round 2) re-aimed the undo dispatch from todo/toggleComplete to
+  // todo/updateTodoFields snapshot-revert; the observed-dispatch contract is unchanged.
+  assert.match(src, /Promise\.resolve\(store\.dispatch\('todo\/updateTodoFields', \{ taskId: cur\.taskId, patch: \{ \.\.\.snap \} \}\)\)\.then\(/,
     'undo dispatch must be observed, not fire-and-forget')
   // success branch is inside the .then() — closeAll + success toast must appear AFTER it
-  const thenIdx = src.indexOf("Promise.resolve(store.dispatch('todo/toggleComplete', cur)).then(")
+  const thenIdx = src.indexOf("Promise.resolve(store.dispatch('todo/updateTodoFields', { taskId: cur.taskId, patch: { ...snap } })).then(")
   const tail = src.slice(thenIdx)
   const closeAllIdx = tail.indexOf('message.closeAll()')
   assert.ok(closeAllIdx > -1 && closeAllIdx < tail.indexOf('}, (e)'), 'success feedback moved into the resolved branch')

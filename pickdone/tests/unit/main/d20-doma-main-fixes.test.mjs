@@ -43,9 +43,12 @@ const { selectPrunes } = require('../../../src/main/autoBackup.js')
 
 test('B4: collision-suffixed -dup<n> auto snapshots are pruned within the auto tier', () => {
   // 30 same-stamp -dup snapshots (handlers/backup.js uniqueSnapshotName shape), all old.
+  // c-wave 2026-10-13: dups can no longer take day/week anchor slots at all (they are
+  // bookkeeping, never tier anchors) — the 6 that fall out of recent-24 are ALL pruned
+  // (previously 4: one dup each illegitimately kept as the day and the week anchor).
   const dups = Array.from({ length: 30 }, (_, i) => `auto-20200101-010101-dup${i + 1}.json`)
   const prunes = selectPrunes(dups, { recent: 24, dailyDays: 1, weeklyWeeks: 1, eventKeep: 10 })
-  assert.equal(prunes.length, 4, `red before the fix: 0 of 30 suffixed snapshots were ever pruned (got ${prunes.length})`)
+  assert.equal(prunes.length, 6, `0 of 30 suffixed snapshots were ever pruned before D20-B4 (got ${prunes.length})`)
   for (const p of prunes) assert.match(p, /^auto-20200101-010101-dup\d+\.json$/)
 })
 

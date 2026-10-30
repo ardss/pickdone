@@ -40,11 +40,16 @@ function markFired (key) {
       // entry here used to drop that watermark on the floor and re-fire it after restart.
       // D21 (P3 2026-10-02): coalesce the flush. flushFiredNow() is a synchronous SQLite write;
       // inside markFired it ran PER EVICTION, so a catch-up burst (every reminder past-due after
-      // sleep) with an all-unwritten map did one SQLite commit per markFired call. Now: flush
-      // directly only when no persist is already pending; if one is (_persistTimer armed), the
-      // pending 60s debounce / 30s retry timer consumes the flush and this admission just evicts
-      // (the existing C9 log above already covers the evicted-unwritten re-fire tradeoff).
-      if (!_persistTimer) flushFiredNow()
+      // sleep) with an all-unwritten map did one SQLite commit per markFired call.
+      // M8B fix 5 (P3): D21 went too far — with a pending 60s/30s timer the eviction deleted an
+      // UNWRITTEN watermark that the pending timer would only persist a minute later, and that
+      // entry re-fired after a crash inside the window (exactly the loss the flush-first order
+      // exists to prevent). flushFiredNow() already coalesces (clears the timer, single commit,
+      // marks written); BOTH arms flush now — one extra SQLite commit per all-unwritten eviction
+      // is the cost of not dropping the watermark on the floor.
+      // M8B fix 5 intent kept: the pending timer must not defer the evicted watermark — both
+      // cases flush, so the vacuous conditional collapses to a single unconditional call.
+      flushFiredNow()
       // C9 (P3 2026-10-02): the bound must hold PER ADMISSION. The old code skipped the eviction
       // when the flush failed ("let the map exceed FIRED_MAX by one; it self-heals") — under a
       // SUSTAINED persist failure every further markFired repeated that path and the map grew
@@ -153,12 +158,36 @@ function setSoundFile (f) { dingFile = f }
 // other entry point (tray click / second-instance / quick-add) honors.
 let showMainEntry = null
 function setShowMainEntry (fn) { showMainEntry = typeof fn === 'function' ? fn : null }
+/** D6 (P2 2026-10-22): notification-click locate. Focusing alone left the user staring at
+ *  whatever view was last open — the clicked task was nowhere in sight. After the focus path
+ *  runs, push the taskId to the renderer over the same fire-and-forget webContents.send shape
+ *  as 'shortcut-conflict' (preload wraps it with a disposer, onReminderOpenTask); the renderer
+ *  routes to the task's view and opens the edit panel. The renderer additionally ignores the
+ *  push while ui.isLocked (the lock-aware gate may have shown the lock screen, never the data). */
+function pushOpenTask (taskId) {
+  if (!taskId) return
+  try {
+    const win = require('./window-ref').getMainWindow()
+    if (win && !win.isDestroyed()) win.webContents.send('reminder-open-task', { taskId: String(taskId) })
+  } catch (e) { log.warn('[Reminder] open-task push failed:', e && e.message) }
+}
+
 /** Notification-click focus path (exported for unit tests): routes through the lock-aware
- *  showMainOrLock when wired; bare-window fallback only when index.js never wired it. */
-function focusMainFromNotification () {
-  if (showMainEntry) { try { showMainEntry(); return } catch (e) { log.warn('[Reminder] showMainOrLock failed', e) } }
-  const win = require('./window-ref').getMainWindow()
-  if (win) { win.show(); win.focus() }
+ *  showMainOrLock when wired; bare-window fallback only when index.js never wired it.
+ *  D6 (P2 2026-10-22): optional taskId — after focusing, pushOpenTask hands it to the renderer. */
+function focusMainFromNotification (taskId) {
+  let shown = false
+  if (showMainEntry) { try { showMainEntry(); shown = true } catch (e) { log.warn('[Reminder] showMainOrLock failed', e) } }
+  if (!shown) {
+    // M2b (P2 2026-10-23): the old bare fallback `win.show(); win.focus()` fired when the lock-aware
+    // entry threw (or was never wired), and it bypassed the security lock — clicking a reminder on a
+    // locked app revealed its full contents. The scheduler cannot probe the lock state here (index.js
+    // wires only showMainOrLock via setShowMainEntry; the security-lock instance is module-private to
+    // index.js), so the fallback now FAILS CLOSED: nothing is shown, the failure is logged, and the
+    // renderer's ui.isLocked gate (see pushOpenTask) still covers the task-locate push.
+    try { log.warn('[Reminder] show entry unavailable/failed — keeping the window hidden (lock-safe fallback)', taskId || '') } catch { /* logging is best-effort */ }
+  }
+  pushOpenTask(taskId)
 }
 
 /** Truncate by code points, not UTF-16 code units: slicing at a fixed index could split a
@@ -217,16 +246,38 @@ function fire (todo, offset) {
     n.on('click', () => {
       // D10 (2026-09-27): route through the lock-aware gate — a locked app must not be revealed
       // by clicking a reminder notification (see focusMainFromNotification above).
-      focusMainFromNotification()
+      // D6 (P2 2026-10-22): the click now also carries the taskId so the renderer locates the task.
+      focusMainFromNotification(todo.taskId)
     })
+    // D22 symmetry (c-wave 2026-10-13, mirrors handlers/system.js:64-69): an OS-level delivery
+    // failure surfaces as an UNHANDLED 'failed' event on the Notification object — under
+    // Electron's unhandled-event policy that can crash the main process. Attach the listener
+    // BEFORE show(); the failure is logged (warn, not error — a missed toast is degraded, not
+    // fatal) and flips the local result so a synchronously-detected failure returns false and
+    // does not consume the catch-up watermark. (Electron fires 'failed' asynchronously in
+    // production — there the listener's job is crash prevention; the watermark stays optimistic,
+    // same contract as the IPC notification channel.)
+    let deliveryFailed = false
+    if (typeof n.on === 'function') {
+      n.on('failed', (err) => {
+        deliveryFailed = true
+        try { log.warn('[Reminder] delivery failed:', todo.taskId, err && (err.message || err)) } catch { /* logging is best-effort */ }
+      })
+    }
     n.show()
-    // Notification sound
+    // Notification sound — M2b (P3 2026-10-23): a synchronously-detected delivery failure must not
+    // play the chime (notify without notification). An ASYNCHRONOUS 'failed' (the production shape)
+    // lands after this line has already run: the sound cannot be un-played — accepted tradeoff,
+    // the watermark/catch-up semantics above still treat it as failed.
     const { sound } = require('./notify-sound')
-    if (sound && dingFile) sound(dingFile)
+    if (!deliveryFailed && sound && dingFile) sound(dingFile)
     // F-B8 (dw wave 3): task titles no longer go to main.log (plaintext side channel — same nature
     // as the index.js plain-bak cleanup); the taskId is enough to correlate a reminder with its task.
     log.info('[Reminder] fired:', todo.taskId, offset || 0)
-    return true // D22: fire result gates the watermark (see the call sites in scheduleTask/reloadAll)
+    // D22: fire result gates the watermark (see the call sites in scheduleTask/reloadAll);
+    // a 'failed' event observed before this point reports false so the reminder stays
+    // catch-up-eligible and retries on the next reloadAll.
+    return !deliveryFailed
   } catch (e) {
     log.error('[Reminder] fire failed', e)
     return false // D22: a failed fire must NOT consume the catch-up watermark — the next reloadAll retries
@@ -340,7 +391,6 @@ function reloadAll (db) {
   // loop on DESKTOP). First run always rebuilds (lastRebuildFingerprint === null).
   const fingerprint = rebuildFingerprint(todos)
   if (lastRebuildFingerprint !== null && fingerprint === lastRebuildFingerprint) return
-  lastRebuildFingerprint = fingerprint
   for (const h of jobs.values()) clearTimeout(h)
   jobs.clear()
   // Restore firedReminders from meta (prevents "already-fired reminders being re-fired by the catch-up path after restart")
@@ -361,9 +411,21 @@ function reloadAll (db) {
       if (ts > now) {
         scheduleTask(t, offset, ts)
         future++
-      } else if (!firstRun && ts > lastSeen && !firedReminders.has(key)) {
+      } else if (firedReminders.has(key)) {
+        // fired at runtime or caught up (the set is meta-persisted) — deduped, never re-fired
+      } else if (!firstRun && (ts > lastSeen || (offset === 0 && Number(t.createTime || 0) > lastSeen))) {
         // D22 (P3): fire first, watermark only on success — a throwing notification path left the
         // old order (markFired before fire) permanently swallowing the reminder (no catch-up retry).
+        // [J7 2026-10-22] born-past-due: the `ts > lastSeen` window alone can never cover a MAIN
+        // reminder created already-due (CLI --reminder <past>, edit-panel past pick, peer sync) —
+        // its due moment predates a frontier written before the row existed, so needsCatchUp said
+        // "fire" while this loop said "already seen" and the reminder was swallowed forever.
+        // Exemption: offset===0 rows CREATED after the frontier were never seen by any sweep —
+        // fire once through the same fire-then-watermark path. Guardrails: offset/extras keep the
+        // never-fire-past semantics (a degenerate past offset on a future anchor is an anchoring
+        // artifact, see scheduleOne); createTime <= lastSeen (peer-synced history) stays swallowed
+        // (D22 anti-bombardment); firstRun still skips everything; a failed fire still rolls the
+        // frontier to ts-1 so the retry stays in-window.
         if (fireImpl(t, offset) !== false) markFired(key)
         else if (ts < earliestFailedTs) earliestFailedTs = ts
         missed++
@@ -372,6 +434,12 @@ function reloadAll (db) {
   }
   try { db.setMeta(['reminderLastSeenAt', String(earliestFailedTs < Infinity ? Math.min(now, earliestFailedTs - 1) : now)]) } catch { /* watermark write failure only affects catch-up dedup */ }
   log.info('[Reminder] scheduler rebuild done: %d future reminders, %d missed reminders re-fired', future, missed)
+  // d-wave fix (2026-10-14): advance the fingerprint ONLY on a fully-successful round. Pre-fix it
+  // advanced before the catch-up loop, so a failed fire stranded the reminder: the next reloadAll
+  // saw unchanged inputs and early-returned, retrying never. Keeping the OLD fingerprint on
+  // failure forces the next rebuild to run again; firedReminders dedups the already-fired
+  // instances, so the retry cannot double-fire (markFired semantics unchanged).
+  if (earliestFailedTs === Infinity) lastRebuildFingerprint = fingerprint
 }
 
 function scheduleOne (todo) {

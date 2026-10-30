@@ -1,7 +1,6 @@
 /** Attachment localization (remote attachment → userData/files) — moved verbatim from index.js (content unchanged) */
 const path = require('path')
 const fs = require('fs')
-const fixUtil = require('./fix-util')
 const { app } = require('electron')
 
 function attachDir () {
@@ -45,18 +44,34 @@ function isAppOwnedBookkeeping (f) { return isUnownedNoiseFile(f) || String(f) =
 const ATT_TMP_RE = /\.att-tmp-\d+-\d+$/
 const TMP_SWEEP_MAX_AGE_MS = 24 * 60 * 60 * 1000
 function isCrashTmpResidue (f) { return ATT_TMP_RE.test(String(f)) }
+// W16 (2026-10-28 P2): crash-claim phantoms. claimSlot reserves the final name with an exclusive
+// 0-byte placeholder; a process crash between the claim and the publish rename left that 0-byte
+// FINAL-named file behind forever — invisible to the D19 `.att-tmp-*` sweep and counted by both
+// quota scanners, so every crash permanently shrank the 64MB/200-file budget. There are NO
+// legitimate 0-byte attachments: saveAttachment rejects empty payloads and LAN ingress rides the
+// same whitelist/size gates, so a 0-byte non-bookkeeping file is always an in-flight claim
+// placeholder (young) or a crashed claim (old). Same 24h age gate as .att-tmp-*: a young one may
+// be a concurrent upload mid-claim and is never touched; an old one is swept, and a row still
+// referencing it hits the existing missing-file guard (re-pull from peer / re-upload) — self-healing.
+function isCrashClaimPhantom (f, stat, { now = Date.now(), maxAgeMs = TMP_SWEEP_MAX_AGE_MS } = {}) {
+  const name = String(f)
+  if (isAppOwnedBookkeeping(name) || isCrashTmpResidue(name)) return false
+  try { return stat.size === 0 && now - stat.mtimeMs > maxAgeMs } catch { return false }
+}
 /** Age-based crash-residue sweep: unlink `.att-tmp-*` older than 24h. A YOUNG tmp file may be
  *  a concurrent transfer's in-flight spool — never touched. Pure-ish over injected fs for tests;
- *  returns the removed count. */
+ *  returns the removed count. W16: also unlinks 0-byte crash-claim phantoms (see above). */
 function sweepTmpResidue (dir, { now = Date.now(), maxAgeMs = TMP_SWEEP_MAX_AGE_MS, fsMod = fs } = {}) {
   let removed = 0
   try {
     for (const f of fsMod.readdirSync(dir)) {
-      if (!isCrashTmpResidue(f)) continue
-      let old = false
-      try { old = now - fsMod.statSync(path.join(dir, f)).mtimeMs > maxAgeMs } catch { old = false }
-      if (!old) continue
-      try { fsMod.unlinkSync(path.join(dir, f)); removed++ } catch { /* best-effort */ }
+      let stat = null
+      try { stat = fsMod.statSync(path.join(dir, f)) } catch { continue }
+      const isTmp = isCrashTmpResidue(f)
+      if (!isTmp && !isCrashClaimPhantom(f, stat, { now, maxAgeMs })) continue
+      if (now - stat.mtimeMs > maxAgeMs) {
+        try { fsMod.unlinkSync(path.join(dir, f)); removed++ } catch { /* best-effort */ }
+      }
     }
   } catch { /* unreadable dir: nothing to sweep */ }
   return removed
@@ -68,13 +83,19 @@ function dirUsage (dir) {
   let bytes = 0
   let count = 0
   for (const f of fs.readdirSync(dir)) {
-    // C14: white-noise slot; lifecycle: alias map; D19: crash-residue .att-tmp-* — none are attachment quota
-    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f)) continue
-    try { bytes += fs.statSync(path.join(dir, f)).size; count++ } catch { /* vanished mid-scan */ }
+    // C14: white-noise slot; lifecycle: alias map; D19: crash-residue .att-tmp-*; W16: crash-claim
+    // 0-byte phantoms — none are attachment quota
+    let stat = null
+    try { stat = fs.statSync(path.join(dir, f)) } catch { /* vanished mid-scan */ }
+    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f) || (stat && isCrashClaimPhantom(f, stat))) continue
+    if (stat) { bytes += stat.size; count++ }
   }
   return { bytes, count }
 }
 const ALLOWED_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'pdf', 'txt', 'md', 'csv', 'xlsx', 'xls', 'docx', 'doc', 'pptx', 'ppt', 'zip', 'mp3', 'wav', 'ogg', 'mp4', 'webm', 'json'])
+// F3 (2026-10-19): filename control-char sanitizer (0x00-0x1F). Built from char codes because a
+// literal control-char class is an eslint no-control-regex error.
+const CTRL_RE = new RegExp('[' + String.fromCharCode(0) + '-' + String.fromCharCode(31) + ']', 'g')
 // main-ipc-4 quota fix (2026-09-22): the wave-C aggregate quota is also exposed as a pure,
 // unit-testable decision (withinStorageQuota) plus a byte-size scanner — same flood guard,
 // testable without 64MB fixtures.
@@ -92,15 +113,49 @@ function withinStorageQuota (existingBytes, incomingBytes, quotaBytes) {
 function dirTotalBytes (dir) {
   let n = 0
   for (const f of fs.readdirSync(dir)) {
-    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f)) continue
-    try { n += fs.statSync(path.join(dir, f)).size } catch { /* raced delete */ }
+    let stat = null
+    try { stat = fs.statSync(path.join(dir, f)) } catch { /* raced delete */ }
+    if (isAppOwnedBookkeeping(f) || isCrashTmpResidue(f) || (stat && isCrashClaimPhantom(f, stat))) continue
+    if (stat) n += stat.size
   }
   return n
 }
 /** Upload: offline implementation = copy into userData/files and return a file:// style URL (signature mirrors re-assembling the key after the get7nyUpToken flow) */
+// P3 F3 TOCTOU (2026-10-19): claim a free filename with an exclusive 0-byte placeholder. Unlike
+// the old existsSync probe, openSync('wx') is atomic at the OS level — two concurrent uploads
+// aiming at the same name cannot both claim it; the loser gets EEXIST and bumps to name-1, -2…
+// fsMod injectable for unit tests. Exported so the claim contract stays directly testable.
+function claimSlot (dir, fileName, fsMod = fs) {
+  const p = require('path')
+  const ext = p.extname(fileName)
+  const stem = fileName.slice(0, fileName.length - ext.length)
+  let candidate = p.join(dir, fileName)
+  for (let i = 0; i < 1000; i++) {
+    try { fsMod.closeSync(fsMod.openSync(candidate, 'wx')); return candidate } catch (e) {
+      if (e.code !== 'EEXIST') throw e
+      candidate = p.join(dir, stem + '-' + (i + 1) + ext)
+    }
+  }
+  candidate = p.join(dir, stem + '-' + Date.now() + ext)
+  // W18 fix: the loop-exhausted fallback used to let openSync's EEXIST (an astronomically unlucky
+  // same-ms collision) escape as a raw OS error out of the upload IPC. Same structured error-face
+  // convention as saveAttachment's own gates ('attachment: ...' — see the extension/quota throws).
+  try {
+    fsMod.closeSync(fsMod.openSync(candidate, 'wx'))
+  } catch (e) {
+    if (e && e.code === 'EEXIST') throw new Error('attachment: cannot claim a file slot (name collision)')
+    throw e
+  }
+  return candidate
+}
 async function saveAttachment ({ taskId, name, dataBase64 }) {
   // Strip Windows trailing dots/spaces before extracting the extension (the filesystem strips them at creation; validation and persistence must see the same name)
-  const cleanName = String(name || '').replace(/[. ]+$/, '')
+  // P3 F3 (2026-10-19): control chars 0x00-0x1F in the name make CreateFile fail outright on
+  // Windows (a name like 'a\u0007b.png' lands as a NUL/bell-bearing path → the whole upload 500s
+  // instead of one bad attachment). Sanitized FIRST, same style as the reserved-name prefix above:
+  // replaced with '_', so extension extraction and every downstream join see the same name.
+  // (CTRL_RE is built from char codes — a literal control-char class trips eslint no-control-regex.)
+  const cleanName = String(name || '').replace(CTRL_RE, '_').replace(/[. ]+$/, '')
   const ext = path.extname(cleanName).slice(1).toLowerCase()
   if (!ext || !ALLOWED_EXT.has(ext)) throw new Error('attachment: extension not allowed')
   // P3 (2026-10-09): Windows reserved device names (CON, PRN, AUX, NUL, COM1-9, LPT1-9) fail
@@ -118,6 +173,13 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // valid and never throws, so corrupted/truncated payloads used to land on disk silently. Require the
   // canonical charset/length AND a decode→re-encode roundtrip match before accepting.
   const { strictBase64 } = require('./fix-util')
+  // d-wave fix (2026-10-14): the strictBase64 decode + roundtrip re-encode below operate on the
+  // FULL string, so a 1GB base64 payload peaked at 4-5GB of process memory before the 50MB gate
+  // rejected it. Cheap length precheck first: decoded bytes ≈ len*3/4 — if that alone exceeds the
+  // per-file cap, reject before touching a Buffer. (MAX_BYTES import must stay lazy/call-time to
+  // mirror the attachments-guards cycle note below.)
+  const lenBytes = Math.floor((dataBase64 ? String(dataBase64).length : 0) * 3 / 4)
+  if (lenBytes > MAX_BYTES) throw new Error('attachment: too large (max 50MB)')
   const stripped = strictBase64(dataBase64)
   if (!stripped) throw new Error('attachment: invalid base64 payload')
   const raw = Buffer.from(stripped, 'base64')
@@ -128,15 +190,25 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // guards.assertWriteAllowed enforces the SAME caps). Lazy require: guards itself requires
   // this module for the exported pure gates, so the cycle must stay call-time only.
   require('./attachments-guards').assertWriteAllowed({ incomingBytes: raw.length, dir: attachDir() })
-  const safe = `${String(taskId).replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${displayName.replace(/[\\/:*?"<>|]/g, '_')}`
+  // F3 control-char hardening mirrors the cleanName fix: taskId comes from IPC and the cleanName
+  // sanitize above does not reach it — a control char in either part would kill CreateFile again.
+  const safe = `${String(taskId).replace(CTRL_RE, '_').replace(/[\\/:*?"<>|]/g, '_').replace(/\.\./g, '_')}_${Date.now()}_${displayName.replace(CTRL_RE, '_').replace(/[\\/:*?"<>|]/g, '_')}`
   // P2 2026-09-12: two uploads in the same millisecond with the same task/name produced the same
   // Date.now() filename and writeFileSync silently overwrote the first attachment. Suffix -1/-2…
   // (pure helper in fix-util, testable) so every upload lands on its own file.
-  const dest = fixUtil.nextFreePath(attachDir(), safe, p => fs.existsSync(p))
+  // P3 F3 TOCTOU (2026-10-19): nextFreePath's existsSync probe raced concurrent uploads — both
+  // picked the same free name, the later rename overwrote the first upload's bytes and -1/-2
+  // dedup was dead in the gap. claimSlot below closes it: each candidate is CLAIMED with an
+  // exclusive fs.openSync('wx') 0-byte placeholder (a losing racer's 'wx' throws EEXIST and it
+  // bumps to the next suffix), then the durable spool renames over OUR OWN placeholder. The
+  // writeFileDurable tmp -> fsync -> rename order is untouched (D22 durability contract holds);
+  // a failed write cleans up the placeholder in the finally below.
+  const dest = claimSlot(attachDir(), safe)
   // D20-B11: atomic write (spool to .att-tmp-* + rename, mirroring att-transfer.js writeAtomic).
   // The bare writeFileSync left a TORN file looking healthy forever (existence-only guards);
   // a crash mid-write now leaves only .att-tmp residue, which the D19 startup sweep ages out.
   const tmp = `${dest}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
+  let published = false
   try {
     // D22 (P2 2026-10-02): the upload twin of the LAN-receive writeAtomic (att-transfer.js D21)
     // — route the spool through writeFileDurable (tmp -> fsync -> rename) so the final rename
@@ -145,13 +217,92 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
     // residue sweep still matches crash trash from either door.
     require('./durable-fs').writeFileDurable(tmp, raw, fs)
     fs.renameSync(tmp, dest)
+    published = true
   } finally {
     try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }
+    if (!published) { try { fs.unlinkSync(dest) } catch { /* placeholder cleanup best-effort */ } }
   }
   const finalName = path.basename(dest)
-  const url = `local://${encodeURIComponent(finalName)}`
+  // W16 (2026-10-28 P1): mint the url in PATH form (local:///<encoded-key>, key in the URL's path
+  // component). The previous host form (local://<encoded-key>) put the key in the HOST, which
+  // Chromium lowercases AND IDNA/punycode-transcodes — a Chinese or uppercase filename arrived at
+  // the local:// handler as a punycode host, decodeURIComponent could not recover the original
+  // name and the request 404'd (user-visible "pasted image shows broken"). The path component is
+  // preserved verbatim (percent-decoding only), so the handler decodes back to the exact on-disk
+  // name. attachmentKeyOfUrl strips the leading '/' so legacy rows keep resolving.
+  const url = `local:///${encodeURIComponent(finalName)}`
   return { url, key: finalName, name, size: fs.statSync(dest).size, ext }
 }
+/** F2 (2026-10-15): resolve the on-disk key a `local://` url refers to — percent-decode + basename,
+ *  with attachmentPath's same malformed-encoding fallback (raw key). Non-local:// urls → null.
+ *  W16 (2026-10-28): tolerates BOTH mint forms — the new path form `local:///<encoded-key>`
+ *  (leading '/' stripped before basename) and the legacy host form `local://<encoded-key>` — so
+ *  existing DB rows keep resolving through the SAME rules saveAttachment now mints by.
+ *  Pure (no IO), so both the App delete-file handler and the CLI remove path count references
+ *  through the SAME resolution rules the unlink itself uses. */
+function attachmentKeyOfUrl (url) {
+  if (typeof url !== 'string' || !url.startsWith('local://')) return null
+  let k = url.slice(8)
+  if (k.startsWith('/')) k = k.slice(1) // path-form: the key lives in the URL's path component
+  try { k = decodeURIComponent(k) } catch { /* malformed encoding: raw key, matches attachmentPath */ }
+  return path.basename(k)
+}
+
+/** F2 (2026-10-15): scan todo rows' image/files metadata for references to a local:// attachment
+ *  key. Deleting a single attachment used to unlink by key alone — task B's only physical copy
+ *  died when task A deleted its entry for the same local:// key (shared after copy/paste or a
+ *  repeat template). Pure (rows in, hits out): callers pass db.getAll rows (App) or liveTasks()
+ *  (CLI); `excludeTaskId` drops one row (the task whose own entry was already spliced out in
+ *  memory — its UPDATED list is scanned by the caller as a pseudo-row). Returns [{taskId, field}];
+ *  empty array = no other row references the key = safe to unlink. */
+function findKeyRefs (key, rows, { excludeTaskId = null } = {}) {
+  const target = path.basename(String(key || ''))
+  if (!target) return []
+  const hits = []
+  for (const row of (rows || [])) {
+    if (!row || (excludeTaskId != null && String(row.taskId) === String(excludeTaskId))) continue
+    for (const field of ['image', 'files']) {
+      let list
+      try { list = JSON.parse(row[field] || '[]'); if (!Array.isArray(list)) continue } catch { continue }
+      for (const item of list) {
+        if (attachmentKeyOfUrl(item && item.url) === target) hits.push({ taskId: row.taskId, field })
+      }
+    }
+  }
+  return hits
+}
+
+/** W16 (2026-10-28 P2): case-insensitive resolve fallback for local:// keys. The key minted by
+ *  saveAttachment preserves the user file's ORIGINAL case, and Chromium lowercases the HOST part
+ *  of standard-scheme URLs — on a case-sensitive filesystem a local://Fetch.PNG request for
+ *  fetch.PNG (or vice versa) used to 404 outright (Windows was accidentally masked by its
+ *  case-insensitive FS, while aliases.json / findKeyRefs kept comparing original case, so a
+ *  case-only rename could strand refs or delete the wrong twin). Minimal, storage-neutral fix:
+ *  resolve on-disk at the SERVE boundary only — exact stat first, else the unique
+ *  case-insensitive basename match; the raw path when nothing matches (the caller keeps its 404
+ *  contract). No DB rows are touched and no keys are rewritten.
+ *  W17 (2026-10-28): uniqueness guard — with a case-only twin pair on disk the old "first
+ *  insensitive match" silently served the WRONG twin's bytes. Now: exactly one match → use it;
+ *  several → only the character-exact match of the requested base, otherwise unresolved (caller
+ *  404s) + a warn. */
+function resolveAttachmentCase (resolvedPath, fsMod = fs) {
+  try { if (fsMod.statSync(resolvedPath).isFile()) return resolvedPath } catch { /* fall through to scan */ }
+  let base
+  try { base = path.basename(resolvedPath) } catch { return resolvedPath }
+  try {
+    const dir = path.dirname(resolvedPath)
+    const lower = base.toLowerCase()
+    const hits = fsMod.readdirSync(dir).filter(f => f.toLowerCase() === lower)
+    if (hits.length === 1) return path.join(dir, hits[0])
+    if (hits.length > 1) {
+      const exact = hits.find(f => f === base)
+      if (exact) return path.join(dir, exact)
+      console.warn('[attachments] ambiguous case-insensitive key "' + base + '" (' + hits.length + ' on-disk twins) — refusing to guess, 404')
+    }
+  } catch { /* unreadable dir: keep the raw path */ }
+  return resolvedPath
+}
+
 function attachmentPath (key) {
   // Malformed percent-encoding (e.g. 'a%zz.png') made decodeURIComponent throw URIError; protocol.js
   // already maps the handler-level throw to a 404 — fall back to the raw key so both layers agree and
@@ -218,13 +369,21 @@ function pruneMissingAliases (exists = p => fs.existsSync(p)) {
 }
 
 module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota, dirTotalBytes, MAX_TOTAL_BYTES, __setTotalQuota,
+  // F3: exclusive-claim slot allocator (TOCTOU fix) — exported for its own regression tests.
+  claimSlot,
   // Alias map (LAN same-name conflict resolution): read/set/delete + list for tests/consumers.
   readAliases, setAlias, deleteAlias, aliasesPath, pruneMissingAliases,
+  // F2: shared-reference counting for single-key deletes (App delete-file + CLI attachment rm).
+  attachmentKeyOfUrl, findKeyRefs,
+  // W16: serve-side case-insensitive key resolve fallback (local:// host lowercasing).
+  resolveAttachmentCase,
   // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
   // attachments-guards.js is the shared gate for every write entry without duplicating caps.
   MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,
   // D19-DOM1: crash-residue classifier + age sweep (exported for unit tests / the att-tmp quota fix).
   isCrashTmpResidue, sweepTmpResidue, TMP_SWEEP_MAX_AGE_MS,
+  // W16: crash-claim 0-byte phantom classifier (startup sweep + quota exclusion).
+  isCrashClaimPhantom,
   // Domain-1 F-A2 refactor (2026-09-23): the whitelist is exported so the LAN attachment
   // receiver (lan-sync/att-transfer.js) enforces the SAME extension set on inbound files —
   // one whitelist, two doors (upload IPC + sync ingress); keep it tighten-only (D6 svg root-fix).

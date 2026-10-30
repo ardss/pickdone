@@ -42,7 +42,7 @@ test('the two tests/-root *.test.js specs exist and actually pass under node --t
   for (const k of Object.keys(env)) if (/^NODE_TEST_CONTEXT|^TEST_/.test(k)) delete env[k]
   const r = spawnSync(process.execPath,
     ['--test', '--test-reporter=tap', path.join(testsDir, 'dayrail-resize-raf.test.js')],
-    { encoding: 'utf8', env })
+    { timeout: 180000, encoding: 'utf8', env })
   const out = (r.stdout || '') + '\n' + (r.stderr || '')
   const pass = /# pass (\d+)/.exec(out)?.[1]
   const fail = /# fail (\d+)/.exec(out)?.[1]
@@ -61,6 +61,9 @@ test('run-all discovery (mirrored rules incl. both extensions) covers the former
 test('run-all.mjs source passes TEST_EXTS to the tests/-root discover() (not just SIBLING_DIR)', () => {
   assert.match(RUN_ALL, /function discover\(root, acc = \[\], exts = TEST_EXTS\)/,
     'the default exts for the tests/ root discover() must include both .test.mjs and .test.js')
-  assert.match(RUN_ALL, /discover\(dir\)\.concat\(discover\(SIBLING_DIR, \[\], TEST_EXTS\)\)/,
+  // 2026-10-24: the two call sites now anchor at appRoot (GATE_META_APP_ROOT sandboxing for the
+  // gate-mechanics meta-suite) instead of the script dir; the root call keeps the TEST_EXTS
+  // default and the sibling call passes it explicitly — same double-extension contract.
+  assert.match(RUN_ALL, /discover\(path\.join\(appRoot, 'tests'\)\)\s*\n\s*\.concat\(existsSync\(siblingDir\) \? discover\(siblingDir, \[\], TEST_EXTS\) : \[\]\)/,
     'both call sites must share the TEST_EXTS constant — the original bug was the root call missing the double-extension list')
 })

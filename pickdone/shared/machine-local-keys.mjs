@@ -62,6 +62,11 @@ export function isMachineLocalMetaKey (id) {
     // never data — syncing them would replay stale commands on the peer).
     k.startsWith('cliTomato') || k.startsWith('cliSync') ||
     k === 'todosVersion' || // per-device dirty-row cursor
+    // [W7-R 2026-10-23 P3] one-time LS→DB category migration flag: it is per-device bookkeeping
+    // (marks "THIS device's empty category table was seeded from its LS cache"). A peer's flag
+    // row must not sync over — a device that has NOT migrated yet would read the peer's '1' and
+    // skip its own migration, silently dropping its entire cached category list forever.
+    k === 'categoryLsMigrated' ||
     k.startsWith('firedReminders:') || k === 'reminderLastSeenAt' || // scheduler dedup watermarks
     k.startsWith('settingsRows.src.') || // v6 migration snapshot markers
     k === 'db.tomatoState' || k === 'habitsState' || // retired ledger+habits blobs (migration bookkeeping)
@@ -73,5 +78,28 @@ export function isMachineLocalMetaKey (id) {
     // Round-3 P1: migration/bookkeeping keys — a peer's 'schemaVersion' row could REGRESS (or
     // over-advance) the local schema migrator, and legacy 'dayPlanState'/'dayPlanState.*'
     // whole-package chip JSON would re-poison a device already migrated to plan_chips.
-    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.')
+    k === 'schemaVersion' || k === 'dayPlanState' || k.startsWith('dayPlanState.') ||
+    // [W16 2026-10-28 P1] durable running-tomato session row (src/main/tomato-session.js writes it
+    // via setMeta on every renderer FSM transition): strictly per-device runtime state. Syncing it
+    // made EVERY peer believe a focus session was running — a spurious "focus in progress" quit
+    // confirm on the peer, and its next-boot reconcile booked-or-voided a session that only ever
+    // lived on the originating machine. Exact key (not prefix), same convention as
+    // tomatoFloatClosedByUser, so a future user-data 'tomatoRunning*' meta key still syncs.
+    k === 'tomatoRunningSession' ||
+    // [W13 2026-10-26 P2] tomato-float dismissal state (src/main/tomato-float.js sets it on every
+    // user float close): strictly per-device UI preference. Syncing it meant closing the float on
+    // device A permanently suppressed device B's float auto-show, and the two devices LWW-fought
+    // the key forever (unbounded oplog churn on every close). Exact key (not prefix) so a future
+    // user-data 'tomatoFloat*' meta key still syncs.
+    k === 'tomatoFloatClosedByUser'
+}
+
+// D2 fix (2026-10-21): the settings/habits blob meta keys moved here from sync-apply-hydrate.js
+// so db-oplog.js's ring-ingress filter can classify them WITHOUT lazily requiring sync-apply.js
+// (which pulls electron-log and dies in the plain-CLI process — the machine-local oplog filter
+// then silently disabled itself on every CLI write). Same single-source doctrine as the two
+// predicates above; sync-apply-hydrate.js re-exports it.
+export function isSyncBlobMetaKey (id) {
+  const k = String(id)
+  return k === 'db.settingsState' || k === 'db.habitsState'
 }

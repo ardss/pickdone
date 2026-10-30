@@ -106,7 +106,7 @@ test('d5-cli-3: the same CSV imported under two different timezones dedupes', ()
     const r = req('./cli/import.js').importFile(${JSON.stringify(csvPath)}, { format: 'ticktick' })
     process.stdout.write(JSON.stringify({ imported: r.imported, duplicates: r.duplicates }))
   `
-  const run = tz => spawnSync(process.execPath, ['-e', script], {
+  const run = tz => spawnSync(process.execPath, ['-e', script], { timeout: 180000,
     encoding: 'utf8',
     env: { ...process.env, TZ: tz },
   })

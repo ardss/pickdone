@@ -231,7 +231,11 @@ test('F-C4: initFromDb on a read error neither restores nor writes the mirror ba
   })
   assert.equal(commits.length, 0, 'no updateSettings commit on a read error')
   assert.equal(dispatches.length, 0, 'no update dispatch on a read error')
-  await sleep(60) // let any (wrong) debounced mirror timer fire
+  // [load-budget 2026-10-25] the negative window MUST exceed the debounce it tries to
+  // catch: production persist debounce is 150ms, so sleep(60) let a WRONG debounced
+  // mirror write land AFTER the check = structural false-green (assertion-quality audit).
+  // 300ms = 2x the 150ms timer; a genuinely broken debounce still fires within it.
+  await sleep(300) // let any (wrong) debounced mirror timer fire
   const writes = dbOps.filter(([op]) => op === 'put')
   assert.equal(writes.length, 0, 'the newer DB copy must not be drowned by in-memory defaults')
 })

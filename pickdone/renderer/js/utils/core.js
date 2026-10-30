@@ -82,14 +82,14 @@ export async function rescheduleExpired (dispatch, todos, todayTs) {
   const snap = []
   for (const t of todos) {
     if (!t.complete && t.dayStart && t.dayStart < todayTs) {
-      snap.push({ id: t.taskId, dayStart: t.dayStart, todoTime: t.todoTime })
-      // [reschedule-crossday fix] the hand-written patch hard-wrote todoTime: todayTs (midnight,
-      // wiping a 14:30 schedule) and never moved reminderTime/reminderExtra off the expired day —
-      // the exact bug class crossDayMove.js was extracted to fix (maint-0924 A1/A2); this third
-      // path was missed. Use the shared builder: time-of-day anchored to the old day travels to
-      // the new day, everything else is omitted (untouched).
       const startOfTs = ts => dayjs(ts).startOf('day').valueOf()
       const patch = crossDayMovePatch(t, todayTs, startOfTs)
+      // [reschedule-undo-reminder fix] the snapshot used to carry only {id, dayStart, todoTime},
+      // but crossDayMovePatch also re-anchors reminderTime/reminderExtra onto the new day — the
+      // two-field revert in the views left reminders stranded on the expired day. Keep the full
+      // original row (deep copy) plus the forward patch so views can build an exact revert via
+      // crossDayRevertPatch(orig, patch); legacy id/dayStart/todoTime fields stay for compat.
+      snap.push({ id: t.taskId, dayStart: t.dayStart, todoTime: t.todoTime, orig: JSON.parse(JSON.stringify(t)), patch: { ...patch } })
       // _deferViews: one view rebuild after the loop instead of one per row (each was an O(n) computeViews)
       patch._deferViews = true
       await dispatch('todo/updateTodoFields', { taskId: t.taskId, patch })

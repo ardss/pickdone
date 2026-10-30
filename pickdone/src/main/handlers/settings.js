@@ -4,7 +4,7 @@ require('../log-isolation') // test isolation: redirect electron-log file transp
 const i18nM = require('../i18n')
 const tomatoFloat = require('../tomato-float')
 const tomatoTaskbar = require('../tomato-taskbar')
-const { makeAssertMainWindow, stripForbiddenSettingsKeys } = require('./shared')
+const { makeAssertMainWindow, makeSenderIsMain, stripForbiddenSettingsKeys } = require('./shared')
 
 // Response-shaped projector for outbound config: stripForbiddenSettingsKeys only cleans the
 // INBOUND patch, but writeConfig returns the FULL merged on-disk config (config-store.js
@@ -20,13 +20,33 @@ function sanitizeConfigOut (c) {
 }
 
 module.exports = function settingsHandlers (ctx) {
-  const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray } = ctx
+  const { readConfig, writeConfig, app, getMainWindow, applyShortcuts, rebuildTrayMenu, getTray, isLocked, isLockWindow } = ctx
   const assertMainWindow = makeAssertMainWindow(getMainWindow)
+  // M2b (P3 2026-10-23): boolean ownership twin (shared.js makeSenderIsMain) — the inline
+  // `getMainWindow() && e.sender === getMainWindow().webContents` test below threw a TypeError when
+  // the main window was destroyed mid-tick (isDestroyed-safe like the throw twin); a destroyed
+  // window's sender now simply reads as "not main" → forbidden, same as null.
+  // The inline fallback only covers test stubs of './shared' predating makeSenderIsMain.
+  const senderIsMain = typeof makeSenderIsMain === 'function'
+    ? makeSenderIsMain(getMainWindow)
+    : (e) => { const w = getMainWindow(); return !!(w && !w.isDestroyed() && e && e.sender === w.webContents) }
 
   return {
     // --- Settings / config ---
     // Sensitive-key stripping: the security-lock ciphertext in config must never be sent down to any renderer window (a compromised auxiliary window could pair with decrypt-secret to recover the lock-screen plaintext password)
-    'get-settings': () => {
+    'get-settings': (e) => {
+      // W17 (P2): last gateless read channel while locked — every sibling config consumer
+      // already throws (handlers/todo.js:125 style). A locked aux window used to read the full
+      // config (backup whitelist / winBounds / shortcuts). The lock-screen window itself stays
+      // exempt (same isLockWindow carve-out as the todo bus); other callers while locked throw.
+      // W18 fix: the tomato-float window stays VISIBLE while locked (lockAppNow only hides the
+      // main window + quick-add — security-lock.js), and its legitimate get-settings read
+      // (white-noise list) was newly bricked by the W17 gate: every read rejected while the
+      // lock screen was up. Carve out the float window itself — same sender-identity test
+      // (tomatoFloat.isSelfSender) notify-settings-updated already uses for its float write
+      // carve-out; NOT a general exemption, any other window still throws.
+      if (isLocked && isLocked() && !(isLockWindow && e && isLockWindow(e.sender)) &&
+          !(e && tomatoFloat.isSelfSender && tomatoFloat.isSelfSender(e.sender))) throw new Error('app is locked')
       const c = readConfig()
       delete c.securityLockPassword
       delete c.securityLockQuestion
@@ -76,7 +96,7 @@ module.exports = function settingsHandlers (ctx) {
     },
     'notify-settings-updated': (e, patch) => {
       // 写配置限主窗;浮窗白噪音选择是合法写入(浮窗内 settings/update 走此通道),放行浮窗自身(2026-09-05 终审 P1)
-      if (!(tomatoFloat.isSelfSender(e.sender) || (getMainWindow() && e.sender === getMainWindow().webContents))) {
+      if (!(tomatoFloat.isSelfSender(e.sender) || senderIsMain(e))) {
         log.warn('[IPC] 拒绝非主窗/浮窗写配置, sender:', e.sender.id)
         throw new Error('forbidden: main window or float only')
       }
@@ -94,17 +114,20 @@ module.exports = function settingsHandlers (ctx) {
       // again). Same for shortcutKeySettings (re-registering global hotkeys) and the other
       // main-consumed keys. Main-window senders keep the full surface; float senders get the
       // forbidden set stripped (their white-noise choice still passes).
-      const clean = stripForbiddenSettingsKeys(patch, { float: !(getMainWindow() && e.sender === getMainWindow().webContents) })
+      const fromFloat = tomatoFloat.isSelfSender(e.sender)
+      const clean = stripForbiddenSettingsKeys(patch, { float: !senderIsMain(e) })
       // note: an own '__proto__' key on the patch is left as inert data here (spread defined it
       // safely); writeConfig's mergeConfig filters it before any merge, and a direct
       // `delete clean.__proto__` is banned by eslint no-proto.
       const c = writeConfig(clean)
-      // P2 2026-09-12 defensive check on the writeConfig contract: config-store.js writeConfig returns
-      // Object.assign(readConfig(), patch) — the full merged config — so c.shortcutKeySettings is
-      // normally present. But if that contract ever drifts (e.g. a patch-only return, or readConfig's
-      // config.json.bad quarantine path returning a bare object), blindly feeding undefined into
-      // applyShortcuts would silently unregister every shortcut. Guard instead.
-      if (c && c.shortcutKeySettings) applyShortcuts(c.shortcutKeySettings)
+      // c-wave fix (2026-10-13): a float-window write is white-noise-only (the float's entire
+      // legitimate write surface; everything main-consumed was stripped above). Re-applying the
+      // whole shortcut set on every white-noise toggle re-registered every global hotkey — a
+      // visible churn window where shortcuts were unregistered, plus avoidable main-process work
+      // on each selection change. Main-window senders keep the re-apply; float senders skip it.
+      if (fromFloat) {
+        log.info('[IPC] 浮窗白噪音写入,跳过快捷键重注册')
+      } else if (c && c.shortcutKeySettings) applyShortcuts(c.shortcutKeySettings)
       else log.warn('[IPC] writeConfig 返回缺少 shortcutKeySettings,跳过快捷键重注册')
       // Make launch-at-login actually take effect (aligned with the reference runWhenComputerStart)
       if ('runWhenComputerStart' in clean) {

@@ -5,7 +5,7 @@
  * Run: npm test (node --test)
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'module'
 

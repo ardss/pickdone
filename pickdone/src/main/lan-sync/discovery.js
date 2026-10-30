@@ -222,10 +222,17 @@ function createDiscovery() {
       // broadcast ONLY to its own bound candidate port — a silent discovery partition. Fan
       // out to EVERY candidate port + the advertised TCP port.
       const bindPort = FALLBACK_PORT_CANDIDATES[candidateIdx++]
+      // M8B fix 3 (P2): the bind callback used to dereference the shared `udp` let. When stop()
+      // / killChannel() / the next tryBind() ran while a bind was in flight, the callback fired
+      // against a CLOSED or NULL socket — setBroadcast threw on the dead handle (uncaughtException)
+      // or on null. Capture this attempt's socket and guard: a stale callback (socket replaced,
+      // closed, or stop() already ran) must be a complete no-op.
+      const sock = udp
       udp.bind(bindPort, () => {
+        if (!sock || stopped || sock !== udp) return
         udpBound = true
         fallbackPort = bindPort // only on SUCCESS — an in-flight attempt must not read as bound
-        udp.setBroadcast(true)
+        sock.setBroadcast(true)
         const targets = [...new Set(FALLBACK_PORT_CANDIDATES
           .concat(Number.isInteger(port) && port > 0 ? [port] : []))]
         // D14 C9 dead-channel guard: 3 consecutive failed sweeps declare the channel dead
@@ -238,8 +245,10 @@ function createDiscovery() {
           udpBound = false
           // D15 C5: a declared-dead channel must not leak the socket — close it too. Restarting
           // advertising (startAdvertising) recreates socket + interval from scratch.
-          try { udp.close() } catch { /* noop */ }
-          udp = null
+          // M8B fix 3: close THIS attempt's socket and only drop the shared ref if it still
+          // points at it — a stop() that already swapped/cleared `udp` must not be undone.
+          try { sock.close() } catch { /* noop */ }
+          if (udp === sock) udp = null
           try { require('electron-log').warn('[LanSync] UDP fallback advertise channel dead (3 consecutive failed sweeps) — socket closed, advertise interval stopped; restart advertising to recreate it') } catch { /* noop */ }
         }
         udpTimer = setInterval(() => {
@@ -256,7 +265,7 @@ function createDiscovery() {
           const sendAd = (target) => {
             pending++
             try {
-              udp.send(payload, target, '255.255.255.255', (err) => {
+              sock.send(payload, target, '255.255.255.255', (err) => {
                 if (err) failed = true // D20-C4: async send failure counts as a failed sweep
                 pending--
                 settle()

@@ -139,35 +139,30 @@ function releasePhaseClaim (claim) {
  *  writes a row the renderer then ignores/never shows, i.e. silently dropped focus minutes). A dead or
  *  missing target resolves to null = the focus is accounted as free (no task association, no bumpSnow),
  *  removing any dependency on the main process's bumpSnow return value. */
-/** U-11 (2026-09-20): idempotent today-counter bump for completeFocus. The counter patch sits in the
- *  same try block as later side effects (sound/notification); a mid-way failure releases the phase
- *  claim and the next tick retries the whole completion — the old unguarded increment then double-bumped
- *  todayTomatoCount for the same focus (same startedAt). The guard keys on the phase identity, mirroring
- *  the claim token, so a retry counts the focus exactly once. Pure (unit-tested): returns the patch to
- *  commit, or null when this focus was already counted. */
-export function todayCountPatch (state, startedAt, endTs) {
-  if (state._countedFocus === startedAt) return null
-  return {
-    todayTomatoCount: (state.todayTomatoCount || 0) + 1,
-    _countDate: dayjs(endTs).format(FMT.date),
-    _countedFocus: startedAt
-  }
-}
+import {
+  todayCountPatch, recountToday, resolveFocusedTask, focusStartedAtOf,
+} from './tomato-pure.js'
+export {
+  todayCountPatch, recountToday, resolveFocusedTask, focusStartedAtOf, remainingSecOfState,
+} from './tomato-pure.js'
 
-/** D14-B2 (2026-10-01, pure/unit-tested): recompute the today ring count from the mutated in-memory
- *  ledger. removeRecord/updateRecord used to mutate tomatoRecordList without touching
- *  todayTomatoCount — the only recompute lived in recordsReload (recordsReload recomputes), which
- *  the main process's broadcast deliberately EXCLUDES for the initiating window, so a deleted or
- *  re-dated tomato stayed counted (and an edited one miscounted) until restart. */
-export function recountToday (records, todayKey) {
-  return (records || []).filter(r => r && r.succeed !== false && r.dateKey === todayKey).length
-}
 
-export function resolveFocusedTask (attachTodo, todoRows) {
-  if (!attachTodo || !attachTodo.taskId) return null
-  const row = (todoRows || []).find(t => t && t.taskId === attachTodo.taskId)
-  if (!row || row.delete === true) return null
-  return { taskId: attachTodo.taskId, taskContent: row.taskContent != null ? row.taskContent : attachTodo.taskContent }
+/** [W7-R P3] symmetric task-side rollback for a succeed true→false correction in updateRecord:
+ *  completeFocus credited the linked task via snowWrite({ taskId, minutes, dedupKey }) — turning
+ *  the record into a failure must un-credit it, or the task keeps focus minutes for a session the
+ *  user crossed out. The compensation reuses the same durable queue (snowWrite, so it survives a
+ *  crash and replays like any bump) with a NEGATIVE delta and its OWN dedupKey ('undo:' + the
+ *  phase identity) so it can never be deduped against the original credit. Zero/negative-minute
+ *  records, non-focus ids and unlinked records are skipped (nothing was ever credited).
+ *  MAIN-PROCESS PARITY NOTE (coordination point): db.js bumpSnow currently clamps minutes with
+ *  Math.max(0, ...) — for this rollback to actually subtract, the clamp must accept negative
+ *  compensations (e.g. dedupKey.startsWith('undo:')); until then the compensation no-ops server
+ *  side (ok:true, minutes:0) and the entry retires — no data corruption, just no un-credit. */
+function rollbackFocusSnow (rec) {
+  const startedAt = focusStartedAtOf(rec && rec.tomatoId)
+  const minutes = Math.round(Number(rec && rec.focusDuration) || 0)
+  if (!startedAt || minutes <= 0 || !rec.focusTaskId) return
+  snowWrite({ taskId: rec.focusTaskId, minutes: -minutes, dedupKey: 'undo:' + String(startedAt) })
 }
 
 /** Todo-module row pool for accounting-time attach validation. In a real Vuex action `this` is the
@@ -213,6 +208,11 @@ function loadState (voidExpired = true) {
     const v = JSON.parse(localStorage.getItem(LS_KEY))
     if (v && typeof v === 'object') {
       const merged = Object.assign({}, DEF, v)
+      // F2-P3 (2026-10-18): the LS blob bypasses patch()'s clampNumericSettings — a hand-edited or
+      // legacy blob carrying tomatoTime: 9999 loaded straight into the RUNNING countdown and was
+      // re-persisted on the next write. Same clamp caliber as settings.js F-C3 (the shared
+      // SETTINGS_MANIFEST ranges, already imported here), applied at load so every reader agrees.
+      clampNumericSettings(merged)
       // 版本守卫真正接线(此前只写不读=仪式代码):未来版本 blob 拒载回退默认,防降级读取错语义
       if ((merged.schemaV || 1) > SCHEMA_V) return Object.assign({}, DEF)
       const statusMap = { focusing: 'startTomatoTime', resting: 'startRestTime', paused: 'default' }
@@ -264,6 +264,31 @@ function newPingToken (seq) {
  *  invisible. The degraded flag latches for the process lifetime: one look, one surface. */
 let _mirrorDegraded = false
 export function tomatoMirrorDegraded () { return _mirrorDegraded }
+
+// F2-P3 (2026-10-18): completeFocus books the row with the PLANNED rest (restDuration = s.restTime
+// — the rest hasn't happened yet at booking time). finishRest / a rest-phase giveUp settle the row
+// to the MEASURED duration afterwards, same caliber as giveUp's measured-focus bookkeeping. This
+// window-local pointer finds the just-booked row cheaply; the fallback scan covers the
+// cross-window case (focus completed in window A, rest finished in window B).
+let _lastBookedFocus = null // { tomatoId }
+function resolvePendingRestRow (s, restStartedAt) {
+  const list = s.tomatoRecordList || []
+  const byId = _lastBookedFocus && list.find(r => r && r.tomatoId === _lastBookedFocus.tomatoId)
+  if (byId && byId.succeed) return byId
+  // The booked row's endTime IS the rest start (completeFocus flips to rest right after booking),
+  // so the succeed row whose endTime sits at restStartedAt (±2s) is the pending one.
+  return list.find(r => r && r.succeed && typeof r.endTime === 'number' && Math.abs(r.endTime - restStartedAt) <= 2000) || null
+}
+function settleRestDuration (commit, s, restStartedAt) {
+  const rec = resolvePendingRestRow(s, restStartedAt)
+  if (!rec) return
+  // Sub-minute rest books 0 (no phantom rest minute) — mirrors giveUp's sub-minute focus caliber.
+  const measured = Math.round((Date.now() - restStartedAt) / 60000)
+  const settled = Math.max(0, Math.min(REST_MAX_MINUTES, measured))
+  _lastBookedFocus = null
+  if (rec.restDuration === settled) return
+  commit('updateRecord', { tomatoId: rec.tomatoId, patch: { restDuration: settled } })
+}
 function persistState (state) {
   // Write sequence number: increments once per real disk flush; the ping carries only the sequence, and receivers skip the full re-read when the sequence matches
   state._syncSeq = (state._syncSeq || 0) + 1
@@ -290,22 +315,6 @@ function persistState (state) {
  *  失败留在重试队列,下一次任意账本写时重放(锁屏/瞬时 IO 失败自愈)。 */
 
 
-/** maint/d11-r4: single source for the tomato countdown's remaining seconds. Five hand-written
- *  copies (TomatoBar clock/remainSecNow/pushTaskbar, TomatoPanel, TomatoFloatPage) drifted-able —
- *  any rounding/clamp change on one end made float window and panel visibly disagree per second.
- *  Running: delegates to the pre-existing single source remainSecOf (tomatoShared) — floor+clamp
- *  and the rest fallback (restTime || 5, NOT 25) stay identical to every other consumer.
- *  Idle: full tomatoTime (||25; rest phase ||5, matching remainSecOf's defaults).
- *  `now` is injected so callers keep their reactive tick (Date.now() in a Vuex getter is not
- *  reactive — see P1-6). */
-export function remainingSecOfState (s, now) {
-  if (!s) return 25 * 60
-  const running = remainSecOf(s.status, s.startedAt, s.tomatoTime, s.restTime, Number(now) || Date.now())
-  if (running !== null) return running
-  // Idle fallback — same defaults as remainSecOf: focus ||25, rest ||5 (r5: the rest half used to
-  // fall back to 25, making a missing restTime show 25:00 in float/panel vs 5:00 in TodayXView).
-  return ((s.status === 'startRestTime' ? s.restTime : s.tomatoTime) || (s.status === 'startRestTime' ? 5 : 25)) * 60
-}
 
 export default {
   namespaced: true,
@@ -381,7 +390,13 @@ export default {
       // the DB layer's clamp (_recToRow restDuration). The old inline 120 silently truncated a
       // 300-minute rest on any entry-card patch — memory said 120, ledger said 600, reload diverged.
       if (patch.restDuration != null) rec.restDuration = Math.max(0, Math.min(REST_MAX_MINUTES, Math.round(patch.restDuration)))
-      if (patch.succeed != null) rec.succeed = !!patch.succeed
+      if (patch.succeed != null) {
+        // [W7-R P3] a true→false correction un-credits the linked task (symmetric rollback of the
+        // original completeFocus bumpSnow); a false→true flip credits nothing new (the original
+        // credit was never revoked — idempotent in both directions).
+        if (rec.succeed === true && patch.succeed === false) rollbackFocusSnow(rec)
+        rec.succeed = !!patch.succeed
+      }
       s.tomatoRecordList = [...s.tomatoRecordList]
       // D14-B2: the mutated list is the truth — re-derive the today count inline (the broadcast
       // echo that would otherwise fix it excludes this window, so drift persisted until restart)
@@ -414,9 +429,9 @@ export default {
     /** 账本从行表整载(启动/收到广播时);DB 是唯一源,直接替换内存副本 */
     recordsReplace (s, list) {
       if (Array.isArray(list)) {
-        // 最后一道防线:同 id 重复行(历史脏数据/迁移产物)不进 UI;保留首现次序(DB 已按 endTime DESC)
         const seen = new Set()
         s.tomatoRecordList = list.filter(r => { const id = r && r.tomatoId; if (!id || seen.has(id)) return false; seen.add(id); return true })
+        s.lastLedgerReplaceAt = Date.now() // w16: bulk-load edge (hydration/broadcast reload) — TomatoBar's pips trigger re-baselines on it instead of misreading fill as a first completion
       }
     },
     /** Cross-window sync: float/main windows each have an independent Vuex instance; after the peer writes localStorage, the storage event triggers a re-read.
@@ -551,6 +566,12 @@ export default {
         return
       }
       const releaseClaim = () => releasePhaseClaim(claim)
+      if (s.status === 'startRestTime' && s.startedAt) {
+        // F2-P3: abandoning the rest settles the just-booked row's restDuration to the MEASURED
+        // value (completeFocus booked the planned restTime; same caliber as the measured-focus
+        // bookkeeping below), then the flow falls through to the normal default/idle write.
+        settleRestDuration(commit, s, s.startedAt)
+      }
       if (running && record) {
         // Measured duration, not the current setting (unified with completeFocus): a mid-focus
         // duration change used to cap the booked minutes at the NEW smaller setting, skewing the ledger
@@ -630,13 +651,17 @@ export default {
           }
       } catch (e) { releaseClaim(); throw e }
       try {
+        // F2-P3: mint the id first so this window can settle the row's restDuration to the
+        // MEASURED rest when the rest phase ends (finishRest) or is abandoned (giveUp).
+        const focusTomatoId = mintTomatoId('tmt_f_', startedAt)
         commit('addRecord', {
           // Accounting basis unified = endTime: stats (metrics)/rail (railSegs)/entry-card corrections (updateRecord) all use endTime
           // [D22 P2] device salt mixed in (same-ms cross-device collision, same as giveUp)
-          tomatoId: mintTomatoId('tmt_f_', startedAt), endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
+          tomatoId: focusTomatoId, endTime: endTs, dateKey: dayjs(endTs).format(FMT.date),
           focus: focused ? focused.taskContent : '', focusTaskId: focused ? focused.taskId : null,
           focusDuration: focusMin, rest: s.restTime, restDuration: s.restTime, succeed: true, status: 'local'
         })
+        _lastBookedFocus = { tomatoId: focusTomatoId }
         {
           // 计入完成时刻所在日,与 stats/时间轴的 endTime 口径一致(2026-09-04 清理:原跨午夜判断是 endTs 与自身比较的恒真式,已删)
           // U-11: idempotent per startedAt — the retry path (claim released after a mid-way failure)
@@ -682,6 +707,9 @@ export default {
     async finishRest ({ state, commit }) {
       const claim = await claimPhase('startRestTime', state.startedAt)
       if (!claim) return
+      // F2-P3: the rest is over — settle the just-booked row's restDuration to the MEASURED rest
+      // (completeFocus booked the planned restTime; parity with the measured-focus caliber).
+      settleRestDuration(commit, state, state.startedAt)
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
       reportRunningTransition('clear', state) // TQ-1: rest finished — release the durable row

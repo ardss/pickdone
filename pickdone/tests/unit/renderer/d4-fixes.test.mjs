@@ -205,9 +205,10 @@ test('TomatoFocusRecordModal: timeline gridlines use var(--line), not rgba(0,0,0
 
 test('main.js: switchToRecentTodos routes to todo-list-today-x, distinct from switchToDaytodo', () => {
   const src = read('renderer/js/main.js')
-  assert.match(src, /case 'switchToDaytodo': router\.push\(\{ name: 'todo-list-today' \}\)/)
+  // 2026-10-18 modal guard: view switches short-circuit while any modal is open
+  assert.match(src, /case 'switchToDaytodo': if \(!modalOpen\(\)\) router\.push\(\{ name: 'todo-list-today' \}\)/)
   // D6-F6: the shortcut is dev-gated — non-dev users land on Today instead of the hidden page
-  assert.match(src, /case 'switchToRecentTodos': \{[\s\S]{0,200}'todo-list-today-x' : 'todo-list-today'/)
+  assert.match(src, /case 'switchToRecentTodos': \{[\s\S]{0,260}'todo-list-today-x' : 'todo-list-today'/)
   const router = read('renderer/js/router.js')
   assert.match(router, /name: 'todo-list-today-x'/, 'target route exists in router.js')
 })

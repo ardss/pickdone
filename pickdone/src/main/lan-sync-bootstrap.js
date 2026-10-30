@@ -191,7 +191,7 @@ function kickSyncRound (reason) {
   }, delay)
   kickTimer.unref?.()
 }
-async function runRound () {
+async function runRoundBody () {
   if (!state || !state.node) return null
   try {
     const t0 = Date.now()
@@ -206,6 +206,7 @@ async function runRound () {
     return r
   } catch (e) { log.warn('[LanSync] round failed:', e.message); return null }
 }
+const runRound = require('./lan-sync/run-round-guard')(runRoundBody, { log }) // runRoundBody hoisted; F4 guard: overlap -> no-op + one queued follow-up
 
 function manualPeers () {
   try { return JSON.parse(settingGet(K_MANUAL_PEERS) || '[]') || [] } catch { return [] }
@@ -373,7 +374,7 @@ async function startSync () {
           silent: false,
           ...require('./scheduler').notifyTimeoutOptsForApp() // B4: honor notificationTimeoutInterval on the pairing notification too
         })
-        n.on('click', () => { try { notifyRenderers('pair-request-focus') } catch { /* noop */ } })
+        n.on('failed', e => { try { log.warn('[LanSync] pair-request notification failed:', e && (e.message || e)) } catch { /* noop */ } }); n.on('click', () => { try { notifyRenderers('pair-request-focus') } catch { /* noop */ } }) // D22 (d-wave 2026-10-14): 'failed' attached before show — unhandled, it can crash the main process
         n.show()
       }
     } catch (e) { log.warn('[LanSync] pair-request notification failed:', e.message) }
@@ -506,7 +507,7 @@ function notifyRenderers (reason) {
  * peer-online, peer-offline, peer-unauthorized, peer-unpaired, pair-request, pair-accepted,
  * pair-rejected, pair-throttled, snapshot-sync, round-done, round-error, server-error,
  * sync-conflict, flush-quarantined, tomato-announce, attachments-arrived,
- * egress-hydration-failed, oplog-append-failed.
+ * egress-hydration-failed, oplog-append-failed, sync-degraded, float-recovery-exhausted.
  * (r4 2026-09-28: that list is set-equality-gated against the actual emit sites —
  * tests/unit/main/fix-20260928-r4-main.test.mjs greps every emitSyncEvent('<type>') and fails
  * on any drift in either direction.)
@@ -654,10 +655,15 @@ function getStatusPayload () {
   const s = getSettingsPayload()
   const pendingPair = pendingPairPayload()
   const flushQuarantine = flushQuarantineSummary(state.db)
+  // [H7 2026-10-25, rootcause audit] the J4 db-less-shell shape (db init failed, the app
+  // keeps running) used to be invisible in the status payload: every field read as "sync
+  // simply off" while writes went nowhere durable. Expose the db health flag (additive —
+  // old consumers keep parsing; the settings card / CLI can now surface it).
+  const dbHealthy = !!(state.db && typeof state.db.call === 'function')
   if (!state.node) {
     return {
       ...s, listening: false, port: null, peers: [], recent: [], security: [], discovered: [],
-      lastRoundAt: null, lastError: null, pendingPair, flushQuarantine,
+      lastRoundAt: null, lastError: null, pendingPair, flushQuarantine, dbHealthy,
       self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
     }
   }
@@ -673,7 +679,7 @@ function getStatusPayload () {
     discovered: st.discovered || [],
     recent: st.recent, security: st.security,
     // Read-only flush-quarantine summary (Device Center; re-apply op is a registered follow-up).
-    flushQuarantine,
+    flushQuarantine, dbHealthy,
     lastRoundAt: st.lastRoundAt, lastError: st.lastError, pendingPair,
     self: st.self || { deviceId: s.deviceId, deviceName: s.deviceName, port: st.port },
   }
@@ -746,8 +752,11 @@ function registerOps () {
  *  opts.resyncExternalWatch (P0-1): re-baseline hook for the external-write watcher — sync's own
  *  main-process writes touch the WAL and must not surface as "external CLI writes". */
 function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
-  const peerWatermarks = createTrackedWatermarks()
+  // The tracked watermark store reads settingGet() -> state.db immediately.
+  // Set state first so cold boot can load the persisted peer progress safely.
+  const peerWatermarks = null
   state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null, applied: null, resyncExternalWatch: typeof resyncExternalWatch === 'function' ? resyncExternalWatch : null }
+  state.peerWatermarks = createTrackedWatermarks()
   registerOps()
   // Running-tomato announcements (feature): wire the announce module to the db + identity,
   // and relay remotely-applied announces to the renderer as 'tomato-announce' syncEvents.
@@ -771,7 +780,11 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
       // D2-c: startSync is async and fail-closed now — a bind failure at boot must be logged,
       // not become an unhandled rejection. K_ENABLED stays true so the toggle reflects the
       // user's intent, but getStatus().listening=false shows the device card the truth.
-      startSync().catch(e => log.error('[LanSync] startup enable failed:', e.message))
+      // [H1 2026-10-25] the retry ladder + visible degradation live in lan-sync/boot-enable.js
+      // (structure ratchet: this module splits instead of growing): fast arm 3x5s for the
+      // crash-storm window, one late arm at 60s, then ONE visible notice (Notification +
+      // sync-degraded syncEvent) if sync is still down.
+      require('./lan-sync/boot-enable').bootEnableWithRetry({ startSync, log, emitSyncEvent })
     }
   } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
 }
@@ -826,6 +839,5 @@ module.exports.__test = {
   registerOps,
   missingAttachmentKeys,
   // d12 schemaVersion gate test surface: the snapshot receivers with the gate applied.
-  ingestSnapshotAssembled,
-  ingestSnapshotChunked,
+  ingestSnapshotAssembled, ingestSnapshotChunked, runRound, // F4 test surface: concurrent interval/kick rounds must serialize
 }

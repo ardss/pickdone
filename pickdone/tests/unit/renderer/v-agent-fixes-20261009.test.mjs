@@ -72,16 +72,21 @@ test('[V1] behavior: weekGridStart aligns any first-of-month to the week grid ho
 
 /* ===== [V2] ProjectView renameProject CATEGORY_EXISTS ===== */
 
-test('[V2] renameProject catches CATEGORY_EXISTS around the updateCategory commit, before the cancel-catch', () => {
+test('[V2] renameProject catches CATEGORY_EXISTS around the updateCategory commit; cancel-catch scoped to the dialog (F3)', () => {
   const i = src.proj.indexOf('async renameProject () {')
   assert.ok(i > -1, 'renameProject found')
   const body = src.proj.slice(i, src.proj.indexOf('async setColor', i))
   assert.ok(body.includes("e.code === 'CATEGORY_EXISTS'"), 'a dedicated catch branch checks CATEGORY_EXISTS')
   assert.ok(body.includes('catNameExistsWarn'), 'it surfaces the same warning key as ProjectOverviewView.createProject')
-  const iCatchAll = body.indexOf("catch { /* cancelled */ }")
+  // [F3 fix] contract updated: the old OUTER `catch { /* cancelled */ }` around prompt AND persist
+  // swallowed real persistence errors as user cancels. Cancel handling is now scoped to the
+  // $prompt await ONLY; the CATEGORY_EXISTS guard lives in the persist try, and any other
+  // rejection surfaces via actionFailedMsg instead of dying as a "cancel".
+  const iPromptCancel = body.indexOf('catch { return } // user cancelled the dialog')
   const iGuard = body.indexOf('CATEGORY_EXISTS')
-  assert.ok(iGuard > -1 && iGuard < iCatchAll,
-    'the guard runs before the outer cancelled-swallowing catch could see the throw')
+  assert.ok(iPromptCancel > -1, 'cancel handling is scoped to the dialog await')
+  assert.ok(iGuard > -1 && iGuard > iPromptCancel, 'the guard lives in the persist try AFTER the cancel-only catch')
+  assert.ok(body.includes('statsH.main.actionFailedMsg'), 'non-duplicate persistence rejections surface (no cancel swallow)')
   // the updateCategory commit now sits inside its OWN try (the inner guard), not bare in the
   // cancel-only try scope: the line right before `const ok = await ...updateCategory` must be a try opener
   const iCommit = body.indexOf("const ok = await this.$store.commit('category/updateCategory'")
@@ -102,12 +107,14 @@ function extractMethod (srcText, name) {
   let depth = 0
   for (let j = open; j < srcText.length; j++) {
     if (srcText[j] === '{') depth++
-    else if (srcText[j] === '}') { depth--; if (!depth) return new Function('c', srcText.slice(open + 1, j)) }
+    else if (srcText[j] === '}') { depth--; if (!depth) return new Function('c', 'return (async () => {' + srcText.slice(open + 1, j) + '})()') }
   }
   throw new Error('unbalanced braces in ' + name)
 }
 
-test('[V3] saveMgrEdit: duplicate-name commit keeps the edit state, warns and refocuses', () => {
+test('[V3] saveMgrEdit: duplicate-name commit keeps the edit state, warns and refocuses', async () => {
+  // [F3 fix] saveMgrEdit is now async (it awaits the updateCategory persist result for the
+  // confirmed-write gate) — extractMethod wraps the body in an async IIFE so `await` compiles.
   const saveMgrEdit = extractMethod(src.mgrModal, 'saveMgrEdit')
   const warnings = []
   const focusCalls = []
@@ -125,7 +132,7 @@ test('[V3] saveMgrEdit: duplicate-name commit keeps the edit state, warns and re
     $store: { commit: () => { const e = new Error('already exists'); e.code = 'CATEGORY_EXISTS'; throw e } }
   }
   try {
-    saveMgrEdit.call(vm, { categoryId: 7 })
+    await saveMgrEdit.call(vm, { categoryId: 7 })
   } catch (e) { threw = true } finally {
     globalThis.document.querySelector = prevQuery
   }
@@ -220,8 +227,8 @@ test('[V6] createTag warns (instead of silent return) when the tag already exist
     tags: []
   }
   await handlers.createTag(vm)
-  assert.deepEqual(warnings, ['statsG.SideNav.catNameExistsWarn'],
-    'the duplicate tag path fires the existing name-exists warning key')
+  assert.deepEqual(warnings, ['statsG.SideNav.tagNameExistsWarn'],
+    'the duplicate tag path fires the tag-specific name-exists warning key (F3 2026-10-18)')
 })
 
 /* ===== [V7] QuickAdd pure date-word guard ===== */
@@ -232,8 +239,8 @@ test('[V7] onEnter refuses creation when parsed.restText is empty (date-only inp
   const body = src.quick.slice(i, src.quick.indexOf("content = this.parsed.restText || raw", i))
   assert.ok(body.includes('this.parsed.restText === \'\''),
     'a parsed input with empty restText (pure date words) is intercepted')
-  assert.ok(body.includes('statsB.ProjectView.nameRequired'),
-    'the refusal reuses the existing empty-name warning key (no new i18n key)')
+  assert.ok(body.includes('statsD.QuickAdd.dateOnlyRefused'),
+    'the refusal uses the dedicated date-only message key (F3 2026-10-18, no longer the borrowed project-name text)')
   assert.ok(body.includes('this._submitting = false'),
     'the guard releases the submit lock before returning (a follow-up Enter must still work)')
 })
@@ -283,7 +290,9 @@ test('[V11] the Esc handler returns early while a .el-picker-panel overlay is in
   const i = src.editPanel.indexOf('this._onKeydown = (e) => {')
   assert.ok(i > -1)
   const body = src.editPanel.slice(i, src.editPanel.indexOf("window.addEventListener('keydown', this._onKeydown)", i))
-  const iGuard = body.indexOf("document.querySelector('.el-picker-panel')")
+  // [fix 2026-10-27] the whitelist now also covers DayDateStrip's .ds-cal-pop calendar popover
+  // (same early-return contract; guard must still precede the closeEditCleanup dispatch)
+  const iGuard = body.indexOf("document.querySelector('.el-picker-panel, .ds-cal-pop')")
   const iClose = body.indexOf("dispatch('ui/closeEditCleanup'")
   assert.ok(iGuard > -1 && iClose > -1 && iGuard < iClose,
     'the picker-panel guard precedes the closeEditCleanup dispatch')

@@ -1,0 +1,46 @@
+{
+ "seeded": [
+  {
+   "id": "tid_840001QPVRlP_1792671363711",
+   "c": "Buy milk 9am #errands",
+   "d": 1792598400000
+  },
+  {
+   "id": "tid_840001INcUI1_1792671363726",
+   "c": "Write audit report",
+   "d": 1792598400000
+  },
+  {
+   "id": "tid_840001mU4qFo_1792671363741",
+   "c": "Plan week review",
+   "d": 1792598400000
+  }
+ ],
+ "completed-row": "[{\"c\":\"Buy milk 9am\",\"done\":true},{\"c\":\"Write audit \",\"done\":false},{\"c\":\"Plan week re\",\"done\":false}]",
+ "arrowRoving": {
+  "focusedFirstRow": "td-item",
+  "afterArrowDown": "DIV.td-item|Write audit reportToday"
+ },
+ "arrow-roving": {
+  "focusedFirstRow": "td-item",
+  "afterArrowDown": "DIV.td-item|Write audit reportToday"
+ },
+ "realEnterCreates": {
+  "before": 3,
+  "after": 4,
+  "created": true
+ },
+ "real-cdp-enter": {
+  "before": 3,
+  "after": 4,
+  "created": true
+ },
+ "edit-panel": {
+  "dblclick": true,
+  "panelNodes": 0,
+  "hash": "#/todo-list/today",
+  "texts": "PickDone\nTask added: Real enter task, scheduled for today\nPickDone\nPICKDONE\n«\nTo"
+ },
+ "tagView": "{\"hash\":\"#/todo-list/tag/errands\",\"rows\":0,\"title\":\"PickDone [TEST]\"}",
+ "tag-view": "{\"hash\":\"#/todo-list/tag/errands\",\"rows\":0,\"title\":\"PickDone [TEST]\"}"
+}

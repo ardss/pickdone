@@ -33,7 +33,7 @@ const dayjs = require_('dayjs')
 db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
-const runCli = args => execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8' })
+const runCli = args => execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { timeout: 180000, encoding: 'utf8' })
 
 let _seq = 0
 function seed (over = {}) {

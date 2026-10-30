@@ -26,9 +26,9 @@ const dbm = require_(path.join(ROOT, 'src/main/db.js'))
 dbm.init(process.env.TODO_DB_DIR)
 
 const cliPath = path.join(ROOT, 'cli', 'pickdone.js')
-const runCli = args => JSON.parse(execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8' })).data
+const runCli = args => JSON.parse(execFileSync(process.execPath, [cliPath, ...args], { timeout: 180000, encoding: 'utf8' })).data
 const runCliFail = args => {
-  try { execFileSync(process.execPath, [cliPath, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); return null } catch (e) {
+  try { execFileSync(process.execPath, [cliPath, ...args], { timeout: 180000, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }); return null } catch (e) {
     try { return JSON.parse(e.stderr || e.stdout) } catch { return { error: 'UNKNOWN', message: String(e.message) } }
   }
 }

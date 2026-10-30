@@ -32,6 +32,9 @@ function makeTree () {
   fs.mkdirSync(path.join(tmp, 'renderer/js/components'), { recursive: true })
   fs.mkdirSync(path.join(tmp, 'renderer/js/views'), { recursive: true })
   fs.copyFileSync(GATE, path.join(tmp, 'cli/check-op-feedback.js'))
+  // W21: the gate now delegates its walker to the shared lib-filescan.cjs — the fixture copy
+  // needs the dependency alongside or the gate dies with MODULE_NOT_FOUND
+  fs.copyFileSync(path.join(import.meta.dirname, '../../../cli/lib-filescan.cjs'), path.join(tmp, 'cli/lib-filescan.cjs'))
   return tmp
 }
 
@@ -42,7 +45,7 @@ const writeSfc = (tmp, rel, src) => {
 }
 
 const runGate = tmp =>
-  spawnSync(process.execPath, [path.join(tmp, 'cli', 'check-op-feedback.js')], { encoding: 'utf8' })
+  spawnSync(process.execPath, [path.join(tmp, 'cli', 'check-op-feedback.js')], { timeout: 180000, encoding: 'utf8' })
 
 test('dead UPDATE_FIELDS_ALLOWLIST entry (no matching dispatch anywhere) fails the gate', () => {
   const tmp = makeTree()
@@ -53,7 +56,7 @@ test('dead UPDATE_FIELDS_ALLOWLIST entry (no matching dispatch anywhere) fails t
   let gate = fs.readFileSync(gatePath, 'utf8')
   gate = gate.replace(
     "const UPDATE_FIELDS_ALLOWLIST = [",
-    "const UPDATE_FIELDS_ALLOWLIST = [\n  'StaleModal.vue',"
+    "const UPDATE_FIELDS_ALLOWLIST = [\n  'components/StaleModal.vue',"
   )
   writeSfc(tmp, 'renderer/js/components/StaleModal.vue', '<template><div /></template>\n')
   fs.writeFileSync(gatePath, gate)
@@ -70,7 +73,7 @@ test('dead DELETE_ALLOWLIST entry fails the gate (file gone entirely)', () => {
   let gate = fs.readFileSync(gatePath, 'utf8')
   gate = gate.replace(
     "const DELETE_ALLOWLIST = [",
-    "const DELETE_ALLOWLIST = [\n  'GhostView.vue',"
+    "const DELETE_ALLOWLIST = [\n  'views/GhostView.vue',"
   )
   fs.writeFileSync(gatePath, gate)
   // GhostView.vue does not exist anywhere in the tree
@@ -87,7 +90,7 @@ test('live allowlist entry (matching dispatch present) keeps the gate green', ()
   // dead here by design) and keep exactly one live entry
   let gate = fs.readFileSync(path.join(tmp, 'cli/check-op-feedback.js'), 'utf8')
   gate = gate.replace(/const UPDATE_FIELDS_ALLOWLIST = \[[\s\S]*?\]/,
-    "const UPDATE_FIELDS_ALLOWLIST = [\n  'LiveModal.vue',\n]")
+    "const UPDATE_FIELDS_ALLOWLIST = [\n  'views/LiveModal.vue',\n]")
   fs.writeFileSync(path.join(tmp, 'cli/check-op-feedback.js'), gate)
   writeSfc(tmp, 'renderer/js/views/LiveModal.vue',
     "<script setup>\nimport { useStore } from 'vuex'\nconst store = useStore()\nstore.dispatch('todo/updateTodoFields', {})\n</script>\n")
@@ -98,7 +101,7 @@ test('live allowlist entry (matching dispatch present) keeps the gate green', ()
 
 test('current real tree passes the gate with the retirement check in place', () => {
   // gates the shipped allowlists: after removing the 6 stale entries the repo must be green
-  execFileSync(process.execPath, [GATE], { stdio: 'pipe' })
+  execFileSync(process.execPath, [GATE], { timeout: 180000, stdio: 'pipe' })
 })
 
 function writeSvcLiveUpdate (tmp, rel) {
@@ -118,9 +121,9 @@ test('cross-kind staleness fails the gate: a file dispatching todo/deleteTodo mu
   let gate = fs.readFileSync(path.join(tmp, 'cli/check-op-feedback.js'), 'utf8')
   gate = gate
     .replace(/const UPDATE_FIELDS_ALLOWLIST = \[[\s\S]*?\]/,
-      "const UPDATE_FIELDS_ALLOWLIST = [\n  'CrossView.vue',\n]")
+      "const UPDATE_FIELDS_ALLOWLIST = [\n  'views/CrossView.vue',\n]")
     .replace(/const DELETE_ALLOWLIST = \[[\s\S]*?\]/,
-      "const DELETE_ALLOWLIST = [\n  'CrossView.vue',\n]")
+      "const DELETE_ALLOWLIST = [\n  'views/CrossView.vue',\n]")
   fs.writeFileSync(path.join(tmp, 'cli/check-op-feedback.js'), gate)
   const r = runGate(tmp)
   assert.equal(r.status, 1, `expected exit 1 (stale update-kind entry), got ${r.status}: ${r.stderr}`)

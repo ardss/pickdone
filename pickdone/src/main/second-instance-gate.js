@@ -7,8 +7,13 @@
  * Extracted here so the gate is unit-testable under plain node (index.js cannot be require()d
  * without executing the app bootstrap). Behavior when ready is unchanged: show synchronously.
  */
-function wireSecondInstance (app, show) {
+function wireSecondInstance (app, show, isQuitting = null) {
   app.on('second-instance', () => {
+    // d-wave fix (2026-10-14): during the quit-flush window (quitting=true, flush in progress /
+    // DB already closed) showMainOrLock() would createMainWindow() against a shut-down DB,
+    // resurrecting a broken window. Once quitting started, a second-instance nudge must be
+    // ignored — the app is going down.
+    if (typeof isQuitting === 'function' && isQuitting()) return
     if (app.isReady()) { show(); return }
     // Not ready yet: defer until the ready chain finished, so show() can never reach
     // new BrowserWindow before app ready.

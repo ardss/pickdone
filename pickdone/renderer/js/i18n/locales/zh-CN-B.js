@@ -2,6 +2,11 @@
 export default {
 
   statsB: {
+  // [F3-UX] DepView milestone load failure state (zh side of the bilingual pair)
+  DepView: {
+    msError: '里程碑加载失败',
+    msRetry: '重试'
+  },
     TomatoFloatPage: {
       startFocusTip: '开始番茄专注',
       giveUpFocusTip: '放弃本次专注（需确认）',
@@ -156,6 +161,7 @@ export default {
       restored: '已恢复为普通分类',
       rescheduled: '过期未达成事件已重新安排到今天',
       noOverdue: '没有过期任务需要重排',
+      // [F3-UX] examples must match the en-US shard (+7d in both, was +7d vs +14d)
       dateFmtHint: '支持 YYYY-MM-DD、M-D、today、+7d 等格式',
       deadlineTip: '目标完成日 {d}',
       daysLeftText: '剩余 {n} 天',

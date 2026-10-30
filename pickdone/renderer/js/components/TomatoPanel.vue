@@ -100,7 +100,14 @@ export default {
     dfmt (ts) { return dayjs(ts).format(FMT.time) },
     /* [maint/d23 FIX-3b a11y sweep] remote chip is role="button": Space joins Enter */
     onRemoteKey: roleButtonActivate(function () { this.openRemoteTodo() }),
-    commitPatch (p) { store.commit('tomato/patch', p) },
+    /* J4 (2026-10-22 journey audit): the steppers used to raw-commit tomato/patch, updating ONLY
+       the transient tomato runtime blob. The settings ledger (SettingsModal display, the synced
+       settings blob, the db mirror and config.json) stayed stale — the panelSyncHint tip promises
+       与番茄面板实时同步, and the panel's value was silently reverted by the settings ledger's
+       restore mirror on the next boot (live-verified). Route through the canonical settings/update
+       writer: it mirrors the duration keys back down into tomato/patch, so the running countdown
+       still updates AND every ledger agrees. */
+    commitPatch (p) { store.dispatch('settings/update', p) },
     /** Open the remote focus's linked todo (display-only: never starts/stops anything).
      *  P2 (2026-09-19 UX review): an absent/deleted (tombstoned) todo must not click-fail
      *  silently — toast "task not on this device" instead of a silent no-op. */

@@ -1,6 +1,5 @@
 /**
- * Main process entry — PickDone offline implementation * IPC channel names stay aligned with the project baseline, easing a later swap to a real cloud backend * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the
- * assembly point (wiring + unified handler error-wrap loop + tray + quit chain). */
+ * Main process entry — PickDone offline implementation * IPC channel names stay aligned with the project baseline, easing a later swap to a real cloud backend * Window lifecycle lives in windows.js; IPC handlers live in handlers/*.js — this file stays the assembly point (wiring + unified handler error-wrap loop + tray + quit chain). */
 const { app, BrowserWindow, ipcMain, Tray, Menu, dialog } = require('electron')
 // globalShortcut is required by quick-add/pomodoro-float and other modules (avoid duplicates)
 const path = require('path')
@@ -30,8 +29,7 @@ app.setName('pickdone') // standalone userData directory, does not affect the pr
 // Windows toast notifications resolve the app name/icon via the AppUserModelID; without this they show "electron.app". // Must match package.json build.appId — the electron-builder Start Menu shortcut carries the same AUMID.
 app.setAppUserModelId('com.pickdone.app')
 
-// EPIPE tolerance: in dev, when the parent shell exits it takes the inherited stdout/stderr pipes with it; after that, any write from console.log / // electron-log's console transport raises an uncaught EPIPE exception → the main process pops an error dialog (verified P0 on 2026-08-30).
-// Node's default behavior for failed pipe writes is to throw; swallow it here: failing to write logs must not drag down the whole app.
+// EPIPE tolerance: in dev, when the parent shell exits it takes the inherited stdout/stderr pipes with it; after that, any write from console.log / // electron-log's console transport raises an uncaught EPIPE exception → the main process pops an error dialog (verified P0 on 2026-08-30). Node's default behavior for failed pipe writes is to throw; swallow it here: failing to write logs must not drag down the whole app.
 for (const stream of [process.stdout, process.stderr]) {
   if (stream && typeof stream.on === 'function') stream.on('error', () => {})
 }
@@ -50,7 +48,12 @@ process.on('unhandledRejection', (reason) => {
 // Disable HTTP disk cache for renderer ESM modules (app:// already sends no-cache but Chromium still caches, // which once made revised JS ineffective — the root cause of both blank-screen and stale-logic incidents); reading local resources directly has no performance cost
 app.commandLine.appendSwitch('disable-http-cache')
 // Test isolation: TODO_USER_DATA_DIR gives test instances a separate data directory coexisting with the dev instance (SQLite WAL multi-process safety is backstopped by external-write detection)
+// Data-location priority: TODO_USER_DATA_DIR env (test isolation, unchanged) > boot redirect file (data-location.cjs) > electron default userData.
+const bootRedirect = require('./data-location.cjs').readBootRedirect()
 if (process.env.TODO_USER_DATA_DIR) app.setPath('userData', process.env.TODO_USER_DATA_DIR)
+else if (bootRedirect) app.setPath('userData', bootRedirect)
+// Boot-location honesty (boot-notice.cjs): snapshotted at module init — before whenReady.
+const bootRedirectState = require('./data-location.cjs').readBootRedirectState()
 // Hardware acceleration switch (aligned with the reference enableHardwareAcceleration; must be called before ready)
 try {
   const c = JSON.parse(fs.readFileSync(path.join(app.getPath('userData'), 'config.json'), 'utf8'))
@@ -96,6 +99,8 @@ const windowManager = createWindowManager({
   tomatoTaskbar, updater, applyShortcuts, shortcuts, scheduler,
   isLocked, lockAppNow, showMainOrLock,
   isQuitting: () => quitting, getState: () => state, getTray: () => tray,
+  // F1 (2026-10-22): exit-mode X must reach the same guarded quit chain as the tray (quitFromTray is a hoisted declaration — safe to reference here)
+  requestUserQuit: quitFromTray,
   // D10 (2026-09-27): renderer-death hooks — clear the stale tomato countdown lease and let the // crash counter health window live in windows.js (see crashRelaunchDecision in handlers/shared).
   onRendererGone: clearTomatoLiveText
 })
@@ -129,11 +134,11 @@ function broadcastWhiteNoiseUpdated () {
 
 /* ---------------- Tiered recovery from DB corruption (P0 data-loss prevention) — implementation extracted to dbRecovery.cjs (independently testable) ---------------- */
 function attemptDbRecovery (ud, retryInit) { return dbRecovery.attemptDbRecovery(ud, retryInit) }
-// Phase-2 command bus: the critical-backup restore pipeline commits through the bus // (todo.putMany / category.put / tomato.appendMany) like every other write path. preserveStamp: // restore replays the backup's own row ages verbatim — re-stamping here would skew LWW against
-// peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the // startup recovery path commits with no fanout, exactly as before.
+// Phase-2 command bus: the critical-backup restore pipeline commits through the bus (todo.putMany / category.put / tomato.appendMany) like every other write path, preserveStamp: restore replays the backup's own row ages verbatim — re-stamping would skew LWW against peers. The 'undo-barrier'/'ls-mirror' subscribers only exist after registerIpc, so the startup recovery path commits with no fanout, exactly as before.
 const busCommit = (entity, verb, payload) => require('./command-bus').commit(entity, verb, payload, { preserveStamp: true })
-// F11 (dw wave6): startup recovery now re-imports the SAME segment set the UI restore accepts — // filter.putMany / plan.putMany / meta.put ride the same command-bus doors as the renderer, all // idempotent by id (dbRecovery skips rows without id; the db ops upsert ON CONFLICT).
-// Sync-3 (D12): the wrapper returns the per-segment REPORT (tasks / imported / failedSegments / // unconsumedSegments / proved) — the plain-bak cleanup gate must know whether EVERY segment of // the snapshot was consumed, not just whether todoState imported rows.
+// F11 (dw wave6) + Sync-3 (D12): startup recovery re-imports the SAME segment set the UI restore accepts (filter/plan/meta/habits ride the same command-bus doors, idempotent by id) and the wrapper returns the per-segment REPORT (tasks / imported / failedSegments / unconsumedSegments / proved) — the plain-bak cleanup gate needs to know whether EVERY segment was consumed, not just that todoState imported rows.
+// [F4 #9] recovery-dialog disclosure of a degraded dump (mirrors renderer todoBackup.describeDegradedSegments; the main process cannot require the ESM renderer module, so the segment→surface map is duplicated here on purpose)
+const describeRecoveryDegraded = segs => (Array.isArray(segs) ? segs.filter(s => s === 'planState' || s === 'metaState').map(s => s === 'planState' ? 'planState (schedule chips)' : 'metaState (repeat rules/estimates/project meta)').join(', ') : '')
 function restoreFromCriticalBackup (ud) {
   const r = dbRecovery.restoreSegmentsFromCriticalBackup(ud,
     list => busCommit('todo', 'putMany', list),
@@ -144,9 +149,13 @@ function restoreFromCriticalBackup (ud) {
       planPutMany: chips => busCommit('plan', 'putMany', chips),
       habitsPut: pair => busCommit('meta', 'put', pair),
       // metaState (2026-09-26, meta-keys-omitted): repeat rules / tomato estimates / project // deadline+status+flag+milestones live only in the meta table — re-put them like habits.
-      metaPut: pair => busCommit('meta', 'put', pair)
+      metaPut: pair => busCommit('meta', 'put', pair),
+      // F1 (2026-10-17) sync-identity restore: sync.deviceId / sync.pairingSecret live in settings_rows
+      // (lan-sync-bootstrap reads settingsRowsAll), NOT the meta table — without this door the whitelist-preserved
+      // identity keys would land in the wrong table (inert) and a JSON restore would mint a fresh deviceId.
+      settingsPut: pair => busCommit('setting', 'put', { key: pair[0], value: pair[1] })
     })
-  // [Sync-13 reader, restore-degraded-segments-marker-never-consumed] the only main-process caller // logs the marker: a degraded dump's missing segments must be visible in the recovery trail.
+  // [Sync-13 reader + F4 #9] a degraded dump's missing segments must be visible: logged here and surfaced in the recovery dialog below (describeRecoveryDegraded).
   if (r && Array.isArray(r.degradedSegments) && r.degradedSegments.length) {
     log.warn('[Init] critical backup was collected degraded — segments missing from this dump:', r.degradedSegments.join(', '))
   }
@@ -180,7 +189,13 @@ let tomatoSession = null
 function createTray () {
   const iconPath = path.join(__dirname, '../../assets/tray/tray.png')
   const usedPath = fs.existsSync(iconPath) ? iconPath : path.join(__dirname, '../../assets/icon.png')
-  tray = new Tray(usedPath)
+  // headless Linux (xvfb/CI) throws inside new Tray; boot must survive — whenReady catch treats any throw as fatal
+  try {
+    tray = new Tray(usedPath)
+  } catch (e) {
+    log.warn('[Tray] unavailable on this desktop, continuing without tray:', e && e.message)
+    return
+  }
   tomatoTaskbar.attachTray(tray, usedPath) // during a pomodoro the tray is redrawn as a progress ring; restores the original icon when idle
   rebuildTrayMenu()
   tray.setToolTip(i18nM.mt('appName'))
@@ -206,7 +221,7 @@ async function quitFromTray () {
 }
 async function quitFromTrayInner () {
   state.quitByUser = true
-  // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no // record. Ask before tearing everything down (the tray stays alive until confirmed).
+  // P2 2026-09-23: a running pomodoro used to die silently on tray-quit — the ledger only ever // records on completeFocus/giveUp, so the in-progress session vanished with no confirm and no record. Ask before tearing everything down (the tray stays alive until confirmed).
   // TQ-1 (2026-10-03): the confirm gate now consults the DURABLE 'tomatoRunningSession' meta row // (written by every renderer FSM transition, main or float window), not the tray-text lease. // The lease (tomatoLiveText) was a display artifact: a throttled/crashed renderer let a live
   // focus quit with no confirm, and a float-originated focus never refreshed the lease at all // (update-tomato-taskbar is main-window-gated). The lease remains for the tooltip detail text // only; isLiveTextFresh stays exported for its lease-semantics unit tests.
   const sessionLive = tomatoSession ? tomatoSession.hasRunningSession() : false
@@ -237,7 +252,8 @@ async function quitFromTrayInner () {
   // win can be a DESTROYED instance here (closeActionMinimize=false destroys the window on X but only // createMainWindow reassigns the module var) — getBounds on it throws "Object has been destroyed" and // kills the whole quit chain. Route through the live-window guard.
   const qw = getMainWindow()
   // P1 2026-09-12: writeConfig here used to run bare — a disk-full/locked config.json threw straight // out of the tray-menu click handler. The tray was already destroyed below, so the quit died // mid-chain leaving a zombie process (no window, no tray). Same try-wrap as windows.js close path.
-  if (qw) { try { writeConfig({ winBounds: qw.getBounds() }) } catch (err) { log.warn('[Tray] winBounds 写入失败(退出路径)', err) } }
+  // F4 #5 (2026-10-21): windows.js persistBoundsState — getBounds() on a MAXIMIZED window returns the full-screen rect, which used to be stamped as the next launch's restore size (giant non-maximized window + lost maximized state). Same normalized shape as close.
+  if (qw) { windowManager.persistBoundsState(qw) }
   // Destroy the tray icon first: the icon only disappears on Windows when the process exits, // while the quit path (renderer flush + scheduler persist + WAL close) can take seconds — without this, the icon lingers and reads as "quit is slow"
   if (tray) { try { tray.destroy() } catch (e) { /* empty */ } tray = null }
   app.quit()
@@ -254,14 +270,8 @@ function rebuildTrayMenu () {
   tray.setContextMenu(Menu.buildFromTemplate(tpl))
 }
 
-/* ================= Custom protocol privileges (must run before ready) ================= */
-{
-  const { protocol } = require('electron')
-  protocol.registerSchemesAsPrivileged([
-    { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
-    { scheme: 'local', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
-  ])
-}
+/* Custom protocol privileges: moved to ./protocol-privileges (required at module top, timing unchanged — must run before 'ready') */
+require('./protocol-privileges')
 
 /* ================= Single-instance lock & startup ================= */
 // D10: true only for the singleton-lock WINNER after full startup. Declared before its first
@@ -308,8 +318,8 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
   // (the duplicate's app.quit() has no DB and no windows; see shouldRunQuitFlush in will-quit).
   ranFullInit = true
   // Round-3 stability (2026-09-26): show() deferred until whenReady during cold-start init — a
-  // BrowserWindow before ready hard-throws (see second-instance-gate.js).
-  require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() })
+  // BrowserWindow before ready hard-throws (see second-instance-gate.js); d-wave 2026-10-14 adds the quitting guard.
+  require('./second-instance-gate').wireSecondInstance(app, () => { showMainOrLock() }, () => quitting)
 
   app.whenReady().then(() => {
     Menu.setApplicationMenu(null) // project baseline has no menu bar
@@ -321,8 +331,7 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // recovery, testable without electron); whenReady keeps one-line calls. Behavior unchanged:
     // 无 todos.db 但 .plain-bak 存在 = 加密迁移两步 rename 间崩溃的'两头都没有'窗口(2026-09-04 深审 P0),
     // 必须在此显式把 plain-bak 放回去;pending-delete-<ts>-* 是上次「重置数据」被占用改名挂起的文件。
-    dbRecovery.preflightMigrateResidue(app.getPath('userData'), log)
-    dbRecovery.sweepPendingDeletes(app.getPath('userData'), log)
+    require('./boot-notice.cjs').surfaceMissingBootTarget({ getMainWindow, i18n: i18nM, log }, bootRedirectState)
     try {
       dbm.init(app.getPath('userData'))
     } catch (e0) {
@@ -369,17 +378,17 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       }
       let reinitErr = null
       try { dbm.init(ud) } catch (e2) { reinitErr = e2 }
-      let restoredN = 0
-      // Sync-3 (D12): per-segment success report — the plain-bak cleanup gate needs to know that
-      // EVERY segment of the snapshot was consumed, not just that todoState imported rows.
+      let restoredN = 0; let degradedNote = '' // F4 #9: degraded dump segments, disclosed in the dialog detail below
+      // Sync-3 (D12): per-segment success report — the plain-bak cleanup gate needs to know EVERY snapshot segment was consumed.
       let restoreFullyConsumed = false
-      // source is a structured branch flag; display copy must never drive logic (dbRecovery.cjs contract)
-      // jsonRestoreAllowed gates on the re-init having succeeded: with a dead DB (e.g. the vendor
-      // driver itself cannot load) every busCommit in the restore path throws and the "restore"
+      // source is a structured branch flag; display copy must never drive logic (dbRecovery.cjs contract).
+      // jsonRestoreAllowed gates on the re-init having succeeded: with a dead DB every busCommit in the
+      // restore path throws and the "restore"
       // rebuilds nothing (2026-09-26 lubancat live catch; gate = dbRecovery.jsonRestoreAllowed).
       if (dbRecovery.jsonRestoreAllowed(recoveredFrom, reinitErr)) {
         const restored = restoreFromCriticalBackup(ud)
         restoredN = restored.tasks
+        degradedNote = describeRecoveryDegraded(restored.degradedSegments) // F4 #9: surface what the dump was missing
         restoreFullyConsumed = !!restored.proved
         // GAP-D fix (2026-09-19): recovery writes go through dbm.call directly with no sync kick —
         // restored rows waited for the periodic round. Boot-time kick is safe: kickSyncRound no-ops
@@ -411,11 +420,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
       if (recovered && (recoveredFrom.source === 'json' || recoveredFrom.source === 'plain-bak')) {
         try { require('./lan-sync-bootstrap').invalidateSyncWatermarks('db-recovery:' + recoveredFrom.source) } catch { /* sync lazy-not-init */ }
       }
-      const detailMsg = String(e && e.message || e) + '.' + (recoveryFailed
-        ? ' ' + recoveredFrom.label
-        : recoveredFrom
-          ? i18nM.mt('dbFailRecovered', { n: restoredN })
-          : i18nM.mt('dbFailRecoveredNone')) + (reinitErr ? i18nM.mt('dbFailReinit', { msg: reinitErr.message }) : '')
+      // [structure-ratchet 2026-10-25] detail assembly moved into dbRecovery.recoveryDetailText
+      // (J4 transient copy + H4 sync-reset disclosure live there now).
+      const detailMsg = dbRecovery.recoveryDetailText({
+        errText: (e && e.message) || e, recoveryFailed, recoveredFrom, restoredN, reinitErr, degradedNote, mt: (k, p) => i18nM.mt(k, p),
+      })
       const buttons = recovered
         ? [i18nM.mt('btnRecoverRelaunch'), i18nM.mt('btnOpenDataDir'), i18nM.mt('btnQuit')]
         : [i18nM.mt('btnOpenDataDirBackup'), i18nM.mt('btnResetRelaunch'), i18nM.mt('btnQuit')]
@@ -458,20 +467,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
         // startup), and any residual failure is reported to the user instead of silently "succeeding".
         try { dbm.close() } catch {}
         const ts = Date.now()
-        const failures = []
-        for (const f of ['todos.db', 'todos.db-wal', 'todos.db-shm', 'db.key', 'todos.db.plain-bak']) {
-          const p = path.join(ud, f)
-          try {
-            fs.unlinkSync(p)
-          } catch (err) {
-            try {
-              fs.renameSync(p, path.join(ud, fixUtil.pendingDeleteName(f, ts)))
-              log.warn('[Reset] 文件被占用无法直接删除,已改名挂起(下次启动清理):', f, err.message)
-            } catch (err2) {
-              failures.push(f + ': ' + (err2 && err2.message || err2))
-            }
-          }
-        }
+        // F1 (2026-10-17): deletion moved to reset-data-fs.deleteResetTargets — the list now
+        // covers the replay sentinels (recovery-pending.json + critical-state-backup.json, incl.
+        // the ACTIVE default root via criticalBackupPath). The old list let cleanInitReplayDecision
+        // resurrect just-destroyed data on the next boot. Failures are reported, not swallowed.
+        const failures = require('./reset-data-fs').deleteResetTargets(ud, ts, (name, err) => log.warn('[Reset] 文件被占用无法直接删除,已改名挂起(下次启动清理):', name, err))
         if (failures.length) {
           // Never claim success when files survived: hand the list back to the dialog flow
           dialog.showErrorBox(i18nM.mt('appName'), i18nM.mt('dbFailMessage') + '\n\n' + failures.join('\n'))
@@ -598,6 +598,9 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // Round-3 stability (2026-09-26): surface a quarantined corrupt config.json to the user (notice-only)
     require('./quarantine-notice').showQuarantineNotice(win, log)
 
+    // [H5 2026-10-25] plaintext-fallback session: surface the degradation once (see enc-migration-notice.js).
+    require('./enc-migration-notice').showEncMigrationNotice(win, log)
+
     // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
     if (readConfig().enableSecurityLock) {
       win.webContents.once('did-finish-load', () => {
@@ -617,10 +620,17 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
 }
 
 function proxyDb () {
-  return new Proxy({}, { get (_, op) { return (p) => dbm.call(op, p) } })
+  const methods = { call: (...args) => dbm.call(...args), queryTodos: p => dbm.call('queryTodos', p) }
+  // Proxy methods must stay on the returned facade. Spreading an empty
+  // Proxy into {} dropped call/getMeta/setMeta on every actual cold start.
+  return new Proxy(methods, { get (target, op) {
+    if (Object.prototype.hasOwnProperty.call(target, op)) return target[op]
+    if (typeof op !== 'string' || op === 'then') return undefined
+    return p => dbm.call(op, p)
+  } })
 }
 
-function dbApi () { return { queryTodos: p => dbm.call('queryTodos', p), ...proxyDb() } }
+function dbApi () { return proxyDb() }
 
 let quitting = false // re-entrancy guard for the will-quit flush window (see below)
 let flushDone = false // flush window finished; second will-quit passes through so the native quit event (updater autoInstallOnAppQuit) fires
@@ -690,11 +700,8 @@ app.on('before-quit', () => {
       if (w && !w.isDestroyed()) {
         w.webContents.send('app-quitting-flush', { token: roundToken })
         liveWindows.push(w.webContents.id)
-        // P2 2026-09-12: a window destroyed between this send and its ack can never ack, so the
-        // flush window previously waited out the full 2s cap every time a window died mid-handshake.
-        // When the webContents is destroyed (window closed) or its renderer process is gone (crash —
-        // it can never ack either), abandon the sender so allAcked() can go true early. Idempotent
-        // via the tracker's abandoned set; acks from still-live windows are unaffected.
+        // P2 2026-09-12: a window destroyed between this send and its ack can never ack, so the flush window previously waited out the full 2s cap every time a window died mid-handshake.
+        // When the webContents is destroyed (window closed) or its renderer process is gone (crash — it can never ack either), abandon the sender so allAcked() can go true early. Idempotent via the tracker's abandoned set; acks from still-live windows are unaffected.
         const senderId = w.webContents.id
         // P3 2026-09-12: before-quit can fire more than once (aborted round → re-issued quit), and
         // blind once() attaches then accumulated one dead closure pair per round on long-lived
@@ -751,6 +758,7 @@ app.on('will-quit', (event) => {
     quitHangFallback.arm()
     try { extWatch.stopForQuit() } catch {} // release the fs.watchFile poll timers before closing
     try { shortcuts.unregisterAll() } catch {}
+    try { require('./win-bind').disposeForQuit() } catch {} // T7: kill the resident PS window-probe child
     // Persist the reminder dedup ledger synchronously (quitting inside the 60s debounce window → reminders resent after restart) + close the db handle (avoids losing one checkpoint and late handle release on Windows)
     try { scheduler.flushFiredNow() } catch {}
     // R7-B P2: the sync node stops here — after the flush window, before the DB handle closes.
@@ -781,11 +789,10 @@ app.on('will-quit', (event) => {
 })
 
 /* ================= Full IPC registration (channel names aligned with the project baseline) =================
-   Handlers are split by domain into handlers/*.js modules; each exports (ctx) => ({ channel: fn }).
-   This file stays the assembly point: ctx injection + Object.assign merge + the unified error-wrap loop. */
+   Handlers are split by domain into handlers/*.js modules, each exporting (ctx) => ({ channel: fn });
+   this file stays the assembly point: ctx injection + Object.assign merge + the unified error-wrap loop. */
 function registerIpc () {
-  // App-side audit trail (src/main/audit.js) resolves its JSONL path lazily; wire it to the real userData
-  // here so app.setPath('userData', TODO_USER_DATA_DIR) test isolation is honored
+  // App-side audit trail (src/main/audit.js) resolves its JSONL path lazily; wire it to the real userData so app.setPath('userData', TODO_USER_DATA_DIR) test isolation is honored
   appAudit.setDirResolver(() => app.getPath('userData'))
 
   // Shared context injected into every handler domain (argument injection only — handler modules never require index.js)
@@ -821,7 +828,8 @@ function registerIpc () {
     require('./handlers/attachments')(hctx),
     require('./handlers/csv-import')(hctx),
     require('./handlers/tomato')(hctx),
-    require('./handlers/system')(hctx)
+    require('./handlers/system')(hctx),
+    require('./win-bind')(hctx) // T7: five dedicated win-bind:* channels (win-bind/index.js)
   )
   // Flush-ack handshake receiver (see will-quit): renderer sends this after dispatching its debounced
   // flush writes on app-quitting-flush. fire-and-forget (ipcMain.on, not handle) — the main process is
@@ -847,6 +855,5 @@ function registerIpc () {
     })
   }
 }
-
 
 module.exports = { getMainWindow }

@@ -26,16 +26,33 @@ const dbRecovery = require('../src/main/dbRecovery.cjs')
  *   - a symlinked backup dir falls back (the App's symlink-bypass guard, backup-dirs.js:98-107).
  *  Shared by evt-snapshot writing (cli/lib.js) and restore discovery (this module) so the CLI's
  *  snapshot dir can no longer split from the App's. */
-function resolveCliBackupDir (configured, userDataDirPath) {
+function resolveCliBackupDir (configured, userDataDirPath, warn) {
+  const warn_ = warn || (msg => console.error(msg))
   const fallback = path.resolve(defaultBackupRootCandidates(userDataDirPath)[0])
   const raw = String(configured || '').trim()
   if (!raw) return fallback
   const resolved = path.resolve(raw)
   if (resolved === fallback) return fallback
+  // W8 fix (2026-10-25): ENOENT (first run, nothing registered — normal) must stay silent, but an
+  // unreadable (EACCES) or CORRUPT whitelist used to be swallowed into the same "nothing
+  // registered" path, silently demoting a registered dir to the default root. Semantics aligned
+  // with the App's src/main/backup-dirs.js loadAllowedBackupDirs: warn to stderr, fall back
+  // unchanged (read-only command — the fallback choice itself is preserved).
   let allowed = new Set()
+  const wlFile = path.join(userDataDirPath, 'allowed-backup-dirs.json')
+  let wlRaw = null
   try {
-    allowed = new Set((JSON.parse(fs.readFileSync(path.join(userDataDirPath, 'allowed-backup-dirs.json'), 'utf8')) || []).map(d => path.resolve(d)))
-  } catch { /* unreadable whitelist = nothing registered (first-run state) */ }
+    wlRaw = fs.readFileSync(wlFile, 'utf8')
+  } catch (e) {
+    if (!e || e.code !== 'ENOENT') warn_('[restore-backup] allowed-backup-dirs 读取失败，忽略（回落默认备份根）: ' + ((e && e.message) || e))
+  }
+  if (wlRaw != null) {
+    try {
+      allowed = new Set((JSON.parse(wlRaw) || []).map(d => path.resolve(d)))
+    } catch (e) {
+      warn_('[restore-backup] allowed-backup-dirs 内容损坏，忽略（回落默认备份根）: ' + ((e && e.message) || e))
+    }
+  }
   if (!allowed.has(resolved)) return fallback
   try {
     if (fs.lstatSync(resolved).isSymbolicLink()) return fallback

@@ -208,6 +208,20 @@ module.exports = {
           call('deleteMeta', key)
           return { ok: true, key: originalKey, entity }
         }
+        // W20 (P2, 2026-10-30): the meta branch previously fed b.value straight into setMeta.
+        // db.js's setMeta String()-coerces the value, so an object-valued META backup (e.g. a
+        // legacy/old-format payload whose originalKey carries no syncable-entity prefix) was
+        // written as the literal '[object Object]' and then the backup key was deleted — the
+        // B16 corruption path resurrected on the restore side. Fail closed: a meta backup is
+        // only restorable when its value is a string (writeMetaConflictBackup always stores
+        // meta values in their serialized string form); an object value is REFUSED, the throw
+        // happens before any setMeta/deleteMeta, so the backup key survives untouched.
+        // (The entity branch above keeps the inverse invariant: its backups are row objects
+        // and non-objects are already refused there. The file-head CONVENTION — meta keys must
+        // never be named `<syncable-entity>:` — remains the routing contract; this check is the
+        // restore-side fail-closed backstop for a meta key that collides with a prefix: its
+        // string value routes into the entity branch, which throws without touching meta.)
+        if (typeof b.value !== 'string') throw new Error('syncConflictBackupRestore: meta backup value is not a string — refusing to restore (would corrupt to [object Object]); backup kept')
         const current = call('getMeta', originalKey)
         if (current != null) {
           call('setMeta', [snapKeyFor(originalKey), JSON.stringify({ key: originalKey, value: current, lostAt: Date.now() })])

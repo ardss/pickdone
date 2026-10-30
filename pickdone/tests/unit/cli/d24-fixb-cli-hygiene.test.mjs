@@ -201,7 +201,7 @@ test('d24 hygiene: gate exits 1 with the planted empty-name category flagged, 0 
   lib.deleteCategory('Doomed') // tombstoned → the live task now dangles (e)
   const run = env => {
     try {
-      return { code: 0, out: execFileSync(process.execPath, ['cli/check-data-hygiene.cjs'], { cwd: APP_ROOT, env: { ...process.env, TODO_DB_DIR: env }, encoding: 'utf8' }) }
+      return { code: 0, out: execFileSync(process.execPath, ['cli/check-data-hygiene.cjs'], { timeout: 180000, cwd: APP_ROOT, env: { ...process.env, TODO_DB_DIR: env }, encoding: 'utf8' }) }
     } catch (e) {
       return { code: e.status, out: String(e.stdout || '') + String(e.stderr || '') }
     }
@@ -218,7 +218,7 @@ test('d24 hygiene: gate exits 1 with the planted empty-name category flagged, 0 
 /* ---------- NEW verb: category cleanup-empty ---------- */
 function runCli (args, dbDir, backupDir) {
   try {
-    return { code: 0, out: execFileSync(process.execPath, ['cli/pickdone.js', ...args], { cwd: APP_ROOT, env: { ...process.env, TODO_DB_DIR: dbDir, TODO_BACKUP_DIR: backupDir || '' }, encoding: 'utf8' }) }
+    return { code: 0, out: execFileSync(process.execPath, ['cli/pickdone.js', ...args], { timeout: 180000, cwd: APP_ROOT, env: { ...process.env, TODO_DB_DIR: dbDir, TODO_BACKUP_DIR: backupDir || '' }, encoding: 'utf8' }) }
   } catch (e) {
     return { code: e.status, out: String(e.stdout || '') + String(e.stderr || '') }
   }

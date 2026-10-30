@@ -33,6 +33,14 @@ const SYNC_OPLOG_KEEP = 10000
  *  page through, so a larger request limit is pointless and a smaller one is honored. */
 const oplogKeepLimit = limit => Math.min(SYNC_OPLOG_KEEP, limit)
 
+// D2 fix (2026-10-21): the machine-local/meta-blob predicates come from the SHARED
+// machine-local-keys module (single source, same one sync-apply/command-manifest use). The old
+// lazy require of the sync-apply module pulled electron-log through its import chain and THREW
+// in the plain-CLI process (no electron runtime), so the catch returned false and the ring
+// filter was silently DISABLED for every CLI write — machine-local bookkeeping pointers
+// re-entered the ring.
+const machineLocalKeys = require('../../shared/machine-local-keys.mjs')
+
 module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) => {
   /* ---------- Change-capture oplog (P1 sync groundwork, 2026-09-15) ---------- */
   // One sync_oplog row per successful write op. Appended in call() (db layer, like the ledger hook) so
@@ -42,9 +50,19 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
   // full snapshots, not by unbounded log retention.
   // entity + affected ids per write op (batch ops expand to one row per id so deltas are row-granular)
   function oplogEntriesFor (op, params, result) {
+    // D2 fix (2026-10-21): ghost-pointer filter at the boundary — `one()` returns null for an
+    // empty/absent id (same rule arr() always applied), and no null may leak to appendOplog's
+    // ring bookkeeping or any external consumer of this exporter.
+    return oplogEntriesForRaw(op, params, result).filter(Boolean)
+  }
+
+  function oplogEntriesForRaw (op, params, result) {
     const now = Date.now()
-    const one = (entity, entityId) => ({ entity, entityId: String(entityId), ts: now })
-    const arr = (entity, ids) => (Array.isArray(ids) ? ids : [ids]).filter(v => v != null && v !== '').map(id => one(entity, id))
+    // D2 fix (2026-10-21): `one` filters empty/absent ids exactly like `arr` always did — a null
+    // params key (e.g. setMeta called without a key, or a bad call shape) used to log a GHOST
+    // pointer with entityId 'null'/'undefined' that peers then hydrated as junk rows.
+    const one = (entity, entityId) => (entityId == null || entityId === '' ? null : { entity, entityId: String(entityId), ts: now })
+    const arr = (entity, ids) => (Array.isArray(ids) ? ids : [ids]).filter(v => v != null && v !== '').map(id => one(entity, id)).filter(Boolean)
     switch (op) {
       case 'upsert': return [one('todo', params && params.taskId)]
       case 'upsertMany': return arr('todo', (params || []).map(t => t && t.taskId))
@@ -175,12 +193,10 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
   // the push watermark could never catch up with generation, and Device Center permanently
   // showed a few hundred "pending" rows that were pure self-echo. hydrateRow already refuses
   // them at egress (peers apply 0); the ring is the earlier choke point and the cheaper fix.
-  let localKeyPredicates = null
   function isLocalBookkeeping (entity, entityId) {
-    try { if (!localKeyPredicates) localKeyPredicates = require('./sync-apply.js') } catch { return false }
     const k = String(entityId)
-    if (entity === 'setting') return localKeyPredicates.isMachineLocalSettingKey(k)
-    if (entity === 'meta') return localKeyPredicates.isMachineLocalMetaKey(k) || localKeyPredicates.isSyncBlobMetaKey(k)
+    if (entity === 'setting') return machineLocalKeys.isMachineLocalSettingKey(k)
+    if (entity === 'meta') return machineLocalKeys.isMachineLocalMetaKey(k) || machineLocalKeys.isSyncBlobMetaKey(k)
     return false
   }
   // r4 fix (2026-09-28): oplogEntriesFor runs OUTSIDE appendOplog's try/catch (db.js call()),
@@ -198,7 +214,7 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
         oplogInsert = getDb().prepare('INSERT INTO sync_oplog (entity, entityId, ts) VALUES (?, ?, ?)')
         oplogCount = getDb().prepare('SELECT COUNT(*) n FROM sync_oplog')
       }
-      const kept = entries.filter(e => !isLocalBookkeeping(e.entity, e.entityId))
+      const kept = entries.filter(e => e && !isLocalBookkeeping(e.entity, e.entityId))
       if (!kept.length) return
       const tr = getDb().transaction(() => kept.forEach(e => oplogInsert.run(e.entity, e.entityId, e.ts)))
       tr()
@@ -229,7 +245,12 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
     const ins = getDb().prepare('INSERT INTO sync_oplog (entity, entityId, ts) SELECT ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM sync_oplog WHERE entity = ? AND entityId = ?)')
     let seeded = 0
     for (const r of rows || []) {
-      const ts = Number(r.ts) > 0 ? Number(r.ts) : now
+      // W8 fix (2026-10-25): the ts-less fallback was a blanket Date.now() for EVERY entity,
+      // contradicting the D13 doctrine right above (meta has no stored age → epoch-oldest 1).
+      // Discriminate by entity: meta keys seed at 1 (any genuine peer edit wins the next LWW
+      // round); row-table entities (todos/categories/plan/filter/tomato/settings) fall back to
+      // now — an unstamped legacy row there is genuinely fresh-on-this-device.
+      const ts = Number(r.ts) > 0 ? Number(r.ts) : (r.entity === 'meta' ? 1 : now)
       seeded += ins.run(r.entity, String(r.id), ts, r.entity, String(r.id)).changes
     }
     return { seeded }

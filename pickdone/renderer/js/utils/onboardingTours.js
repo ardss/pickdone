@@ -57,7 +57,9 @@ const TOURS = {
   /* Task-row tomato pips: first lesson of the ledger concept after the first tomato is recorded */
   pips: () => ({
     steps: [
-      { element: '.td-tomcount', popover: { title: tt(T('pipsTitle')), description: tt(T('pipsDesc')), side: 'top', align: 'center' } }
+      /* 2026-09-03 一体胶囊重构: td-tomcount 已被 .td-tom 取代(TodoItem.vue)——旧选择器是死链,
+         runTour 对空 steps 静默 return false,pips tour(含设置页重看)因此从未弹出过 */
+      { element: '.td-tom', popover: { title: tt(T('pipsTitle')), description: tt(T('pipsDesc')), side: 'top', align: 'center' } }
     ]
   }),
   /* Edit panel: the description area's image/attachment toolbar (tour of Plan B's unified entry) */
@@ -127,6 +129,35 @@ export function tourSeenState () { return seenMap() }
    Each completed action auto-advances to the next step; skip and next are always available, never trapping the user.
    No mask during the drag stage (the driver spotlight only lets through the highlighted element; dragging needs both ends interactive) — replaced by a persistent banner. */
 const J_SEED_TEXT = () => tt(T('jSeedTask'))
+/* ============ 引导示例任务的清理账本 ============
+ * 种子经真实输入链落库(拿不到同步返回值),落库后按内容回查 taskId 记入 localStorage;
+ * 旅程任何出口(finishAll 覆盖 ✕/跳过/超时安全出口/完成页)回收:任务仍是种子原文且未完成
+ * 才静默软删——用户改过内容或已勾选的,视为已"收养",绝不动。 */
+const J_SEED_LS = 'onboardingJourneySeedTaskId'
+function rememberSeed () {
+  try {
+    const st = window.appUI && window.appUI.$store
+    if (!st) return
+    const row = st.state.todo.todoList.find(t => t.taskContent === J_SEED_TEXT() && !t.delete)
+    if (row) localStorage.setItem(J_SEED_LS, String(row.taskId))
+  } catch (e) { /* store not mounted / stub host */ }
+}
+/* Exported for the regression suite; production calls it only from finishAll. */
+export function cleanupJourneySeed () {
+  let id = null
+  try { id = localStorage.getItem(J_SEED_LS) } catch (e) { return false }
+  try { localStorage.removeItem(J_SEED_LS) } catch (e) { /* ignore */ }
+  if (!id) return false
+  try {
+    const st = window.appUI && window.appUI.$store
+    if (!st) return false
+    const row = st.state.todo.todoList.find(t => String(t.taskId) === String(id))
+    // 守卫三连:仍是种子原文、未完成、不在回收站,三者都成立才回收
+    if (!row || row.complete || row.delete || row.taskContent !== J_SEED_TEXT()) return false
+    Promise.resolve(st.dispatch('todo/deleteTodo', row)).catch(() => {}) // 静默:旅程收场不追加撤销 toast
+    return true
+  } catch (e) { return false }
+}
 /** Poll until test() passes. With maxMs > 0 the poll self-terminates once the budget is spent
  *  and calls onTimeout (safe exit) instead of ticking forever when the awaited element never renders. */
 const poll = (test, cb, interval = 400, maxMs = 0, onTimeout = null) => {
@@ -172,18 +203,16 @@ export function runJourney (force = false) {
   // polling forever. finishAll is declared below; the closures only run after runJourney returns.
   const JOURNEY_POLL_CAP_MS = 30000
   const pollCapped = (test, cb) => poll(test, cb, 300, JOURNEY_POLL_CAP_MS, () => finishAll())
-  if (!document.querySelector('.td-item')) {
-    seedOnce()
-    watch = pollCapped(() => !!document.querySelector('.td-item'), () => {
-      clearWatch()
-      stageCreate()
-    })
-    // Sample task not landed within 2.4s = creation failed (input chain busy/view abnormal); retry once
-    setTimeout(() => {
-      if (!document.querySelector('.td-item') && !document.querySelector('.tour-journey-banner')) seedOnce()
-    }, 2400)
-    return true // stageCreate is relayed by the poll above
-  }
+  // Every journey watch rides the capped wrapper whose timeout exits through finishAll.
+  // pollCappedTour (J-audit P3 fix, 2026-10-22) additionally refuses the timeout exit while a
+  // driver popover is on screen: an open popover means the user is mid-tour, not stuck — the old
+  // unconditional 30s exit tore the journey down (and silently soft-deleted the seed) while the
+  // instruction card was still up. It re-arms the same watch instead; with no popover open the
+  // safe exit applies as before.
+  const pollCappedTour = (test, cb, rearm) => poll(test, cb, 300, JOURNEY_POLL_CAP_MS, () => {
+    if (document.querySelector('.driver-popover')) rearm()
+    else finishAll()
+  })
   let ending = false // × close = exit the whole journey (no relaying to the next stage); next-step/auto-advance is the only way forward
   let advancing = false // guards driver.js onDestroy firing synchronously during a poll-driven stage switch: without it, destroy() → onDestroy → onDone re-enters the next stage, double-advancing and leaking a duplicate driver
   const singleStep = (step, onDone, { doneLabel = false } = {}) => {
@@ -196,6 +225,9 @@ export function runJourney (force = false) {
       overlayOpacity: 0.4,
       nextBtnText: doneLabel ? tt(T('done')) : tt(T('next')),
       doneBtnText: doneLabel ? tt(T('done')) : tt(T('next')),
+      // [J-audit P4] runTour passes prevBtnText; singleStep forgot it, so the (disabled) first-step
+      // back button rendered driver.js's English default "← Previous" in the zh UI.
+      prevBtnText: tt(T('prev')),
       onDestroy: () => {
         clearWatch()
         if (!ending && !advancing && onDone) onDone()
@@ -212,6 +244,8 @@ export function runJourney (force = false) {
     if (drv) { try { drv.destroy() } catch (e) { /* empty */ } drv = null }
     const b = document.querySelector('.tour-journey-banner')
     if (b) b.remove()
+    // ✕/跳过/超时安全出口/完成页全部汇聚于此:回收用户没收养的示例任务
+    cleanupJourneySeed()
   }
   // Stage E: completion page (re-view entry)
   const stageDone = () => {
@@ -239,15 +273,42 @@ export function runJourney (force = false) {
       watch = pollCapped(() => !!document.querySelector('.td-tom.active'), () => { clearWatch(); stageDrag() })
     })
   }
-  // Stage A: create your own task (task count growing above baseline = user-created, auto-advance; baseline is snapshotted only after the sample task renders, so the seed isn't mistaken for user creation)
+  // Stage A: create your own task. [J-audit P3 fix, 2026-10-22] The instruction popover must
+  // ALWAYS arm: stageCreate is reached only after the seed has rendered (or the user's own rows
+  // are on screen), so the old `if (document.querySelector('.td-item')) { armGrowth(); return }`
+  // shortcut matched the SEED itself and the jCreate popover never fired — the user saw a silent
+  // sample task appear with zero guidance and, after the 30s cap, silently vanish (finishAll
+  // soft-deletes the unadopted seed). The growth baseline counts rows MINUS the seed row, so
+  // creating your own task still auto-advances exactly as before.
   const stageCreate = () => {
-    const armGrowth = () => {
-      const baseCount = document.querySelectorAll('.td-item').length
-      watch = pollCapped(() => document.querySelectorAll('.td-item').length > baseCount, () => { clearWatch(); stagePick() })
-    }
-    if (document.querySelector('.td-item')) { armGrowth(); return }
-    watch = pollCapped(() => !!document.querySelector('.td-item'), () => { clearWatch(); armGrowth() })
+    const seedText = J_SEED_TEXT()
+    const userItemCount = () => [...document.querySelectorAll('.td-item')].filter(el => !(el.textContent || '').includes(seedText)).length
+    // singleStep FIRST, growth watch SECOND: singleStep's clearWatch() would kill a watch armed
+    // before it (J-audit round 2 ordering fix — auto-advance-on-create must survive the popover).
     singleStep({ element: '.qa-input', popover: { title: tt(T('jCreateTitle')), description: tt(T('jCreateDesc')), side: 'bottom', align: 'start' } }, stagePick)
+    const armGrowth = () => {
+      const baseCount = userItemCount()
+      watch = pollCappedTour(() => userItemCount() > baseCount, () => { clearWatch(); stagePick() }, armGrowth)
+    }
+    armGrowth()
+  }
+  // Seed presetting (fresh install only). [J-audit round 2, 2026-10-22] This block MUST stay
+  // BELOW every stage closure: it early-returns, and before today it sat above `let ending` /
+  // `const singleStep` / `const stageCreate` — its async relay then called stageCreate() with
+  // those consts still in TDZ, throwing a ReferenceError INSIDE the poll interval (swallowed,
+  // unlogged): the journey died silently on every version — no popover, no advance, no cleanup.
+  if (!document.querySelector('.td-item')) {
+    seedOnce()
+    watch = pollCapped(() => !!document.querySelector('.td-item'), () => {
+      clearWatch()
+      rememberSeed() // 种子已渲染:按内容回查 taskId 记入清理账本(finishAll 据此回收)
+      stageCreate()
+    })
+    // Sample task not landed within 2.4s = creation failed (input chain busy/view abnormal); retry once
+    setTimeout(() => {
+      if (!document.querySelector('.td-item') && !document.querySelector('.tour-journey-banner')) seedOnce()
+    }, 2400)
+    return true // stageCreate is relayed by the poll above
   }
   // Start once the quick-add box is ready
   watch = pollCapped(() => !!document.querySelector('.qa-input'), () => { clearWatch(); stageCreate() })

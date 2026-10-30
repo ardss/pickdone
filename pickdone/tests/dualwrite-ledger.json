@@ -131,6 +131,10 @@
     "authority": "local-only",
     "note": "今日页视图模式偏好"
   },
+  "renderer/js/views/TomatoFloatPage.vue::tomatoFloatVisPing": {
+    "authority": "local-only",
+    "note": "J2 float-close signal token: value is a write timestamp, never read as state; TomatoBar's storage listener re-queries real visibility over IPC. Cross-window trigger only, no DB channel or sync semantics"
+  },
   "renderer/js/utils/dayPlans.js::dayPlanState": {
     "authority": "sqlite",
     "note": "排程芯片根修(2026-09-03):唯一权威=SQLite plan_chips 行;LS 仅一次性兜底导入后删除,永不回写"
@@ -206,5 +210,9 @@
   "renderer/js/store/helpers/tomatoPendingQueue.js::#legacyKey": {
     "authority": "sqlite",
     "note": "One-time migration of the legacy whole-blob queue mirrors (tomatoPendingLedger / tomatoPendingSnow, authority migrated with them = SQLite): read blob, split into per-entry keys under prefix, then removeItem the blob key. Idempotent (absent key = already migrated); corrupt blob quarantined under ::#key before the degrade."
+  },
+  "renderer/js/utils/onboardingTours.js::onboardingJourneySeedTaskId": {
+    "authority": "sqlite",
+    "note": "旅程示例任务清理指针;权威源是sqlite里的todo行(taskContent===种子文本),LS只存taskId指针,finishAll时校验内容/完成态/回收站后软删并消费,不跨端同步"
   }
 }

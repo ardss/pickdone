@@ -3,7 +3,11 @@
  *  local:// maps the userData/files attachment directory */
 const path = require('path')
 const fs = require('fs')
-const { attachDir, attachmentPath } = require('./attachments')
+const { attachDir, attachmentPath, resolveAttachmentCase } = require('./attachments')
+
+// F3 (2026-10-19): cached realpath of the attachment dir for the local:// symlink-escape check
+// (see the handler comment). Null until first resolved; recomputed on transient failure.
+let realRoot = null
 
 /* Media elements (audio/video) in newer Chromium (confirmed on Electron 39) require Range support from custom protocols:
    replying with a whole-file 200 makes <audio> fail outright with MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) — white noise/confirm sounds all mute.
@@ -42,7 +46,13 @@ async function fileResponse (file, mime, request, extraHeaders) {
       return new Response('range not satisfiable', { status: 416, headers: { 'Content-Range': 'bytes */' + total } })
     }
     const out = buf.subarray(0, bytesRead)
-    headers['Content-Range'] = 'bytes ' + start + '-' + (start + bytesRead - 1) + '/' + total
+    // W18 fix: `total` used to stay the stale stat size even after a concurrent shrink, so the
+    // Content-Range could claim "bytes start-end/<old-larger-total>" with a body that stops short —
+    // the header then disagrees with reality. The bytes in hand are the ground truth: the resource
+    // as served is exactly start + bytesRead long (this is the same contract the 200 path's
+    // Content-Length fix below already uses — headers must describe the body actually sent).
+    const totalServed = start + bytesRead
+    headers['Content-Range'] = 'bytes ' + start + '-' + (start + bytesRead - 1) + '/' + totalServed
     headers['Content-Length'] = String(out.length)
     return new Response(out, { status: 206, headers })
   }
@@ -72,8 +82,20 @@ function handleAppProtocol () {
       // the executable) came back as 200 octet-stream through app://. Only the three trees the
       // renderer actually loads are served now; everything else is 404. src/preload is NOT a root:
       // the preload script is loaded via a filesystem path (windows.js), not app://.
-      const top = u.replace(/\\/g, '/').split('/')[0]
-      if (!APP_ROOTS.includes(top)) return new Response('not found', { status: 404 })
+      // W16 (2026-10-28 P1): the allowlist top-segment used to be read from the RAW decoded u, but
+      // path.join/normalize below treats an encoded backslash (%5C) as a real separator on Windows —
+      // 'renderer-dist%5C..%5C..%5Csrc%5Cmain%5Cdb.js' had top='renderer-dist' while the resolved
+      // file escaped to <root>/src/main/db.js, re-opening the whole install tree (the very hole the
+      // 2026-10-02 hardening closed). The decision now runs on the NORMALIZED, root-relative path:
+      // a relative path whose first segment is not an allowlisted root (incl. any surviving '..'
+      // segment or an absolute escape) can never pass. On POSIX %5C stays a literal filename char
+      // and the normalized check is equally strict.
+      const rel = path.relative(root, file)
+      const segs = rel.split(path.sep)
+      if (!rel || rel.startsWith('..') || path.isAbsolute(rel) ||
+          segs.some(s => s === '..') || !APP_ROOTS.includes(segs[0])) {
+        return new Response('not found', { status: 404 })
+      }
       const mime = {
         '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript',
         '.css': 'text/css', '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg', '.svg': 'image/svg+xml',
@@ -100,10 +122,38 @@ function handleAppProtocol () {
   // local:// local attachment protocol (maps userData/files)
   protocol.handle('local', async (req) => {
     try {
-      const key = decodeURIComponent(req.url.slice('local://'.length))
-      const resolved = path.resolve(attachmentPath(key))
+      // W16 (2026-10-28 P1): two url mint forms arrive here. NEW (saveAttachment since this wave):
+      // path form `local:///<encoded-key>` — the key lives in the URL's PATH component, which
+      // Chromium preserves verbatim (no lowercasing, no IDNA/punycode transcoding), so decoding
+      // recovers the exact on-disk name (fixes Chinese/uppercase paste-image 404s). LEGACY (rows
+      // already in the DB): host form `local://<encoded-key>` — the host is lowercased (case
+      // fallback below) and non-ASCII hosts were punycoded by Chromium (unrecoverable; those
+      // stale rows fall back to the case-insensitive scan / 404 as before). Strip one leading
+      // '/' to normalize both forms onto the same key.
+      let keyRaw = req.url.slice('local://'.length)
+      if (keyRaw.startsWith('/')) keyRaw = keyRaw.slice(1)
+      const key = decodeURIComponent(keyRaw)
+      let resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
+      // W16 (2026-10-28 P2): Chromium lowercases the HOST of a standard-scheme url, so a local://
+      // key with uppercase can arrive lowercased; on a case-sensitive FS the exact path misses and
+      // the request 404'd. Resolve to the real on-disk name (exact hit keeps the path untouched;
+      // otherwise the unique case-insensitive basename match) BEFORE the bookkeeping/realpath
+      // checks so those see the true file name.
+      resolved = resolveAttachmentCase(resolved)
+      // P3 F3 (2026-10-19): the lexical check above does not follow symlinks — a symlink inside
+      // attachDir pointing at e.g. the user's homedir made the containment test pass while
+      // readFile served the target bytes (arbitrary read). Resolve BOTH sides with realpath and
+      // compare real paths: an escaped resolution is 403; an unresolvable key (missing file /
+      // dangling link) keeps the existing 404 contract. attachRoot's realpath is cached — the
+      // attachment dir never moves mid-process; one fs syscall per request for the file itself.
+      let real = null
+      try { real = await fs.promises.realpath(resolved) } catch { return new Response('nf', { status: 404 }) }
+      try { realRoot = realRoot || await fs.promises.realpath(attachRoot) } catch { realRoot = null }
+      if (!realRoot || !(real === realRoot || real.startsWith(realRoot + path.sep))) return new Response('forbidden', { status: 403 })
+      // Serve the REAL path so a symlink swap between check and read cannot race the decision.
+      resolved = real
       // sec-local-protocol (2026-10-02): bookkeeping/tmp files are never served. aliases.json is the
       // LAN conflict alias map (internal state), .att-tmp-* are atomic-write temp files from
       // writeAtomic / att-transfer — neither is user content. Attachment keys minted by

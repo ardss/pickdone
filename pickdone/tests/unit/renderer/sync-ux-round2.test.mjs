@@ -91,10 +91,13 @@ test('P1-3: external-settings-changed is routed through settings/updateExternal'
 /* ---------------- P2b: conflict toast singleton + rate limit ---------------- */
 
 test('P2b: conflict toast path reuses one instance and rate-limits to 30s', () => {
-  const src = read('renderer/js/main.js')
-  assert.match(src, /_conflictToast/, 'singleton toast handle exists')
-  assert.match(src, /_conflictToast\.close\(\)/, 'previous instance is closed, not stacked')
-  assert.match(src, /30 \* 1000/, '30s minimum interval between shows')})
+  // [H2 2026-10-25] the wiring moved to utils/syncDegradedToast.js (structure ratchet
+  // split) — same contract, new home: singleton handle, close-not-stack, 30s interval.
+  const src = read('renderer/js/utils/syncDegradedToast.js')
+  assert.match(src, /conflictToast/, 'singleton toast handle exists')
+  assert.match(src, /conflictToast\.close\(\)/, 'previous instance is closed, not stacked')
+  assert.match(src, /30 \* 1000/, '30s minimum interval between shows')
+})
 
 /* ---------------- P2c: unpaired-by-remote peer card ---------------- */
 
@@ -164,12 +167,17 @@ test('P2f: tomatoAnnounce clears remote announces when sync is disabled', () => 
   assert.match(tab, /tomatoAnnounce\/clearRemote/, 'toggle-off drops the chip immediately')
 })
 
-/* ---------------- P1-4i: updater channel pin ---------------- */
+/* ---------------- P1-4i: updater channel shape ---------------- */
 
-test('P1-4i: updater pins channel to latest (beta.yml 404 fix)', () => {
+test('P1-4i: updater leaves channel unset (beta.yml fallback + prerelease matcher), allowPrerelease on', () => {
   const src = read('src/main/updater.js')
-  assert.match(src, /autoUpdater\.channel = 'latest'/)
-  assert.match(src, /autoUpdater\.allowPrerelease = true/, 'beta app versions still satisfy the range check')
+  // 2026-10-29 beta.21 实锤: electron-updater 6.8.9 GitHubProvider 的 prerelease 匹配要求 channel
+  // 为 null 或 alpha/beta (`shouldFetchVersion = !channel || ['alpha','beta'].includes(channel)`) —
+  // 旧的 channel='latest' 钉法让任何 beta tag 都匹配不上 → "No published versions on GitHub" 永远报错。
+  // channel 未设时: currentVersion(beta) 得 currentChannel='beta' 正常匹配; feed 文件经 allowPrerelease
+  // 回落 latest.yml(beta.yml 404 fallback)。两者缺一不可,钉死防回潮。
+  assert.doesNotMatch(src, /autoUpdater\.channel\s*=/, 'channel must stay unset — pinning latest breaks the beta matcher')
+  assert.match(src, /autoUpdater\.allowPrerelease = true/, 'prerelease match + latest.yml 404 fallback both require it')
 })
 
 /* ---------------- P1-4k: check-all live stage ceilings ---------------- */
@@ -180,9 +188,15 @@ test('P1-4k: every Electron live (③) stage tuple carries an explicit named cei
   // EOL-agnostic (repo checkouts may be CRLF): strip \r before anchored matches
   const segLines = seg.split('\n').map(l => l.replace(/\r$/, ''))
   const stageLines = segLines.filter(l => l.trim().startsWith("['"))
-  assert.ok(stageLines.length >= 9, 'live stages found')
+  // 2026-10-23 speed wave: the six run-interactions-gated lanes were consolidated into ONE
+  // shared-instance stage (tests/run-interactions-shared.mjs) — live pool is 5 stages now.
+  // The floor stays a sanity check against silently emptying the pool, not a shape pin.
+  assert.ok(stageLines.length >= 5, 'live stages found')
   for (const l of stageLines) {
-    assert.match(l, /, 20\],$/, `stage lacks a 20min ceiling: ${l.slice(0, 60)}`)
+    // Intent (2026-09-19 doctrine): every live stage carries an EXPLICIT named minute ceiling,
+    // none rides the 15min default. The value itself may differ per stage (the shared pool runs
+    // 6 sequential targets -> 30), so the pin is on explicitness, not on the number 20.
+    assert.match(l, /, \d+\],$/, `stage lacks an explicit named ceiling: ${l.slice(0, 60)}`)
   }
 })
 

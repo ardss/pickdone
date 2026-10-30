@@ -11,6 +11,9 @@ module.exports = function attachmentHandlers (ctx) {
   // D6 P2 (2026-09-21): destructive attachment channels are main-window-only, same capability
   // class as the backup channels hardened for this exact threat (compromised aux window).
   const assertMainWindow = require('./shared').makeAssertMainWindow(getMainWindow)
+  // W19: cached realpath of the attachment root for open-file containment (the dir never moves
+  // mid-process — same one-syscall amortization as protocol.js's realRoot).
+  let realAttachRoot = null
 
   return {
     // --- Attachments (offline localization) ---
@@ -26,7 +29,16 @@ module.exports = function attachmentHandlers (ctx) {
       if (isLocked()) throw new Error('locked')
       if (typeof url !== 'string') return false // F2 2026-09-15: 非字符串 url 此前在 startsWith 处 TypeError;与 save-upload-file-to-download 守卫同款
       if (url.startsWith('local://')) {
-        const p = attachmentPath(url.slice(8))
+        // W17: resolve the case-insensitive fallback BEFORE the missing guard — Chromium
+        // lowercased keys rendered fine via the serve boundary's W16 fallback but this path
+        // used the RAW name: every open reported missing (one wasted sync round per click)
+        // and every delete ENOENT'd. No match → the raw path keeps the original contracts.
+        const p = attachments.resolveAttachmentCase(attachmentPath(url.slice(8)))
+        // sec-local-protocol parity (W18 fix): the serve boundary (protocol.js:157) 404s internal
+        // bookkeeping files (aliases.json, .att-tmp-* atomic-write temps) — but this handler opened
+        // them straight via shell.openPath, leaking the LAN alias map (and stale temp bytes) to
+        // whatever OS handler claims .json. Same decision, IPC shape: refuse like an unknown scheme.
+        if (require('../protocol').isLocalBookkeepingFile(path.basename(p))) return false
         // Missing-file guard (feature: LAN-synced attachments): the metadata row may arrive
         // before the file is pulled over. Structured result -> renderer toasts "not yet
         // synced" instead of a raw open failure. P1-8 (2026-09-19 UX review): the missing key
@@ -35,6 +47,19 @@ module.exports = function attachmentHandlers (ctx) {
         if (!fs.existsSync(p)) {
           try { if (notifySyncChange) notifySyncChange('attachment-missing-open') } catch { /* sync lazy-not-init */ }
           return { missing: true, name: path.basename(p) }
+        }
+        // W19 (2026-10-30) symlink containment, sec-local-protocol parity: the serve boundary
+        // (protocol.js:145-156) realpath-compares BOTH sides before serving — but this handler
+        // handed the lexically-contained path straight to shell.openPath. A symlink inside the
+        // attachment store pointing at e.g. the user's homedir passed the lexical check and opened
+        // the TARGET via whatever OS handler claims the extension. Fail-closed like the protocol:
+        // an escaped resolution (or an unresolvable race-torn path) refuses the open.
+        try {
+          const real = await fs.promises.realpath(p)
+          realAttachRoot = realAttachRoot || await fs.promises.realpath(attachDir())
+          if (!(real === realAttachRoot || real.startsWith(realAttachRoot + path.sep))) return false
+        } catch {
+          return false // realpath failed (dangling symlink / vanished between existsSync and here): fail-closed
         }
         // Fault-7 (D12 2026-10-01): shell.openPath resolves with an ERROR STRING ('' = success) —
         // the old fire-and-forget `shell.openPath(p); return true` discarded it and claimed
@@ -60,7 +85,7 @@ module.exports = function attachmentHandlers (ctx) {
     // r3 dead-channel removal (2026-09-28): 'download-file-and-open' and
     // 'save-upload-file-to-download' deleted — todoAPI.downloadAndOpen/saveToDownloads had
     // zero renderer callers (open-file serves the live attachment path).
-    'delete-file': (e, url) => {
+    'delete-file': (e, url, opts) => {
       assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like backup write
       if (isLocked()) throw new Error('locked')
       if (typeof url !== 'string') return false // F2 2026-09-15: 同 open-file/download-file 的 typeof 守卫(此前 startsWith TypeError)
@@ -77,7 +102,38 @@ module.exports = function attachmentHandlers (ctx) {
       // double-decode names that legitimately contain '%'), with attachmentPath's same fallback
       // (malformed encoding falls back to the raw key).
       const key = url.slice(8)
-      try { fs.unlinkSync(attachmentPath(key)) } catch (err) {
+      // F2 (2026-10-15): shared-reference guard BEFORE any unlink — deleting task A's attachment
+      // entry used to unlink the physical file by key alone, but the same `local://` key can be
+      // referenced by OTHER todo rows (copy/paste of an entry, repeat templates, a hand-edited
+      // row): task B's only copy died silently. Scan every live row's image/files metadata; if
+      // another row still references the key, refuse with a structured message (the file stays).
+      // `opts.force` bypasses (parity with the CLI's `--force`). The renderer already re-checks
+      // its own store row before calling (EditPanel deleteFromDisk), and the row flush lands
+      // during the undo-toast window, so by the time this runs a surviving reference is a REAL
+      // other-task reference. A db scan failure keeps the old behavior (fail-open) rather than
+      // bricking every delete on a transient read error. The alias map is keyed by the DECODED
+      // name (B5), so the reference scan uses the decoded key too.
+      let aliasKey = key
+      try { aliasKey = decodeURIComponent(key) } catch { /* malformed encoding: use raw (matches attachmentPath) */ }
+      // sec-local-protocol parity (W18 fix): same bookkeeping guard as the serve boundary
+      // (protocol.js:157) — before this, a local://aliases.json / .att-tmp-* url deleted the
+      // internal alias map or an in-flight atomic-write temp straight via unlinkSync. Refuse
+      // honestly (false = "nothing deleted", same shape as the unknown-scheme path above).
+      if (require('../protocol').isLocalBookkeepingFile(path.basename(aliasKey))) return false
+      if (!(opts && opts.force)) {
+        let rows = null
+        try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }
+        if (rows) {
+          const refs = attachments.findKeyRefs(aliasKey, rows)
+          if (refs.length) {
+            const tasks = [...new Set(refs.map(r => String(r.taskId)))]
+            throw new Error('delete-file refused: "' + path.basename(aliasKey) + '" is still referenced by ' + tasks.length + ' other task row(s) (' + tasks.join(', ') + ')')
+          }
+        }
+      }
+      // W17: same case-fallback as open-file above — deleting a lowercased-key row must hit the
+      // real on-disk name instead of ENOENT (no match → raw path, ENOENT stays idempotent-success).
+      try { fs.unlinkSync(attachments.resolveAttachmentCase(attachmentPath(key))) } catch (err) {
         // Already-gone is success (idempotent delete); anything else is a real failure
         if ((err && err.code) !== 'ENOENT') throw new Error('delete-file failed: ' + String((err && err.message) || err))
       }
@@ -85,8 +141,6 @@ module.exports = function attachmentHandlers (ctx) {
       // target (aliased from the row's original local://key), drop the alias too — otherwise
       // the stale entry keeps resolving the dead key to the now-missing renamed file and the
       // missing-file guard can never re-pull the original key.
-      let aliasKey = key
-      try { aliasKey = decodeURIComponent(key) } catch { /* malformed encoding: use raw (matches attachmentPath) */ }
       try { require('../attachments').deleteAlias(aliasKey) } catch { /* best-effort */ }
       return true
     },

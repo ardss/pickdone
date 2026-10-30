@@ -94,7 +94,7 @@ Write commands:
 
 Global options:
   --json   structured output (recommended for AI; write responses include a next suggestions field)
-  --limit N  list/search result cap (default 200, max 500, protects context)
+  --limit N  list/search result cap (default 200, max 5000, protects context)
 Version & updates:
   version                         show CLI/App version (--version / -v also work; --json for structured output)
   update                          check GitHub for a newer release (installing stays in the App's updater)
@@ -113,4 +113,47 @@ Environment:
   TODO_USER_DATA_DIR  main-process isolation var (userData root); used by the CLI when TODO_DB_DIR is unset
   TODO_BACKUP_DIR     backup snapshot directory override (default: <userData>/backups)`
 
-module.exports = HELP
+/* ---- C1 fix 1: per-command flag whitelist, co-located with the help text so the documented
+   flags and the enforced flags stay one source of truth. pickdone.js imports these and calls
+   assertKnownFlags right after parseArgs; the subcommand routers (category/tag/project/view/
+   plan/tomato/sync/...) own their flag parsing inside lib-*.cjs and are not listed here. ---- */
+// Keys that TAKE a value (C1 fix 2): when the next argv token starts with `--` (or is absent)
+// these must not silently degrade to a boolean `true` (edit id --content --urgent wrote content=1).
+// NOTE: `limit`/`n` deliberately NOT here — their bare-flag form is a documented lenient fallback
+// to the default cap (list --limit bare must not collapse the result, f6-7); `on` is a boolean
+// toggle on `project` and only value-taking on `list` (whitelist still enforces the value form).
+const VALUE_KEYS = [
+  'content', 'desc', 'date', 'reminder', 'deadline', 'estimate', 'category', 'difficulty',
+  'priority', 'important', 'urgent', 'after', 'created-at', 'at', 'to', 'add', 'rm',
+  'format', 'file', 'view', 'quad', 'keyword', 'action', 'from',
+  'project', 'parent', 'color', 'reason', 'minutes', 'rest', 'succeed', 'task',
+  'host', 'port', 'timeout', 'code', 'account', 'base-url', 'root-key',
+  'type', 'interval', 'weekdays', 'monthday', 'count', 'remind-offset', 'remind-extra', 'status'
+]
+const CMD_FLAGS = {
+  overview: [],
+  list: ['view', 'on', 'all', 'done', 'noDate', 'quad', 'category', 'keyword', 'limit', 'lunar'],
+  search: ['all', 'done', 'limit', 'lunar'],
+  get: [], categories: [],
+  stats: ['from', 'to'], recycle: [], log: ['n', 'action'],
+  add: ['desc', 'date', 'reminder', 'category', 'difficulty', 'priority', 'important', 'urgent', 'created-at', 'after', 'estimate', 'deadline'],
+  deps: [], ready: ['project'],
+  batch: ['to', 'add', 'rm'], sort: [],
+  done: ['at', 'no-sub-cascade'], undo: ['no-sub-cascade'],
+  edit: ['content', 'desc', 'date', 'reminder', 'remind-offset', 'remind-extra', 'category', 'important', 'urgent', 'priority', 'deadline', 'estimate', 'difficulty'],
+  delete: [], restore: [],
+  import: ['format', 'category', 'no-lists', 'lists'],
+  open: ['dev'], doctor: [],
+  clean: ['all', 'dry'], purge: ['dryRun'],
+  events: ['file'], skill: [], update: []
+}
+const GLOBAL_FLAGS = new Set(['json', 'help', 'yes', 'yesIKnow', 'dry-run'])
+// Flags whose long name the parser renames (--yes-i-know → opts.yesIKnow, --no-date → noDate,
+// --undone → done) are whitelisted under their OPTS key; CMD_FLAGS above already reflects that.
+function assertKnownFlags (CliError, cmd, opts) {
+  const allowed = CMD_FLAGS[cmd]
+  if (!allowed) return
+  const unknown = Object.keys(opts).filter(k => k !== '_' && !GLOBAL_FLAGS.has(k) && !allowed.includes(k))
+  if (unknown.length) throw new CliError(`unknown flag --${unknown[0]} for command "${cmd}" (run "help" for the flag list)`, 'USAGE')
+}
+module.exports = { HELP, VALUE_KEYS, CMD_FLAGS, GLOBAL_FLAGS, assertKnownFlags }

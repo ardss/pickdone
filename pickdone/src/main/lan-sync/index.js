@@ -382,8 +382,20 @@ function createLanSyncNode(opts) {
 
   function rememberPeer(peer) {
     if (!peer || !peer.deviceId || peer.deviceId === deviceId) return
-    // Self-dial guard: never admit a peer whose host is one of our own addresses (see ownHosts).
-    if (peer.host && ownHosts.has(peer.host)) return
+    // Self-dial guard: never admit a peer whose host is one of our own addresses (see ownHosts)
+    // — UNLESS this node is a per-instance-port debug instance (TODO_SYNC_PORT) and the peer
+    // advertises a DIFFERENT listen port on that address: that is another instance of the app
+    // on this same machine, the documented single-machine multi-instance debug scenario. The
+    // blanket drop silently swallowed such peers AFTER a half-successful pairing handshake:
+    // discovery listed the device, the handshake resolved, but the peer never entered the
+    // peers map — sync never ran and nothing errored. (2026-10-15 two-instance walkthrough,
+    // repro'd twice.) Self-pairing stays blocked by the deviceId equality check above; the
+    // same-port case (stale manual entry pointing at our own server) keeps the blanket drop.
+    if (peer.host && ownHosts.has(peer.host)) {
+      const ourPort = server && typeof server.port === 'number' ? server.port : null
+      const debugInstance = Number(process.env.TODO_SYNC_PORT) > 0
+      if (!(debugInstance && ourPort != null && peer.port != null && peer.port !== ourPort)) return
+    }
     // Bounded bookkeeping (round-3 review): a mDNS/UDP flood of random deviceIds must not grow
     // the peer/lastSeen maps without limit. Beyond MAX_PEERS, expel the LEAST-recently-seen
     // peer (never the incoming one) from every per-peer map.

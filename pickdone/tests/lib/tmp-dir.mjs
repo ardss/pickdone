@@ -21,6 +21,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'module'
 
 const require_ = createRequire(import.meta.url)
@@ -54,10 +55,61 @@ function installExitHooks () {
 // anything older than half a day cannot belong to a run in progress).
 const STALE_MS = 12 * 60 * 60 * 1000
 
-// The test suite's temp-dir prefix family (audit 2026-10-09): every direct
-// mkdtempSync(path.join(os.tmpdir(), '<prefix>...')) call in tests/ + pickdone/test/ uses
-// one of these families. Anything OUTSIDE the family is never touched.
-const FAMILY = /^(todo-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+// The test suite's temp-dir prefix family. [determinism 2026-10-25] the hard-coded list
+// had silently DRIFTED: 30+ prefix families added since the 2026-10-09 audit (att-, b5-,
+// v2s5-, gate-meta-, ...) were never swept, so every SIGKILLed child leaked its dirs into
+// %TEMP% forever (self-reinforcing load). The registry is now EXTRACTED from the test
+// sources themselves (mkdtempSync/isolatedTmpDir/withTmpDir/newTmpLib literals) — a new
+// prefix joins the sweep automatically. Fail-safe: if extraction finds suspiciously few
+// prefixes, fall back to the 2026-10-09 hard-coded family (never WIDEN the sweep face).
+const FAMILY_FALLBACK = /^(todo-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+
+let cachedPrefixes = null
+function collectPrefixesFromSources () {
+  if (cachedPrefixes) return cachedPrefixes
+  const prefixes = new Set(['todo-', 'lan-sync-', 'pickdone-']) // historic core, always in
+  const testsRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
+  // static part of the first string literal of a prefix argument (template literals
+  // contribute their static head; the trailing '-' is what makes it a directory prefix)
+  const res = [
+    /mkdtempSync\(\s*(?:path\.join\(\s*[^,)]+,\s*)?['"`]([^'"`$]+?)['"`]/g,
+    /(?:isolatedTmpDir|withTmpDir|newTmpLib)\(\s*['"`]([^'"`$]+?)['"`]/g
+  ]
+  const walk = dir => {
+    let entries = []
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) {
+        if (e.name !== '.artifacts' && e.name !== 'node_modules') walk(full)
+        continue
+      }
+      if (!/\.(mjs|js|cjs)$/.test(e.name)) continue
+      let src = ''
+      try { src = fs.readFileSync(full, 'utf8') } catch { continue }
+      for (const re of res) {
+        for (const m of src.matchAll(re)) {
+          let p = m[1]
+          if (!p.includes('-')) continue // not a directory-prefix shape
+          if (p.length > 40) continue // not a prefix (a path or a sentence)
+          if (!p.endsWith('-')) p = p.slice(0, p.lastIndexOf('-') + 1)
+          if (p) prefixes.add(p)
+        }
+      }
+    }
+  }
+  walk(testsRoot)
+  cachedPrefixes = prefixes
+  return prefixes
+}
+
+/** Prefix-family matcher used by the sweep. Falls back to the hard-coded family when the
+ * source extraction looks broken (too few prefixes = we would silently SHRINK the sweep). */
+function familyMatcher () {
+  const prefixes = collectPrefixesFromSources()
+  if (prefixes.size < 12) return name => FAMILY_FALLBACK.test(name)
+  return name => { for (const p of prefixes) if (name.startsWith(p)) return true; return false }
+}
 // Directory names carry the owning pid as `<prefix>...pid<pid>-<mkdtemp-random>` so the
 // sweeper can prove the owner is dead before deleting.
 const PID_RE = /pid(\d+)-/
@@ -85,9 +137,10 @@ export function sweepStaleTmpDirs () {
   let removed = 0
   let entries = []
   try { entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true }) } catch { return { scanned, removed } }
+  const isFamily = familyMatcher()
   const now = Date.now()
   for (const e of entries) {
-    if (!e.isDirectory() || !FAMILY.test(e.name)) continue
+    if (!e.isDirectory() || !isFamily(e.name)) continue
     scanned++
     const full = path.join(os.tmpdir(), e.name)
     let st = null

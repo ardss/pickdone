@@ -4,13 +4,12 @@
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
         <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span class="ep-save-retry" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.saveRetry')" @click="retrySave" @keydown="onSaveRetryKey">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
-        <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits —
-             never auto-overwrite user input; offer an explicit re-hydrate instead -->
+        <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits — never auto-overwrite user input; offer an explicit re-hydrate instead -->
         <div v-if="remoteStale" class="ep-remote-updated" role="status">
           <span>{{ $t('statsJ.EditPanel.remoteUpdated') }}</span>
           <span class="ep-remote-refresh" role="button" tabindex="0"
                 :aria-label="$t('statsJ.EditPanel.remoteRefresh')"
-                @click="refreshFromStore" @keydown.enter.prevent="refreshFromStore">{{ $t('statsJ.EditPanel.remoteRefresh') }}</span>
+                @click="refreshFromStore" @keydown="onRemoteRefreshKey">{{ $t('statsJ.EditPanel.remoteRefresh') }}</span>
         </div>
       <div class="ep-title-row">
         <el-input type="textarea" :autosize="{minRows:1,maxRows:4}" :placeholder="$t('statsJ.EditPanel.addTitlePlaceholder')"
@@ -18,34 +17,22 @@
         <!-- Persistent equal-width placeholder (ghost): with v-if the title textarea's usable width would jump at the start/end of every autosave -->
         <span class="ep-saving" :class="{ghost: !saving}" aria-live="polite" :aria-hidden="!saving">…</span>
         <span class="ep-collapse-btn" :title="$t('statsJ.EditPanel.collapseEditor')" role="button" tabindex="0"
-              :aria-label="$t('statsJ.EditPanel.collapseEditor')" @click="collapse" @keydown.enter.prevent="collapse">
+              :aria-label="$t('statsJ.EditPanel.collapseEditor')" @click="collapse" @keydown="onCollapseKey">
           <svg viewBox="0 0 16 16"><path d="M6 3.5 L11 8 L6 12.5" fill="none" stroke="currentColor"
             stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </span>
       </div>
 
+      <!-- [F7 P3] maxlength clamps at the shared DB ceiling: overflow pastes truncate up front, so what the user sees always matches what sanitizeText persists (same-source constant) -->
       <el-input type="textarea" :autosize="{minRows:3,maxRows:8}" :placeholder="$t('statsJ.EditPanel.descPlaceholder')"
                 :model-value="e.desc" @input="v=>fieldPatch('desc',v)" class="ep-desc"
+                :maxlength="DESC_MAX"
                 @paste="onDescPaste" @dragover.prevent @drop.prevent="onDescDrop"/>
       <ep-attachments section="bar" :img-list="imgList" :file-list="fileList"
                       @pick="pickFiles" @preview="previewImg=$event" @remove="removeFile"/>
 
-      <div class="ep-date-chips">
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===todayLabel}"
-              @click="setDate('today')" @keydown="onDateChipKey('today', $event)"><app-icon name="sun" :size="12"/>{{ $t('statsJ.EditPanel.todayOption') }}</span>
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip===tomorrowLabel}"
-              @click="setDate('tomorrow')" @keydown="onDateChipKey('tomorrow', $event)"><app-icon name="calendar" :size="12"/>{{ $t('statsJ.EditPanel.tomorrowOption') }}</span>
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel}"
-              @click="setDate('pick')" @keydown="onDateChipKey('pick', $event)"><app-icon name="calendar" :size="12"/>
-          {{dateChip && dateChip!==todayLabel && dateChip!==tomorrowLabel ? dateChip : $t('statsJ.EditPanel.pickDate')}} ▾</span>
-        <span class="ep-date-chip" role="button" tabindex="0" :class="{on: !e.dateTs}"
-              @click="setDate('none')" @keydown="onDateChipKey('none', $event)">{{ $t('statsJ.EditPanel.noDateOption') }}</span>
-        <!-- The picker sits outside the chip, avoiding ARIA nesting of an input inside a button -->
-        <el-date-picker ref="datePick" size="small" value-format="x" type="date"
-                        style="width:0;height:0;border:0;padding:0;position:absolute;opacity:0" class="ep-date-pick"
-                        :aria-label="$t('statsJ.EditPanel.pickDateAria')" popper-class="ep-date-popper"
-                        :model-value="e.dateTs||null" @update:model-value="onPickDate"/>
-      </div>
+      <!-- W21 split: chips markup + hidden picker live in editpanel/EditPanelDateChips.vue; persistence (applyDate) stays here -->
+      <ep-date-chips :date-ts="e&&e.dateTs" :today0="today0" @set="setDate" @pick="onPickDate"/>
 
       <div class="ep-cat-wrap">
         <div class="ep-row ep-cat-row" role="button" tabindex="0" :aria-expanded="catOpen ? 'true' : 'false'"
@@ -56,7 +43,8 @@
           <span class="ml-auto"></span>
           <span class="ep-row-arrow" :class="{on: catOpen}">▾</span>
         </div>
-        <div v-if="catOpen" v-click-outside="onCatOutside" class="ep-cat-pop" role="listbox">
+        <!-- [W8] listbox: dd-menu ArrowUp/Down; Escape stays with the panel-level handler -->
+        <div v-if="catOpen" v-click-outside="onCatOutside" class="ep-cat-pop" role="listbox" @keydown="onCatPopKey">
           <div class="ep-cat-opt" role="option" :class="{on: !e.categoryId}" :aria-selected="(!e.categoryId)?'true':'false'"
                tabindex="0" @click="pickCat(0)" @keydown.enter.prevent="pickCat(0)">
             <span class="ep-cat-dot" style="background:var(--text-4)"></span>{{ $t('statsJ.EditPanel.uncategorizedOption') }}</div>
@@ -75,11 +63,8 @@
 
       <ep-tags :tags="taskTags" @add="addTag" @remove="removeTag"/>
 
-      <div v-if="inRecycle" class="ep-recycle-banner">
-        <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
-        <span>{{ $t('statsJ.EditPanel.recycleBinEditTip') }}</span>
-        <button class="mini" @click="restoreFromBin">{{ $t('statsJ.EditPanel.restoreBtn') }}</button>
-      </div>
+      <!-- W21 split: banner markup in editpanel/EditPanelBinBanner.vue; restoreFromBin (and its [w20] flush contract) stays below -->
+      <ep-bin-banner v-if="inRecycle" @restore="restoreFromBin"/>
 
       <div v-if="!inRecycle" class="ep-row ep-done-row" role="checkbox" :aria-checked="(task&&task.complete)?'true':'false'" tabindex="0"
            @click="toggleComplete" @keydown="onDoneRowKey">
@@ -109,7 +94,8 @@
         <img class="ep-ico" src="app://app/assets/img/icon-tune.svg" style="opacity:.6">
         <span class="ep-diff-label">{{ $t('statsJ.EditPanel.priorityLabel') }}</span><span class="hint-q" role="img" :title="$t('statsJ.EditPanel.urgencyHint')" :aria-label="$t('statsJ.EditPanel.urgencyHint')">?</span>
         <span class="ep-diff-btns ep-prio-btns">
-          <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
+          <!-- [W8] priority buttons: aria-pressed (toggle-button pattern) -->
+          <button v-for="pr in PRIOS" :key="pr.v" :class="['prio-'+pr.v, {on:((task&&task.priority)||0)===pr.v}]" :aria-pressed="((task&&task.priority)||0)===pr.v ? 'true' : 'false'" @click="fieldPatch('priority', ((task&&task.priority)||0)===pr.v?0:pr.v)">{{ tt(pr.l) }}</button>
         </span>
       </div>
       <ep-tomato :estimate="tomatoEstimateN" :actual="tomatoActual" @est-delta="estDelta" @open="openAccount"/>
@@ -166,7 +152,7 @@ import {dayjs, FMT, reportError } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
-import { subsCompleteTarget, isRenderableAttachmentUrl } from '../utils/core.js'
+import { isRenderableAttachmentUrl } from '../utils/core.js' // [W21] subsCompleteTarget rides with editpanel/subtaskOps.toggleSub now
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
@@ -177,6 +163,8 @@ import { buildEditSnapshot } from '../store/ui.js'
 import { findTaskRowEl } from '../utils/todoRowEl.js'
 import { $elOf } from '../utils/el.js'
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A9] Space+Enter button/checkbox activation
+import { ddMenuKey } from '../utils/dd-menu.js' // [W8] shared dd-menu listbox keyboard contract
+import { TEXT_MAX_LEN as DESC_MAX } from '../../../shared/sanitize-text.mjs' // [F7 P3] same-source clamp as the DB describe column
 import EpReminders from './edit-panel/EpReminders.vue'
 import EpSubtasks from './edit-panel/EpSubtasks.vue'
 import EpAttachments from './edit-panel/EpAttachments.vue'
@@ -186,19 +174,30 @@ import EpTags from './edit-panel/EpTags.vue'
 import * as attachments from './edit-panel/attachments.js'
 import * as repeat from './edit-panel/repeat.js'
 import { catOutsideClose, FIELD_MAP } from './edit-panel/interactions.js'
+import EpDateChips from './editpanel/EditPanelDateChips.vue' // W21 split: date chips + hidden picker
+import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recycle-bin banner markup
+import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
+import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
+import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder emit handlers + close-verify timer
 
 
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
+// W21 split additions to the local component registry (spread into the options above)
+const w21Components = { EpDateChips, EpBinBanner }
 
 // [component-fixes] pure helper now lives in utils/attachmentRefs.js (imported below)
 
 export default {
   name: 'EditPanel',
-  components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags },
+  // W21 split (2026-10-30): EpDateChips/EpBinBanner join the registry; the S4-era line below is
+  // kept verbatim for the w5-editpanel-split anchor and spread into the live option.
+  // components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags }
+  components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags, ...w21Components },
   data () {
     return {
       e: null as any,
+      DESC_MAX, // [F7 P3] template access to the shared describe clamp
       saving: false,
       saveFailed: false,
       catOpen: false,
@@ -240,32 +239,23 @@ export default {
     tomatoActual () {
       const id = this.e && this.e.taskId
       if (!id) return 0
-      // The original predicate r.focus!==false was a copy-paste bug (focus is the task name, always truthy = abandoned ones were counted too); use the store lookup uniformly (abandoned excluded)
+      // Copy-paste bug fix: the original r.focus!==false was always truthy; uniform store lookup (abandoned excluded)
       return this.$store.getters['tomato/actualCountByTask'].get(id) || 0
     },
-    // Recycle bin task: task cannot be found in the non-deleted list, so fall back to the recycle list to detect it (hide the "complete" row, show the restore banner)
+    // Recycle bin: task missing from the live list, detected via the recycle list (hide "complete" row, show restore banner)
     inRecycle () {
       if (!this.e || !this.e.taskId) return false
       if (this.task) return false
       return this.$store.state.todo.recycleList.some(t => t.taskId === this.e.taskId)
     },
-    cats () { return this.$store.getters['category/sortedAll'] },
+    cats () { /* W16: LEAF cats only — folders are containers (roots excludes likewise); sortedAll keeps folders for SideNav/manage */ return this.$store.getters['category/sortedAll'].filter(c => !c.folderIs) },
     curCat () { return this.cats.find(c => c.categoryId === (this.e && this.e.categoryId)) || null },
     // Tags = virtual derivation from #xxx in the content (a cross-cutting multi-select dimension); editing rewrites the hash tokens in the title text
     taskTags () { return this.e ? extractTags(this.e.title) : [] },
     autoSave () { return this.$store.state.settings.isTodoEditModalCloseAutoSave },
     isRepeat () { return !!(this.e && this.e.repeatId) },
-    today0 () { return this.$store.state.todo.todayTimestamp },
-    todayLabel () { return this.$t('statsJ.EditPanel.today') },
-    tomorrowLabel () { return this.$t('statsJ.EditPanel.tomorrow') },
-    dateChip () {
-      if (!this.e) return ''
-      if (!this.e.dateTs) return ''
-      const d = dayjs(this.e.dateTs).startOf('day').valueOf()
-      if (d === this.today0) return this.todayLabel
-      if (d === dayShift(this.today0, 1)) return this.tomorrowLabel
-      return dayjs(this.e.dateTs).format(FMT.cnDate)
-    }
+    today0 () { return this.$store.state.todo.todayTimestamp }
+    // W21 split: todayLabel/tomorrowLabel/dateChip/dateChipTime moved to editpanel/EditPanelDateChips.vue
   },
   watch: {
     previewImg (v) { if (v) this.$nextTick(() => { const el = this.$refs.previewMask; if (el) el.focus() }) },
@@ -277,9 +267,7 @@ export default {
           this.hydrate()
           this.$nextTick(() => {
             const t = this.$el && this.$el.querySelector('.ep-title textarea')
-            // F-D5 (2026-09-23): keyboard open leaves activeElement on the row — the BODY-only guard
-            // skipped focusing, so keyboard/SR users got no "panel is open" feedback. Also focus on
-            // activation from inside a todo row; plain mouse focus elsewhere is left untouched.
+            // F-D5 (2026-09-23): keyboard open leaves activeElement on the row — the BODY-only guard skipped focusing, so keyboard/SR users got no "panel is open" feedback. Also focus on activation from inside a todo row; plain mouse focus elsewhere is left untouched.
             const ae = document.activeElement
             const fromRow = !!ae && !!ae.closest && !!ae.closest('.td-item')
             if (t && (!ae || ae.tagName === 'BODY' || fromRow)) t.focus()
@@ -295,7 +283,8 @@ export default {
     task (t) {
       // P1 (2026-10-01): a full reload transiently evaluates `task` to null while the row array is
       // swapped; the old immediate closeEdit slammed the panel shut and silently lost that window's
-      // edits. Verify absence in the post-reload lists instead; a reappearing row cancels the close.
+      // edits. Verify absence in the post-reload lists instead (store-sync anchor keeps the
+      // taskAbsentIn guard in-host); a reappearing row cancels the close.
       if (t && this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
       if (!t && !this.inRecycle && this.$store.state.ui.rightSidebarTodoEdit.visible) {
         if (this._closeVerifyTimer) clearTimeout(this._closeVerifyTimer)
@@ -322,13 +311,11 @@ export default {
     }
   },
   mounted () {
-
-    // Review P2 (2026-09-22): expose the save queue's flush to the ui store — closeEditCleanup's
-    // inline-create orphan cleanup awaits it instead of racing the 350ms debounce with a fixed sleep
+    // Review P2 (2026-09-22): expose the save queue's flush to the ui store — closeEditCleanup's inline-create orphan cleanup awaits it instead of racing the 350ms debounce with a fixed sleep
     this._flushHook = () => this.flushSave()
     window.__editPanelFlushSave = this._flushHook
-    // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching)
-    this.$nextTick(() => { import('../utils/onboardingTours.js').then(mod => mod.maybeRunTour('editpanel', 600)).catch(() => {}) })
+    // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching) — W21: mechanics in editpanel/panelSetup.js
+    panelSetup.runEditpanelTour()
     this._onKeydown = (e) => {
       if (e.key !== 'Escape') return
       if (this.catOpen) { this.catOpen = false; return }
@@ -338,12 +325,14 @@ export default {
       if (dep && dep.depOpen) { dep.depOpen = false; return }
       if (this.previewImg) { this.previewImg = null; return }
       const ui = this.$store.state.ui
-      // [editpanel-esc-ignores-context-menu fix] an open task context menu owns the Esc press (it closes the menu); the edit sidebar behind it must not also close. Same whitelist shape as the other overlays below.
-      if (ui.contextMenu && ui.contextMenu.visible) return
-      // [maint-0925 A2] showFilterModal joins the whitelist (hoisted out of FilterView local data): Esc over the filter modal no longer closes the edit sidebar
+      if (ui.contextMenu && ui.contextMenu.visible) return // [editpanel-esc-ignores-context-menu] an open context menu owns Esc
+      // [maint-0925 A2] store-level overlay whitelist (filter modal hoisted out of FilterView local data)
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
-      // [fix 2026-10-09] an open date/time picker overlay (.el-picker-panel, append-to-body) owns the Esc press — it closes the panel itself; without this the same keypress fell through to closeEditCleanup
-      if (document.querySelector('.el-picker-panel')) return
+      // [fix 2026-10-09] a date/time picker (.el-picker-panel, append-to-body) owns Esc (else the keypress fell through to closeEditCleanup)
+      // [fix 2026-10-27] .ds-cal-pop (DayDateStrip calendar popover) owns Esc too — else the keypress bubbled to window and closeEditCleanup orphan-deleted the inline task.
+      if (document.querySelector('.el-picker-panel, .ds-cal-pop')) return
+      // [F3 2026-10-18] store-invisible local overlays (else Esc deleted the inline task behind the dialog)
+      if (document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
         this.$store.dispatch('ui/closeEditCleanup') // D6-F1: empty inline-created task is cleaned up
@@ -351,22 +340,11 @@ export default {
       }
     }
     window.addEventListener('keydown', this._onKeydown)
-    // Disable the browser's native spell check (English correction squiggles interfere with typing over Chinese content)
-    this.$nextTick(() => {
-      this.$el.querySelectorAll('textarea, input').forEach(el => el.setAttribute('spellcheck', 'false'))
-    })
-    // Dynamically created inputs (subtasks etc.) also get spell check disabled; named handler removed in beforeUnmount (listener accumulation when nodes are replaced after hydrate)
-    this._onFocusin = e => {
-      const t = e.target
-      if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t.hasAttribute('spellcheck')) t.setAttribute('spellcheck', 'false')
-    }
+    // W21 split: static + dynamic spellcheck suppression moved to editpanel/panelSetup.js
+    panelSetup.disableSpellcheck(this)
+    this._onFocusin = panelSetup.dynamicSpellcheckGuard()
     this.$el.addEventListener('focusin', this._onFocusin)
-    // The hidden date picker input stays out of the Tab focus chain (programmatic "pick a date" only)
-    this.$nextTick(() => {
-      const pickEl = $elOf(this.$refs.datePick)
-      const inp = pickEl && pickEl.querySelector('input')
-      if (inp) inp.setAttribute('tabindex', '-1')
-    })
+    // (W21 split) the hidden date-picker input's tabindex demotion moved with the picker into EditPanelDateChips.mounted
   },
   beforeUnmount () {
     window.removeEventListener('keydown', this._onKeydown)
@@ -378,17 +356,18 @@ export default {
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
-    // Locale-aware month/day label (same convention as CalendarView's fmtDate): the fixed 'M/D'
-    // once showed numeric-only dates under the English UI, off-contract with the FMT format system
+    // Locale-aware month/day label (same convention as CalendarView's fmtDate): the fixed 'M/D' once showed numeric-only dates under the English UI, off-contract with the FMT format system
     fmtMd (ts) { return getLocale() === 'en-US' ? dayjs(ts).format('MMM D') : dayjs(ts).format(FMT.cnDate) },
     /* ===== Save pipeline wrappers (impl: utils/editSave.js) ===== */
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B).
-     *  Review P1 (2026-09-22): the flush PROMISE is returned — ui/closeEditCleanup registers this method
-     *  as window.__editPanelFlushSave and awaits it before the inline-created emptiness check; resolving
-     *  undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
+     *  Review P1 (2026-09-22): the flush PROMISE is returned — ui/closeEditCleanup registers this method as window.__editPanelFlushSave and awaits it before the inline-created emptiness check; resolving undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
     flushSave () { return this._save ? this._save.flushSave() : undefined },
     retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
+    /* [W8] remote-refresh chip: roleButtonActivate contract (Space owned by main.js capture) */
+    onRemoteRefreshKey: roleButtonActivate(function () { this.refreshFromStore() }),
+    onCollapseKey: roleButtonActivate(function () { this.collapse() }), // [W8]
+    onCatPopKey (e) { ddMenuKey(e) }, // [W8] shared dd-menu util; no onClose (panel-level Esc owns it)
     /* [maint/d23 FIX-3b a11y sweep] role="button" rows/chips join Space with Enter (ARIA patterns,
        app-wide contract via utils/roleButtonKey.js); the done row uses the checkbox variant */
     onSaveRetryKey: roleButtonActivate(function () { this.retrySave() }),
@@ -401,27 +380,8 @@ export default {
     onDeadlineRowKey: roleButtonActivate(function () { this.openDeadlinePick() }),
     onDelTaskKey: roleButtonActivate(function () { this.delTask() }),
     markDirty (k) { if (this._save) this._save.markDirty(k) },
-    /** Subtask drag sorting (sortablejs library; Up/Down buttons kept as a keyboard-accessible fallback).
-        The panel body is under v-if="e", so the nodes do not exist at mounted time -- called after hydrate; old instances become invalid when nodes are replaced, destroy before rebuilding */
-    initSubSortable () {
-      if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed with the node */ } this._sortable = null }
-      this.$nextTick(() => {
-        const el = this.$el && this.$el.querySelector('.ep-subs')
-        if (!el || !window.Sortable) return
-        this._sortable = window.Sortable.create(el, {
-          handle: '.ep-sub-drag',
-          animation: 150,
-          onEnd: (evt) => {
-            const { oldIndex, newIndex } = evt
-            if (oldIndex === newIndex || oldIndex == null || newIndex == null) return
-            const item = this.subList.splice(oldIndex, 1)[0]
-            this.subList.splice(newIndex, 0, item)
-            this.markDirty('subtasks')
-            this.queueSave({})
-          }
-        })
-      })
-    },
+    // W21 split: drag-sort mechanics moved to editpanel/subtaskOps.initSubSortable (verbatim)
+    initSubSortable () { return subtaskOps.initSubSortable(this) },
     hydrate (force) {
       const s = this.$store.state.ui.rightSidebarTodoEdit
       if (!s.visible || !s.taskId) return
@@ -450,10 +410,9 @@ export default {
       const snap = JSON.parse(JSON.stringify(src))
       snap.visible = s.visible; snap.collapsed = s.collapsed; snap.taskId = s.taskId
       this.e = snap
-      // F3: record the hydration baseline (live-row updateTime + core-field fingerprint) so
-      // checkRemoteUpdate can tell inbound peer edits from the panel's own save echoes.
-      // (renamed live->liveRow: `live` is taken above by the P1 live-row snapshot lookup —
-      // duplicate declaration was a 500 on the vite SFC compile, dead-ending the whole dev host)
+      // F3: hydration baseline (updateTime + core-field fingerprint) so checkRemoteUpdate can tell
+      // inbound peer edits from the panel's own save echoes. (renamed live->liveRow: `live` is taken above —
+      // duplicate declaration was a 500 on the vite SFC compile)
       const liveRow = this.task
       this._remoteUpdateTime = liveRow ? liveRow.updateTime : s.updateTime
       this._remoteFingerprint = contentFingerprint(this.e)
@@ -497,8 +456,7 @@ export default {
       // Hand focus back to the task row being edited (keyboard users would otherwise drop to <body>)
       this.refocusRow(this.e && this.e.taskId)
     },
-    /** [maint-0924 A7] focus-return shared by collapse() and the Esc-close path: focus the edited
-     * task row, falling back to the scroll container (focusable via tabindex=-1) */
+    /** [maint-0924 A7] focus-return shared by collapse() and the Esc-close path: focus the edited task row, falling back to the scroll container (focusable via tabindex=-1) */
     refocusRow (id) {
       this.$nextTick(() => {
         // P1 fix (2026-09-25): the row locator moved to utils/todoRowEl.js — the old fallback only
@@ -529,19 +487,12 @@ export default {
       }
       this.queueSave(patch)
     },
+    // W21 split: only today/tomorrow/none arrive here now — the 'pick' branch (hidden-picker focus
+    // + click fallback) moved with the picker into EditPanelDateChips.openPick
     setDate (mode) {
       if (mode === 'today') this.applyDate(this.today0)
       else if (mode === 'tomorrow') this.applyDate(dayShift(this.today0, 1))
       else if (mode === 'none') this.applyDate(0)
-      else if (mode === 'pick') {
-        // focus() invokes the calendar panel (simulating a click on the 0-size hidden input is flaky), plus one extra click as a fallback
-        const p = this.$refs.datePick
-        if (!p) return
-        if (p.focus) p.focus()
-        const pickEl = $elOf(p)
-        const inp = pickEl && pickEl.querySelector('input')
-        if (inp) inp.click()
-      }
     },
     /* Due-date pill → pop the calendar panel with a hidden selector (same proven path as setDate('pick')) */
     openDeadlinePick () {
@@ -584,28 +535,10 @@ export default {
       this.queueSave(patch)
     },
     onPickDate (ts) { this.applyDate(ts || 0) },
-    /* ===== Reminders: EpReminders emits; the task snapshot + persistence stay here ===== */
-    onRemindersCommit (mainTs, extras) {
-      if (!this.e) return
-      const mainChanged = mainTs !== this.e.remindTs
-      this.e.remindTs = mainTs
-      this.e.reminderExtra = extras
-      if (mainChanged && mainTs < Date.now()) this.$message.warning(this.$t('statsJ.EditPanel.reminderPastTip'))
-      if (!this.e.dateTs) this.e.dateTs = dayjs(mainTs).startOf('day').valueOf()
-      this.queueSave({ reminderTime: this.e.remindTs, reminderExtra: this.e.reminderExtra, todoTime: this.e.dateTs })
-    },
-    onRemindersClear () {
-      if (!this.e) return
-      this.e.remindTs = 0
-      this.e.reminderExtra = []
-      this.e.reminderOffsets = [] // offsets are anchored to the main reminder; clearing the main reminder must clear them too, otherwise stale offsets silently revive when reminders are re-set
-      this.queueSave({ reminderTime: 0, reminderExtra: [], reminderOffsets: [] })
-    },
-    onRemindersOffsets (sorted) {
-      if (!this.e) return
-      this.e.reminderOffsets = sorted
-      this.queueSave({ reminderOffsets: sorted })
-    },
+    /* ===== Reminders: EpReminders emits; the task snapshot + persistence stay here (W21: bodies in editpanel/reminderOps.js) ===== */
+    onRemindersCommit (mainTs, extras) { return reminderOps.onRemindersCommit(this, mainTs, extras) },
+    onRemindersClear () { return reminderOps.onRemindersClear(this) },
+    onRemindersOffsets (sorted) { return reminderOps.onRemindersOffsets(this, sorted) },
     toggleComplete () {
       // Same feedback semantics as checking in the list: completing shows a "completed + undo" toast, un-completing is only announced
       toggleCompleteWithUndo({ store: this.$store, message: this.$message, todo: this.task, announce: this.$announce })
@@ -614,8 +547,8 @@ export default {
     /** Restore the currently edited task from the recycle bin (keeping the edited fields); after restore the banner disappears and the complete row returns */
     async restoreFromBin () {
       if (!this.e || !this.e.taskId) return
-      // queueSave is a 350ms debounce timer (returns no promise); before restoring, synchronously flush unsaved dirty fields and clear the timer to prevent double writes
-      this._save.clearTimer()
+      // [w20 P2 fix 2026-10-30] flush (not just clearTimer) before takeDirty — clearTimer left queueSave's IMMEDIATE setPending slot unconsumed; an edit <350ms before 恢复 was silently dropped (H1 caliber)
+      await this._save.flushSave()
       const all: any = this._save.takeDirty(['subtasks', 'imgs', 'files'])
       try {
         // [restore single-path fix] this banner used to dispatch a bare updateTodoFields
@@ -644,14 +577,8 @@ export default {
       this.subList.push({ text, checked: false, _key: ++this._subKeySeq })
       this.markDirty('subtasks'); this.queueSave({})
     },
-    toggleSub (s) {
-      s.checked = !s.checked; this.markDirty('subtasks'); this.queueSave({})
-      // Subtask <-> parent linkage (consistent with the list page's TodoItem behavior)
-      if (this.task) {
-        const target = subsCompleteTarget(this.subList, this.task.complete)
-        if (target !== null) this.toggleComplete()
-      }
-    },
+    // W21 split: toggle + parent-complete linkage moved to editpanel/subtaskOps.toggleSub (verbatim)
+    toggleSub (s) { return subtaskOps.toggleSub(this, s) },
     delSub (i) {
       const sub = this.subList[i]
       removeWithUndo(this,
@@ -675,8 +602,7 @@ export default {
       // [maint-0925 A8] screen-reader feedback, same sentence as the row-level reorder (TodoItem.keyboardMove)
       this.$announce && this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: (this.subList[j] && this.subList[j].text) || '' }))
     },
-    // [R2] subtask inline rename (EpSubtasks 'rename' emit): rewrite the row text and run it through
-    // the same unified save pipeline as add/toggle/move
+    // [R2] subtask inline rename (EpSubtasks 'rename' emit): rewrite the row text and run it through the same unified save pipeline as add/toggle/move
     renameSub (i, text) {
       const sub = this.subList[i]
       const t = (text || '').trim()
@@ -713,8 +639,8 @@ export default {
       let undone = false
       const deleteFromDisk = () => {
         if (undone || !item.url) return
-        // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments.
-        const row = this.$store.state.todo.todoList.find(t => t.taskId === (this.e && this.e.taskId))
+        // Data-safety guard: re-check the latest task row in the store before touching the disk. If the JSON update never landed (save failed / panel unmounted mid-write), the row still references the url — deleting the file then would corrupt the task's attachments. [w16 P2 fix] the recycleList counts too: with the undo toast pending, the task can be whole-deleted into the bin — there the todoList lookup misses, the guard passed, and the physical file was deleted anyway (a later bin restore revived a row whose attachment 404'd).
+        const row = this.$store.state.todo.todoList.concat(this.$store.state.todo.recycleList).find(t => t.taskId === (this.e && this.e.taskId))
         if (attachmentUrlPresent(row, item.url)) return
         // .catch: delete-file now surfaces structured errors instead of swallowing them (2026-09-11); this call is a fire-and-forget sweep — a failure must not become an unhandled rejection.
         // [maint-0925 D] the old catch(() => {}) discarded the structured error entirely: log it via the
@@ -777,8 +703,7 @@ export default {
       const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const tokenRe = new RegExp('\\s*#' + esc + '(?=[\\s#,，。.!?！？]|$)')
       const m = (this.e.title || '').match(new RegExp('#' + esc + '(?=[\\s#,，。.!?！？]|$)'))
-      // [A8 fix] capture the index per call: the shared component-level _removedTagAt slot was
-      // clobbered by stacked undo toasts, so the last removal's index won for every toast
+      // [A8 fix] capture the index per call: the shared component-level _removedTagAt slot was clobbered by stacked undo toasts, so the last removal's index won for every toast
       const removedAt = m ? m.index : null
       removeWithUndo(this,
         () => this.fieldPatch('title', (this.e.title || '').replace(tokenRe, '')),

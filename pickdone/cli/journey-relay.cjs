@@ -27,6 +27,7 @@ const crypto = require('node:crypto')
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const { createRoundEvidence, assertDistinctDeviceIds } = require('./relay-round-evidence.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const LOCAL_CLI = path.join(ROOT, 'cli', 'pickdone.js')
@@ -128,11 +129,15 @@ function cliRemote (args, timeoutMs = 180000) {
 
 async function poll (budgetMs, fn) {
   const end = Date.now() + budgetMs
+  let lastError = null
   for (;;) {
     let v = null
-    try { v = await fn() } catch { /* transient — keep polling */ }
+    try { v = await fn() } catch (e) { lastError = e /* transient — keep polling */ }
     if (v) return v
-    if (Date.now() > end) return null
+    if (Date.now() > end) {
+      if (lastError) console.error('[jrelay] last poll error: ' + (lastError.stack || lastError.message || lastError))
+      return null
+    }
     await sleep(2500)
   }
 }
@@ -143,10 +148,14 @@ const relayStatus = async which => {
   const parsed = lastJson(r.out)
   return parsed.ok ? parsed.data || parsed.result || parsed : parsed
 }
+const relayEvidence = createRoundEvidence()
+const enabledDevices = {}
 const relaySync = async which => {
   const r = which === 'a' ? cliLocalEnv(['sync', 'relay', 'sync', '--json']) : cliRemote(['sync', 'relay', 'sync', '--json'])
-  if (r.code !== 0) return { ok: false, error: 'CLI exit ' + r.code + ': ' + r.out.slice(0, 300) }
-  return lastJson(r.out)
+  if (r.code !== 0) throw new Error(`device ${which} relay sync CLI exit ${r.code}: ${r.out.slice(0, 400)}`)
+  const parsed = lastJson(r.out)
+  if (parsed.ok !== true) throw new Error(`device ${which} relay sync returned ok=${JSON.stringify(parsed.ok)}: ${JSON.stringify(parsed).slice(0, 400)}`)
+  return relayEvidence.record(which, parsed)
 }
 const getAll = async which => {
   const r = which === 'a' ? cliLocalEnv(['list', '--all', '--json']) : cliRemote(['list', '--all', '--json'])
@@ -314,7 +323,10 @@ step('enable: relay transport on BOTH devices (shared root key = manual account 
     const parsed = lastJson(r.out)
     const st = parsed.data || parsed.result || parsed
     if (!st.enabled) throw new Error(`relay not enabled on ${which}: ` + JSON.stringify(st).slice(0, 300))
+    enabledDevices[which] = st
+    if (st.firstRound && st.firstRound.ok === true) relayEvidence.record(which, st.firstRound)
   }
+  assertDistinctDeviceIds(enabledDevices.a, enabledDevices.b)
   ok(`both devices enabled for ${ACCOUNT} @ ${RELAY_URL} (enrollment accepted, devices registered)`)
 })
 
@@ -337,13 +349,17 @@ step('converge: A adds 3, B adds 2 — rounds until both sides hold the same 5',
   ok(`both sides hold all 5 journey todos [${converge.contents.join(', ')}] (3+2 converged; A=${converge.a} rows, B=${converge.b} rows)`)
 })
 
-step('clean: quarantined === 0 on both devices (no frame failed to verify)', async () => {
+step('clean: same-round quarantine evidence and resident app cumulative counters', async () => {
+  // relaySync() records the actual command result, not a new CLI's zeroed metrics.
+  const counts = relayEvidence.assertClean()
   for (const which of ['a', 'b']) {
     const st = await relayStatus(which)
-    const q = st && (st.quarantinedTotal != null ? st.quarantinedTotal : (st.lastResult && st.lastResult.quarantined))
-    if (!(q === 0)) throw new Error(`device ${which} quarantined=${JSON.stringify(q)} (status: ` + JSON.stringify(st).slice(0, 300) + ')')
+    if (!st || !Number.isSafeInteger(st.quarantinedTotal) || st.quarantinedTotal !== 0) {
+      throw new Error(`device ${which} resident app quarantinedTotal=${JSON.stringify(st && st.quarantinedTotal)}`)
+    }
+    if (st.nodeId !== enabledDevices[which].nodeId) throw new Error(`device ${which} nodeId changed during journey`)
   }
-  ok('quarantined=0 on A and B')
+  ok(`quarantined=0 in actual A/B sync rounds (A=${counts.a}, B=${counts.b}) and resident app counters`)
 })
 
 step('idempotent: extra rounds on both — no duplicates, counts stable', async () => {

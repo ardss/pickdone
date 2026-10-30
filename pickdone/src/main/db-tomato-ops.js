@@ -131,7 +131,17 @@ exports.tomatoAppendMany = (db, rows) => {
     // older peer row then silently lost LWW on the origin). Parity with planAddMany: renderer/CLI
     // callers omit the stamp and get now().
     const stamp = Number(raw.updatedAt) > 0 ? Number(raw.updatedAt) : now
-    ins.run({ ...r, updatedAt: stamp })
+    // W14 (2026-10-27, P1): the DO UPDATE's tombstone gate (`WHERE deleted = 0 OR
+    // excluded.updatedAt >= deletedAt`) makes a stale re-append onto a tombstoned row a
+    // SILENT no-op — `ins.run()` returns changes=0 without throwing, so the row counted as
+    // accepted while never landing. The sync flush (sync-apply-flush flushOne) reads only
+    // the `rejected` list, so the segment acked ok and the sender's push watermark advanced
+    // past a row that exists nowhere: one-way permanent loss. Count the gated row as
+    // rejected (same F2 row-granular contract as the gates above) — flush quarantines it
+    // and the renderer drops it from its pending queue instead of acking it. A result
+    // WITHOUT a `changes` field (legacy in-memory test fakes) is treated as accepted.
+    const runRes = ins.run({ ...r, updatedAt: stamp })
+    if (runRes && runRes.changes === 0) { reject('tombstone-gated'); return }
     accepted++
   }))
   tr()
@@ -146,6 +156,11 @@ exports.tomatoUpdateById = (db, { tomatoId, patch }) => {
   rec.dateKey = dayjs(rec.endTime).format('YYYY-MM-DD')
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(rec.dateKey))) throw new Error('tomatoUpdateById: bad endTime produces invalid dateKey')
   delete rec.updatedAt // handled explicitly below; never leak the stamp into the extra JSON blob
+  // W9 (2026-10-26): a patch carrying its own tomatoId leaked through _recToRow into the
+  // UPDATE bindings, where r.tomatoId overrode the WHERE binding → the op silently rewrote a
+  // DIFFERENT ledger row. tomatoId is the address, not mutable content: pin it to the TARGET
+  // id after the merge (must stay present — _recToRow stringifies a missing id to 'undefined').
+  rec.tomatoId = String(tomatoId)
   const r = exports._recToRow(rec)
   // `AND deleted = 0`: a tombstoned (removed) record is invisible to every reader — reporting success
   // on it would tell the caller a patch landed that nobody can ever see (review V1-F2)

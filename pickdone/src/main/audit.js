@@ -300,8 +300,11 @@ let dirReady = false
 
 function ensureDir () {
   if (dirReady) return
-  try { fs.mkdirSync(path.dirname(auditFile()), { recursive: true }) } catch { /* best-effort */ }
-  dirReady = true
+  // W20: dirReady is only set on SUCCESS — the old unconditional `dirReady = true` meant one
+  // transient mkdir failure (AV lock, permission blip) permanently disabled the audit stream,
+  // because every later call short-circuited on the stale flag. Keeping it false on failure lets
+  // the next append retry the mkdir.
+  try { fs.mkdirSync(path.dirname(auditFile()), { recursive: true }); dirReady = true } catch { /* best-effort; retry on next append */ }
 }
 
 function rotateIfNeeded () {

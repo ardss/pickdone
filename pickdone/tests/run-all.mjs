@@ -9,8 +9,8 @@
  *   Suite membership is directory-level: tests/unit/**, tests/integration/**, tests/visual/**;
  *   files kept at the tests/ root (npm-script / check-all entrypoints) count as integration.
  */
-import { readdirSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
+import { existsSync, readdirSync, writeSync } from 'node:fs'
+import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 // 2026-10-09 preflight sweep: exit-only cleanup is bypassed when a test child is SIGKILLed
@@ -19,26 +19,87 @@ import { fileURLToPath } from 'node:url'
 // (family prefix + mtime > 12h + dead owning pid) are removed; fresh or live-owned dirs
 // are never touched (double-guard inside sweepStaleTmpDirs).
 import { sweepStaleTmpDirs } from './lib/tmp-dir.mjs'
+// D4 orphan hygiene (2026-10-23 speed wave): the runner child is registered at spawn and
+// pruned on 'close'. A run-all killed from the outside (watchdog / CI timeout / harness
+// kill) never reaches its own cleanup — the registry entry it leaves behind is what
+// `node tests/run-all.mjs --cleanup` reaps, after verifying the live command line still
+// matches (pid-reuse safety, see tests/lib/child-registry.mjs).
+import { registerChild, unregisterChild, cleanupRegisteredChildren, reapAllRegisteredSync } from './lib/child-registry.mjs'
+
+// Symmetric with check-all's exit reap (2026-10-24): run-all is also invoked directly
+// (npm test / suite slices) — its own exit must best-effort reap whatever its spawn tree
+// left registered, not only the dedicated --cleanup pass.
+process.on('exit', () => { try { reapAllRegisteredSync() } catch { /* best-effort by contract */ } })
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
+// --cleanup must short-circuit BEFORE any discovery/spawn: it is a maintenance mode that
+// reaps children recorded by run-all / check-all stage spawns (see child-registry.mjs).
+if (process.argv.includes('--cleanup')) {
+  const r = await cleanupRegisteredChildren()
+  console.error(`[run-all] --cleanup: killed=${r.killed.length} already-gone=${r.gone.length} foreign=${r.foreign.length} survivors=${r.survivors.length}`)
+  for (const e of r.foreign) console.error(`  [foreign] pid ${e.pid} alive but command line no longer matches (${e.purpose || 'unknown'}) — left untouched`)
+  for (const e of r.survivors) console.error(`  [survivor] pid ${e.pid} matched but refused to die (${e.purpose || 'unknown'})`)
+  process.exit(r.survivors.length ? 1 : 0)
+}
 {
   const { scanned, removed } = sweepStaleTmpDirs()
   if (removed > 0) console.error(`[run-all] preflight temp sweep: removed ${removed} orphaned dir(s) of ${scanned} scanned in %TEMP%`)
 }
 // App root (pickdone/): the runner anchors its child spawn here and passes repo-relative
 // test paths — see the argv-length comment at the spawnSync call below.
-const appRoot = path.join(dir, '..')
+// GATE_META_APP_ROOT (2026-10-24): meta-test injection point — lets the gate-mechanics
+// suite anchor run-all at a sandbox fixture dir. Default (unset) behavior is unchanged.
+const appRoot = process.env.GATE_META_APP_ROOT
+  ? path.resolve(process.env.GATE_META_APP_ROOT)
+  : path.join(dir, '..')
 // Live-Electron tests spawn their own instance (~30-60s each) and depend on the shared 5175
 // host's runtime state — they stay out of the quick regression (and out of pre-commit, which
 // must never be hostage to dev-host state); each runs as a dedicated check:all ③ live stage.
 // NOTE: exclusion is by bare FILENAME across all suites — never reuse these names elsewhere.
 const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-visibility.test.mjs',
+  // 2026-10-27 core-journey E2E regressions (tests/e2e-journeys/): live-Electron pool targets
+  // run by run-interactions-shared.mjs as dedicated check:all ③ live stages — same class as
+  // e2e.test.mjs, never in the quick/pre-commit regression (boots + dev-host state).
+  'j-todo-core.test.mjs', 'j-habit-moment.test.mjs', 'j-rail-stats-settings.test.mjs',
   // 2026-09-28 un-excluded: the --test-force-exit + 2min-ceiling harness added after that wave
   // contains exactly the runaway-test scenario the flake feared, so the file re-joins the
   // default pool — an orphaned integration spec is a regression nobody sees.
   ])
 
 const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
+
+// --tier=core|deep (2026-10-23 efficiency wave): the full pool mixes pure in-process specs with
+// suites that bind real sockets, spawn real processes, or boot real Electron instances. Those
+// deep suites are slow (minutes each) AND load-sensitive: under a loaded dev host they cascade
+// into contention-artifact reds (2026-10-22 fast-gate unit run: 12 of 17 not-ok entries were
+// exactly this class, every one green in isolation). `--tier=core` = default pool minus this
+// list; `--tier=deep` = this list only; no --tier = everything (CI / full check:all unchanged).
+// The split never silently drops a suite from the FULL pool — it only re-routes where a tier
+// runs. Exclusion is by bare FILENAME across all suites (same doctrine as EXCLUDE above):
+// never reuse these names elsewhere.
+const DEEP_FILES = new Set([
+  // live Electron, boots the real app twice (exit-mode quit + tray-mode hide)
+  'e2e-exit-close.test.mjs',
+  // two real paired instances, multi-minute journey (J4 reconnect lives here)
+  'lan-sync-journey.test.mjs',
+  // loopback server suites — bind real ports / long socket lifecycles
+  'lan-sync-loopback.test.mjs',
+  'v2-acceptance-drill.test.mjs',
+  'd9-loopback-mesh-scale.test.mjs',
+  'd9-loopback-two-machine-drill.test.mjs',
+  'd9-loopback-restart-conflict.test.mjs',
+  'd9-concurrency-smoke.test.mjs',
+  'same-host-instance-20261015.test.mjs',
+  'relay-413-forceexit-teardown.test.mjs',
+  // cross-process relay drill, self-declared 120s timeout (unit/main)
+  'relay-cross-process-outbox.test.mjs',
+  // D6 (2026-10-23): c1-parse-ux was routed here for the fixture-suite lock/ceiling burn.
+  // Root-caused as a SEQUENTIAL-SPAWN WALL-TIME problem, not a db lock: ~40 strictly serial
+  // CLI children inflate to 6-23s each under full-suite process-creation contention and the
+  // 300s file ceiling executes mid-file. Fixed in the suite itself (per-test fixture dirs +
+  // 8 concurrent async spawn lanes + bounded child lifecycle) — c1 rejoined core; keep this
+  // comment as the routing-history anchor for the perf-debt-ledger D6 entry.
+])
 
 // Sibling spec dir: pickdone/test/ (flat, next to tests/) used to be executed by NOTHING —
 // discover() only scanned tests/**, so 13 regression specs lived on manual discipline alone and
@@ -73,8 +134,10 @@ function discover(root, acc = [], exts = TEST_EXTS) {
 }
 
 function topOf(file) {
-  const rel = path.relative(dir, file).split(path.sep)
-  return rel.length > 1 ? rel[0] : 'integration' // tests/ root entrypoints = integration-flavored
+  // anchored at appRoot (not the script dir) so GATE_META_APP_ROOT sandbox runs classify
+  // their own fixture files instead of computing `..\..` garbage against the real repo
+  const rel = path.relative(path.join(appRoot, 'tests'), file).split(path.sep)
+  return rel.length > 1 && !rel[0].startsWith('..') ? rel[0] : 'integration' // tests/ root entrypoints = integration-flavored
 }
 
 // Fail-closed classification (H6 2026-09-12): a test file under an unknown top-level directory
@@ -91,9 +154,30 @@ const suites = process.argv
   .map(a => /^--suite=([\w,]+)$/.exec(a)?.[1])
   .filter(Boolean)
   .flatMap(s => s.split(','))
-// drop the --suite args before forwarding the rest to node --test
-const forwardArgs = process.argv.slice(2).filter(a => !a.startsWith('--suite='))
-const all = discover(dir).concat(discover(SIBLING_DIR, [], TEST_EXTS))
+const tierArg = (/^--tier=(\w+)$/.exec(process.argv.find(a => a.startsWith('--tier=')) || '') || [])[1]
+if (tierArg && !['core', 'deep'].includes(tierArg)) {
+  console.error(`✗ [run-all] unknown --tier=${tierArg} (valid: core|deep)`)
+  process.exit(1)
+}
+// drop the --suite/--tier/--dirs args before forwarding the rest to node --test
+const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=') || a.startsWith('--dirs=')))
+// discovery follows appRoot too (GATE_META_APP_ROOT sandboxing): scanning the script's own
+// tests/ would drag the real corpus into a meta-test sandbox run. The sibling dir is
+// tolerated missing — sandbox fixtures don't carry it.
+const siblingDir = path.join(appRoot, 'test')
+const all = discover(path.join(appRoot, 'tests'))
+  .concat(existsSync(siblingDir) ? discover(siblingDir, [], TEST_EXTS) : [])
+// Every DEEP_FILES entry must match a discovered file — a stale name would silently shrink the
+// deep pool (and silently GROW the core pool) with nobody the wiser. Sandbox runs
+// (GATE_META_APP_ROOT, gate-mechanics meta-tests only) carry no deep files by construction.
+if (!process.env.GATE_META_APP_ROOT) {
+  const discovered = new Set(all.map(f => path.basename(f)))
+  const missing = [...DEEP_FILES].filter(n => !discovered.has(n))
+  if (missing.length) {
+    console.error(`✗ [run-all] DEEP_FILES entries matching no discovered test file: ${missing.join(', ')}`)
+    process.exit(1)
+  }
+}
 // Fail-closed: refuse to run (instead of silently misclassifying) when a test file lives under an
 // unknown top-level directory — force an explicit suite classification. Sibling specs
 // (pickdone/test/) are pre-classified as 'unit' by suiteOf, so they skip this check.
@@ -103,10 +187,37 @@ if (unclassified.length) {
   unclassified.forEach(f => console.error(`  ${path.relative(dir, f)}`))
   process.exit(1)
 }
-const files = suites.length ? all.filter(f => suites.includes(suiteOf(f))) : all
+let files = suites.length ? all.filter(f => suites.includes(suiteOf(f))) : all
+let tierNote = ''
+if (tierArg === 'core') {
+  tierNote = ` (deep pool: ${[...DEEP_FILES].length} file(s) re-routed to --tier=deep / full runs)`
+  files = files.filter(f => !DEEP_FILES.has(path.basename(f)))
+} else if (tierArg === 'deep') {
+  tierNote = ' (deep pool only)'
+  files = files.filter(f => DEEP_FILES.has(path.basename(f)))
+}
+// --dirs=<comma-separated tests/ subdirs> (2026-10-23 S2 affected-scope): restrict the pool to
+// the given directory prefixes (repo-relative to pickdone/, e.g. tests/unit/store). Fail-closed:
+// a named dir matching ZERO discovered files is an error, never a silent empty run — the whole
+// point of scoping is safe wall-time, not silent green. Prefix matching runs against the path
+// relative to appRoot (covers tests/** AND the sibling test/ dir uniformly).
+const relFromAppRoot = f => path.relative(appRoot, f).split(path.sep).join('/')
+const dirsArg = (/^--dirs=([\w./,-]+)$/.exec(process.argv.find(a => a.startsWith('--dirs='))) || [])[1]
+if (dirsArg) {
+  const prefixes = dirsArg.split(',').filter(Boolean)
+  const missing = prefixes.filter(p => !all.some(f => relFromAppRoot(f).startsWith(p + '/')))
+  if (missing.length) {
+    console.error(`✗ [run-all] --dirs entries matching no discovered test file: ${missing.join(', ')}`)
+    process.exit(1)
+  }
+  files = files.filter(f => prefixes.some(p => relFromAppRoot(f).startsWith(p + '/')))
+  tierNote += ` (dirs: ${prefixes.join(',')})`
+}
 
-if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites.length ? ` (suite=${suites.join(',')})` : ''}`); process.exit(1) }
+if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites.length ? ` (suite=${suites.join(',')})` : ''}${tierArg ? ` (tier=${tierArg})` : ''}`); process.exit(1) }
 if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} -> ${files.length} file(s)`)
+if (tierArg) console.error(`[run-all] tier=${tierArg}: ${files.length} file(s)${tierNote}`)
+else if (dirsArg) console.error(`[run-all] scope: ${files.length} file(s)${tierNote}`)
 
 // With shell:true, unquoted file paths explode when the project path contains spaces (e.g. D:My Projects): the argument string is cut at the space;
 // executing the binary inside the electron package does not rely on shell lookup, so shell can be safely dropped here
@@ -124,6 +235,40 @@ const TEST_TIMEOUT_MS = 300000
 // default" (= cores, observed 8-12 here) to 4 — the electron-booting integration specs are the
 // flake surface under a loaded box, and the boot flakes (J4/F4a family) reproduce only at high
 // concurrency. 4 trades wall time for boot stability; TEST_CONCURRENCY env still overrides.
+// 2026-10-23 FALSIFIED HYPOTHESIS (kept for the record): a tier-aware core default of
+// cores-2 (8) was measured LIVE — 22.1min but 7 not-ok entries, and the follow-up acceptance
+// run reproduced the SAME suite families twice in a row (c1-parse-ux, d26 plan, purge family):
+// root cause is NOT scheduling starvation but the cli-suite spawn storm: each file spawns
+// dozens of real CLI children whose wall time inflates 10-20x under concurrent process
+// creation (D6: c1-parse-ux, the 40-spawn worst case, breached the 300s file ceiling).
+// Concurrency 4 shows the same families at lower frequency; D6 landed suite-side (c1 now
+// runs its children on concurrent lanes), default stays 4.
+// 2026-10-23 speed wave RE-RAISE (core 4 -> 8; deep stays 4): the three flake root causes the
+// falsification run exposed are all fixed suite-side since — (1) D6 c1-parse-ux now spawns its
+// ~40 CLI children on internal concurrent lanes with per-test fixture dirs, so its wall time no
+// longer rides on file-level serialization; (2) D7/D8 landed the force-exit registration doctrine
+// + guard, so leaked-handle children can no longer wedge a file past its ceiling; (3) the f4
+// stamp-margin flake (timing margin too tight under load) is fixed in the suite. With the
+// per-file root causes gone, concurrency 8 stops multiplying independent time bombs and only
+// pays the wall-time win. TEST_CONCURRENCY env still overrides both tiers.
+// ACCEPTANCE (same day, measured live): --tier=core at the new default 8 = 4774/4774 pass,
+// 0 fail / 0 cancelled, 5:41 wall (slowest test 31.8s, 9.4x ceiling margin) on a LOADED
+// daytime host. Honest caveat kept on the record: two earlier full-core passes at 8 under
+// PEAK ambient load (parallel agent lanes saturating process creation) each dropped one
+// non-deterministic red — a pomodoro timing assert, and a NEW native class: a per-file child
+// dying at STARTUP with `Assertion failed: ncrypto::CSPRNG(nullptr, 0)` (exit 134, Node
+// bug class, random file) — now covered by NATIVE_CRASH_RE's rerun-once doctrine below, same
+// as the 0xC0000409 teardown crash. At 4 the same pool measured ~11-13min wall, both passes
+// green, under the same load — 8 roughly halves the unit wall and stays zero-fail on the
+// designated acceptance run.
+// 2026-10-23 EVENING RE-REVERT of the default (8 stays available via TEST_CONCURRENCY=8 for
+// quiet windows): the evening full gate under the day's worst ambient burst red'd the unit tier
+// at 8 (28.7min, 5 victims) — the lan-sync drill convergence budgets (mesh / scale / 4-pair) and
+// the C14/D19 sleepBackoff timing assert are FIXED-budget asserts that a burst can push past
+// their ceilings in BOTH retry passes, and the CSPRNG rerun-once doctrine absorbed crashes but
+// not budget overruns. Tally at 8 across the day: 2 green / 1 red depending on load — not a
+// safe DEFAULT on a family box whose load is uncontrollable; 4 stayed green in every window
+// measured today. The re-raise rationale above stands for quiet windows; flip via env.
 const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
@@ -168,21 +313,72 @@ function runnerFileArgs () {
   return args
 }
 
-function spawnRunner () {
-  return spawnSync(process.execPath, [...RUNNER_ARGS,
-    ...forwardArgs, ...runnerFileArgs()],
-  // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
-  // paths (K:\...\pickdone\tests\...) blow past it and spawnSync fails with ENAMETOOLONG —
-  // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
-  // (2026-09-26 check:fast round-2). Anchor STAYS at the app root: a D25 experiment moving the
-  // cwd to tests/ to shave the argv broke ~20 cwd-anchored specs (build-whitelist, CI-workflow,
-  // structure pins) for a ~4k-char saving — not worth it. The argv-cap guard margin instead
-  // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
-  // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
-  { cwd: appRoot, stdio: ['inherit', 'pipe', 'pipe'], maxBuffer: 1 << 28 })
+// Streaming spawn (2026-10-23 perf wave S3): the old spawnSync buffered the ENTIRE TAP until
+// process exit — a budget-killed or hung run showed ZERO output for its whole lifetime (the
+// 2026-10-22 fast gate sat 15.3min on a 0-byte TAP). spawn + pipe-through prints each suite's
+// results as its file completes; the same bytes are still accumulated for the downstream
+// consumers below (native-crash retry, coverage summary, slow-test margin), so behavior is
+// identical — only visibility changed.
+// Synchronous stdout write (2026-10-26 composed-TAP contract): buffered end-of-run emission
+// must land BEFORE process.exit() — async process.stdout.write can be truncated by an
+// immediate exit when stdout is a pipe (pipeline mode redirects run-all's stdout into the
+// gate's tap file), which would truncate the composed plan mid-stream.
+const emitSync = buf => { try { writeSync(1, buf) } catch { /* stdout already closed */ } }
+// `live:false` buffers the stdout pipe-through (bytes still accumulate in `out` for the
+// downstream consumers). 2026-10-26 W12 contract: only the RETRY/rerun passes are buffered —
+// their TAP may be REBUILT (composed full-corpus stream) or APPENDED after pass1's raw
+// live-streamed bytes, and parseSummary anchors the LAST plan, so pass1 raw above stays as
+// evidence while the appended/composed stream is authoritative. Pass 1 itself streams live
+// (see the spawn site below for why buffered pass1 was reverted).
+// Tradeoff, accepted deliberately: during a buffered pass its own bytes appear only at the
+// final emission — stderr diagnostics and the failure-path emissions keep every terminal
+// state named.
+function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
+  return new Promise(resolve => {
+    // NODE_TEST_CONTEXT must NOT leak into the runner: when run-all itself is spawned from a
+    // node:test process (the gate-mechanics meta-suite), the marker inherits down the chain and
+    // the runner's run() recursion guard silently SKIPS every file — exit 0 with zero TAP, the
+    // worst possible false green. Runner env is therefore scrubbed clean of it.
+    const env = { ...process.env }
+    delete env.NODE_TEST_CONTEXT
+    const child = spawn(process.execPath, [...RUNNER_ARGS,
+      ...forwardArgs, ...(fileArgsOverride || runnerFileArgs())],
+    // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
+    // paths (K:\...\pickdone\tests\...) blow past it and spawn fails with ENAMETOOLONG —
+    // exit 1 with ZERO TAP output, which the summary gate could only read as a mystery red
+    // (2026-09-26 check:fast round-2). Anchor STAYS at the app root: a D25 experiment moving the
+    // cwd to tests/ to shave the argv broke ~20 cwd-anchored specs (build-whitelist, CI-workflow,
+    // structure pins) for a ~4k-char saving — not worth it. The argv-cap guard margin instead
+    // tracks reality: repo-relative argv measured 28702 chars at 3860+ tests, still ~4k under
+    // the true 32767 cap; run-all-argv-limit.test.mjs asserts against that measured headroom.
+    { cwd: appRoot, env, stdio: ['inherit', 'pipe', 'pipe'] })
+    // D4: registry write at spawn, prune on close — a hard-killed run-all leaves its runner
+    // child discoverable by `run-all --cleanup` instead of orphaned forever.
+    if (child.pid) {
+      registerChild(child.pid, { match: ['--test-force-exit', '--test-reporter=tap'], purpose: 'node --test runner (run-all)' })
+      child.on('close', () => unregisterChild(child.pid))
+    }
+    const out = []
+    const err = []
+    child.stdout.on('data', d => { out.push(d); if (live) process.stdout.write(d) })
+    child.stderr.on('data', d => { err.push(d); process.stderr.write(d) })
+    child.on('error', e => resolve({ status: null, stdout: Buffer.concat(out), stderr: Buffer.concat(err), error: e, streamed: live }))
+    child.on('close', code => resolve({ status: code, stdout: Buffer.concat(out), stderr: Buffer.concat(err), streamed: live }))
+  })
 }
 
-let r = spawnRunner()
+// Pass 1 is spawned LIVE again (2026-10-26 W12 Fix 4). History: it was spawned buffered
+// (live:false) so the composed flake-retry TAP could be the only stream on stdout (exactly-once
+// plan). That buffered pass1 meant NOTHING reached the gate's tap file until the child exited —
+// a hung/killed runner reproduced the 2026-10-22 "0-byte TAP, unattributable" incident that
+// streaming was built to prevent (cli/check-test-summary.cjs documents that contract: the tap
+// file must grow live). New contract, honest about the tradeoff: pass1's raw bytes stream live
+// into stdout/tap-file as EVIDENCE; when the flake-retry path composes a full-corpus TAP, the
+// composed stream is APPENDED after a loud separator line and is the authoritative record —
+// cli/check-test-summary.cjs parseSummary anchors summary parsing on the LAST `1..N` plan line
+// (verified 2026-10-26), so consumers read only the composed plan while the raw pass1 above it
+// stays on record. Retry passes that may be composed/appended stay buffered ({ live: false }).
+let r = await spawnRunner()
 // Native-crash retry (2026-10-10 nightly R2b): on Windows, per-file child processes die at
 // teardown to a libuv assertion (`!(handle->flags & UV_HANDLE_CLOSING)`, src/win/async.c)
 // surfacing as exitCode 3221226505 (0xC0000409) — a Node bug, NOT a test failure, and the
@@ -191,14 +387,287 @@ let r = spawnRunner()
 // children are native crashes, rerun the whole runner EXACTLY ONCE (the CI `rerun --failed`
 // doctrine): green second run = pass with a loud note; crash or real failure again = red.
 // A genuinely failing test never benefits: it fails deterministically on the rerun too.
-const NATIVE_CRASH_RE = /exitCode: 3221226505/
+// 2026-10-23 speed wave: SECOND native signature observed live (exit 134, d22-ux-fixes) —
+// `Assertion failed: ncrypto::CSPRNG(nullptr, 0)` fired INSIDE node::InitializeOncePerProcess,
+// i.e. the per-file child died at STARTUP before running any test. Process-creation storms
+// under a loaded host (concurrency 8 + parallel agent lanes) trigger it; same class as the
+// libuv teardown assert: a Node-native abort, never a product red, random file per run.
+const NATIVE_CRASH_RE = /exitCode: (?:3221226505|134)\b/
 const onlyNativeCrash = tap => {
   const notOk = tap.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || []
   return notOk.length > 0 && notOk.every(block => NATIVE_CRASH_RE.test(block))
 }
 if (r.status !== 0 && r.stdout && onlyNativeCrash(String(r.stdout))) {
   console.error('[run-all] native teardown crash(s) (0xC0000409 libuv async assert) were the only failures — retrying the suite once (CI rerun doctrine)')
-  r = spawnRunner()
+  // The rerun stays BUFFERED (live:false), not live-streamed (2026-10-26 W12): pass1's raw
+  // crash TAP is already on stdout (pass1 streams live) as evidence; the buffered rerun becomes
+  // the authoritative LAST plan (parseSummary anchors the last plan) — every downstream branch
+  // emits its bytes exactly once and nothing double-plans.
+  r = await spawnRunner(null, { live: false })
+}
+// Flake-retry per FILE (2026-10-24, generalizes the rerun doctrine above): under gate
+// self-load a rotating set of 1-6 fs/timing-sensitive files red per full run while
+// passing solo (observed in one night: usage-quota relay restart, migrateData
+// relocation-gate pair, key-rename M-1 pair, crypto F20, settings h8-3). Re-running
+// the whole corpus costs ~26min and re-rolls the same dice; re-running JUST the
+// failed files costs seconds. ONE retry, failed files only, budgets unchanged — a
+// file failing twice is a real red and the retry TAP is the authoritative record.
+// Flood guard: more than 12 failed files means systemic breakage — never spin.
+const failedFileList = tap => {
+  const files = new Set()
+  for (const block of (tap.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || [])) {
+    const m = /location: '?([^'\r\n]+)'?/.exec(block)
+    if (!m) continue
+    // location is 'file:line:col' for case-level failures — keep the file path only
+    const file = m[1].replace(/\\\\/g, '\\').replace(/:\d+:\d+$/, '')
+    if (/\.(?:test\.mjs|test\.js)$/.test(file)) files.add(file)
+  }
+  return [...files]
+}
+// --- flake-retry observability (2026-10-25, signal-integrity audit) ---
+// The audit verdict was blunt: absorbing a first red into a silent green is the
+// mechanized version of "blame the load and move on" — pass1's TAP got REPLACED
+// by the retry's (so the skip ratchet saw only the retried few files = partial
+// corpus blindness), nothing was persisted, and DEEP_FILES (the deliberately
+// load-sensitive two-machine family) could be silently absorbed like any other
+// file. The retry stays (it is a legitimate anti-jitter boundary under gate
+// self-load) but from now on every absorbed red is: counted, persisted, loud,
+// and impossible for the deep pool.
+const FLAKE_LEDGER = path.join(appRoot, 'tests', '.artifacts', 'flake-files.json')
+const recordFlake = async entries => {
+  try {
+    const fsx = await import('node:fs')
+    fsx.mkdirSync(path.dirname(FLAKE_LEDGER), { recursive: true })
+    const readLedger = () => {
+      try {
+        const v = JSON.parse(fsx.readFileSync(FLAKE_LEDGER, 'utf8'))
+        return Array.isArray(v) ? v : []
+      } catch { return [] } // first entry or unreadable prior
+    }
+    const prior = readLedger()
+    // [merge-on-write 2026-10-26] plain read-modify-write LOST entries when two gates ran
+    // concurrently (pre-commit lane + check:all lane): the second writer serialized from its
+    // own stale snapshot and clobbered the first lane's entries on rename. Re-read the
+    // ledger immediately BEFORE the tmp+rename and UNION the entry lists, deduped by the
+    // entry's (at, files) pair — a same-instant same-file entry from both lanes is one
+    // flake, not two. slice(-200) keeps the observability window as before.
+    const fresh = readLedger()
+    const seen = new Set()
+    const dedupe = e => {
+      const k = JSON.stringify([e && e.at, e && e.files])
+      if (seen.has(k)) return false
+      seen.add(k)
+      return true
+    }
+    const next = [...prior, ...entries, ...fresh].filter(dedupe).slice(-200)
+    // [determinism 2026-10-25] atomic write (tmp+rename): two concurrent gates must not
+    // tear the shared ledger mid-write (rename within the same dir is atomic on POSIX
+    // and effectively atomic on win32/NTFS).
+    const tmp = FLAKE_LEDGER + '.tmp-' + process.pid
+    fsx.writeFileSync(tmp, JSON.stringify(next, null, 2) + '\n')
+    fsx.renameSync(tmp, FLAKE_LEDGER)
+    console.error(`[run-all] ⚑FLAKY ledger updated: ${path.relative(appRoot, FLAKE_LEDGER)} (${next.length} entries)`)
+  } catch (e) { console.error(`[run-all] flake ledger write failed: ${e.message}`) }
+}
+
+// Split a TAP stream into { head, blocks, tail }: head = leading version line(s),
+// blocks = top-level `ok N`/`not ok N` test blocks (indented continuation lines
+// and their `# Subtest` prologue ride along), tail = the plan + summary comment lines.
+const splitTapBlocks = tap => {
+  const lines = String(tap).split(/\r?\n/)
+  const head = []; const blocks = []; const tail = []
+  let cur = null
+  let prologue = []
+  for (const line of lines) {
+    if (/^(?:not )?ok \d+/.test(line)) {
+      if (cur) blocks.push(cur)
+      cur = [...prologue, line]
+      prologue = []
+    } else if (/^# Subtest/.test(line) && !/^\s/.test(line)) {
+      prologue = [line]
+    } else if (/^1\.\.\d+/.test(line) || (/^# (pass|fail|cancel|skip|tests|suites|cancelled|skipped|todo|duration_ms)/.test(line))) {
+      if (cur) { blocks.push(cur); cur = null }
+      prologue = []
+      tail.push(line)
+    } else if (cur && (/^\s/.test(line) || line === '')) {
+      cur.push(line)
+    } else if (cur) {
+      cur.push(line)
+    } else {
+      head.push(line)
+    }
+  }
+  if (cur) blocks.push(cur)
+  return { head, blocks, tail }
+}
+const blockFile = block => {
+  const m = /(?:^|\n)\s*location: '?([^'\r\n]+)'?/.exec(block.join('\n'))
+  return m ? m[1].replace(/\\\\/g, '\\').replace(/:\d+:\d+$/, '') : null
+}
+const renumber = blocks => blocks.map((b, i) => {
+  const lines = [...b]
+  lines[0] = lines[0].replace(/^(ok|not ok) \d+/, (m0, kw) => `${kw} ${i + 1}`)
+  return lines
+})
+
+if (r.status !== 0 && !r.error && r.stdout) {
+  const failedFiles = failedFileList(String(r.stdout))
+  if (failedFiles.length > 0 && failedFiles.length <= 12) {
+    console.error(`[run-all] ${failedFiles.length} file(s) failed — flake-retry pass on just those files (one shot, budgets unchanged)`)
+    for (const f of failedFiles) console.error('  ↻ ' + path.relative(appRoot, f))
+    // 30s settle before the retry: the full pass leaves the host hot (concurrent-pool
+    // debris, fs flushing); retrying into the same heat re-loses the same races
+    // (check-test-scope-golden flunked the immediate retry twice before this delay).
+    await new Promise(r2 => setTimeout(r2, 30000))
+    // The retry pass is buffered too (live:false): its bytes may be folded into the composed
+    // full-corpus stream, and every terminal branch below emits its buffers exactly once.
+    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)), { live: false })
+    if (retry.status === 0) {
+      const deepHit = failedFiles.filter(f => DEEP_FILES.has(path.basename(f)))
+      if (deepHit.length > 0) {
+        // [signal-integrity 2026-10-25] the deep pool IS the deliberate load-sensitivity
+        // probe — a first red there is the signal we built this suite to catch. The retry
+        // run stays on record, but it must never flip the exit: pass1 red stays red.
+        console.error('[run-all] ⚑FLAKY retry GREEN but DEEP_FILES hit (' + deepHit.map(f => path.basename(f)).join(', ') + ') — NOT absorbed: pass1 red stands, retry recorded as evidence')
+        await recordFlake([{
+          at: new Date().toISOString(), absorbed: false, deepPool: true,
+          files: failedFiles.map(f => path.relative(appRoot, f)),
+          note: 'deep-pool load-sensitivity: retry green, pass1 red stands'
+        }])
+        // pass1 TAP stays in r.stdout (final exactly-once emission) — the suite verdict.
+        console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
+        emitSync(retry.stdout || '')
+      } else {
+        // Compose a FULL-corpus TAP for the summary gate: pass1 blocks minus the
+        // retried files' blocks, then the retry's own blocks — the skip ratchet
+        // sees every file of this run again (partial-corpus blindness closed).
+        // Fail-closed twice over (2026-10-26): composition is refused BOTH on parse
+        // low-confidence AND when the kept corpus still carries not-ok blocks —
+        // blockFile()-null-located failures (shared helpers, tests/lib/*.mjs) are
+        // neither retried nor absorbable, and counting them as zero was a fake green.
+        const pass1 = String(r.stdout || '')
+        const retryTap = String(retry.stdout || '')
+        const p1 = splitTapBlocks(pass1)
+        const rt = splitTapBlocks(retryTap)
+        const retriedSet = new Set(failedFiles)
+        const kept = []
+        let keptNotOk = 0
+        for (const b of p1.blocks) {
+          const file = blockFile(b)
+          if (file && retriedSet.has(file)) continue // retry's verdict is authoritative
+          if (/^not ok \d+/.test(b[0])) keptNotOk++
+          kept.push(b)
+        }
+        const planOk = /^1\.\.\d+/.test(p1.tail.find(l => /^1\.\.\d+/.test(l)) || '')
+        const notOkInRetry = rt.blocks.filter(b => /^not ok \d+/.test(b[0])).length
+        // pass1's cancel count rides the kept corpus (retried files' cancels cannot be
+        // separated block-wise; the gate reds on any nonzero cancelled either way)
+        // W12 2026-10-26 (Fix 5): the RETRY pass's own cancelled count was invisible — a
+        // cancellation inside a retried file's retry pass occupied a slot and the composed
+        // summary counted it green. Both tails are parsed now; composition is REFUSED on any
+        // nonzero (mirroring the keptNotOk guard) and the real sum is emitted otherwise.
+        // W13 2026-10-26: both regexes now carry the `m` flag and are matched LINE BY LINE —
+        // the un-`m`'d exec over the joined tail could silently miss a `# cancelled N` line
+        // (multi-line text without `m` never anchors per line), making the parse return 0 for
+        // a genuinely cancelled pass and the W12 "absorption refused on cancelled" guard never
+        // fire: fake green on cancelled tests in absorbed runs. Scanning per line is fail-loud
+        // by construction (any cancelled line anywhere in the tail is counted).
+        const countCancelled = tail => tail.reduce((n, l) => { const m = /^# cancelled\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
+        const cancelled1 = countCancelled(p1.tail)
+        const cancelled2 = countCancelled(rt.tail)
+        if (planOk && keptNotOk === 0 && notOkInRetry === 0 && cancelled1 === 0 && cancelled2 === 0 && rt.blocks.length > 0) {
+          const all = renumber([...kept, ...rt.blocks])
+          // TAP skip semantics: a skip directive belongs to a TEST POINT line (`ok N ... # SKIP`),
+          // not anywhere in the block — a diagnostic line inside a passing block containing
+          // "# SKIP" used to inflate the composed skip count (substring false positive).
+          // W15 2026-10-27: per TEST-POINT LINE across the composed corpus, not per BLOCK — the
+          // block form counted each file block at most once, but node:test nests each file's test
+          // points as INDENTED `ok N ... # SKIP` lines inside its top-level block, so a file with
+          // 3 skipped test points contributed 1 (or 0) and the skip ratchet under-counted exactly
+          // on the paths it exists to guard. W14 semantics preserved: only `ok N`/`not ok N` lines
+          // match (the `ok`/`not ok` anchor cannot match a diagnostic text line), indentation now
+          // allowed.
+          const skips = all.reduce((n, b) => n + b.filter(l => /^\s*(?:not )?ok\b.*#\s*(?:SKIP|skip)\b/.test(l)).length, 0)
+          const composed = [
+            // W12 2026-10-26 (Fix 4): pass1 streams live, so the gate's tap file already holds
+            // its raw bytes when this composed stream is appended. The separator marks the
+            // boundary: consumers anchor the LAST plan (raw pass1 above is evidence).
+            '# COMPOSED-TAP-FOLLOWS: consumers anchor the LAST plan (raw pass1 above is evidence)',
+            ...p1.head,
+            ...all.map(b => b.join('\n')),
+            `1..${all.length}`,
+            `# pass ${all.length - skips}`,
+            // fail line is MANDATORY (2026-10-26): the composed summary previously omitted it
+            // entirely — parseSummary returns fail=undefined without it and the gate fail-closed
+            // on "摘要解析失败". Here both counts are provably 0 (the branch guard above).
+            `# fail ${keptNotOk + notOkInRetry}`,
+            `# skip ${skips}`,
+            // REAL counts (2026-10-26): the hardcoded `# cancelled 0` masked kept cancel
+            // blocks. W12 Fix 5: the retry pass's cancelled count rides along too — the sum is
+            // emitted, and any nonzero refuses composition entirely (guard above).
+            `# cancelled ${cancelled1 + cancelled2}`,
+            `# COMPOSED after flake-retry absorption (${failedFiles.length} file(s) re-ran green; pass1 blocks for those files replaced by retry blocks)`,
+            `# flake-absorbed-at ${new Date().toISOString()}`
+          ].join('\n')
+          console.error(`[run-all] ⚑FLAKY absorbed ${failedFiles.length} file(s) (load-band class) — suite green, composed full-corpus TAP, ledger updated`)
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: true, deepPool: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            pass1Blocks: String(pass1.match(/^not ok .*(?:\n(?!not ok ).*)*/gm) || []).length,
+            note: 'first red re-ran green under lighter load (retried files only + 30s settle)'
+          }])
+          // r.stdout = the ONE coherent composed stream; final emission below writes it once.
+          r = { status: 0, stdout: composed, stderr: r.stderr, streamed: false }
+        } else if (cancelled1 > 0 || cancelled2 > 0) {
+          // W12 2026-10-26 (Fix 5): cancelled test(s) inside pass1's kept corpus OR inside a
+          // retried file's retry pass — composition is REFUSED (mirrors the keptNotOk guard).
+          // A cancellation is neither pass nor fail; folding the retry green over it would
+          // count an occupied slot as a clean pass. The gate reds on `# cancelled > 0`.
+          console.error(`[run-all] ⚑FLAKY absorption REFUSED: cancelled test(s) detected (pass1=${cancelled1}, retry=${cancelled2}) — a cancellation is neither pass nor fail, composition skipped; raw pass1+retry TAP is the record`)
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: false, deepPool: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            cancelled1, cancelled2,
+            note: 'cancelled test(s) in pass1/retry — absorption refused, composition skipped'
+          }])
+          console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
+          emitSync(retry.stdout || '')
+          // r stays pass1 (status !== 0) → red exit via the final emission + status
+        } else if (keptNotOk > 0) {
+          // Kept not-ok outside the retried file set: real failures the retry never covered.
+          // Refuse composition and fall through to the RED path — pass1's exit stands.
+          console.error(`[run-all] ⚑FLAKY absorption REFUSED: ${keptNotOk} pass1 not-ok block(s) OUTSIDE the retried file set (failures in shared helpers / unattributable blocks are neither retried nor absorbable) — real red stands`)
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: false, deepPool: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            keptNotOk,
+            note: 'kept pass1 not-ok outside retried set — absorption refused, composition skipped'
+          }])
+          console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
+          emitSync(retry.stdout || '')
+          // r stays pass1 (status !== 0) → red exit via the final emission + status
+        } else {
+          console.error(`[run-all] ⚑FLAKY absorbed but TAP composition skipped (parse confidence low: plan=${planOk} keptNotOk=${keptNotOk} retryNotOk=${notOkInRetry} cancelled=${cancelled1}/${cancelled2}) — raw pass1+retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
+          console.error('[run-all] ⚑FLAKY ledger still records this absorption')
+          await recordFlake([{
+            at: new Date().toISOString(), absorbed: true, deepPool: false, composed: false,
+            files: failedFiles.map(f => path.relative(appRoot, f)),
+            note: 'absorbed; ratchet saw partial corpus (composition guard failed)'
+          }])
+          // W12 2026-10-26 (Fix 4): pass1's raw bytes are ALREADY on stdout (live pass1) —
+          // emitting Buffer.concat([r.stdout, retry.stdout]) again would double-plan. Only the
+          // retry tail is appended after a separator, so the LAST plan (the retry's) stays
+          // what parseSummary anchors.
+          r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + (retry.stdout || ''), stderr: r.stderr, streamed: false }
+        }
+      }
+    } else {
+      console.error('[run-all] flake-retry did NOT absorb — real red, retry TAP below is authoritative')
+      // W12 2026-10-26 (Fix 4): pass1's raw TAP is already on stdout from the live pass1 —
+      // emitting r.stdout here would double-plan; only the authoritative retry TAP is appended.
+      r = retry
+    }
+  }
 }
 // Fail closed and LOUD on spawn errors: r.status is null when the child never ran, so the
 // old `r.status ?? 1` fell through to exit 1 with empty output — indistinguishable from a
@@ -207,11 +676,7 @@ if (r.error) {
   console.error(`✗ [run-all] test runner failed to spawn: ${r.error.code || r.error.message}`)
   process.exit(1)
 }
-// Timing summary: print the enforced per-test ceiling next to the SLOWEST observed test, so a
-// near-ceiling duration reads as "slow but finished" and a kill-at-ceiling reads as "hung".
-// The 5min ceiling itself stays as-is (2026-09-29 recalibration, see TEST_TIMEOUT_MS above).
-if (r.stdout) process.stdout.write(r.stdout) // forward the TAP verbatim (summary gate parses it)
-if (r.stderr) process.stderr.write(r.stderr) // spec reporter stream (coverage table) + runner warnings
+// TAP/spec streams were already piped through live by spawnRunner() — no end-of-run replay.
 // When coverage was requested, persist a machine-readable summary for the coverage ratchet,
 // so the gate can compare without re-running the whole unit suite (running both concurrently
 // on a 4-vCPU CI runner doubled the load enough to time tests out, 2026-09-26).
@@ -238,10 +703,16 @@ if (forwardArgs.includes('--experimental-test-coverage')) {
     const failCount = (stdoutText.match(/^not ok /gm) || []).length
     // suite tag: the coverage ratchet only auto-raises its baseline from the suite it was
     // calibrated on ('unit'); a full-suite summary must be visibly labeled so the ratchet
-    // can tell the instruments apart instead of silently mixing them.
-    const suiteTag = suites.length ? suites.join('+') : 'all'
-    fs.writeFileSync(path.join(artifacts, 'coverage-summary.json'),
+    // can tell the instruments apart instead of silently mixing them. A --tier run is a
+    // DIFFERENT instrument still (its file set is a strict subset/superset) — the tier rides
+    // the tag so the ratchet treats it as compare-only, never as a raise source.
+    const suiteTag = (suites.length ? suites.join('+') : 'all') + (tierArg ? `+${tierArg}` : '')
+    // [determinism 2026-10-25] atomic write (tmp+rename) — a concurrent gate must not read
+    // a torn summary (the ratchet must never raise a baseline from a half-written file).
+    const covTmp = path.join(artifacts, 'coverage-summary.json.tmp-' + process.pid)
+    fs.writeFileSync(covTmp,
       JSON.stringify({ ...all, failCount, suite: suiteTag, generatedAt: new Date().toISOString() }, null, 2) + '\n')
+    fs.renameSync(covTmp, path.join(artifacts, 'coverage-summary.json'))
     if (all) console.error(`[run-all] coverage summary written: ${all.lines}/${all.branches}/${all.functions}`)
     else console.error('[run-all] coverage requested but no all-files summary found — ratchet will fall back to its own run')
   } catch (e) { console.error(`[run-all] coverage summary write failed: ${e.message}`) }
@@ -255,4 +726,11 @@ try {
     console.error(`[run-all] per-test timeout ceiling: ${TEST_TIMEOUT_MS}ms; slowest observed test: ${max.toFixed(0)}ms (${(TEST_TIMEOUT_MS / max).toFixed(1)}x margin)`)
   }
 } catch { /* diagnostics only — never mask the runner's real exit status */ }
+// Exactly-once stdout emission (updated 2026-10-26 W12 Fix 4): pass1 streams LIVE (diagnostics
+// must reach the gate's tap file while it runs — 0-byte-TAP contract). The retry/rerun passes
+// are buffered, so r.stdout here carries exactly what those passes own: the raw retry/rerun
+// TAP, the composed full-corpus TAP after absorption, or the appended retry tail — each
+// preceded by a loud separator; pass1's raw live-streamed bytes above are evidence. Emitted
+// synchronously (flush before process.exit truncates a pipe).
+if (!r.streamed && r.stdout && r.stdout.length) emitSync(r.stdout)
 process.exit(r.status ?? 1)

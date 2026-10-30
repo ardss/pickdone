@@ -70,7 +70,13 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, userDataDir, CliError }) 
     const tmp = path.join(dir, `${safe}.att-tmp-${Date.now()}-${Math.floor(Math.random() * 1e6)}`)
     const dest = path.join(dir, safe)
     try {
-      fs.writeFileSync(tmp, raw)
+      // F2 (2026-10-15, App parity with saveAttachment D22): the bare writeFileSync published the
+      // rename before the bytes were durable — a power cut between the two left a TORN final file
+      // that readers accepted (existence-only guards). durable-fs.js is plain Node (no electron),
+      // so the CLI reuses the SAME writeFileDurable (tmp -> fsync -> rename) the App uses. The
+      // `.att-tmp` outer name is kept so the App's D19 startup residue sweep still matches crash
+      // trash from either door (writeFileDurable's own inner `.dtmp` spool never survives).
+      require('../src/main/durable-fs.js').writeFileDurable(tmp, raw)
       fs.renameSync(tmp, dest)
     } finally {
       try { if (fs.existsSync(tmp)) fs.unlinkSync(tmp) } catch { /* best-effort cleanup */ }
@@ -93,8 +99,9 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, userDataDir, CliError }) 
     const parse = s => { try { const a = JSON.parse(s || '[]'); return Array.isArray(a) ? a : [] } catch { return [] } }
     return { taskId: t.taskId, images: parse(t.image), files: parse(t.files) }
   }
-  /** Remove the n-th image or file attachment (1-based). Unlinks the physical file best-effort (same as the UI delete flow). */
-  function removeAttachment (input, kind, n) {
+  /** Remove the n-th image or file attachment (1-based). Unlinks the physical file best-effort (same as the UI delete flow).
+   *  F2 (2026-10-15): opts.force bypasses the shared-reference guard below. */
+  function removeAttachment (input, kind, n, opts = {}) {
     const t = resolveTask(input, liveTasks())
     const field = /^(img|image|i)$/i.test(kind) ? 'image' : /^(file|f)$/i.test(kind) ? 'files' : null
     if (!field) throw new CliError('kind must be img|file', 'USAGE')
@@ -108,6 +115,27 @@ module.exports = ({ resolveTask, liveTasks, patchTodo, userDataDir, CliError }) 
     // ATTACH_NOT_FOUND with the row already changed (non-atomic, 2026-09-15). unlink stays best-effort.
     const key = attachKeyOf(item)
     if (!key) throw new CliError('attachment has no resolvable file name (refusing to guess)', 'ATTACH_KEY_INVALID')
+    // F2 (2026-10-15, App parity with delete-file's shared-ref guard): single-key deletes used to
+    // unlink by key alone — deleting task A's entry killed the physical file that task B still
+    // referenced (same local:// key on two rows). BEFORE patching anything (validate-before-write
+    // contract), scan every live row's image/files metadata; the OWN row is scanned with its
+    // UPDATED list (the entry being removed is already spliced out of `list`), so a duplicate
+    // entry of the same key elsewhere in the row also blocks. Surviving refs → ATTACH_SHARED_REF
+    // refusal with the referencing task ids; `--force` (opts.force) overrides — the row edit and
+    // the unlink both proceed.
+    let rows = []
+    try { rows = liveTasks() || [] } catch { rows = [] }
+    const ownUpdated = {
+      taskId: t.taskId,
+      image: field === 'image' ? JSON.stringify(list) : t.image,
+      files: field === 'files' ? JSON.stringify(list) : t.files
+    }
+    const others = rows.filter(r => r && String(r.taskId) !== String(t.taskId))
+    const refs = attachments.findKeyRefs(key, [ownUpdated, ...others])
+    if (refs.length && !(opts && opts.force)) {
+      const tasks = [...new Set(refs.map(r => String(r.taskId)))]
+      throw new CliError(`attachment "${key}" is still referenced by ${tasks.length} other task row(s) (${tasks.join(', ')}); re-run with --force to delete anyway`, 'ATTACH_SHARED_REF')
+    }
     patchTodo(t.taskId, { [field]: JSON.stringify(list) }, { action: 'attachment.remove' })
     // B6: resolve through attachments.attachmentPath (percent-decode + LAN-conflict alias map),
     // NOT the raw key — after a LAN same-name/different-content pull the row's local://key no

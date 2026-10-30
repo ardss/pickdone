@@ -64,8 +64,13 @@ test('IPC dbCall: dangerous non-whitelisted ops throw (prevents XSS injecting ha
       op + ' should be blocked by IPC whitelist'
     )
     // db.call accepts the dangerous op (it is in db OPS), but the IPC whitelist intercepts at the main-process entry - one layer of defense is enough
-    const r = db.call(op, ['t1'])
-    assert.ok(r !== undefined, 'db.call accepts the dangerous op; the defense lives at the IPC entry')
+    // [assertion-quality 2026-10-25] the real claim is "the op EXISTS in the db layer's
+    // OPS literal" (an `r !== undefined` assert had ~zero signal — db.call throwing
+    // already reds the test). OPS is a module-internal const, so verify against the
+    // literal in db.js source (same extraction discipline as realAllowedOps above).
+    db.call(op, ['t1'])
+    const dbSrc = fs.readFileSync(path.join(anchorPath('mainDir'), 'db.js'), 'utf8')
+    assert.ok(new RegExp('\\n  ' + op + ': ').test(dbSrc), op + ' is a real db-layer OPS entry; the defense lives at the IPC entry')
   }
 })
 

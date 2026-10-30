@@ -1,6 +1,8 @@
 <template>
 
-  <!-- 弹窗显隐由父层 v-if 驱动,本 transition 实际不参与动画 -->
+  <!-- Modal visibility is driven by the parent's v-if; this transition is not actually animated -->
+  <!-- [F3-UX] the fb-* form controls below are styled in the scoped block at the bottom of this file -->
+
   <transition name="fade">
     <div class="modal-container" @click.self="close">
       <div class="modal-tablecloth" @click.self="close">
@@ -144,9 +146,41 @@ export default {
         this.close()
       } catch (e) {
         this.$message.error(this.$t('feedback.submitFailed'))
+      } finally {
+        // [F4] the flag must reset on the failure path too — a rejected submit used to leave
+        // submitting=true and the button disabled forever (the success path closes the modal,
+        // so only failures were stuck).
+        this.submitting = false
       }
     }
   },
 
 }
 </script>
+
+<style>
+/* [F3-UX] FeedbackModal had zero styling for its fb-* form controls (naked/unreadable modal).
+   Visual language follows the app modal family (.mini / .modal__body controls): token-driven
+   so both light and dark themes resolve via the shared --* variables. */
+.fb-type-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.fb-type-btn {
+  border: 1px solid var(--line-strong); background: var(--panel, #fff); color: var(--text-2);
+  border-radius: var(--radius-md); padding: 4px 12px; font-size: var(--fs-sm); cursor: pointer;
+}
+.fb-type-btn:hover { border-color: var(--brand); color: var(--brand); }
+.fb-type-btn.on {
+  border-color: var(--brand); color: var(--brand); background: var(--brand-light);
+}
+.fb-desc, .fb-contact {
+  display: block; width: 100%; box-sizing: border-box;
+  border: 1px solid var(--line-strong); background: var(--panel, #fff); color: var(--text-1);
+  border-radius: var(--radius-md); padding: 8px 10px; font-size: var(--fs-sm); font-family: inherit;
+}
+.fb-desc { resize: vertical; min-height: 72px; }
+.fb-desc:focus, .fb-contact:focus { border-color: var(--brand); outline: none; }
+.fb-desc-count { text-align: right; margin: 4px 0 10px; font-size: var(--fs-xs); color: var(--text-3); }
+.fb-contact { margin-bottom: 12px; }
+.fb-attach { display: flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-2); cursor: not-allowed; }
+.fb-attach input { accent-color: var(--brand); }
+.fb-pending { margin-top: 10px; font-size: var(--fs-xs); color: var(--text-3); }
+</style>

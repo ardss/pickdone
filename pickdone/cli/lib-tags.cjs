@@ -2,6 +2,7 @@
  * Factory-injected deps keep it decoupled from lib.js (no circular require), same pattern as lib-settings.cjs.
  * Tags (derived from #tag in content/description; rename/remove rewrite text across tasks — same regex semantics as SideNav)
  * + explicit-id batch operations. */
+const { isValidTagName, normalizeTagName } = require('../shared/tag-name.mjs') // F2 fix: rename-target legality, single source with the renderer modal (require(esm), same pattern as sort-core.mjs)
 module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete, dateChangeReminderPatch, migrateChipsOnDayChange, parseDate, resolveCategory }) => {
   // Character-for-character identical to renderer/js/utils/search.js TAG_RE (tags are derived from body text, no separate storage)
   const TAG_RE = /#([^\s#,，。.!?！？]+)/g
@@ -26,6 +27,12 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
     return Object.entries(count).map(([name, tasks]) => ({ name, tasks })).sort((a, b) => b.tasks - a.tasks || a.name.localeCompare(b.name))
   }
   function rewriteTag (name, next, { remove } = {}) {
+    const target = normalizeTagName(next)
+    // F2 fix: an illegal rename target (contains a TAG terminator char like `.`/`,`/`，`) could
+    // never be extracted by TAG_RE again — a ghost tag. Same-source guard with the App modal.
+    if (!remove) {
+      if (!isValidTagName(target)) throw new CliError(`invalid tag name "${target}": a tag name must not contain spaces, #, , ， . 。 ! ！ ？ or similar separators (it would never be extractable again)`, 'TAG_NAME_INVALID')
+    }
     const esc = tagEsc(name)
     // rename: #old(?=[\s#,，。.!?！？]|$) → #new ; remove: leading whitespace swallowed too (\s*#old(…) → '')
     // Same terminator class as the App's SnManageTagsModal.tagRewriteRe — `buy #milk.` renames to
@@ -36,17 +43,38 @@ module.exports = ({ liveTasks, recycleTasks, CliError, patchTodo, toggleComplete
     // CLI iterating live rows only missed the tombstones, so restore-after-rename resurrected the old
     // tag (ghost tags). Rewrite across live ∪ recycled rows; the tag LIST derivation stays live-only.
     const rows = liveTasks().concat(recycleTasks())
+    const failures = []
     for (const todo of rows) {
       const patch = {}
       if (todo.taskContent) {
-        const v = remove ? todo.taskContent.replace(re, '').trim() : todo.taskContent.replace(re, '#' + next)
+        // F2 fix: FUNCTIONAL replacement — a string replacement would treat `$&` etc. in the
+        // new name as special patterns (renaming to `$&b` mangled every rewritten task).
+        const v = remove ? todo.taskContent.replace(re, '').trim() : todo.taskContent.replace(re, () => '#' + target)
         if (v !== todo.taskContent) patch.taskContent = v
       }
       if (todo.taskDescribe) {
-        const v = remove ? todo.taskDescribe.replace(re, '').trim() : todo.taskDescribe.replace(re, '#' + next)
+        const v = remove ? todo.taskDescribe.replace(re, '').trim() : todo.taskDescribe.replace(re, () => '#' + target)
         if (v !== todo.taskDescribe) patch.taskDescribe = v
       }
-      if (Object.keys(patch).length) { patchTodo(todo.taskId, patch, { action: 'tag.' + (remove ? 'remove' : 'rename') }); touched++ }
+      if (Object.keys(patch).length) {
+        // C2 P2 (2026-10-21): one mid-run patchTodo failure used to abort the loop with rows
+        // half-rewritten and NO contract — the caller saw an opaque stack and could not tell
+        // which tasks were rewritten. Per-row try/catch: keep rewriting the rest, collect
+        // failures in the batch shape { taskId, error }, then surface them as a structured
+        // CliError (e.code = TAG_REWRITE_PARTIAL, e.failures = the batch-shaped array,
+        // e.touched = rows already rewritten) so callers/agents get a machine-readable
+        // per-task report. NOTE: `tag rename`'s emit lives in cli/lib-taxonomy.cjs (outside
+        // this fix's edit scope), so the CLI process exits 1 via the CliError path rather than
+        // batch's exit-2 contract — documented tradeoff, the failures[] payload is contract-identical.
+        try { patchTodo(todo.taskId, patch, { action: 'tag.' + (remove ? 'remove' : 'rename') }); touched++ }
+        catch (e) { failures.push({ taskId: todo.taskId, error: String(e.message || e) }) }
+      }
+    }
+    if (failures.length) {
+      const err = new CliError(`tag ${remove ? 'remove' : 'rename'} partially failed: ${touched} task(s) rewritten, ${failures.length} failed — failures: ` + JSON.stringify(failures), 'TAG_REWRITE_PARTIAL')
+      err.failures = failures
+      err.touched = touched
+      throw err
     }
     return touched
   }

@@ -131,8 +131,11 @@ test('A16: modal X buttons announce "close", not the dialog title', () => {
 test('A3: the deadline chip is overdue only after the due DAY has passed (not on the due day)', () => {
   const src = read('renderer/js/components/TodoItem.vue')
   assert.ok(!src.includes('todo.deadlineTs < Date.now()'), 'raw now-compare removed from the chip')
-  assert.match(src, /deadlineOverdue \(\)[\s\S]*?startOf\('day'\)\.valueOf\(\) < dayjs\(\)\.startOf\('day'\)\.valueOf\(\)/,
-    'day-level compare matches dueStateOf (days<0 = overdue)')
+  // [w19] the "today" side reads the reactive store owner (todo.todayTimestamp) instead of a bare
+  // dayjs() — a wall-clock read has no reactive dependency, so the computed cached its pre-midnight
+  // value and the red chip never appeared after the day flipped.
+  assert.match(src, /deadlineOverdue \(\)[\s\S]*?startOf\('day'\)\.valueOf\(\) < this\.\$store\.state\.todo\.todayTimestamp/,
+    'day-level compare against the reactive today owner (w19 midnight fix)')
   assert.match(src, /\{overdue: deadlineOverdue\}/, 'chip class uses the new computed')
 })
 

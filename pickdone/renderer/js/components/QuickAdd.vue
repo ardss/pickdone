@@ -2,12 +2,14 @@
 
   <div class="qa-bar">
       <div class="qa-inputwrap" :class="{ 'qa-failed': failed }">
+      <!-- [F7 P3] maxlength clamps at the shared DB title ceiling: overflow pastes truncate up front -->
       <input ref="inp" v-model="text" class="qa-input" :placeholder="$t('statsD.QuickAdd.placeholder')"
              :aria-label="$t('statsD.QuickAdd.ariaLabel')"
+             :maxlength="TITLE_MAX"
              @input="failed = false"
              @paste="onPaste"
-             @keyup.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"
-             @keyup.esc="onCancel"/>
+             @keydown.enter="e => { if (e.isComposing || e.keyCode === 229) return; onEnter() }"
+             @keydown.esc="onCancel"/>
       <transition name="fade">
         <!-- Inline failure feedback for the 64px standalone quick-add window: a $message toast is
              clipped there (overflow:hidden), so quiet mode surfaces the error inside the card -->
@@ -44,10 +46,11 @@
  */
 import { parseNaturalDate } from '../utils/nlDate.js'
 import {dayjs, FMT } from '../utils/core.js'
-import { resolveQuickAddDate } from '../utils/quickAddDate.js'
+import { resolveQuickAddDate, reminderTsFromParse } from '../utils/quickAddDate.js'
 import { splitPasteLines, ensureTagSuffix } from '../utils/quickAddPaste.js'
 import { $elOf } from '../utils/el.js'
 import { roleButtonActivate } from '../utils/roleButtonKey.js' // [A9/A16] Space+Enter button activation
+import { TEXT_MAX_LEN as TITLE_MAX } from '../../../shared/sanitize-text.mjs' // [F7 P3] same-source clamp as the DB title column
 
 export default {
   name: 'QuickAdd',
@@ -58,6 +61,7 @@ export default {
   data () {
     return {
       text: '',
+      TITLE_MAX, // [F7 P3] template access to the shared title clamp
       // Set by a failed submit in quiet mode (standalone window) — the toast path is unavailable
       // there; cleared by the next input so the field stays retryable
       failed: false,
@@ -96,6 +100,22 @@ export default {
     // Tag page context: tags are embedded in the content (#tag); the tag text must be appended at creation for the task to appear on that tag page
     routeTag () {
       return this.$route && this.$route.name === 'todo-list-tag' ? String(this.$route.params.id || '') : ''
+    },
+    // [J1 journey-audit 2026-10-22] Selected day on the today page (date strip): when a NON-today
+    // day is selected, quick-add defaults to THAT day — the day view's empty state invites adding
+    // a task for the day on screen, and the old today-default made the new row invisible there.
+    // Meaningful only on the today route (daySelectedTs persists across route changes); 0 = today.
+    viewDayTs () {
+      if (!this.$route || this.$route.name !== 'todo-list-today') return 0
+      const st = this.$store && this.$store.state
+      const sel = st && st.ui ? st.ui.daySelectedTs : 0
+      return (typeof sel === 'number' && Number.isFinite(sel)) ? sel : 0
+    },
+    // [P2 config-surface 2026-10-22] A time-bearing NL parse ("明天下午3点 …", "后天 09:30 …") shows
+    // the time in the chip — the created task must carry it as reminderTime. 0 for date-only
+    // parses and when a manual date chip overrides the parsed date (decision in quickAddDate.js).
+    parsedReminderTs () {
+      return reminderTsFromParse({ pickedDate: this.pickedDate, parsed: this.parsed })
     }
   },
   mounted () {
@@ -110,6 +130,14 @@ export default {
     window.removeEventListener('todo:focus-quickadd', this.focusInput)
   },
   methods: {
+    /* [F7 P3] replay the failure feedback: toggling failed true→false→true (across a tick)
+       restarts the qa-failed-shake CSS animation on a back-to-back failed submit — a plain
+       `failed = true` on an already-failed field never re-triggers it */
+    markFailed () {
+      if (!this.quiet) return
+      this.failed = false
+      this.$nextTick(() => { this.failed = true })
+    },
     /* [A9/A16] date-chip clear button: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
     onClearDateKey: roleButtonActivate(function () { this.clearDate() }),
     /* [uiux-2026-10-01 J1 P3] Esc is the universal cancel key: clear the draft (and the failure
@@ -119,6 +147,8 @@ export default {
       if (e && (e.isComposing || e.keyCode === 229)) return
       this.failed = false
       if (this.text) this.text = ''
+      // [d-wave 2026-10-14] Esc is a full cancel: drop the pending multi-line retry queue too
+      this._pendingLines = null
       // [D22 P3] Esc also clears the date chip (stale-date carry-over)
       this.pickedDate = null
       const inp = this.$refs.inp
@@ -132,10 +162,14 @@ export default {
     async onPaste (e) {
       const lines = splitPasteLines(e.clipboardData && e.clipboardData.getData('text'))
       if (lines.length <= 1) return
-      // [A9 fix] the _submitting check must come BEFORE preventDefault: while a submit is in
-      // flight the multi-line paste used to be swallowed silently. Return WITHOUT preventing so
-      // the native paste lands in the input (draft preserved) when busy.
-      if (this._submitting) return
+      if (this._submitting) {
+        // [d-wave 2026-10-14] busy: the old early-return WITHOUT preventDefault let the
+        // native paste fold the multi-line text into the single-line draft. Prevent it and
+        // queue the lines instead — they are submitted by the next onEnter via createLines.
+        e.preventDefault()
+        this._pendingLines = (this._pendingLines || []).concat(lines)
+        return
+      }
       e.preventDefault()
       await this.createLines(lines)
     },
@@ -154,6 +188,15 @@ export default {
       this._submitting = true
       const tag = this.routeTag
       const catId = this.routeCategoryId
+      // [F4] snapshot the effective date BEFORE the loop (same pattern as the tag/catId
+      // snapshots above): re-reading the live computed per line meant a mid-loop change (or
+      // the cleared chip below) could land later lines on a different day than the toast claims.
+      // [w21] snapshot the MANUAL chip only, not effDate: effDate folds in the draft's NL-parsed
+      // date (parsed.date), and the contract above says NL parsing applies to the whole draft,
+      // never to pasted lines — leaking it here stamped every pasted line with the draft's
+      // parsed date. pickedDate covers all three states the paste path needs (null = default,
+      // 0 = explicitly undated, ts = chip day).
+      const effDate = this.pickedDate
       let done = 0 // lines already dispatched successfully (read by the catch below)
       try {
         for (const raw of lines) {
@@ -161,7 +204,8 @@ export default {
           const payload: any = {
             todoContent: content,
             todoDescription: '',
-            todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
+            todoDate: resolveQuickAddDate({ pickedDate: effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf(), viewDayTs: this.viewDayTs }),
+            // multi-line paste lines skip NL parsing (createLines contract) → no reminder handoff here
             todoReminderTime: 0,
             todoDifficultyLevel: 0
           }
@@ -173,12 +217,15 @@ export default {
         // [P2 fix] the bulk toast omitted WHERE the lines landed — with a date chip active every
         // created task went to that day, and the toast said only "Added N tasks". Same date
         // suffix idiom as onEnter's single-line toast (reuses scheduledAt/today/movedToInbox).
-        // Read the effective date BEFORE clearing it (the computed goes stale once reset).
-        let d = this.effDate
+        // Report the SAME pre-loop snapshot the lines were created with (the computed goes
+        // stale once reset).
+        let d = effDate
         this.text = ''
         this.pickedDate = null
-        // Mirror onEnter's default-date semantics: other pages default to today, the todo box stays undated
-        if (d == null && !this.inTodoBox) d = dayjs().startOf('day').valueOf()
+        // Mirror onEnter's default-date semantics: other pages default to today, the todo box stays undated,
+        // and a non-today selected day on the today page is the target ([J1]) — must match the
+        // resolveQuickAddDate call above or the toast names the wrong day.
+        if (d == null && !this.inTodoBox) d = this.viewDayTs || dayjs().startOf('day').valueOf()
         const when = d && d !== 0 ? this.$t('statsD.QuickAdd.scheduledAt') + (dayjs(d).isSame(dayjs(), 'day') ? this.$t('statsD.QuickAdd.today') : dayjs(d).format(FMT.cnDate)) : this.$t('statsD.QuickAdd.movedToInbox')
         const msg = this.$t('statsD.QuickAdd.created', { c: lines[0] }) + ' …'
         const bulkMsg = (this.$t('statsD.QuickAdd.createdBulk', { n }) || (msg + ` (${n})`)) + when
@@ -188,11 +235,20 @@ export default {
       } catch (err) {
         console.error('[quick-add] multi-line paste failed:', err)
         // [D22 P2] partial-failure retry contract: lines already created must NOT be re-created
-        // on the user's retry (they duplicated). Leave only the unsent remainder in the input,
-        // so Enter/paste resubmits exactly what is still missing. done counts successful lines.
-        const rest = lines.slice(done).join('\n')
-        if (rest) this.text = rest
-        if (this.quiet) this.failed = true
+        // on the user's retry (they duplicated). [d-wave 2026-10-14] the remainder now lives in
+        // the _pendingLines queue with its per-line shape: the old `lines.slice(done).join('\n')`
+        // landed in the single-line input where the next Enter folded the \n-joined text into
+        // one space-concatenated junk task. The queue is drained by onEnter (bulk path); the
+        // input shows the first pending line as the visible draft.
+        const rest = lines.slice(done)
+        if (rest.length) {
+          // [w19 retry-order fix] FIFO append (the old prepend put a LATER failed batch
+          // ahead of lines already queued); and never clobber a draft the user typed during the
+          // await window — only seed the input when it is empty.
+          this._pendingLines = (this._pendingLines || []).concat(rest)
+          if (!this.text.trim()) this.text = rest[0]
+        }
+        if (this.quiet) this.markFailed()
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }
     },
@@ -218,16 +274,29 @@ export default {
     },
     async onEnter () {
       if (this._submitting) return // pressing Enter repeatedly within the await window would create duplicate tasks
+      // [d-wave 2026-10-14] pending retry queue (partial multi-line failure / busy paste):
+      // drain it through the bulk createLines path BEFORE touching the single-line draft —
+      // submitting the folded draft instead would create one space-joined junk task.
+      if (this._pendingLines && this._pendingLines.length) {
+        const pending = this._pendingLines
+        this._pendingLines = null
+        await this.createLines(pending)
+        return
+      }
       const raw = this.text.trim()
       if (!raw) return
       this._submitting = true
       // Input that parses to PURE date words ("明天", "10月1日"…) has an empty restText: the old
       // `restText || raw` fallback re-created the date string itself as a junk task titled "明天".
-      // A date-only input schedules nothing to do — refuse creation and say so (reuse the
-      // existing generic "name cannot be empty" key; no new i18n key was allowed here).
+      // A date-only input schedules nothing to do — refuse creation and say so with a dedicated
+      // message (F3 2026-10-18: was the generic "project name cannot be empty" key, misleading).
       if (this.parsed && this.parsed.restText === '') {
         this._submitting = false
-        if (!this.quiet) this.$message.warning(this.$t('statsB.ProjectView.nameRequired'))
+        // [d-wave 2026-10-14] quiet mode used to return with ZERO feedback: no toast, no
+        // qa-error — the standalone-window user thought the shortcut was broken. Quiet mode
+        // surfaces failures inline (failed + qa-error), same as the dispatch-failure paths.
+        if (this.quiet) this.markFailed()
+        else this.$message.warning(this.$t('statsD.QuickAdd.dateOnlyRefused'))
         return
       }
       let content = raw
@@ -241,9 +310,12 @@ export default {
       const payload: any = {
         todoContent: content,
         todoDescription: '',
-        // When no date is specified: the todo box page defaults to "no date" (into the todo box), other pages default to today (project baseline semantics)
-        todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf() }),
-        todoReminderTime: 0,
+        // When no date is specified: the todo box page defaults to "no date" (into the todo box), other pages default to today (project baseline semantics);
+        // a non-today selected day on the today page is the target ([J1 journey-audit])
+        todoDate: resolveQuickAddDate({ pickedDate: this.effDate, parsedTs: null, inTodoBox: this.inTodoBox, todayTs: dayjs().startOf('day').valueOf(), viewDayTs: this.viewDayTs }),
+        // [P2 config-surface 2026-10-22] the chip's time is a promise: a time-bearing NL parse wires
+        // the reminder; date-only parses and manual-chip overrides stay 0 (quickAddDate.reminderTsFromParse)
+        todoReminderTime: this.parsedReminderTs,
         todoDifficultyLevel: 0,
         }
       // Category/project page context: belong to the current list, not the global default category (otherwise the current page cannot see the created task)
@@ -253,8 +325,10 @@ export default {
       let d = this.effDate
       this.text = ''
       this.pickedDate = null
-      // When created with a date, toast which day it landed on; when unspecified: the todo box page stays undated (toast says it went to the todo box), others default to today (consistent with addTodo semantics)
-      if (d == null && !this.inTodoBox) d = dayjs().startOf('day').valueOf()
+      // When created with a date, toast which day it landed on; when unspecified: the todo box page stays undated (toast says it went to the todo box), others default to today (consistent with addTodo semantics);
+      // [J1] the default mirrors resolveQuickAddDate above — a selected non-today day on the today
+      // page is the target, so the toast names the day the row actually went to
+      if (d == null && !this.inTodoBox) d = this.viewDayTs || dayjs().startOf('day').valueOf()
       const when = d && d !== 0 ? this.$t('statsD.QuickAdd.scheduledAt') + (dayjs(d).isSame(dayjs(), 'day') ? this.$t('statsD.QuickAdd.today') : dayjs(d).format(FMT.cnDate)) : this.$t('statsD.QuickAdd.movedToInbox')
       const msg = this.$t('statsD.QuickAdd.created', { c: content }) + when
       // quiet mode (standalone quick-add window): skip the toast — the window hides 250ms later
@@ -268,7 +342,7 @@ export default {
         // toast is clipped by the tiny viewport (overflow:hidden), so surface the failure inline
         // on the card instead — the input is kept and the window stays open for the retry.
         console.error('[quick-add] addTodo failed:', err)
-        if (this.quiet) this.failed = true
+        if (this.quiet) this.markFailed()
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
       } finally { this._submitting = false }
     }

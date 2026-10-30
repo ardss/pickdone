@@ -96,25 +96,45 @@ function flushOnceOnReady (deps = {}) {
 }
 
 let _inited = false
+// D2 (2026-10-21): set by init — the stall-watchdog arming point, so the manual downloadUpdate
+// entry into 'downloading' arms it too (module-level because downloadUpdate lives outside init).
+let _armStallWatchdog = null
+// D2 (2026-10-21): the in-flight manual download's abort handle — markUpdateError (watchdog /
+// 'error' event) resolves a hung downloadUpdate promise so the NEXT click can start a fresh
+// download instead of being handed the same dead promise forever.
+let _manualAbort = null
 function init (mainWin) {
   win = mainWin
   if (_inited) return module.exports // idempotent: the main-window-close → tray → reopen path calls createMainWindow again; repeated init would stack listeners and multiply broadcasts N-fold
   _inited = true
   autoUpdater.logger = log // stdout is invisible after packaging; update failures must be diagnosable from the log
+  // F4 (2026-10-21): autoInstallOnAppQuit fires only on the NATIVE quit event, i.e. AFTER a
+  // user-confirmed quit — the running-pomodoro confirmation lives upstream at the quit entry
+  // points (tray quit in index.js, X-close quit chain, and the "restart to update" IPC in
+  // handlers/system.js which now asks the same confirm). No second gate here: this path cannot
+  // run without the user having already confirmed the quit.
   autoUpdater.autoInstallOnAppQuit = true // after download, a normal user quit silently upgrades
-  // P1-4 (2026-09-19 release-chain round): electron-updater derives the feed FILE from the app
-  // version — a `0.4.0-beta.x` version implies a `beta` channel and fetches `beta.yml`, which
-  // electron-builder never publishes for this project (it only emits `latest.yml` for the draft
-  // release). Result: every beta build's first update check 404'd. Pin the channel to `latest`
-  // (with allowPrerelease so beta versions still satisfy the range check) so the updater reads
-  // the artifact that actually ships, matching the GitHub draft release layout.
-  autoUpdater.channel = 'latest'
+  // P1-4 (2026-09-19): electron-updater derives the feed FILE from the channel — a beta app version
+  // implies channel `beta` and fetches `beta.yml`, which electron-builder never publishes for this
+  // project (it only emits `latest.yml`). Pinning channel='latest' fixed that 404 but introduced a
+  // WORSE one (2026-10-29 beta.21 实锤): GitHubProvider's prerelease matcher requires the channel to
+  // be null-or-alpha/beta (`shouldFetchVersion = !channel || ['alpha','beta'].includes(channel)`),
+  // so channel='latest' matched NO beta tag at all → "No published versions on GitHub" forever.
+  // Correct shape: leave `channel` UNSET (currentVersion 0.4.0-beta.x yields currentChannel 'beta',
+  // which matches beta tags; and a null channel resolves the feed file to latest.yml by default)
+  // + allowPrerelease=true. Verified against node_modules/electron-updater 6.8.9 getLatestVersion.
   autoUpdater.allowPrerelease = true
   autoUpdater.allowDowngrade = false
   syncAutoDownload()
   autoUpdater.on('checking-for-update', () => {
     // D10: a periodic/error-retry check() overlapping a manual downloadUpdate must not clobber state
-    if (_manualDownload) return
+    // W12 (P2 2026-10-26): the last handler without the terminal 'ready' guard — every check()
+    // (4h periodic, 30s error retry, manual updater:check) fires this event first, so a re-check
+    // after update-downloaded clobbered 'ready' → 'checking', and the downstream M2b guards never
+    // saw 'ready' again; 'update-available' then reset to 'available'/'downloading' and
+    // quitAndInstall() (requires status==='ready') returned false for the rest of the session —
+    // the "restart to install" button died (with autoDownloadUpdates:false it never recovered).
+    if (_manualDownload || state.status === 'ready') return
     state.status = 'checking'; broadcast()
   })
   autoUpdater.on('update-available', i => {
@@ -122,25 +142,88 @@ function init (mainWin) {
     // status to 'available' and replace state.info, so the settings gate read the wrong state and a
     // second downloadUpdate double-called autoUpdater.downloadUpdate. While a manual download is
     // in flight, status/info are owned by it.
-    if (_manualDownload) return
+    // d-wave fix (2026-10-14): a LATER check() firing update-available after update-downloaded
+    // reset status off 'ready', breaking the "restart and install" path (quitAndInstall requires
+    // status==='ready'). A downloaded update is already on disk — later availability events are
+    // stale; keep 'ready' and the stored info.
+    if (_manualDownload || state.status === 'ready') return
     state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast()
+    // D2 fix (2026-10-21): the auto-download entry into 'downloading' arms the stall watchdog
+    // too — the hang-before-first-progress case is reachable from here just as much.
+    if (state.status === 'downloading' && _armStallWatchdog) { try { _armStallWatchdog() } catch { /* arming is best-effort */ } }
   })
-  autoUpdater.on('update-not-available', i => { state.status = 'uptodate'; state.info = i; broadcast() })
-  autoUpdater.on('download-progress', p => { state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast() })
-  autoUpdater.on('update-downloaded', i => { state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
+  autoUpdater.on('update-not-available', i => {
+    // M2b (P2 2026-10-23): same guards as 'update-available' above — a later check() firing
+    // update-not-available must not downgrade a settled 'ready' (a downloaded update is already
+    // on disk; quitAndInstall requires status==='ready') nor clobber an in-flight manual download.
+    if (_manualDownload || state.status === 'ready') return
+    state.status = 'uptodate'; state.info = i; broadcast()
+  })
+  // F4 (2026-10-21): download stall watchdog. A hung transfer (proxy drop, dead mirror, firewall)
+  // used to keep status='downloading' FOREVER — no progress event, no error event, so the settings
+  // page spun and autoInstallOnAppQuit never armed. Every download-progress refreshes
+  // _lastProgressAt and re-arms a 90s timer; when it fires with no newer progress and the download
+  // is still in flight, we fail through the SAME honest-status + single-backoff-retry path as the
+  // 'error' event. Cleared on success/error so a settled state is never re-marked.
+  // Test-budget overrides (unit tests only; production uses the defaults — same pattern as the
+  // adapter's roundIntervalMs overrides). READ ONCE per init so tests can shorten the windows.
+  const STALL_WATCHDOG_MS = Number(process.env.PICKDONE_UPDATER_STALL_MS) || 90 * 1000
+  const RETRY_BACKOFF_MS = Number(process.env.PICKDONE_UPDATER_RETRY_MS) || 30 * 1000
+  let _stallTimer = null
+  let _lastProgressAt = 0
+  const clearStallWatchdog = () => { if (_stallTimer) { clearTimeout(_stallTimer); _stallTimer = null } }
+  // F4/D2 (2026-10-21): ONE arming point shared by every 'downloading' entry — a download that
+  // hangs BEFORE its first progress event (dead proxy at connect) used to never arm the watchdog
+  // (only 'download-progress' armed it) and stall in 'downloading' forever.
+  const armStallWatchdog = () => {
+    _lastProgressAt = Date.now()
+    clearStallWatchdog()
+    _stallTimer = setTimeout(() => {
+      _stallTimer = null
+      if (state.status !== 'downloading' || Date.now() - _lastProgressAt < STALL_WATCHDOG_MS) return
+      log.warn('[Updater] download stalled: no progress for ' + (STALL_WATCHDOG_MS / 1000) + 's — failing into the retry path')
+      markUpdateError(new Error('update download stalled (no progress for ' + (STALL_WATCHDOG_MS / 1000) + 's)'))
+    }, STALL_WATCHDOG_MS)
+    if (_stallTimer.unref) _stallTimer.unref()
+  }
+  _armStallWatchdog = armStallWatchdog // module-level so the manual downloadUpdate entry arms too
+  // d-wave fix (2026-10-14): same 'ready' guard — a stray progress event after download completed
+  // must not flip the settled 'ready' state back to 'downloading'.
+  autoUpdater.on('download-progress', p => {
+    if (state.status === 'ready') return
+    state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast()
+    armStallWatchdog()
+  })
+  autoUpdater.on('update-downloaded', i => { clearStallWatchdog(); state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
   // Error handling: besides broadcasting, schedule a single backoff retry (checkForUpdates after 30s).
   // Only one retry: transient network/proxy jitter self-heals; persistent failures (e.g. 404, certificate issues) are not retried, avoiding a request storm every 30s. During the retry window, a new error overwrites the state directly without queuing.
   let _retryTimer = null
-  autoUpdater.on('error', e => {
+  // F4: the error bookkeeping (status + broadcast + one 30s backoff retry) is shared by the
+  // autoUpdater 'error' event AND the stall watchdog so a stalled download gets the identical
+  // retry path instead of hanging in 'downloading' forever.
+  function markUpdateError (e) {
+    clearStallWatchdog()
+    // M2b (P2 2026-10-23): 'ready' is terminal for this process run (same guard style as the
+    // 'update-available' handler above) — a stray/late 'error' event (or watchdog fire) after
+    // update-downloaded must not downgrade the "restart and install" state; the watchdog is
+    // already cleared on success and the manual download settled, so there is nothing to abort.
+    if (state.status === 'ready') return
     state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
+    // D2 fix (2026-10-21): if a MANUAL download is hung in flight, settle its promise NOW — the
+    // old code left `_manualDownload` holding the dead promise and every later "Download now"
+    // click returned the SAME hung promise forever (idempotent-reentry guard with no exit).
+    try { if (_manualAbort) _manualAbort() } catch { /* best-effort */ }
     if (_retryTimer || !isActive()) return
     _retryTimer = setTimeout(() => {
       _retryTimer = null
       if (!isActive() || state.status === 'ready') return
       log.warn('[Updater] 自动重试检查更新（仅一次）')
       check().catch(() => {})
-    }, 30 * 1000)
+    }, RETRY_BACKOFF_MS)
     _retryTimer.unref?.()
+  }
+  autoUpdater.on('error', e => {
+    markUpdateError(e)
   })
   return module.exports
 }
@@ -153,8 +236,12 @@ async function check () {
   _inFlight = (async () => {
     syncAutoDownload() // align with the settings-page toggle before every check (hot-applied, no restart needed)
     try { await autoUpdater.checkForUpdates(); return { active: true, ...state } } catch (e) {
-      state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }
-      broadcast() // 手动检查失败也要推给设置页状态条(error 事件路径之外的 catch 不经过 autoUpdater 事件)(三轮扫荡 P2)
+      // M2b (P2 2026-10-23): same 'ready' guard as markUpdateError — a check() racing the tail of
+      // a completed download must not flip the settled 'ready' into 'error'.
+      if (state.status !== 'ready') {
+        state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }
+        broadcast() // 手动检查失败也要推给设置页状态条(error 事件路径之外的 catch 不经过 autoUpdater 事件)(三轮扫荡 P2)
+      }
       return { active: true, ...state }
     } finally { _inFlight = null }
   })()
@@ -170,6 +257,11 @@ let _manualDownload = null
 function downloadUpdate () {
   if (_manualDownload) return _manualDownload
   if (!isActive() || state.status !== 'available') return Promise.resolve(false)
+  // D2 fix (2026-10-21): abort handle — markUpdateError (watchdog stall or 'error' event) fires
+  // this while the underlying downloadUpdate() hangs, so this promise settles and the reentry
+  // guard clears; the next click starts a FRESH download instead of receiving the dead one.
+  let abortNow = null
+  const abortPromise = new Promise(res => { abortNow = res })
   _manualDownload = (async () => {
     // C5 (2026-10-02): the manual path set autoDownload=true and NEVER restored the user's
     // opt-out — after one "Download now" the setting behaved as auto-download-on for the rest
@@ -179,19 +271,61 @@ function downloadUpdate () {
     const priorAutoDownload = autoUpdater.autoDownload !== false
     autoUpdater.autoDownload = true
     state.status = 'downloading'; broadcast()
-    try { await autoUpdater.downloadUpdate(); return true } catch (e) {
+    try { if (_armStallWatchdog) _armStallWatchdog() } catch { /* arming is best-effort */ }
+    // The raw promise gets a noop catch so a LATE rejection after an abort cannot surface as an
+    // unhandled rejection; the derived `settled` maps both outcomes to a tag.
+    const settled = autoUpdater.downloadUpdate().then(() => 'done', () => 'failed')
+    settled.catch(() => {}) // belt and braces for the derived promise itself
+    try {
+      const outcome = await Promise.race([settled, abortPromise.then(() => 'aborted')])
+      if (outcome === 'done') return true
+      if (outcome === 'aborted') return false // status already 'error' via markUpdateError
+      // 'failed': the autoUpdater 'error' event already recorded the failure state
+      return false
+    } catch (e) {
       state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
       return false
     } finally {
       _manualDownload = null
+      _manualAbort = null
       autoUpdater.autoDownload = priorAutoDownload
     }
   })()
+  _manualAbort = abortNow
   return _manualDownload
+}
+
+// W16 (2026-10-28) pre-install sync-safety settle: quitAndInstall runs OUTSIDE the quit chain
+// (it skips will-quit entirely — electron-updater spawns the installer whose customInit
+// taskkills the process), so the quit-path flush triggers must be re-fired HERE or everything
+// not yet on disk when the installer lands is lost — including the LAN sync round boundary.
+// Mirrors flushOnceOnReady's trigger set, synchronously:
+//   1. the debounced dbMirror/reminder flush (same scheduler trigger index.js's quit flush uses)
+//   2. stopSyncForQuit: closes the in-flight LAN round sockets (each round settles through its
+//      normal failure path) and persists pull/push watermarks + the security ring while the DB
+//      handle is still open.
+// Bounded-wait note: quitAndInstall's contract is a SYNCHRONOUS boolean (index.js's D10
+// quit-hang fallback calls it and branches on the return value, so it cannot await). The
+// tokenized bounded handshake for renderer-pending writes already ran at 'update-downloaded'
+// (flushOnceOnReady -> quit-ack.runFlushRound, 2s cap); this settle hard-commits the
+// main-process side at the install moment itself.
+function preInstallSyncSettle () {
+  try { require('./scheduler').flushFiredNow() } catch (e) { try { log.warn('[Updater] pre-install scheduler flush failed:', e && e.message) } catch { /* best-effort */ } }
+  try {
+    const lanSync = require('./lan-sync-bootstrap')
+    if (typeof lanSync.stopSyncForQuit === 'function') {
+      // Fire-and-forget: the stop's internal await chain (server close -> watermark persist)
+      // races the installer's taskkill by design margin; quitting without it would race with
+      // NO settle at all (in-flight rounds would hold sockets and unsent watermarks into the kill).
+      const p = lanSync.stopSyncForQuit()
+      if (p && typeof p.catch === 'function') p.catch(() => { /* best-effort */ })
+    }
+  } catch (e) { try { log.warn('[Updater] pre-install LAN sync settle failed:', e && e.message) } catch { /* best-effort */ } }
 }
 
 function quitAndInstall () {
   if (isPortable || state.status !== 'ready') return false
+  preInstallSyncSettle()
   autoUpdater.quitAndInstall(true, true) // silent + runAfter: skips the install wizard and auto-launches the new version after update (smooth default)
   return true
 }
@@ -201,5 +335,6 @@ function getStatus () {
 }
 
 module.exports = { init, check, downloadUpdate, quitAndInstall, getStatus, flushOnceOnReady, forwardFlushAck,
+  preInstallSyncSettle, // W16: pre-install sync-safety settle (unit-testable: flush triggers fire before the installer spawns)
   syncAutoDownload, // updater-config-read-fail-open fix: unit-testable decision (plain node + __setConfigDir)
 }

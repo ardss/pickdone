@@ -16,12 +16,12 @@ const GATE = path.join(ROOT, 'cli', 'check-dualwrite.cjs')
 // check-all.js keeps its fast-feedback stage; that duplication is feedback, not enforcement.
 
 test('dualwrite gate executes green: every LS write point registered, no rotting ledger entries', () => {
-  const r = spawnSync(process.execPath, [GATE], { encoding: 'utf8' })
+  const r = spawnSync(process.execPath, [GATE], { timeout: 180000, encoding: 'utf8' })
   assert.equal(r.status, 0, `check-dualwrite.cjs must exit 0 (unregistered write points / rotting entries):\n${r.stdout}\n${r.stderr}`)
 })
 
 test('dualwrite gate negative self-test: injected fake write point turns the gate red (not an always-green gate)', () => {
-  const r = spawnSync(process.execPath, [GATE], { encoding: 'utf8', env: { ...process.env, DUALWRITE_SELFTEST: '1' } })
+  const r = spawnSync(process.execPath, [GATE], { timeout: 180000, encoding: 'utf8', env: { ...process.env, DUALWRITE_SELFTEST: '1' } })
   assert.equal(r.status, 0, `DUALWRITE_SELFTEST run must exit 0 (fake write point caught):\n${r.stdout}\n${r.stderr}`)
   assert.match(String(r.stdout) + String(r.stderr), /selftest|自测/i, 'self-test run must report the negative self-test result')
 })

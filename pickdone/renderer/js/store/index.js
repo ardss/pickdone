@@ -10,12 +10,13 @@ import ui from './ui.js'
 import repeatSettings from './repeatSettings.js'
 import filters from './filters.js'
 import tomatoAnnounce from './tomatoAnnounce.js'
+import winbind from './winbind.js' // win-bind: task↔window bindings (drag-outside-to-bind)
 import { snapshotString } from './helpers/snapshotString.js'
 
 const Vuex = window.Vuex
 
 const store = Vuex.createStore({
-  modules: { auth, todo, tomato, settings, category, habits, ui, repeatSettings, filters, tomatoAnnounce },
+  modules: { auth, todo, tomato, settings, category, habits, ui, repeatSettings, filters, tomatoAnnounce, winbind },
   state: () => ({ cloudEnabled: false }),
   getters: {
     tomatoBarVisible (state) {
@@ -77,8 +78,16 @@ store.subscribe(mutation => {
   // Y6: blob → LS write-through for the tours ledger (LS is the synchronous read cache of
   // utils/onboardingTours.js). Merge per-key max so a stale whole-package echo can't unsee a tour.
   if (blob.onboardingToursSeen && typeof blob.onboardingToursSeen === 'object') {
+    // [F4] the LS parse gets its OWN try: it previously shared the try with the merge+write,
+    // so one corrupt blob (JSON.parse throw) silently skipped the whole merge forever — every
+    // later fan-out kept re-hitting the same throw and the LS cache never healed. Corrupt
+    // values reset to {} (preserveCorrupt convention from habits.js / FeedbackModal staging).
+    let cur = {}
     try {
-      const cur = JSON.parse(localStorage.getItem('onboardingToursSeen') || '{}')
+      cur = JSON.parse(localStorage.getItem('onboardingToursSeen') || '{}')
+      if (!cur || typeof cur !== 'object' || Array.isArray(cur)) cur = {}
+    } catch (e) { cur = {} }
+    try {
       for (const [k, v] of Object.entries(blob.onboardingToursSeen)) {
         if (!(k in cur) || (Number(v) || 0) > (Number(cur[k]) || 0)) cur[k] = v
       }

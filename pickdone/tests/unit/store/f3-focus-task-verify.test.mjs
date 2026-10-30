@@ -61,7 +61,13 @@ test('completeFocus: 任务存活 → 保留链接并正常 bumpSnow(原行为�
   const { state, calls, run } = makeCtx({ taskId: 't1', delete: false })
   await run()
   assert.equal(calls.bumpSnow.length, 1)
-  assert.deepEqual(calls.bumpSnow[0], { taskId: 't1', minutes: 25, dedupKey: String(state.tomatoRecordList[0].tomatoId.replace('tmt_f_', '')) }, 'D5: payload carries dedupKey = String(startedAt)')
+  // [assertion-quality 2026-10-25] pin the CONTRACT keys only (dedupKey semantics + the
+  // billed minutes): whole-shape deepEqual made any future telemetry field on the payload
+  // red with no behavior change. dedupKey = String(startedAt) stripped of the tmt_f_ prefix.
+  const bump = calls.bumpSnow[0]
+  assert.equal(bump.taskId, 't1')
+  assert.equal(bump.minutes, 25)
+  assert.equal(bump.dedupKey, String(state.tomatoRecordList[0].tomatoId.replace('tmt_f_', '')), 'D5: payload carries dedupKey = String(startedAt)')
   assert.equal(state.tomatoRecordList[0].focusTaskId, 't1')
 })
 

@@ -2,7 +2,7 @@
  * Pomodoro float window (aligned with the reference show-tomato-floating / internal reference implementation)
  * 131×44 transparent frameless always-on-top toolbar window, default bottom-right of the screen; whole-card drag = main-process 16ms timer following the cursor
  */
-const { BrowserWindow, screen } = require('electron')
+const { BrowserWindow, screen, ipcMain } = require('electron')
 const path = require('path')
 const log = require('electron-log')
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
@@ -36,21 +36,101 @@ let screenHooksOn = false
 let pendingLoadShow = null
 
 /* ---- C10 (2026-09-25): crash-rebuild cap (aligned with windows.js crashReloadCount<3) ----
- * 3 consecutive auto-rebuilds per health window; the counter resets when a rebuilt window
- * reaches ready-to-show (proof of health, same as the main window's did-finish-load reset) or
- * when the user explicitly opens the float. Exported as `crashRebuild` so the policy is
- * unit-testable without booting Electron windows. */
+ * W16 (2026-10-28) re-baselined: the cap used to be "3 CONSECUTIVE rebuilds, refilled as soon as a
+ * rebuilt window reached ready-to-show" — and ready-to-show is exactly the fake-health signal behind
+ * the recurring "window exists, content invisible" incident (HWND alive, isVisible=true, load events
+ * fired, screen blank). Two changes:
+ *   1. the refill signal is now the RENDER HEALTH HANDSHAKE (noteRenderHandshake — the float page
+ *      reports it only after its card DOM is actually mounted; see __renderHealth below);
+ *   2. the budget is a rolling 5-minute window of at most 3 auto-rebuilds (crash OR handshake
+ *      failure share the same budget), so a slow-drip failure mode cannot live forever on resets.
+ * Beyond the budget the float stays down until the user opens it explicitly (an explicit show()
+ * also resets — a deliberate user action is the strongest health signal we get) and ONE structured
+ * 'float-recovery-exhausted' report goes to the main window over the existing syncEvent channel.
+ * Exported as `crashRebuild` (pure, unit-testable without booting Electron windows). */
 const CRASH_REBUILD_CAP = 3
-let crashRebuildCount = 0
+const RECOVERY_WINDOW_MS = 5 * 60_000
+let recoveryStamps = []
 const crashRebuild = {
-  /** Consume one rebuild slot; false once the cap is exhausted (no further auto-rebuild). */
-  allow () {
-    if (crashRebuildCount >= CRASH_REBUILD_CAP) return false
-    crashRebuildCount++
+  /** Consume one rebuild slot within the rolling window; false once the cap is exhausted
+   *  (no further auto-rebuild until stamps expire out of the window or reset() runs). */
+  allow (now = Date.now(), windowMs = RECOVERY_WINDOW_MS, cap = CRASH_REBUILD_CAP) {
+    recoveryStamps = recoveryStamps.filter(t => now - t < windowMs)
+    if (recoveryStamps.length >= cap) return false
+    recoveryStamps.push(now)
     return true
   },
-  reset () { crashRebuildCount = 0 },
-  get count () { return crashRebuildCount },
+  reset () { recoveryStamps = [] },
+  get count () {
+    recoveryStamps = recoveryStamps.filter(t => Date.now() - t < RECOVERY_WINDOW_MS)
+    return recoveryStamps.length
+  },
+}
+
+/* ---- W16 (2026-10-28): render-health handshake ----
+ * The float page calls the EXISTING 'set-tomato-float-bounds' IPC (preload facade unchanged) once its
+ * Vue component has mounted AND $nextTick confirmed the card (.tomato) is actually in the DOM — see
+ * TomatoFloatPage.vue mounted(). module.exports.setBounds (the only caller of that channel) records
+ * the handshake here. aux-load-guard arms a HANDSHAKE_TIMEOUT_MS watch after every did-finish-load;
+ * a handshake that never arrives inside the window drives the bounded rebuild path. Ready-to-show /
+ * did-finish-load are NOT consulted anywhere as proof of health anymore. */
+const HANDSHAKE_TIMEOUT_MS = 10000
+let lastHandshakeAt = 0
+function noteRenderHandshake (now = Date.now()) {
+  lastHandshakeAt = now
+  crashRebuild.reset() // proof of health = card DOM alive, not ready-to-show (W16)
+}
+/** Pure decision (exported via __renderHealth for unit tests): is the last handshake RECENT?
+ * W20 fix (2026-10-30): the previous "handshake arrived since armedAt" semantics deadlocked on the
+ * real boot sequence — vue-router's post-mount same-document navigations fire a SECOND did-finish-load
+ * ~50ms AFTER the one-shot handshake (the channel repositions the window, so it must stay one-shot),
+ * which re-arms armedAt ABOVE lastHandshakeAt; every 10s check then fails → destroy+rebuild loop at
+ * ~11s cadence, self-sustaining because each cycle's own handshake calls crashRebuild.reset(). The
+ * health fact the handshake proves ("card DOM mounted, page JS running") does not expire because a
+ * later arm happened, so health is now RECENCY-based: any handshake within 2× the timeout window.
+ * A genuinely dead window never handshakes → its age grows unbounded → still caught. */
+function handshakeHealthySince (_armedAt, now = Date.now()) {
+  return now - lastHandshakeAt < HANDSHAKE_TIMEOUT_MS * 2
+}
+
+/* ---- W16: bounded recovery exhaustion report (one structured message per session per cause) ----
+ * Emitted over the EXISTING 'syncEvent' Device-Center channel to the MAIN window (window-ref — no
+ * reverse require of index.js). Renderer side picks it up in utils/syncDegradedToast.js with the
+ * sync.floatRecoveryExhausted i18n key (en/zh). The diagnostics probe stays available afterwards. */
+let exhaustionReported = false
+function reportRecoveryExhausted (code) {
+  if (exhaustionReported) return
+  exhaustionReported = true
+  log.error('[TomatoFloat] float recovery exhausted (' + code + '); auto-rebuild stopped until the user reopens the float; diagnose() remains available')
+  // Structured report over the EXISTING Device-Center syncEvent channel (lan-sync-bootstrap's
+  // emitSyncEvent — the r6 gate requires emit sites and renderer evt.type consumers to stay
+  // set-equal, so the emit MUST go through it rather than a raw webContents.send).
+  try {
+    const bootstrap = require('./lan-sync-bootstrap')
+    if (typeof bootstrap.emitSyncEvent === 'function') bootstrap.emitSyncEvent('float-recovery-exhausted', { code })
+    else throw new Error('emitSyncEvent unavailable')
+  } catch (e) {
+    // degrade: direct send to the main window over the same 'syncEvent' channel (window-ref — no
+    // reverse require of index.js); renderer still surfaces it via syncDegradedToast.
+    try {
+      const { getMainWindow } = require('./window-ref')
+      const mw = getMainWindow()
+      if (mw && !mw.isDestroyed()) mw.webContents.send('syncEvent', { type: 'float-recovery-exhausted', code, at: Date.now() })
+    } catch (e2) { /* renderer notification is best-effort */ }
+  }
+}
+
+/** W16: shared bounded rebuild for the handshake-failure path (render-process-gone keeps its own
+ *  handler but consumes the SAME windowed budget via crashRebuild). Destroy → delayed reopen: the
+ *  500ms gap lets 'closed' reset the module state before reopen() lazily recreates a fresh window
+ *  (same shape as the crash path). */
+function rebuildAfterHandshakeFailure (code) {
+  stopDrag()
+  stopHitPoll()
+  if (!crashRebuild.allow()) { reportRecoveryExhausted(code); return }
+  log.warn('[TomatoFloat] ' + code + ' — rebuilding float window (' + crashRebuild.count + '/' + CRASH_REBUILD_CAP + ' auto-rebuilds in the last 5min)')
+  try { if (win && !win.isDestroyed()) win.destroy() } catch (e) { /* already gone */ }
+  setTimeout(() => { try { module.exports.reopen() } catch (e) { log.warn('[TomatoFloat] handshake-failure rebuild failed', e) } }, 500)
 }
 
 /* ---- "user explicitly closed the float" marker (F12, 2026-09-24 adversarial-review round 2) ----
@@ -59,7 +139,8 @@ const crashRebuild = {
  * OWNERSHIP lives HERE, in the single convergence point of every open/close path — an earlier attempt
  * wrapped window.todoAPI.showTomatoFloat in the renderer, but contextBridge objects are read-only
  * (strict-mode ESM assignment throws; the wrapper never installed). All paths converge on this module:
- *   close paths → hide() (TomatoBar toggle, float ✕, SettingsModal switch off — all via 'hide-tomato-float');
+ *   close paths → hide() (TomatoBar toggle, float ✕ while idle, SettingsModal switch off — all via
+ *                 'hide-tomato-float'; during focus/rest the float ✕ opens the give-up confirm instead);
  *                 dock() is deliberately NOT a close (undock restores the same session intent).
  *   open paths  → show() AND undock() clear the marker (IPC 'show-tomato-float' from SettingsModal /
  *                 TomatoPanel / TomatoBar, tray undock, auto-show itself — harmless no-op there). */
@@ -93,9 +174,35 @@ function ensureScreenHooks () {
 // the display-removal transition fired an UNCAUGHT EXCEPTION in the main process. Same hardening
 // convention as startHitPoll's tick ('transient screen API errors must not break the poll') and
 // undock's applyIgnore: the re-clamp intent stays, a failure becomes a logged no-op.
+// W16 (2026-10-28) refinement: the clamp used to fire on EVERY display-metrics-changed (incl. DPI
+// changes on OTHER monitors), yanking an on-screen float (e.g. dragged onto a secondary display)
+// back to the primary display's default corner. Now it only repositions when the float's current
+// bounds are off-screen on EVERY display — the monitor-unplug "float left at dead coordinates"
+// case the clamp exists for — via the pure floatBoundsVisible test (same center-or-corner rule
+// as windows.js windowBoundsVisible).
+/** Pure geometry test (exported for unit tests): a float counts as on-screen when its CENTER or
+ *  ANY CORNER lies inside some display's workArea. */
+function floatBoundsVisible (b, displays) {
+  if (!b || !Array.isArray(displays) || !displays.length) return false
+  const pts = [
+    [b.x + b.width / 2, b.y + b.height / 2],
+    [b.x, b.y], [b.x + b.width, b.y], [b.x, b.y + b.height], [b.x + b.width, b.y + b.height]
+  ]
+  return pts.some(([x, y]) => displays.some(d => {
+    const wa = d && d.workArea
+    return !!wa && x >= wa.x && x <= wa.x + wa.width && y >= wa.y && y <= wa.y + wa.height
+  }))
+}
+
 function safeReclamp () {
   try {
-    if (win && !win.isDestroyed()) setBounds()
+    if (!win || win.isDestroyed()) return
+    let visible = null // null = display topology could not be read at all
+    try { visible = floatBoundsVisible(win.getBounds(), screen.getAllDisplays()) } catch (e) { /* fall through to the legacy guarded clamp */ }
+    if (visible === true) return // on-screen: leave the user's placement alone (W16 P1 — no more primary-display yank)
+    // off-screen (the monitor-unplug case this clamp exists for) OR topology unreadable → guarded
+    // clamp; setBounds → defaultBounds → getPrimaryDisplay throws land in THIS catch and are logged
+    setBounds()
   } catch (e) { try { log.warn('[TomatoFloat] display-change re-clamp failed', e) } catch { /* logging is best-effort */ }
   }
 }
@@ -220,7 +327,12 @@ function create () {
     routeMark: '__tomato-float',
     tag: 'TomatoFloat',
     onRetry: () => stopHitPoll(),
-    onExhausted: () => { stopDrag(); stopHitPoll() }
+    onExhausted: () => { stopDrag(); stopHitPoll() },
+    // W16: did-finish-load alone is NOT health — watch for the renderer handshake (the float page
+    // reports it after its card DOM is mounted) and rebuild within the bounded budget otherwise.
+    handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
+    isHandshakeHealthy: (armedAt) => handshakeHealthySince(armedAt),
+    onHandshakeTimeout: () => rebuildAfterHandshakeFailure('render-handshake-timeout'),
   })
   // 渲染进程崩溃自愈(2026-09-09,与主窗 render-process-gone 同类):did-fail-load 只覆盖加载失败,
   // 渲染进程崩溃后浮窗从此白屏/无响应且永不恢复。崩溃时销毁重建;若崩溃前可见(番茄进行中)则延迟重开。
@@ -242,6 +354,7 @@ function create () {
     if (wasVisible && crashRebuild.allow()) {
       setTimeout(() => { try { module.exports.reopen() } catch (e) { log.warn('[TomatoFloat] 崩溃重建失败', e) } }, 500)
     } else if (wasVisible) {
+      reportRecoveryExhausted('render-process-gone') // W16: structured one-shot report (logs in EN above)
       log.error('[TomatoFloat] 崩溃重建超限(' + CRASH_REBUILD_CAP + ' 次),浮窗不再自动重建,等待用户手动打开')
     }
   })
@@ -263,7 +376,9 @@ function create () {
   win.loadURL('app://app/renderer-dist/index.html#/__tomato-float').catch(e => log.error('[TomatoFloat] loadURL failed', e))
   win.once('ready-to-show', () => {
     if (!win || win.isDestroyed()) return
-    crashRebuild.reset() // C10: a window that actually reached its first frame = health restored
+    // W16: crashRebuild.reset() REMOVED from here — ready-to-show is the fake-health signal behind
+    // the "window alive, content invisible" incident. The budget now refills on the render-health
+    // handshake (noteRenderHandshake) instead.
     win.showInactive()
     // After show, flush the bounds in place to force DWM to repaint the transparent layer (backstop against ghosting; dragging "erases" the ghost via this same mechanism)
     try { win.setBounds(win.getBounds()) } catch (e) { /* empty */ }
@@ -408,9 +523,65 @@ function flushPaint (w) {
   try { if (w && !w.isDestroyed()) w.setBounds(w.getBounds()) } catch (e) { /* empty */ }
 }
 
+/* ---- W16 (2026-10-28): layered diagnostics probe ----
+ * The recurring incident ("HWND exists, isVisible=true, load events fired, screen shows nothing")
+ * was indistinguishable from a healthy float because the only signals were ready-to-show / load
+ * events — fake health. diagnose() separates the three failure layers:
+ *   route    — getURL(): is the webContents still on the #__tomato-float route?
+ *   DOM      — executeJavaScript(): does the .tomato card exist, with non-zero geometry and
+ *              computed visibility/opacity? (component render failure / CSS-hidden layer)
+ *   paint    — capturePage(): non-empty raster with size info (blank-paint / compositor layer)
+ * plus the handshake age and window geometry. NO automatic polling — this runs only when the
+ * diagnostics command is invoked. Registered as the read-only 'tomato-float-diagnose' IPC command
+ * (main window's sender only; the float/quick-add/trapped windows must not trigger it), reusing
+ * the plain ipcMain.handle pattern so the main-window diagnostics surface can call it via the
+ * todoAPI.tomatoFloatDiagnose() preload facade. */
+async function diagnose () {
+  const out = { at: Date.now(), hasWindow: !!(win && !win.isDestroyed()) }
+  if (!out.hasWindow) { out.reason = 'no-window (never created / destroyed / not docked-recreated yet)'; return out }
+  const w = win
+  const wc = w.webContents
+  try { out.visible = w.isVisible(); out.bounds = w.getBounds() } catch (e) { out.boundsError = String((e && e.message) || e) }
+  try {
+    out.url = wc.getURL()
+    out.urlOk = String(out.url).includes('__tomato-float')
+  } catch (e) { out.url = null; out.urlError = String((e && e.message) || e) }
+  out.renderHandshakeAgeMs = lastHandshakeAt ? (Date.now() - lastHandshakeAt) : null
+  try {
+    // DOM layer: card presence + geometry + computed paint-affecting styles
+    out.dom = await wc.executeJavaScript("(() => { const el = document.querySelector('.tomato'); if (!el) return { present: false }; const r = el.getBoundingClientRect(); const cs = getComputedStyle(el); return { present: true, width: r.width, height: r.height, visibility: cs.visibility, opacity: cs.opacity, display: cs.display } })()", true)
+  } catch (e) { out.dom = { error: String((e && e.message) || e) } }
+  try {
+    const img = await wc.capturePage()
+    if (!img || img.isEmpty()) out.capture = { empty: true }
+    else { const size = img.getSize(); out.capture = { width: size.width, height: size.height, pngBytes: img.toPNG().length } }
+  } catch (e) { out.capture = { error: String((e && e.message) || e) } }
+  return out
+}
+
+let diagnoseIpcRegistered = false
+function ensureDiagnoseIpc () {
+  // Guarded so bare unit-test electron stubs (no ipcMain) can still load this module.
+  if (diagnoseIpcRegistered || !ipcMain || typeof ipcMain.handle !== 'function') return
+  diagnoseIpcRegistered = true
+  ipcMain.handle('tomato-float-diagnose', async (e) => {
+    // read-only probe: the MAIN window's diagnostics surface only
+    try {
+      const { getMainWindow } = require('./window-ref')
+      const mw = getMainWindow()
+      if (!mw || !e || e.sender !== mw.webContents) throw new Error('forbidden: main window only (tomato-float-diagnose)')
+    } catch (err) {
+      if (err && /forbidden/.test(String(err.message))) throw err
+      return Promise.resolve({ hasWindow: false, reason: 'diagnose unavailable: ' + String((err && err.message) || err) })
+    }
+    return diagnose()
+  })
+}
+ensureDiagnoseIpc()
+
 module.exports = {
   dock, undock, isDocked,
-  crashRebuild, // C10 crash-rebuild cap policy (unit-testable; see CRASH_REBUILD_CAP above)
+  crashRebuild, // C10 crash-rebuild cap policy, W16: now a rolling 5min window (unit-testable; see above)
   isInsideHit, // hover hit-test pure function (for unit tests)
   dragExpired, // D10 drag failsafe pure decision (for unit tests)
   DRAG_MAX_MS, // D10 drag failsafe cap
@@ -418,11 +589,16 @@ module.exports = {
   isUserClosed, // closed-marker getter (unit tests pin the F12 marker lifecycle)
   clampDrag, // drag clamp pure function (for unit tests)
   safeReclamp, // C8: guarded re-clamp (unit tests prove the screen-event path cannot throw)
+  floatBoundsVisible, // W16 P1: pure off-screen test used by safeReclamp (unit-testable)
+  diagnose, // W16 P0-1: layered route/DOM/paint probe (diagnostics command surface)
+  HANDSHAKE_TIMEOUT_MS, // W16 P0-2: render-health handshake watch window
+  __renderHealth: { note: noteRenderHandshake, healthySince: handshakeHealthySince, timeoutMs: HANDSHAKE_TIMEOUT_MS }, // W16 test seam
   __forceWin (w) { win = w }, // C8 test seam: inject a stub window so the guarded path is reachable
   __clearWin () { win = null }, // C8 test seam
   /** Show (setBounds + showInactive if already created; common practice: do not steal focus) */
   show () {
     crashRebuild.reset() // C10: an explicit user open is the strongest health signal — refill rebuild slots
+    exhaustionReported = false // W16: a deliberate user open re-arms the exhaustion report for the next failure chain
     return module.exports.reopen()
   },
   /** Open WITHOUT touching the crash-rebuild counter — the crash self-heal path uses this so an
@@ -466,6 +642,11 @@ module.exports = {
     return true
   },
   setBounds () {
+    // W16 render-health handshake: the ONLY renderer caller of the 'set-tomato-float-bounds' channel
+    // is TomatoFloatPage.vue mounted() — and it sends it only after $nextTick confirmed the card
+    // (.tomato) is actually mounted. That makes this call the "render health" proof (no new IPC
+    // channel needed; ready-to-show/did-finish-load are no longer treated as health anywhere).
+    noteRenderHandshake()
     if (win && !win.isDestroyed()) win.setBounds(defaultBounds())
     return true
   },

@@ -126,7 +126,9 @@
  *  Header "Pomodoro Focus Record" + top-right "Add record manually"; body lists .tomato-record entries (date/time range/duration/linked task/right-click delete).
  *  Manual add follows the common tomatoRecordAdd pattern: start time + focus/rest duration sliders, limited to 3 per day (settings.tomatoRecordAddDate/Count). */
 import { dayjs, FMT } from '../utils/core.js'
-import { genTomatoId } from '../utils/core.js'
+// [F7 P3] salted id mint (device-salt mixed in): the unsalted genTomatoId collided across
+// devices within the same millisecond and the merge swallowed one manual record whole
+import { mintTomatoId } from '../store/tomato.js'
 import { loadRuntime, saveRuntime } from '../store/helpers/runtimeState.js'
 import dialogA11y from '../utils/dialogA11y.js'
 import { secToHHmmss } from '../utils/tomatoShared.js'
@@ -309,7 +311,7 @@ export default {
         const end = f.startTs + f.focusTime * 60000
         const task = f.focusTaskId ? this.$store.state.todo.todoList.find(x => x.taskId === f.focusTaskId) : null
         this.$store.commit('tomato/addRecord', {
-          tomatoId: genTomatoId(), endTime: end, startTime: f.startTs,
+          tomatoId: mintTomatoId('tmt_f_', f.startTs), endTime: end, startTime: f.startTs,
           dateKey: dayjs(end).format(FMT.date),
           focus: task ? task.taskContent : (f.focusText || '').trim(),
           focusTaskId: task ? task.taskId : null,
@@ -405,7 +407,8 @@ html[data-theme="dark"] .tomato-record--open { background: #2a3038; }
 .tomato-record__title__interval { flex-shrink: 0; margin-left: 15px; }
 .tomato-record__description { display: flex; align-items: center; margin-top: 10px; }
 .tomato-record__description__icon { display: flex; flex-shrink: 0; width: 14px; height: 14px; margin-right: 10px; background: url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22><circle cx=%228%22 cy=%228%22 r=%226%22 fill=%22%23ccc%22/></svg>') no-repeat 50%/100% 100%; }
-.tomato-record__description__text { display: -webkit-box; overflow: hidden; color: #666; font-size: var(--fs-base); line-height: 20px; text-overflow: ellipsis; word-break: break-all; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
+/* [F3-UX] was hardcoded #666 with no dark override -> near-unreadable in dark mode; now token-driven */
+.tomato-record__description__text { display: -webkit-box; overflow: hidden; color: var(--text-2); font-size: var(--fs-base); line-height: 20px; text-overflow: ellipsis; word-break: break-all; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 /* 添加记录表单行 */
 .tfr-form-row { margin-bottom: 16px; }
 .tfr-form-label { display: block; margin-bottom: 6px; color: var(--text-2); font-size: var(--fs-md); }

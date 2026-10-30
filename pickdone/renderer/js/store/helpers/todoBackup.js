@@ -36,7 +36,11 @@ export function buildBackupDump (rootState, state, { stripVolatileSettings = fal
       // (dbMirror.js 注释确认),UI 恢复七段与 dbRecovery 三段都从不读它,全仓无恢复端消费者。
       tomatoRecords: JSON.stringify(rootState.tomato && rootState.tomato.tomatoRecordList || []),
       categoryState: JSON.stringify({ schemaV: SCHEMA_V, list: rootState.category.list }),
-      habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0 }),
+      // [W7-R 2026-10-23 P2] the dump used to drop the deletion tombstones: a JSON disaster
+      // restore fed the habits segment into replaceAll, and without `deleted` the restore-side
+      // sticky tombstone merge had nothing to merge — a habit (or moment) deleted after the dump
+      // could be resurrected by an older synced blob. Additive fields; old readers ignore them.
+      habitsState: JSON.stringify({ schemaV: SCHEMA_V, habits: rootState.habits.habits, moments: rootState.habits.moments, savedAt: rootState.habits.savedAt || 0, deleted: rootState.habits.deleted || [], deletedMoments: rootState.habits.deletedMoments || [] }),
       // D6-F14: saved filters were never in dumps — a JSON disaster recovery wiped every smart list
       filterState: JSON.stringify({ schemaV: SCHEMA_V, list: (rootState.filters && rootState.filters.list) || [] }),
       // D6-F14: schedule chips live in SQLite (plan_chips), not in vuex state — callers pass the
@@ -187,7 +191,14 @@ export async function writeAutoBackupCore (ctx, { state, rootState }) {
     if (r && r.ok) saveRuntime({ autoBackupLastAt: Date.now(), autoBackupLastFailAt: 0, autoBackupLastError: '' })
     // Failure must stay visible (autoBackupLastAt:0 alone made a persistently failing backup read as
     // "never ran" in Settings→Data): keep the fail timestamp + reason for the honest status line.
-    else saveRuntime({ autoBackupLastAt: 0, autoBackupLastFailAt: Date.now(), autoBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) }) // retry next time on failure
+    // [H3 2026-10-25] ALSO surface it actively ONCE per session: the settings-page status line is
+    // passive — a user who never opens Settings never learns backups stopped. The pd:backup-degraded
+    // window event is consumed by app-root.vue (first failure only — a persistent failure must not
+    // become a toast storm).
+    else {
+      saveRuntime({ autoBackupLastAt: 0, autoBackupLastFailAt: Date.now(), autoBackupLastError: String((r && r.error) || 'backup failed').slice(0, 160) }) // retry next time on failure
+      try { window.dispatchEvent(new CustomEvent('pd:backup-degraded', { detail: { error: String((r && r.error) || 'backup failed').slice(0, 120) } })) } catch { /* non-browser env */ }
+    }
     return !!r && !!(r.ok)
   } catch (e) {
     console.error('[auto-backup] failed:', e && e.message)
@@ -247,16 +258,23 @@ let _lastCriticalWrite = null
 export function criticalBackupWrite () { return _lastCriticalWrite }
 
 /** [D13 #11] Quit-flush ack: resolves the ack AFTER the retained critical write settles (or the
- *  cap elapses — the main process closes the DB at ≤2s, so the ack must always fire) and after a
- *  short floor that lets the other quit-flush handlers' queued IPC messages actually leave.
- *  The old ack path was a fixed 60ms setTimeout that never looked at the write promise, so
- *  quitting inside the write's 2-5MB dump + IPC + fsync window cut off the last critical
- *  snapshot. Exported for the regression test (same D11 todoBackup test style). */
-export function ackQuitFlushAfterWrite ({ write, notifyDone, capMs = 1000, floorMs = 60 }) {
+ *  cap elapses) and after a short floor that lets the other quit-flush handlers' queued IPC
+ *  messages actually leave. The old ack path was a fixed 60ms setTimeout that never looked at the
+ *  write promise, so quitting inside the write's 2-5MB dump + IPC + fsync window cut off the last
+ *  critical snapshot. Exported for the regression test (same D11 todoBackup test style).
+ *  [F4 2026-10-21] cap budget matched to the main process: index.js will-quit waits for acks up to
+ *  quit-ack.FLUSH_ACK_CAP_MS (2000ms) BEFORE flushNow runs its 500ms floor + sync-stop awaits and
+ *  only then dbm.close(). The old 1000ms cap abandoned the dump-build window (2 serial IPCs:
+ *  planAll + getMetaMany) half-way — main closed the DB while the final snapshot's IPC was still
+ *  in flight, silently dropping the plan/meta segments from the last backup. 1800ms keeps the
+ *  ack provably inside the main window (1800 + 60 floor < 2000) while using the whole budget;
+ *  anything ≥2000ms would be UNSAFE (the ack would never arrive, main hits its own cap and
+ *  closes the DB anyway). Semantics stay "write settled OR budget exhausted" — never block quit. */
+export function ackQuitFlushAfterWrite ({ write, notifyDone, capMs = 1800, floorMs = 60 }) {
   const waited = new Promise(resolve => {
     let done = false
     const finish = () => { if (!done) { done = true; resolve() } }
-    setTimeout(finish, capMs) // cap: the main process closes the DB at ≤2s — the ack must always fire
+    setTimeout(finish, capMs) // cap: must stay < quit-ack.FLUSH_ACK_CAP_MS (2000) — see comment above
     Promise.resolve(write).then(finish, finish) // write failure is already stamped into runtimeState; never block the quit
   })
   return waited.then(() => new Promise(resolve => setTimeout(resolve, floorMs))).then(notifyDone)

@@ -14,6 +14,29 @@ const fs = require('fs')
 // compare-and-delete of the slot stays a caller-side callback (see seedSlotWatermark).
 const { CLI_SLOT_ABANDON_TTL_MS, seedSlotWatermark } = require('./cli-slot-policy')
 
+// D1 #8a (F-RELOC migration window): module-level registry of the LATEST live watcher's stop
+// hook. index.js holds the instance, but the data:relocate handler must stop the fs.watchFile
+// poll BEFORE closing the DB (a tick firing mid-migration would read a half-moved tree);
+// index.js is not touched, so handlers reach the hook through this module export instead.
+let latestStopDbWatch = null
+// M8B fix 1 (P1): the data:relocate failure branch stops the watch, closes the DB and re-inits
+// on the old dir — but the watch was never restarted, so CLI direct-write detection stayed blind
+// for the rest of the session. Keep a restart hook alongside the stop hook (set at factory time;
+// watchDbForExternalWrites is idempotent-to-recreate: it rebuilds baseline/seed/channel closures
+// from scratch) so the failure branch can re-arm the poll after a successful re-init.
+let latestRestartDbWatch = null
+
+/** Stop the most recently created watcher's poll (no-op when none ever started). */
+function stopLatestDbWatch () {
+  try { if (latestStopDbWatch) latestStopDbWatch() } catch { /* best-effort, same as stopForQuit */ }
+}
+
+/** Restart (re-create) the most recently created watcher's poll after a stop + re-init cycle
+ *  (no-op when none ever started). Fresh baseline is built inside watchDbForExternalWrites. */
+function restartLatestDbWatch () {
+  try { if (latestRestartDbWatch) latestRestartDbWatch() } catch { /* best-effort */ }
+}
+
 /** Seed the tomato command watermark at startup. Returns the initial lastTomatoSeq.
  *  Pure/injected so the seed policy (including the abandonment TTL) is unit-testable without
  *  Electron. getMeta/deleteMeta talk to the machine-local meta table; deleteMeta is optional
@@ -44,6 +67,7 @@ function createExternalDbWatch (deps) {
   let resyncDbWatch = null // set by watchDbForExternalWrites: re-baselines lastMtime after OUR OWN db writes (P1 2026-09-11)
   let stopDbWatch = null // set by watchDbForExternalWrites: unwatchFile both files on the quit chain (P2 2026-09-11)
   let pollTickHook = null // set by watchDbForExternalWrites: manual poll-tick drive for unit tests (settings seed contract)
+  let changeHook = null // M2a: manual onChange drive for unit tests (debounce-failure baseline-rollback contract)
   function watchDbForExternalWrites () {
     const ud = app.getPath('userData')
     const dbFile = path.join(ud, 'todos.db')
@@ -114,6 +138,10 @@ function createExternalDbWatch (deps) {
       try { lastSettingsSavedAt = Number(dbm.call('settingsRowsMaxUpdated')) || 0 } catch { /* legacy lib: watermark stays 0 */ }
     }
     let debounce = null
+    // W15 (2026-10-25): one-shot absorb of our OWN wal write after a kick whose baseline re-read
+    // failed (see kick) — the next distinct mtime is re-baselined without a reload so a persistent
+    // stable-read failure cannot turn our own echo into an external-write replay loop.
+    let echoAbsorbArmed = false
     // CLI sync command channel (feat/cli-sync-pair): same polling surface as cliTomatoCmd — the CLI
     // writes meta cliSyncCmd, we dispatch into db-sync-ops (the Device Center's own registry) and
     // write the receipt to cliSyncState. Handled in the MAIN process directly: LAN sync state lives
@@ -228,8 +256,16 @@ function createExternalDbWatch (deps) {
             if (Object.keys(patch).length) {
               // P2 2026-09-11: hot-sync used to push only the main window — the float/quick-add windows
               // kept pre-CLI-change settings until restart (same all-windows pattern as the quit flush)
+              // [J-audit P2 fix 2026-10-22] the BLOB's own _savedAt rides as a 2nd arg (NOT `at`):
+              // `at` folds in settingsRowsMaxUpdated, and rows get re-stamped when our own mirror blob
+              // lands (~2s after its snapshot), so `at` always exceeds the renderer's mirror watermark
+              // and every own-echo looked foreign — the J6 bounce survived fix v2 through exactly this.
+              // The renderer compares the blob stamp against its own mirror watermark
+              // (dbMirror.isOwnMirrorStamp) and skips its own echoes; genuine CLI/peer blobs carry
+              // newer stamps and still apply.
+              const originSavedAt = (doc && doc._savedAt) || 0
               for (const w of BrowserWindow.getAllWindows()) {
-                try { if (w && !w.isDestroyed()) w.webContents.send('external-settings-changed', patch) } catch {}
+                try { if (w && !w.isDestroyed()) w.webContents.send('external-settings-changed', patch, originSavedAt) } catch {}
               }
               log.info('[CLI] 设置变更热同步:', Object.keys(patch).join(','))
             }
@@ -238,7 +274,13 @@ function createExternalDbWatch (deps) {
         }
       } catch (e) { log.warn('[CLI] 设置热同步失败', e) }
     }
-    const kick = () => {
+    // M2a (P2): rollbackMtime = the baseline value BEFORE the change that scheduled this kick.
+    // The sync段 of onChange already rolls back on a synchronous throw, but kick only ARMS a
+    // debounce — the reloadAll/broadcast work actually runs inside the timer, where a failure
+    // used to be swallowed with lastMtime already advanced: the external write was consumed
+    // forever (next poll saw m === lastMtime). On failure the baseline is rolled back so the
+    // next poll re-processes the same change (kick's success path re-baselines as before).
+    const kick = (rollbackMtime, observedMtime) => {
       clearTimeout(debounce)
       debounce = setTimeout(() => {
         try {
@@ -257,9 +299,22 @@ function createExternalDbWatch (deps) {
           log.info('[TodoDB] 检测到外部写入（CLI），已刷新调度器并通知渲染端')
           try { require('./lan-sync-bootstrap').kickSyncRound('external-db-write') } catch { /* sync lazy-not-init */ }
           // Resync the mtime baseline: reloadAll itself writes reminderLastSeenAt (touching -wal); without this
-          // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop
-          lastMtime = readWatchMtime() ?? lastMtime
-        } catch (e) { log.warn('[TodoDB] 外部写入刷新失败', e) }
+          // the next poll sees our own write as "another external write" → reload → write again = a self-sustaining loop.
+          // W15 (2026-10-25): a failed re-read (stable-read null) must not leave a STALE baseline —
+          // lastMtime then sits before reloadAll's own wal write, and under persistent read failure
+          // EVERY later poll re-kicks on our own echo: the same external write replays a full
+          // reload+broadcast each 500ms tick. Keep the baseline at the OBSERVED (consumed) change
+          // mtime and arm a one-shot echo absorb: the next distinct mtime (our own wal write) is
+          // re-baselined WITHOUT a reload; a further distinct mtime is a genuine new change again.
+          const nowM = readWatchMtime()
+          if (nowM != null) { lastMtime = nowM; echoAbsorbArmed = false } else {
+            lastMtime = observedMtime ?? lastMtime
+            echoAbsorbArmed = observedMtime != null
+          }
+        } catch (e) {
+          lastMtime = rollbackMtime
+          log.warn('[TodoDB] 外部写入刷新失败,基线已回滚待下轮重处理:', e && e.message)
+        }
       }, 150)
     }
     const onChange = () => {
@@ -282,6 +337,14 @@ function createExternalDbWatch (deps) {
           forwardTomatoCmd(); forwardSyncCmd(); return
         }
         if (m === lastMtime) { forwardTomatoCmd(); forwardSyncCmd(); return } // check commands even when mtime is unchanged (guards against watchFile dropping events)
+        // W15 echo absorb (see kick): after a failed baseline re-read the first distinct mtime is
+        // almost always our OWN reloadAll wal write — re-baseline it silently instead of replaying
+        // a full reload+broadcast for our own echo (one-shot: the flag is consumed here).
+        if (echoAbsorbArmed) {
+          echoAbsorbArmed = false
+          lastMtime = m
+          forwardTomatoCmd(); forwardSyncCmd(); return
+        }
         // R7 sweep (2026-10-10): the baseline must NOT advance past a change whose forwarding
         // failed — the old `lastMtime = m` before kick/forwards let any throw here CONSUME the
         // external write (next poll sees m === lastMtime and returns: silent missed change, no
@@ -290,7 +353,7 @@ function createExternalDbWatch (deps) {
         const prevMtime = lastMtime
         try {
           lastMtime = m
-          kick()
+          kick(prevMtime, m)
           forwardTomatoCmd()
           forwardSyncCmd()
         } catch (e) {
@@ -308,6 +371,7 @@ function createExternalDbWatch (deps) {
     // after every write-type todo-db:call so the next poll sees mtime === baseline.
     resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
     pollTickHook = () => forwardTomatoCmd() // test seam: one manual poll tick without fs.watchFile
+    changeHook = () => onChange() // M2a test seam: one poll tick that goes through the change path
     // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
     stopDbWatch = () => {
       // Round-3 stability (2026-09-26): a pending debounce kick survived the unwatch and fired against the closed DB handle. Clear it first.
@@ -317,7 +381,7 @@ function createExternalDbWatch (deps) {
       resyncDbWatch = null
     }
   }
-  return {
+  const api = {
     watchDbForExternalWrites,
     // hctx shape parity: handlers previously got `() => resyncDbWatch` (null before the watcher starts)
     currentResyncDbWatch: () => resyncDbWatch,
@@ -326,8 +390,13 @@ function createExternalDbWatch (deps) {
     // quit chain hook (was: try { if (stopDbWatch) stopDbWatch() } catch {})
     stopForQuit: () => { try { if (stopDbWatch) stopDbWatch() } catch {} },
     // unit-test seam: drive one poll tick (settings hot-sync branch) without fs.watchFile
-    __pollTickForTests: () => { try { if (pollTickHook) pollTickHook() } catch { /* guarded like onChange */ } }
+    __pollTickForTests: () => { try { if (pollTickHook) pollTickHook() } catch { /* guarded like onChange */ } },
+    // M2a unit-test seam: drive one poll tick through the change path (kick scheduling) without fs.watchFile
+    __pollChangeForTests: () => { try { if (changeHook) changeHook() } catch { /* onChange swallows its own */ } }
   }
+  latestStopDbWatch = () => { try { if (stopDbWatch) stopDbWatch() } catch {} }
+  latestRestartDbWatch = () => { try { watchDbForExternalWrites() } catch {} }
+  return api
 }
 
-module.exports = { createExternalDbWatch, seedTomatoWatermark, CLI_SLOT_ABANDON_TTL_MS }
+module.exports = { createExternalDbWatch, seedTomatoWatermark, CLI_SLOT_ABANDON_TTL_MS, stopLatestDbWatch, restartLatestDbWatch }

@@ -18,8 +18,18 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
     const day = planDayKey(date != null && date !== true ? date : (t.dayStart ? dayjs(t.dayStart).format('YYYY-MM-DD') : null))
     const existing = planRows(day).filter(r => r.taskId === t.taskId)
     if (!replace && existing.some(r => r.mm === mm)) throw new CliError(`task already has a chip at ${mm} (plan list to inspect, --replace to rebuild)`, 'PLAN_EXISTS')
-    if (replace && existing.length) commit('plan', 'deleteTaskDay', { taskId: t.taskId, day })
+    // C2 P2 (2026-10-21, --replace two-step half-state): the old order was deleteTaskDay FIRST then
+    // putMany — a crash between the two writes lost EVERY chip the task had on the day. Order is
+    // flipped: write the new chip first, then remove the stale chips (old ids except one at the new
+    // mm). The bus has no cross-entity transaction, so this picks the safer failure direction: a
+    // crash now leaves at worst a DUPLICATE chip (visible, idempotently repairable with another
+    // `plan --replace`) instead of silent data loss.
     commit('plan', 'putMany', [{ taskId: t.taskId, day, mm }])
+    if (replace && existing.length) {
+      // ALL pre-write chips are stale now (including any at the same mm — the fresh insert replaces them)
+      const staleIds = existing.map(r => r.id)
+      if (staleIds.length) commit('plan', 'removeIds', staleIds)
+    }
     const chips = planRows(day).filter(r => r.taskId === t.taskId).map(r => r.mm).sort() // re-read actual state so the audit stays faithful
     audit.record({ action: 'plan.set', targets: [t], changes: [{ after: { day, chips } }], note: 'scheduled on the day timeline at ' + mm })
     return { taskId: t.taskId, content: t.taskContent, day, chips }

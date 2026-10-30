@@ -33,7 +33,29 @@ function listTodos (opts = {}) {
   else if (opts.range === 'next7d') { q.dayStartFrom = +now.startOf('day'); q.dayStartTo = +now.add(7, 'day').endOf('day') }
   else if (opts.range === 'overdue') { q.dayStartTo = +now.subtract(1, 'day').endOf('day') }
   else if (opts.range === 'future') { q.dayStartFrom = +now.add(1, 'day').startOf('day') }
-  return open().call('queryTodos', q)
+  // C2 P3 (2026-10-21): a cap-truncated listing used to end SILENTLY — JSON consumers saw a plain
+  // array and could not tell "these are all the matches" from "200 of 900". Fetch cap+1 rows; when
+  // the extra row exists the result is truncated, and a sentinel tail row { truncated: true, ... }
+  // is appended: JSON payloads then literally carry `truncated: true`, and the text renderer
+  // (emitList → fmtTodoLine on taskContent) prints it as a readable hint line right above the
+  // "-- N task(s)" footer. Explicit --limit 0 keeps its fail-closed zero-row contract untouched.
+  const cap = q.limit
+  if (cap <= 0) return open().call('queryTodos', q)
+  q.limit = cap + 1
+  const rows = open().call('queryTodos', q)
+  if (rows.length <= cap) return rows
+  // W8 fix (2026-10-25): the sentinel's taskContent used to ride into `list --json` payloads as an
+  // enumerable field, so content-keyed JSON consumers (keyword matching, search indexing over
+  // taskContent) could false-positive on the hint text itself. The hint now lives in a
+  // NON-enumerable property: JSON.stringify omits it (the JSON sentinel is effectively
+  // { truncated: true, ...null-ish fields }) while the text renderer keeps reading it verbatim —
+  // `truncated: true` stays enumerable, so the existing JSON contract (c2 test #6) is intact.
+  const sentinel = { taskId: null, truncated: true, complete: false, todoTime: 0, dayStart: 0, taskDescribe: '' }
+  Object.defineProperty(sentinel, 'taskContent', {
+    value: `(list truncated: more tasks matched than the ${cap}-row cap — pass a higher --limit to see all)`,
+    enumerable: false
+  })
+  return rows.slice(0, cap).concat([sentinel])
 }
 
 function getCategories () { return open().call('getAllCategories') }

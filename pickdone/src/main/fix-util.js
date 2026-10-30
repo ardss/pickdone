@@ -119,12 +119,19 @@ function nextAvailableName (dir, fileName, existsFn) {
 /** Newest-first backup name ordering by the embedded timestamp segment (auto-YYYYMMDD-HHMMSS.json /
  *  evt-<reason>-YYYYMMDD-HHMMSS.json). Lexical .sort() put 'auto-' before 'evt-…' with the same date
  *  prefix and misjudged dedup against a stale file. Mirrors autoBackup.nameToTs (kept inline so this
- *  module stays dependency-free). */
+ *  module stays dependency-free; 2026-10-26 switched to the LOCAL-time parse form — filename stamps
+ *  are local time, see autoBackup.nameToTs's 2026-09-19 fix — so the mirror is actually true and
+ *  future age-comparisons don't skew by the UTC offset; ordering behavior is unchanged for
+ *  consumers, which only compare these values against each other). The optional `-[A-Za-z0-9]+` suffix covers same-second collision
+ *  names (auto-…-dup<n>.json) and CLI event names (evt-<reason>-…-<epochMs>.json) so they parse to
+ *  their BASE stamp instead of 0 (ts=0 ranked them oldest in the restore list and let dedup pick a
+ *  stale twin). Note: unlike autoBackup.rankTs, the suffix is NOT mapped to 0 here — that dup→0
+ *  rule is a pruning-layer semantic and this ordering layer must use the real base stamp. */
 function backupNameTs (name) {
-  const m = /^(?:auto-|evt-[a-z0-9-]+-)(\d{8})-(\d{6})\.json$/.exec(String(name))
+  const m = /^(?:auto-|evt-[a-z0-9-]+-)(\d{8})-(\d{6})(?:-[A-Za-z0-9]+)?\.json$/.exec(String(name))
   if (!m) return 0
   const s = m[1]; const t = m[2]
-  return Date.UTC(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6))
+  return +new Date(+s.slice(0, 4), +s.slice(4, 6) - 1, +s.slice(6, 8), +t.slice(0, 2), +t.slice(2, 4), +t.slice(4, 6))
 }
 function sortBackupNamesNewestFirst (names) {
   return (Array.isArray(names) ? names : []).slice().sort((a, b) => backupNameTs(b) - backupNameTs(a))

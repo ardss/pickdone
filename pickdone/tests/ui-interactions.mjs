@@ -2,7 +2,7 @@
  * UI interaction smoke - covers "click -> visible effect" interaction regressions (systematic coverage strengthening, 2026-08-29).
  * Background: the broken calendar ‹/› pagination clicks exposed a coverage gap - views had a render matrix, but interactions had no defense line.
  * This script adds ten high-value interaction chains, each = action + visible-effect assertion; any failure turns the release gate red.
- * Zero dependencies (Node 22 built-in fetch/WebSocket). Usage: npm run smoke:interact
+ * Zero dependencies (Node 22 built-in fetch/WebSocket). Run by the gate stage run-interactions-gated (cli/check-all.js); manual: node tests/ui-interactions.mjs against a TODO_CDP instance.
  */
 const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
 
@@ -173,7 +173,7 @@ console.log('\n[4] quick-add creation')
 await gotoHash('#/todo-list/today', '.qa-input')
 const before = await evalJson(`document.querySelectorAll('.td-item').length`)
 await evalJson(`(() => { var el = document.querySelector('.qa-input'); el.focus(); var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '交互冒烟_临时任务'); el.dispatchEvent(new Event('input', { bubbles: true })); return 'ok' })()`)
-await evalJson(`(() => { var el = document.querySelector('.qa-input'); el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true })); return 'ok' })()`)
+await evalJson(`(() => { var el = document.querySelector('.qa-input'); el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'ok' })()`)
 await sleep(900)
 const after = await evalJson(`document.querySelectorAll('.td-item').length`)
 ok('quick-add Enter creation takes effect', after === before + 1, `before=${before} after=${after}`)
@@ -298,7 +298,7 @@ ok('card deck mounted', await evalJson(`!!document.querySelector('.pd-day-deck')
 const seedIfNeeded = async () => {
   if (await evalJson(`!!document.querySelector('.pd-day-deck__card.front .pd-day-deck__chk[aria-checked="false"]')`)) return false
   await evalJson(`(() => { var el = document.querySelector('.qa-input'); if (!el) return 'no-input'; el.focus(); var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(el, '交互冒烟_临时任务'); el.dispatchEvent(new Event('input', { bubbles: true })); return 'ok' })()`)
-  await evalJson(`(() => { var el = document.querySelector('.qa-input'); if (el) el.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', bubbles: true })); return 'ok' })()`)
+  await evalJson(`(() => { var el = document.querySelector('.qa-input'); if (el) el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); return 'ok' })()`)
   await sleep(1000)
   return true
 }
@@ -364,7 +364,11 @@ if (d0) {
     if (await frontSig() === d0) break
   }
 } else {
-  console.log('  - card deck absent; skipping the drag check')
+  // [signal-integrity 2026-10-25] deck absent used to be a silent console.log: a render
+  // regression deleting the day-deck would make this check evaporate (0 signals, still
+  // "green"). Count it as a failure — the drag check was supposed to run here.
+  failed++
+  console.log('  ✗ card deck absent — the drag check could not run (was the deck removed from the renderer?)')
 }
 // Restore: switch back to list view + clean up the seeded task (do not pollute the real instance / the next assertion baseline)
 await realClickAt(segBtn(0))

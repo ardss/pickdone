@@ -16,7 +16,11 @@ async function device(dir, op, payload = {}) {
   const args = [child, '--dir', dir, '--op', op, '--payload', JSON.stringify(payload)]
   let output
   try {
-    output = await exec(process.execPath, args, { cwd: process.cwd(), timeout: 30000, maxBuffer: 1048576, windowsHide: true })
+    // [load-budget 2026-10-25] 90s (was 30s, idle-machine figure): each device() is a fresh
+    // OS child opening a real encrypted db — under a full gate the spawn+init can take ~10s
+    // and a timed-out kill surfaces as `ok: undefined` (a false red). Timeout shape unchanged;
+    // a genuinely hung child still dies at the budget.
+    output = await exec(process.execPath, args, { cwd: process.cwd(), timeout: 90000, maxBuffer: 1048576, windowsHide: true })
   } catch (e) {
     // Known libuv teardown class (win32 async.c UV_HANDLE_CLOSING): the child can print its
     // final JSON line successfully and STILL die non-zero while native modules unwind. The
@@ -32,7 +36,7 @@ async function device(dir, op, payload = {}) {
   return result.result
 }
 
-test('real encrypted TodoDB survives two-device process restarts and replays offline edits', { timeout: 120000 }, async () => {
+test('real encrypted TodoDB survives two-device process restarts and replays offline edits', { timeout: 240000 }, async () => {
   const dirA = fs.mkdtempSync(path.join(os.tmpdir(), 'pickdone-real-db-A-'))
   const dirB = fs.mkdtempSync(path.join(os.tmpdir(), 'pickdone-real-db-B-'))
   const relay = createRelay(memoryStore())

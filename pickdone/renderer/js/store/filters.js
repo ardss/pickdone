@@ -2,12 +2,14 @@ import { commit as commitCommand } from "../utils/commandBus.js"
 /** Saved filters (smart lists) — condition sets persisted in the local DB filters table, entered via the sidebar group */
 
 /** [D18-DOM3] Pure duplicate-name check for FilterModal.save: true when ANOTHER filter (different
- *  id) already carries the same trimmed name. Names are compared trimmed; ids compared loosely so
- *  numeric ids from the DB never fork from string route params. */
+ *  id) already carries the same trimmed name. Names are compared trimmed; ids compared via String()
+ *  [W8 fix] so a numeric DB id never forks from a string route param — the old strict `!==` let a
+ *  filter "rename itself" fail with duplicate-name when the caller passed the id in the other type
+ *  (e.g. the row id is the number 5 but the modal hands back "5" from the route). */
 export function filterNameTaken (list, name, exceptId) {
   const n = String(name || '').trim()
   if (!n) return false
-  return (list || []).some(f => f && f.id !== exceptId && String(f.name || '').trim() === n)
+  return (list || []).some(f => f && String(f.id) !== String(exceptId) && String(f.name || '').trim() === n)
 }
 export default {
   namespaced: true,
@@ -32,9 +34,18 @@ export default {
       } catch (e) { console.error('[filters] post-save refetch failed (write stands):', e) }
       return id
     },
-    async remove ({ commit }, id) {
+    async remove ({ commit, state }, id) {
       await commitCommand("filter", "delete", id)
-      commit('setList', await window.todoAPI.dbCall('filterList'))
+      // [d-wave 2026-10-14] Same discipline as the save() refetch (d21-A7): the delete has landed,
+      // so a failed filterList read must NOT reject the whole action — callers saw a spurious
+      // failure while a stale (still-containing) list lingered in the sidebar. On refetch failure
+      // keep the local removal optimistic and still resolve.
+      try {
+        commit('setList', await window.todoAPI.dbCall('filterList'))
+      } catch (e) {
+        console.error('[filters] post-remove refetch failed (delete stands, keeping local removal):', e)
+        commit('setList', (state.list || []).filter(f => f && f.id !== id))
+      }
     }
   }
 }

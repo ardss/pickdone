@@ -602,6 +602,9 @@
     dbCall,
 
     // 对齐桌面语义(主进程读config.json):5175读LS里的settingsState,快捷键等设置与渲染端持久化一致,不再回残缺硬编码
+    // In the browser-only demo there is no native backup directory. Settings
+    // expects this read-only bridge method; without it, opening Settings fails.
+    getDefaultBackupDir: async () => '',
     getSettings: async () => {
       try { return JSON.parse(localStorage.getItem('settingsState') || '{}') || {} } catch { return {} }
     },

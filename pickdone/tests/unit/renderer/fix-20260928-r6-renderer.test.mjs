@@ -52,6 +52,9 @@ test('r6[1b]: GATE — emitSyncEvent sites in src/main and renderer evt.type con
   for (const f of [
     'renderer/js/components/settings/SettingsSyncTab.vue',
     'renderer/js/main.js',
+    // [H2 2026-10-25] the conflict + increment-loss toast wiring moved here (structure
+    // ratchet split) — the consumer scan follows the code, not the file name.
+    'renderer/js/utils/syncDegradedToast.js',
     'renderer/js/components/edit-panel/EpAttachments.vue',
     'renderer/js/store/tomatoAnnounce.js',
   ]) {

@@ -12,7 +12,7 @@
  * Run: node --test tests/unit/dates/dw-cli-shared-dates.test.mjs
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'

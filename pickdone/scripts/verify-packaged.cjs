@@ -20,7 +20,9 @@ const dirIdx = args.indexOf('--dir')
 const unpacked = path.resolve(args[dirIdx >= 0 ? dirIdx + 1 : 0] && !args[dirIdx >= 0 ? dirIdx + 1 : 0].startsWith('--') ? args[dirIdx + 1] : 'dist/win-unpacked')
 
 if (!fs.existsSync(unpacked)) {
-  console.log('SKIP: 未找到打包产物 ' + unpacked + '（先 npm run pack）')
+  const message = '未找到打包产物 ' + unpacked + '（先 npm run pack）'
+  if (args.includes('--require-installer')) { console.error('FAIL: ' + message); process.exit(1) }
+  console.log('SKIP: ' + message)
   process.exit(0)
 }
 
@@ -45,7 +47,13 @@ if (!fs.existsSync(resPkg)) { console.error('FAIL: 缺 resources/package.json（
 // （D:\backups 曾烂成 D:+0x08+ackups，2026-09-03 实锤）；.cmd shim 必须 CRLF+纯 ASCII+无 BOM，否则 cmd.exe 解析炸（LF/中文注释实锤过）
 const resCli = path.join(unpacked, 'resources', 'cli')
 if (fs.existsSync(resCli)) {
-  const skillBuf = fs.readFileSync(path.join(resCli, 'SKILL.md'))
+  // F4 fix (2026-10-15): the SKILL.md read had no existence guard (unlike the .cmd shim below) —
+  // a package that shipped resources/cli without SKILL.md crashed the gate with a raw ENOENT
+  // stack instead of a semantic FAIL. Missing SKILL.md is itself a packaging gap: skill install
+  // cannot work from the packaged app.
+  const skillPath = path.join(resCli, 'SKILL.md')
+  if (!fs.existsSync(skillPath)) { console.error('FAIL: SKILL.md missing'); process.exit(1) }
+  const skillBuf = fs.readFileSync(skillPath)
   const ctrl = [...skillBuf].filter(b => b < 9 || (b > 13 && b < 32))
   if (ctrl.length) { console.error(`FAIL: resources/cli/SKILL.md 含 ${ctrl.length} 个 C0 控制字符（skill install 会原样扩散）`); process.exit(1) }
   // 2026-09-19: guard the .cmd shim checks on the file existing — the Linux AppImage/deb jobs run
@@ -241,27 +249,41 @@ if (perFileMissing.length) {
   console.error('FAIL: index.html 引用的本地文件未进入 asar（单文件缺失，目录级检查查不出）:\n  ' + perFileMissing.join('\n  '))
   process.exit(1)
 }
-// 发布三件套对账：latest.yml 声明的 sha512/size 必须与同目录 exe 实测一致（重打包后只拷部分文件即发出=用户更新失败/增量下载损坏）
+// 发布三件套对账必须使用 --dir 指定的 unpacked 包所在构建目录，不能偷用旧 dist/latest.yml。
+// --require-installer 是正式发行门禁；没有当前构建的 Setup/latest.yml 就返回失败。
 try {
-  const ymlPath = path.resolve('dist/latest.yml')
-  if (fs.existsSync(ymlPath)) {
+  const releaseDir = path.dirname(unpacked)
+  const ymlPath = path.join(releaseDir, 'latest.yml')
+  const requireInstaller = args.includes('--require-installer')
+  if (!fs.existsSync(ymlPath)) {
+    const message = '当前构建目录 ' + releaseDir + ' 无 latest.yml / Setup 安装器，仅 unpacked 资源已验收'
+    if (requireInstaller) { console.error('FAIL: ' + message); process.exit(1) }
+    console.log('UNVERIFIED: ' + message)
+  } else {
     const crypto = require('node:crypto')
     const yml = fs.readFileSync(ymlPath, 'utf8')
     const urlM = yml.match(/- url:\s*(\S+)/)
     const shaM = yml.match(/sha512:\s*(\S+)/)
     const sizeM = yml.match(/size:\s*(\d+)/)
-    if (urlM && shaM && sizeM) {
-      const exePath = path.join(path.dirname(ymlPath), urlM[1])
-      if (!fs.existsSync(exePath)) { console.error('FAIL: latest.yml 指向的 ' + urlM[1] + ' 不存在于 dist/（发布三件套不齐）'); process.exit(1) }
-      const mm = shaSizeMismatch(crypto, exePath, shaM[1], sizeM[1])
-      if (mm) {
-        console.error(`FAIL: latest.yml 与 ${urlM[1]} 实测不符（${mm}）——重打包后未同步重生成元数据`)
-        process.exit(1)
-      }
-      console.log('OK: latest.yml ↔ ' + urlM[1] + ' sha512/size 对账一致')
+    if (!urlM || !shaM || !sizeM) {
+      console.error('FAIL: ' + ymlPath + ' 缺少安装器 url/sha512/size 字段')
+      process.exit(1)
     }
-  } else {
-    console.log('[verify] dist/latest.yml 不存在——跳过发布三件套对账（仅打包不发布时可忽略）')
+    if (path.basename(urlM[1]) !== urlM[1]) {
+      console.error('FAIL: latest.yml 安装器 URL 必须是同目录文件名')
+      process.exit(1)
+    }
+    const exePath = path.join(releaseDir, urlM[1])
+    if (!fs.existsSync(exePath)) {
+      console.error('FAIL: latest.yml 指向的 ' + urlM[1] + ' 不存在于 ' + releaseDir + '（发布三件套不齐）')
+      process.exit(1)
+    }
+    const mm = shaSizeMismatch(crypto, exePath, shaM[1], sizeM[1])
+    if (mm) {
+      console.error('FAIL: latest.yml 与 ' + urlM[1] + ' 实测不符（' + mm + '）——重打包后未同步重生成元数据')
+      process.exit(1)
+    }
+    console.log('OK: 当前构建目录 latest.yml ↔ ' + urlM[1] + ' sha512/size 对账一致')
   }
 } catch (e) { console.error('FAIL: latest.yml 对账异常: ' + e.message); process.exit(1) }
 

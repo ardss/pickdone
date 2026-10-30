@@ -12,7 +12,7 @@
  * Run: node --test tests/unit/utils/lru-cache-eviction.test.mjs
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 
 // Wrap the pinyin-pro UMD global BEFORE importing core.js — core.js captures the function

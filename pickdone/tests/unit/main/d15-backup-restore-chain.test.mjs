@@ -74,7 +74,13 @@ test('dbRecovery exports META_RESTORE_PREFIXES and it covers the collector outpu
 test('drift guard: the SettingsDataTab whitelist carries the same families as dbRecovery', () => {
   const here = path.dirname(fileURLToPath(import.meta.url))
   const src = fs.readFileSync(path.join(here, '..', '..', '..', 'renderer', 'js', 'components', 'settings', 'SettingsDataTab.vue'), 'utf8')
+  // F1 (2026-10-17): sync.deviceId / sync.pairingSecret are MACHINE-LOCAL identity keys restored
+  // only on the STARTUP path (routed to settings_rows via dbRecovery's settingsPut callback —
+  // the UI meta restore's meta.put door writes the wrong table for them), so they are
+  // deliberately absent from the UI whitelist and exempt from this drift check.
+  const uiExempt = ['sync.deviceId', 'sync.pairingSecret']
   for (const p of dbRecovery.META_RESTORE_PREFIXES) {
+    if (uiExempt.includes(p)) continue
     assert.ok(src.includes("'" + p + "'"), `UI restore whitelist is missing '${p}' — the three meta-surface lists must move in lockstep`)
   }
 })

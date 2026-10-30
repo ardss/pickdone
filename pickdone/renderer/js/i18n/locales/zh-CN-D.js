@@ -116,7 +116,7 @@ export default {
 
     },
     "QuickAdd": {
-      "placeholder": "在此添加内容，按回车创建事件",
+      "placeholder": "试试「明天下午3点 交报告 #工作」",
       "ariaLabel": "快捷添加任务",
       "clearDateAria": "清除日期 {d}",
       "selectDate": "选择日期",
@@ -126,7 +126,8 @@ export default {
       "scheduledAt": "，已安排在",
       "created": "已添加任务：{c}",
       "createdBulk": "已按粘贴的 {n} 行分别创建任务",
-      "createFailed": "创建失败，请重试"
+      "createFailed": "创建失败，请重试",
+      "dateOnlyRefused": "只识别到日期，没有任务内容，请补充要做什么"
 
     },
     "DayDateStrip": {

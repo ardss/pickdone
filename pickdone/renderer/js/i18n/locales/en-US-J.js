@@ -135,6 +135,7 @@ export default {
   'statsJ.EditPanel.moveSubtaskUp': 'Move subtask up',
   'statsJ.EditPanel.moveSubtaskDown': 'Move subtask down',
   'statsJ.EditPanel.addSubtask': 'Add subtask',
+  'statsJ.EditPanel.dblclickRenameTip': 'Double-click to rename',
   'statsJ.EditPanel.effortHint': 'Mark task effort; click selected option again to clear',
   'statsJ.EditPanel.urgencyHint': 'High/Medium/Low marks urgency',
   'statsJ.EditPanel.clearDueDate': 'Clear due date',
@@ -158,4 +159,20 @@ export default {
   'statsJ.EditPanel.priorityLabel': 'Priority',
   'statsJ.EditPanel.openBtn': 'Open',
   'statsJ.EditPanel.depsTruncated': 'More candidates — showing the first {shown} of {total}',
+
+  // win-bind (T8 drag-outside-to-bind): task↔window binding feedback and entry copy
+  'statsJ.winbind.bound': 'Window bound: {name}',
+  'statsJ.winbind.boundFailed': 'Failed to bind the window',
+  'statsJ.winbind.activated': 'Bound window brought back',
+  'statsJ.winbind.notFound': 'The bound window is gone',
+  'statsJ.winbind.ambiguous': '{n} windows share that name — cannot pick one automatically',
+  'statsJ.winbind.activateFailed': 'Failed to activate the window',
+  'statsJ.winbind.flashed': 'Could not focus — flashed the taskbar instead',
+  'statsJ.winbind.unbound': 'Window binding removed',
+  'statsJ.winbind.identifyFailed': 'Failed to identify the window — nothing bound',
+  'statsJ.winbind.adapterUnavailable': 'Window detection is unavailable',
+  'statsJ.winbind.activateMenu': 'Bring window back ({name})',
+  'statsJ.winbind.unbindMenu': 'Unbind window',
+  'statsJ.winbind.badgeTip': 'Bound to {name} — click to bring it back',
+  'statsJ.winbind.unbindTip': 'Unbind window',
 }

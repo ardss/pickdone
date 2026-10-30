@@ -35,7 +35,10 @@ exports.planAddMany = (db, chips) => {
   // MOVED an unrelated chip onto the colliding id. Re-mint in a bounded loop until the id is free
   // (wider jitter space when the fast path keeps colliding).
   const seenBatch = new Set() // same-batch mints collide too (DB check cannot see unsent rows)
-  const taken = id => seenBatch.has(id) || !!db.prepare('SELECT 1 FROM plan_chips WHERE id = ?').get(id)
+  // F4 P3 (2026-10-18): the collision-path lookup re-ran db.prepare inside `taken` for every
+  // mint/retry iteration — hoisted OUT of the loop: one statement, prepared once.
+  const idTakenStmt = db.prepare('SELECT 1 FROM plan_chips WHERE id = ?')
+  const taken = id => seenBatch.has(id) || !!idTakenStmt.get(id)
   const mintId = () => {
     let id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
     for (let i = 0; taken(id) && i < 16; i++) id = 'pl_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 9)
@@ -108,6 +111,10 @@ exports.planRemoveIds = (db, ids, opts = {}) => {
 exports.planMoveTask = (db, { taskId, fromDay, toDay }) => {
   const okDay = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v))
   if (!okDay(fromDay) || !okDay(toDay)) return 0 // reject malformed day keys outright, preventing chips from landing in invisible buckets
+  // c-wave fix (2026-10-13): same-day "moves" used to fall through to an unconditional UPDATE
+  // that re-stamped updatedAt with a fresh now() — every todoTime patch re-anchoring the chips'
+  // LWW age and minting a fresh sync delta for rows that did not change. Same-day is a no-op.
+  if (String(fromDay) === String(toDay)) return 0
   const r = db.prepare('UPDATE plan_chips SET day=?, updatedAt=? WHERE taskId=? AND day=? AND deleted=0').run(String(toDay), Date.now(), String(taskId), String(fromDay))
   return r.changes
 }

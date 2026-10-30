@@ -35,7 +35,7 @@ db.init(process.env.TODO_DB_DIR)
 
 const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const cliPath = path.join(ROOT, 'cli', 'pickdone.js')
-const runCliJson = args => JSON.parse(execFileSync(process.execPath, [cliPath, ...args, '--json'], { encoding: 'utf8' }))
+const runCliJson = args => JSON.parse(execFileSync(process.execPath, [cliPath, ...args, '--json'], { timeout: 180000, encoding: 'utf8' }))
 
 let _seq = 0
 function seed (over = {}) {

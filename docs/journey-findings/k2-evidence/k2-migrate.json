@@ -1,0 +1,52 @@
+{
+  "B": {
+    "nonexistent-drive": {
+      "ok": false,
+      "error": "target is not writable: ENOENT: no such file or directory, mkdir 'Q:\\k2-nonexistent\\target'"
+    },
+    "equals-current": {
+      "ok": false,
+      "error": "target equals the current data directory"
+    },
+    "inside-current": {
+      "ok": false,
+      "error": "target is inside the current data directory"
+    },
+    "non-empty": {
+      "ok": false,
+      "error": "target exists and is neither empty nor a valid data directory (todos.db + db.key)"
+    }
+  },
+  "C": {
+    "target": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\k2-migrated-target",
+    "settingsOpen": "gear-clicked",
+    "dataTabOpen": "tab-clicked",
+    "modalForce": "instance-not-found@1",
+    "selfClick": "fast-clicked",
+    "invokeReturned": "{\"ok\":true,\"target\":\"C:\\\\Users\\\\13397\\\\AppData\\\\Local\\\\Temp\\\\pickdone-k2-YOFBGk\\\\appdata\\\\k2-migrated-target\"}",
+    "phaseShots": {},
+    "bootFileContent": "{\n  \"userDataDir\": \"C:\\\\Users\\\\13397\\\\AppData\\\\Local\\\\Temp\\\\pickdone-k2-YOFBGk\\\\appdata\\\\k2-migrated-target\"\n}\n",
+    "relaunch": "RELAUNCH-PROBE-FAILED",
+    "oldLocation": {
+      "todosDb": true,
+      "dbKey": true,
+      "configJson": true
+    },
+    "cliNewDir": "TASKS PRESENT"
+  },
+  "D": {},
+  "sandbox": {
+    "home": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\home",
+    "appdata": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata",
+    "userData": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\pickdone",
+    "bootFile": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\home\\.pickdone-data-location.json"
+  },
+  "A": {
+    "locationInfo": {
+      "currentDir": "C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\pickdone",
+      "bootRedirect": null
+    },
+    "taskCount": 2
+  },
+  "fatal": "Error: EBUSY: resource busy or locked, unlink 'C:\\Users\\13397\\AppData\\Local\\Temp\\pickdone-k2-YOFBGk\\appdata\\k2-migrated-target\\DIPS'"
+}

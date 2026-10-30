@@ -72,3 +72,17 @@ export function tagStaleDone (t, today, r1) {
   if (t.dayStart === today) return false
   return t.dayStart > dayShift(today, 2) || t.dayStart < dayShift(today, -r1)
 }
+
+/**
+ * [w21] projDone fallback predicate for CategoryView/ProjectView's extraGroups — same exclusive
+ * shape as tagStaleDone (B9): true only for completions OUTSIDE every other bucket the shared
+ * builder already emits (catTodayDone = today, catExpDone = past within the R1 window,
+ * catTomorrow/catDat = day+1/day+2). The old `t.complete && t.dayStart !== today` filter double-
+ * rendered completions that also sat in catExpDone / catTomorrow / catDat. Pure so the bucket
+ * membership matrix is unit-testable.
+ *
+ * @param {Object} t todo row ({ complete, dayStart })
+ * @param {number} today start-of-day timestamp
+ * @param {number} r1 expiredCompletedTodoRange in days
+ */
+export const staleDoneExclusive = tagStaleDone

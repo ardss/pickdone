@@ -7,8 +7,14 @@
 const fs = require('fs')
 const path = require('path')
 
-const ROOT = path.join(__dirname, '..')
-const BANNED = /GPL|AGPL|LGPL-3|Unlicense MISSING|UNKNOWN/i
+const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: unit tests point the gate at a temp fixture tree
+// W19 (2026-10-30): the old pattern missed npm-standard spellings — `UNLICENSED` (the SPDX-ish
+// marker npm itself writes for "private, do not publish"), `SEE LICENSE IN <file>` (no SPDX id,
+// legally un-auditable), while `GPL` as an unanchored substring DOES cover LGPL-x.y ("LGPL"
+// contains "GPL", so LGPL-2.1/LGPL-3.0 were already banned). ALLOW_UNKNOWN stays.
+// NOTE: GPL must stay UNANCHORED (no \b) — "LGPL-2.1"/"LGPL-3.0" contain "GPL" as a substring
+// with L (a word char) before it, so \bGPL would silently re-open the LGPL hole.
+const BANNED = /GPL|AGPL|\bUNLICENSED\b|SEE LICENSE IN|Unlicense MISSING|UNKNOWN/i
 const ALLOW_UNKNOWN = new Set(['buffers']) // substack/node-buffers is upstream MIT; the old package lacks a license field (manually verified)
 
 function licenseOf (pkgPath) {

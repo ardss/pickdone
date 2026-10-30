@@ -118,6 +118,8 @@
 .ep-date-chip:hover .app-icon { color: var(--brand); }
 .ep-date-chip.on { background: var(--brand); color: #fff; }
 .ep-date-chip.on .app-icon { color: #fff; }
+/* chip 内的时刻回显（NL 快捷输入带入的 todoTime 时刻），继承 chip 文字色 */
+.ep-date-chip__time { margin-left: 2px; font-weight: 600; }
 /* 选中：白色图标 */
 .ep-date-chip.on .app-icon { opacity: 1; }
 .ep-field-label { color: var(--text-3); display: inline-flex; align-items: center; }

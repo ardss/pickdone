@@ -42,6 +42,8 @@ jobs:
     # takes the max; the residual cost is ~5min of duplicated static work on the windows runner.
     env:
       CHECK_ALL_SKIP_LIVE: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+      # 2026-10-30: date/weekday unit tests assume the app's target timezone (UTC+8); runners are UTC.
+      TZ: Asia/Shanghai
     steps:
       - uses: actions/checkout@v7
 

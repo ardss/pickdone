@@ -67,10 +67,22 @@ export function chunkPushItems(items, budget = PUSH_CHUNK_BYTES) {
  * @param {string|null} [opts.enrollment] operator-issued enrollment secret (relay CTO sweep B#1):
  *   relays that set one reject open registration with 403 — the client presents it (timing-safe
  *   compare server-side) on the register body. Data routes are unaffected.
+ * @param {number} [opts.fetchTimeoutMs] per-request abort budget (default 30000): a half-dead
+ *   relay used to hang every POST on undici's ~300s default headers timeout × retries × both
+ *   round steps — the whole sync loop wedged for many minutes. Timed-out requests throw a
+ *   coded error (code 'RELAY_FETCH_TIMEOUT', no .status) which durable hosts classify as
+ *   RETRYABLE (transport-level uncertainty, same bucket as a network throw).
+ * @param {({applied: number, fromSeq: number, items: Array<{serverSeq: number, envelope: object, status: string}>, ownIds: Set<string>}) => (number|Promise<number>)} [opts.onBeforeAck]
+ *   OPTIONAL cursor gate (durable-host hook, relay materialization fix 2026-10-14): called
+ *   once per round after the pull frames are decrypted and merged, BEFORE the ack/cursor
+ *   commit. `items` is EVERY decrypted frame of the batch in serverSeq order (duplicates
+ *   included — a duplicate non-todo frame is still a frame the business layer never
+ *   materialized). The returned number becomes the ack/cursor; it is clamped to
+ *   [0, applied]. Absent (bare transport) keeps the historical advance-everything ack.
  */
 export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch, store, dataKey,
   deviceSecret: initialSecret = null, onDeviceSecret = null, state = null, pushChunkBytes = PUSH_CHUNK_BYTES,
-  enrollment = null } = {}) {
+  enrollment = null, fetchTimeoutMs = 30_000, onBeforeAck = null } = {}) {
   if (!nodeId || !account || !baseUrl) throw new Error('relay-client: nodeId, account, baseUrl required')
   const s = store || createRevisionStore(nodeId)
   const clock = new Hlc(nodeId)
@@ -112,7 +124,20 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
     // process exit and trip the win32 teardown assert (async.c UV_HANDLE_CLOSING) in
     // short-lived CLI/test processes; a sync client does ~1 round/sec, so a per-round
     // TCP handshake is negligible (same doctrine as the unit-suite fetch fixes).
-    const res = await fetchImpl(baseUrl + path, { method: 'POST', body: JSON.stringify(body), headers, connection: 'close' })
+    // 2026-10-14: every request carries an abort budget (fetchTimeoutMs, default 30s) —
+    // a half-dead relay used to hang each POST on undici's ~300s default, and retries ×
+    // both round steps turned one bad round into many minutes of wedged sync.
+    let res
+    try {
+      res = await fetchImpl(baseUrl + path, { method: 'POST', body: JSON.stringify(body), headers, connection: 'close', signal: AbortSignal.timeout(fetchTimeoutMs) })
+    } catch (e) {
+      if (e && (e.name === 'AbortError' || e.name === 'TimeoutError')) {
+        // coded (no .status) so durable hosts classify it RETRYABLE (transport-level
+        // uncertainty — adapter isRetryable treats status==null as retryable)
+        throw Object.assign(new Error(`relay ${path} timed out after ${fetchTimeoutMs}ms`), { code: 'RELAY_FETCH_TIMEOUT' })
+      }
+      throw e
+    }
     if (res.status === 401 && !retried && path !== '/v1/device/register') {
       // D25 drill-2: a relay that rebooted from torn state wiped its device registry — every
       // data route 401s forever until re-registration. One bounded re-auth + retry through the
@@ -141,6 +166,11 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
     },
     /** One sync round. Idempotent; safe to call from any scheduler cadence. */
     async round() {
+      // Frames this device itself pushed (durable set + this round's push batch): the
+      // cursor gate's "own frame" signal — pull-side marks must not leak into it (see
+      // the unmark after the gate below), or a previously held peer frame would count
+      // as own on its re-pull and the hold would last exactly one round.
+      const pushedBeforeRound = new Set(cursorState.pushed)
       const items = []
       for (const env of s.revisions.values()) {
         if (!cursorState.pushed.has(env.revisionId)) {
@@ -186,6 +216,12 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       // ephemeral store while the cursor advanced past the frames — silent loss on
       // restart. Purely additive result field; bare-transport callers may ignore it.
       const received = []
+      // Cursor-gate input (2026-10-14): EVERY decrypted frame of the batch in serverSeq
+      // order, duplicates INCLUDED. The durable host's business layer may only be able to
+      // materialize a subset of entities; with duplicates filtered out, a re-pulled
+      // unmaterializable frame would vanish from the gate's view and the next batch's
+      // cursor would silently jump over it (silent-loss regression scenario).
+      const ackItems = []
       // D26: `skipped` frames (relay-declared oversize — it can never deliver them) are
       // undeliverable by construction; quarantine semantics (spec §68): advance past them
       // and ack, or the cursor pins below the skip forever and every later envelope
@@ -212,16 +248,45 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
         // relay dedupes by opId anyway — this only spares the bytes). Durable persistence
         // of the marking stays the adapter's commit point, so a failed round replays.
         cursorState.pushed.add(env.revisionId)
-        if (r.status !== 'duplicate') received.push({ envelope: env, status: r.status, action: r.action })
+        ackItems.push({ serverSeq: item.serverSeq, envelope: env, status: r.status, action: r.action })
+        if (r.status !== 'duplicate') received.push({ envelope: env, status: r.status, action: r.action, serverSeq: item.serverSeq })
         // ack advances past applied/merged frames AND duplicates (own frames come back
         // on every pull — without this the cursor never moved and GC was pinned at 0)
         // but NOT past frames that failed to merge for other reasons (spec §18/§67)
         if (r.status === 'applied' || r.status === 'ignored' || r.status === 'duplicate') applied = Math.max(applied, item.serverSeq)
       }
-      cursorState.cursor = applied
+      // Cursor gate (2026-10-14): the durable host holds the cursor at the last frame its
+      // business layer fully materialized — a batch containing frames it could NOT
+      // materialize (non-todo entities this slice) must not be acked/GC'd away, or those
+      // remote changes are lost forever behind a green cursor. Re-pull is idempotent
+      // (duplicate-safe by revisionId, LWW no-ops) — preferring duplicate pulls over
+      // silent loss is the whole point. A gate failure is DETERMINISTIC (local apply
+      // state), not a transport blip: mark noRetry so the adapter's step() fails the
+      // round immediately instead of re-running the same failing apply 3×.
+      let ackSeq = applied
+      if (typeof onBeforeAck === 'function' && ackItems.length) {
+        const ownIds = new Set(pushedBeforeRound)
+        for (const it of items) ownIds.add(it.opId)
+        try {
+          ackSeq = await onBeforeAck({ applied, fromSeq: pull.fromSeq, items: ackItems, ownIds })
+        } catch (e) {
+          throw Object.assign(e, { noRetry: true })
+        }
+        if (!Number.isFinite(ackSeq) || ackSeq < 0) ackSeq = 0
+        ackSeq = Math.min(ackSeq, applied)
+        // Frames the gate held BELOW the ack must not stay in the pushed-set: the mark
+        // told the durable host "this revision is safely local" — for a held (peer,
+        // unmaterializable) frame that is exactly the lie that would let a later round
+        // classify it as own and ack it into GC. Unmark so every replay sees it as a
+        // foreign frame until the gate finally advances past it.
+        for (const it of ackItems) {
+          if (Number.isFinite(it.serverSeq) && it.serverSeq > ackSeq) cursorState.pushed.delete(it.envelope.revisionId)
+        }
+      }
+      cursorState.cursor = ackSeq
       let ackInfo = null
-      if (applied > 0) ackInfo = await post('/v1/sync/ack', { account, device: nodeId, ackSeq: applied })
-      return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: cursorState.cursor, ack: ackInfo, received }
+      if (ackSeq > 0) ackInfo = await post('/v1/sync/ack', { account, device: nodeId, ackSeq })
+      return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: ackSeq, ack: ackInfo, received }
     },
     register: doRegister,
     materialized() { return materializedAll(s) },

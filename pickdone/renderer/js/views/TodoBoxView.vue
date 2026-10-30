@@ -48,7 +48,14 @@
       </div>
     </div>
     <div class="page__main page__main--flow-top">
-      <empty-state v-if="!list.length"><template #text>{{ $t('statsC.TodoBox.empty') }}</template></empty-state>
+      <!-- [F3 2026-10-18] init failure used to render as a permanent empty list: distinguish the error state (retry offered) from a genuinely empty todo box -->
+      <empty-state v-if="!list.length">
+        <template #text>{{ initError ? $t('statsC.TodoBox.initFailed') : $t('statsC.TodoBox.empty') }}</template>
+        <template v-if="initError" #action><button type="button" class="mini primary" @click="retryInit">{{ $t('statsC.TodoBox.retryInit') }}</button></template>
+        <!-- D6 (P3 2026-10-22): a genuinely empty box (not the error state) offers the create entry
+             instead of dead space — same QuickAdd summon channel as main.js focusQuickAdd -->
+        <template v-else #action><button type="button" class="mini primary" @click="openQuickAdd">{{ $t('statsC.TodoBox.emptyCreate') }}</button></template>
+      </empty-state>
       <div v-else class="todo-box-list">
         <!-- [A7] role=button demoted from the row to the content (same TodoItem pattern): a button
              role wrapping role=checkbox children is broken ARIA nesting; the row stays a focusable
@@ -145,11 +152,15 @@ export default {
   },
   computed: {
     settings () { return this.$store.state.settings },
+    initError () { return this.$store.state.todo.initError },
     // value is the persisted stable key; label is the display text resolved via $t
     sortMethodOptions () {
+      // [J3 2026-10-22] no 按截止日期 here: the box only holds UNDATED rows, so a due sort has
+      // nothing to sort by — dueOf falls back to createTime and the option silently duplicated
+      // 按创建时间 (live-verified journey finding J3). A legacy persisted 'due' keeps working
+      // (comparator default branch) and labels as 按创建时间 via the sortMethodLabel fallback.
       return [
         { value: 'created', labelKey: 'statsC.TodoBox.sortByCreate' },
-        { value: 'due', labelKey: 'statsC.TodoBox.sortByDue' },
         { value: 'difficulty', labelKey: 'statsC.TodoBox.sortByDifficulty' }
       ].map(o => ({ ...o, label: this.$t(o.labelKey) }))
     },
@@ -159,13 +170,23 @@ export default {
         { value: 'asc', labelKey: 'statsC.TodoBox.orderAsc' }
       ].map(o => ({ ...o, label: this.$t(o.labelKey) }))
     },
-    sortMethodLabel () { const o = this.sortMethodOptions.find(x => x.value === this.settings.todoBoxSortMethod); return o ? o.label : this.settings.todoBoxSortMethod },
+    sortMethodLabel () { const o = this.sortMethodOptions.find(x => x.value === this.settings.todoBoxSortMethod); return o ? o.label : this.$t('statsC.TodoBox.sortByCreate') }, // [J3] legacy 'due' labels as created, never the raw key
     sortOrderLabel () { const o = this.sortOrderOptions.find(x => x.value === this.settings.todoBoxSortOrder); return o ? o.label : this.settings.todoBoxSortOrder },
     cats () { return this.$store.state.category.list.filter(c => !c.delete) },
     list () { return this.$store.state.todo.views.todoBox },
     selectedId () { const ed = this.$store.state.ui.rightSidebarTodoEdit; return ed.visible ? ed.taskId : null }
   },
   methods: {
+    // [F3 2026-10-18] retry after a failed todo/init — reruns the full load (getAll + computeViews)
+    retryInit () { this.$store.dispatch('todo/init', {}) },
+    // D6 (P3 2026-10-22): empty-box create entry — focus the QuickAdd bar when mounted; on views
+    // where it is not mounted, route to Today first (which always mounts it), then focus
+    openQuickAdd () {
+      if (document.querySelector('.qa-wrap')) { window.dispatchEvent(new CustomEvent('todo:focus-quickadd')); return }
+      this.$router.push({ name: 'todo-list-today' }).then(() => {
+        setTimeout(() => window.dispatchEvent(new CustomEvent('todo:focus-quickadd')), 120)
+      }).catch(() => {})
+    },
     // keyboard activation for the sort/filter dropdown triggers; the cast lives here because the
     // structure guard rejects TS `as` expressions inside templates (silent-undefined identifier scan)
     tbTriggerKey (e) { (e.currentTarget as HTMLElement).click() },
@@ -268,9 +289,16 @@ export default {
           if (!raw) continue
           try {
             const patch = crossDayMovePatch(raw, ts, startOf)
-            await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch })
+            // [J9 batch-undo fix 2026-10-22] snapshot BEFORE the awaited dispatch: updateTodoFields's
+            // upsertLocal mutates the live row in place (store/todo.js Object.assign), so reading
+            // `raw` after the await recorded the NEW values and the undo toast re-applied the move —
+            // a silent no-op (live-verified: rows still dated today after undo AND page reload).
+            // Same live-ref lesson as side-nav/categoryDelete.js's shallow copies; utils/core.js
+            // rescheduleExpired is the in-repo correct shape. Pop on dispatch failure so a dead row
+            // never gains a phantom undo entry.
             snap.push({ id, revert: crossDayRevertPatch(raw, patch) })
-          } catch { failed++ } // per-row catch mirrors batchDelete: one dead row must not abort the rest
+            await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch })
+          } catch { failed++; snap.pop() } // per-row catch mirrors batchDelete: one dead row must not abort the rest
         }
         this.$message.closeAll()
         if (snap.length) {
@@ -295,8 +323,13 @@ export default {
           const raw = this.$store.state.todo.todoList.find(x => x.taskId === id)
           if (!raw) continue
           try {
+            // [J9 batch-undo fix 2026-10-22] capture the PRE-dispatch categoryId: raw is the live
+            // store row and updateTodoFields mutates it in place, so reading it after the await
+            // snapshotted the NEW category and the undo toast was a silent no-op (same root cause
+            // as batchToday above).
+            const prevCatId = raw.categoryId
             await this.$store.dispatch('todo/updateTodoFields', { taskId: id, patch: { categoryId: catId } })
-            snap.push({ id, categoryId: raw.categoryId })
+            snap.push({ id, categoryId: prevCatId })
           } catch { failed++ }
         }
         this.$message.closeAll()
@@ -323,7 +356,8 @@ export default {
     },
     async _batchDeleteInner () {
       const n = this.checkedIds.length
-      try { await this.$confirm(this.$t('statsC.TodoBox.confirmDelete', { n }), this.$t('statsC.TodoBox.confirmTitle'), { type: 'warning' }) } catch { return }
+      // [F5 2026-10-21] confirm button named with the existing btnDelete key (no new i18n key)
+      try { await this.$confirm(this.$t('statsC.TodoBox.confirmDelete', { n }), this.$t('statsC.TodoBox.confirmTitle'), { type: 'warning', confirmButtonText: this.$t('statsC.TodoBox.btnDelete') }) } catch { return }
       // Resolve against the live list first (dead ids deleted elsewhere during batching are excluded),
       // then split: recurring instances divert to ui/askRepeatDelete (RepeatDeleteModal owns their
       // deletion), plain tasks are deleted in bulk below
@@ -331,9 +365,13 @@ export default {
         .map(id => this.$store.state.todo.todoList.find(x => x.taskId === id))
         .filter(Boolean)
       const { plain, repeatAsk, repeatRest } = splitBatchDelete(rows)
-      // Keep the recurring selections that did not get a modal this pass checked, so "delete" asks
-      // about the next repeat group when the user confirms again
-      this.checkedIds = repeatRest.map(t => t.taskId)
+      // [w14 P2] the plain rows STAY in checkedIds until the dispatch settles: the old code pruned
+      // them to repeatRest BEFORE deleteTodosMany, so a thrown dispatch (dead row mid-batch) left the
+      // selection desynced from reality — the batch bar vanished and there was no retry entry for the
+      // rows that never got deleted. Now: success -> selection keeps only the repeatRest pass-over;
+      // failure -> the (still alive) plain rows stay checked next to the repeatRest ones.
+      // Undo semantics unchanged: the snapshot is still built from the ids deleteTodosMany RETURNED
+      // (the success subset), so a total failure yields no phantom undo toast.
       // Aggregate undo: delete all plain rows first, then ONE batch undo toast restoring the whole
       // group — per-row deleteWithUndo would stack N toasts for an N-row selection while sibling
       // batch ops (batchToday/batchCat) aggregate via batchMoveWithUndo + closeAll
@@ -363,6 +401,12 @@ export default {
       }
       // [d21-A1] honest-failure feedback, same shape as batchToday/batchCat (msgPartialFail reuse)
       if (failed) this.$message.warning(this.$t('statsC.TodoBox.msgPartialFail', { n: failed }))
+      // [w14 P2] selection update AFTER the dispatch: keep the recurring pass-over checked (so the
+      // next confirm asks about the next repeat group); on failure also keep the plain rows checked
+      // — they were never deleted, so the batch bar (and its delete button) stays as the retry entry.
+      this.checkedIds = failed
+        ? [...repeatRest.map(t => t.taskId), ...plain.map(t => t.taskId)]
+        : repeatRest.map(t => t.taskId)
       if (repeatAsk) this.$store.commit('ui/askRepeatDelete', repeatAsk.taskId)
     },
     ctxMenu (t, e) {
@@ -391,7 +435,7 @@ html[data-theme="dark"] .dropdown-select__label:hover,
 html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { background: var(--hover-bg); color: var(--text-1); }
 .icon-append{display:block;color:var(--text-4);font-size:16px;line-height:20px}
 /* ---- F1. 待办箱条目（原 TodoBoxListItem scoped，限定于 .todo-box-list 下）---- */
-.todo-box-list .todo-box-list-item{position:relative;border-bottom:1px solid var(--line);background-color:var(--panel, #fff);padding:10px 26px;transition:all .3s cubic-bezier(.23,1,.32,1);box-sizing:border-box;display:flex}
+.todo-box-list .todo-box-list-item{position:relative;border-bottom:1px solid var(--line);background-color:var(--panel, #fff);padding:10px 26px;transition:all var(--dur-slow) cubic-bezier(.23,1,.32,1);box-sizing:border-box;display:flex}
 .todo-box-list .todo-box-list-item__append,.todo-box-list .todo-box-list-item__prepend{flex-shrink:0}
 .todo-box-list .todo-box-list-item__category-dot{display:flex;flex-shrink:0;align-items:center;justify-content:center;width:20px;height:20px;margin-right:8px;font-size: var(--fs-sm)}
 .todo-box-list .todo-box-list-item__category-dot>svg{display:block}
@@ -410,7 +454,7 @@ html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { backg
 .todo-box-list .todo-box-list-item--is-drag{background-color:var(--active-bg)}
 .todo-box-list .todo-box-list-item--selected,.todo-box-list .todo-box-list-item--selected:hover{background-color:var(--brand-light)}
 /* 裸文字按钮仅限待办箱条目（旧 scoped id）；回收站条目用原版药丸组（见 F2 补充） */
-.todo-box-list .todo-box-list-item__tools .btn{padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all .2s}
+.todo-box-list .todo-box-list-item__tools .btn{padding:0;color:var(--brand-dark);font-size: var(--fs-sm);background:none;border:none;cursor:pointer;transition:all var(--dur-fast)}
 .todo-box-list .todo-box-list-item__tools .btn:focus{outline:0}
 .todo-box-list .todo-box-list-item__tools .btn:hover{color:var(--brand-hover)}
 .todo-box-list .todo-box-list-item__tools .btn:active{color:var(--brand-active)}
@@ -418,6 +462,12 @@ html[data-theme="dark"] .dropdown-select.is-open .dropdown-select__label { backg
 .todo-box-list .todo-box-list-item__tools .btn--dark:focus{outline:0}
 .todo-box-list .todo-box-list-item__tools .btn--dark:hover{color:#474747}
 .todo-box-list .todo-box-list-item__tools .btn--dark:active{color:#3b3b3b}
+/* [F4] dark-mode override: #4f4f4f/#474747/#3b3b3b sit below 3:1 on the dark panel (same
+   gap as the .dropdown-select__label dark branch above); resolve to the theme-mutating
+   muted-text tokens instead */
+html[data-theme="dark"] .todo-box-list .todo-box-list-item__tools .btn--dark{color:var(--text-2)}
+html[data-theme="dark"] .todo-box-list .todo-box-list-item__tools .btn--dark:hover{color:var(--text-1)}
+html[data-theme="dark"] .todo-box-list .todo-box-list-item__tools .btn--dark:active{color:var(--text-1)}
 /* 工具栏下拉菜单（原 DropdownSelect 的弹出层无独立样式文件，按设计稿设计语言补齐：白底/分隔/主色高亮） */
 .dd-menu{list-style:none;margin:0 -4px;padding:0;font-size: var(--fs-sm);color:var(--text-1)}
 .dd-menu li{padding:7px 16px;cursor:pointer;white-space:nowrap;border-radius: var(--radius-md)}

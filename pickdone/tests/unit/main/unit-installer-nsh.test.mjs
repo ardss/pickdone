@@ -29,7 +29,10 @@ test('no taskkill line may carry /T — tree-kill reaches the updater-spawned in
 })
 
 test('post-kill settle window stays (file handles release before the install section)', () => {
-  assert.match(nsh, /Sleep 800/, 'Sleep 800 after taskkill must stay')
+  // [assertion-quality 2026-10-25] 800ms was a tuned value, not a contract: assert the
+  // SETTLE WINDOW EXISTS in the 0.8-0.99s band instead of the exact literal — retuning
+  // to 900/850ms is behavior-equivalent and must not red.
+  assert.match(nsh, /Sleep [89]\d\d/, 'a ~0.8-0.99s settle Sleep after taskkill must stay')
 })
 
 test('install progress must be visible during the silent phases (2026-09-11 frozen-bar wave)', () => {

@@ -24,6 +24,21 @@ function parseExportColumns (raw, expected = EXPECTED_EXPORT_COLS) {
   return head
 }
 
+/** W20 (P3) renderer-controlled fileName hardening: fileName comes from the renderer (IPC arg) and
+ *  used to be path.join-ed straight into the save dialog defaultPath, so a value like
+ *  '..\\..\\evil' could plant the dialog outside Downloads. Pure — exported for unit tests.
+ *  Takes the basename, strips Windows-forbidden characters, falls back to a default name and
+ *  forces the .xlsx suffix (same shape as the backup.js read-whitelist precedent). */
+function sanitizeExportFileName (raw) {
+  const DEFAULT = 'todos'
+  // normalize backslashes before basename: POSIX basename does not treat '\' as a separator, and
+  // fileName arrives over IPC from the renderer (untrusted) so the traversal cut must hold cross-platform
+  let name = path.basename(String(raw == null ? '' : raw).replace(/\\/g, '/')).replace(/[\\/:*?"<>|]/g, '_').trim()
+  if (!name || name === '.' || name === '..') name = DEFAULT
+  if (name.toLowerCase().endsWith('.xlsx')) name = name.slice(0, -5)
+  return name + '.xlsx'
+}
+
 function createExporter ({ getMainWindow, i18n, log }) {
   async function exportTodosToXlsx ({ fileName, rows }) {
     // Header validation FIRST: a translator comma used to surface only after the user had already
@@ -36,7 +51,7 @@ function createExporter ({ getMainWindow, i18n, log }) {
     // TypeError. Fall back to the parentless dialog form.
     const opts = {
       title: i18n.mt('exportTitle'),
-      defaultPath: path.join(app.getPath('downloads'), fileName),
+      defaultPath: path.join(app.getPath('downloads'), sanitizeExportFileName(fileName)),
       filters: [{ name: 'Excel', extensions: ['xlsx'] }]
     }
     const dialogResult = (win && typeof win.isDestroyed === 'function' && !win.isDestroyed())
@@ -67,4 +82,4 @@ function createExporter ({ getMainWindow, i18n, log }) {
   return { exportTodosToXlsx }
 }
 
-module.exports = { createExporter, parseExportColumns, EXPECTED_EXPORT_COLS }
+module.exports = { createExporter, parseExportColumns, sanitizeExportFileName, EXPECTED_EXPORT_COLS }

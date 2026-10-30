@@ -64,7 +64,7 @@ test('B2: sort top puts the task FIRST under the App\'s descending custom-mode r
 
 test('B8: FilterView.vue sorts its filtered list by taskSort DESCENDING', () => {
   const src = fs.readFileSync(path.join(here, '..', '..', '..', 'renderer', 'js', 'views', 'FilterView.vue'), 'utf8')
-  assert.ok(/\.sort\(\(a, b\) => \(b\.taskSort \|\| 0\) - \(a\.taskSort \|\| 0\)\)/.test(src), 'FilterView computed sort must be descending (b - a), matching sortMode.js custom mode')
+  assert.ok(/\(b\.taskSort \|\| 0\) - \(a\.taskSort \|\| 0\)\) \|\| \(\(a\.createTime \|\| 0\) - \(b\.createTime \|\| 0\)\)/.test(src), 'FilterView computed sort must be descending (b - a) with the createTime ASC tiebreaker, matching sortMode.js custom mode')
   assert.ok(!/\.sort\(\(a, b\) => \(a\.taskSort \|\| 0\) - \(b\.taskSort \|\| 0\)\)/.test(src), 'the old ascending comparator must be gone')
 })
 

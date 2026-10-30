@@ -23,28 +23,35 @@ if (!globalThis.window.location) globalThis.window.location = { hash: '' }
 
 /* ---------- [F1/F2] QuickAdd: partial-failure remainder + Esc clears the date chip ---------- */
 
-test('[F1] createLines leaves only the unsent remainder in the input on a mid-batch failure', () => {
+// d-wave 2026-10-14: the remainder no longer goes back into the single-line <input>
+// (value-sanitization folded the \n's into ONE space-joined junk task on retry) — it is
+// kept per-line in the _pendingLines queue and replayed through createLines.
+test('[F1] createLines keeps the unsent remainder per-line in _pendingLines on a mid-batch failure', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
   // a per-line success counter declared OUTSIDE the try (the catch reads it)
   assert.ok(/let done = 0[^\n]*\n\s*try \{[\s\S]{0,900}done\+\+[\s\S]{0,2000}\} catch \(err\) \{/.test(src),
     'done counter increments per dispatched line inside the try')
-  // the catch trims the input to lines.slice(done) so a retry re-creates nothing twice
+  // the catch stores the unsent remainder as an ARRAY for the retry path
   const iCatch = src.indexOf("console.error('[quick-add] multi-line paste failed:'")
   assert.ok(iCatch > -1, 'multi-line catch site found')
-  const body = src.slice(iCatch, iCatch + 700)
-  assert.ok(body.includes('lines.slice(done).join') && body.includes('this.text = rest'),
-    'catch keeps only the unsent remainder as the retry draft')
+  const body = src.slice(iCatch, iCatch + 900)
+  assert.ok(body.includes('lines.slice(done)') && body.includes('_pendingLines'),
+    'catch keeps the unsent remainder per-line in the retry queue (never re-folded into the input)')
 })
 
+// d-wave 2026-10-14: Esc also drops the pending multi-line retry queue; the pickedDate
+// reset is unchanged (the assertion window is widened — the queue-clearing comment pushed
+// it past the old fixed 400-char slice).
 test('[F2] onCancel (Esc) resets pickedDate so the next quick-add cannot inherit the stale chip', () => {
   const src = read('renderer/js/components/QuickAdd.vue')
   const i = src.indexOf('onCancel (e) {') // maint/d23: signature gained the event param for the IME guard
   assert.ok(i > -1, 'onCancel found')
-  const body = src.slice(i, i + 400)
+  const body = src.slice(i, i + 700)
   const iFail = body.indexOf('this.failed = false')
   const iPick = body.indexOf('this.pickedDate = null')
   assert.ok(iPick > iFail && iPick > -1, 'Esc clears the picked date chip')
   assert.ok(iPick < body.indexOf('blur'), 'chip reset happens in the cancel path itself')
+  assert.ok(body.includes('_pendingLines = null'), 'Esc also cancels the pending multi-line retry queue')
 })
 
 /* ---------- [F3] abandon is awaited at both giveUp sites ---------- */

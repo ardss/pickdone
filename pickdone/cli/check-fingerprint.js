@@ -22,7 +22,15 @@ const RULES = [
   [/\bindex\.25f4ae00\b|\bchunk-common\.18eac467\b|\bwidget\.fdb3c04f\b|\bchunk-vendors\.5cacfce0\b/i, '遗留构建产物文件名'],
   [/e1b2d6ce|c93bd561|022fdf96|0fa4a437/, '遗留音频 hash 文件名'],
   [/\bdata-v-[0-9a-f]{8}\b/, '遗留 Vue scoped hash'],
-  [/Todo\s?清单|Day\s?Todo|序事/, '遗留品牌名'],
+  // W20 fix (2026-10-30): the old `\s?` tolerated exactly ONE whitespace and matching was
+  // case-sensitive — `Day  Todo` (double space), `DAY TODO`, `Day-Todo` all escaped. Unify on
+  // a repeated separator class (\s covers newlines too) + /i, BUT pin \b word boundaries:
+  // without them /i matches camelCase identifiers (todayTodoList, switchToDaytodo — 13 real
+  // false hits the case-sensitive old form never saw). A standalone `Day Todo`/`DAY TODO`/
+  // `Day-Todo` brand mention matches; `todayTodoList` does not.
+  // (no trailing \b on the 清单 branch: JS \b is ASCII-word-based, a CJK char is a non-word
+  // char, so `清单` at end-of-string can never satisfy a trailing boundary — `Todo清单` must match)
+  [/\bTodo[\s_-]*清单|\bDay[\s_-]*Todo\b|序事/i, '遗留品牌名'],
   // 开发者本机盘符绝对路径（K:\tmp 等）会随 cli/** 进安装包——例示文案一律用 $env:TEMP / /tmp 相对形态
   // \\{1,2}：源码里的 JS 转义形态（"K:\\tmp"，字节为双反斜杠）与原始单反斜杠形态都要抓（复核轮实锤单杠正则漏报）
   [/["'`]([A-Za-z]):\\{1,2}(?:tmp|temp|Users)\\{1,2}[^"'`]*["'`]/i, '本机绝对路径'],

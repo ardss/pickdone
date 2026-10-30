@@ -65,7 +65,10 @@ export default {
     onGearKey: roleButtonActivate(function () { this.gear() }, { stop: true }),
     onRecompleteKey: roleButtonActivate(function () { this.recomplete() }, { stop: true }),
     toggle () { this.$emit('update:collapsed', !this.collapsed) },
-    gear () { this.$store.commit('ui/toggleSettings', true) },
+    /* [W8] the gear opens settings aimed at the tab holding the retention-range options
+       (expiredCompletedTodoRange/expiredUncompletedTodoRange live in the 'general' tab) —
+       plain toggleSettings left the modal on whatever tab the user last visited */
+    gear () { this.$store.commit('ui/openSettingsAt', 'general') },
     recomplete () { this.$emit('recomplete') }
   },
 
@@ -98,6 +101,9 @@ export default {
 .todo-list-item-group--collapsed .todo-list-item-group__arrow{transform:rotate(-90deg)}
 .todo-list-item-group--color2 .todo-list-item-group__title{color:var(--danger-strong)}
 .todo-list-item-group--color3 .todo-list-item-group__title{color:#4053d8}
+/* [F4] dark-mode override: #4053d8 is unreadable on the dark panel (same pattern as the
+   TodoBoxView .btn--dark dark branch); use the theme-mutating muted-text token */
+html[data-theme="dark"] .todo-list-item-group--color3 .todo-list-item-group__title{color:var(--text-2)}
 /* 品牌蓝加深 6.09:1 */
 .todo-list-item-group-list{display:flex;flex-direction:column;min-height:100%;box-sizing:border-box}
 /* 分组列表与今日待办同构:普通文档流滚动,禁用sticky(整组sticky会吞掉高于视口的组,组头sticky则与今日待办行为不一致) */

@@ -31,6 +31,15 @@ const dayjs = dayjsMod.default
 globalThis.dayjs = dayjs
 globalThis.window.dayjs = dayjs
 
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
+const { matchTodo } = await import('../../../renderer/js/utils/search.js')
+const rbkMod = await import('../../../renderer/js/utils/roleButtonKey.js')
+const { parseNaturalDate } = await import('../../../renderer/js/utils/nlDate.js')
+const { resolveQuickAddDate } = await import('../../../renderer/js/utils/quickAddDate.js')
+const quickAddPaste = await import('../../../renderer/js/utils/quickAddPaste.js')
+const { $elOf } = await import('../../../renderer/js/utils/el.js')
+
 /** Evaluate a .vue <script> block with its imports injected (same harness family as tomato-abandon-modal-ime) */
 function loadSFC (rel, inject = {}) {
   const src = read(rel)
@@ -88,8 +97,6 @@ test('fix1 static anchors: data() declares `now`, the refresh loop ticks it', ()
 
 /* ================= Fix 7: SearchView undated tasks hidden by a date range ================= */
 
-const { matchTodo } = await import('../../../renderer/js/utils/search.js')
-const rbkMod = await import('../../../renderer/js/utils/roleButtonKey.js')
 const SearchComp = loadSFC('renderer/js/views/SearchView.vue', { matchTodo, dayjs, TodoItem: {}, EmptyState: {}, roleButtonActivate: rbkMod.roleButtonActivate })
 
 function searchCtx (tasks, range) {
@@ -130,16 +137,13 @@ test('fix7 static anchors: hint line renders the count with a clear-range action
 
 /* ================= Fix 8: QuickAdd quiet error path ================= */
 
-const { parseNaturalDate } = await import('../../../renderer/js/utils/nlDate.js')
-const { resolveQuickAddDate } = await import('../../../renderer/js/utils/quickAddDate.js')
-const quickAddPaste = await import('../../../renderer/js/utils/quickAddPaste.js')
 const QuickAddComp = loadSFC('renderer/js/components/QuickAdd.vue', {
   parseNaturalDate, dayjs, FMT: { date: 'YYYY-MM-DD', cnDate: 'YYYY-MM-DD' }, resolveQuickAddDate,
   splitPasteLines: quickAddPaste.splitPasteLines, ensureTagSuffix: quickAddPaste.ensureTagSuffix,
   // [A9] the date-chip key handler now routes through the shared factory (this harness strips imports)
-  roleButtonActivate: (await import('../../../renderer/js/utils/roleButtonKey.js')).roleButtonActivate,
+  roleButtonActivate: rbkMod.roleButtonActivate,
   // onEnter's calendar-ref resolution also needs $elOf (imports are stripped by this harness)
-  $elOf: (await import('../../../renderer/js/utils/el.js')).$elOf
+  $elOf
 })
 
 function quickAddCtx (quiet, dispatch) {
@@ -156,7 +160,12 @@ function quickAddCtx (quiet, dispatch) {
         success () { message.success++ }
       },
       $emit () {},
-      $announce: null
+      $announce: null,
+      // [2026-10-23 D8 triage] b85b5ca8 introduced the shake-replay failure path: onEnter now
+      // calls this.markFailed() instead of setting this.failed directly. The ctx binds the REAL
+      // component method with a sync $nextTick so the replay logic itself stays under test.
+      $nextTick: fn => fn(),
+      markFailed: QuickAddComp.methods.markFailed
     },
     message
   }
@@ -182,21 +191,24 @@ test('fix8 static anchors: failed class binding, inline alert div, cleared on in
   assert.match(src, /'qa-failed': failed/)
   assert.match(src, /@input="failed = false"/)
   assert.match(src, /class="qa-error" role="alert"/)
-  assert.match(src, /if \(this\.quiet\) this\.failed = true/, 'error path mirrors the success path quiet contract')
+  assert.match(src, /if \(this\.quiet\) this\.markFailed\(\)/, 'error path mirrors the success path quiet contract (shake replay via markFailed, b85b5ca8)')
 })
 
 /* ================= Fix 9: TaskAccountModal fmtDate keeps the year for past years ================= */
 
 const AccountComp = loadSFC('renderer/js/components/TaskAccountModal.vue', {
-  FMT: { date: 'YYYY-MM-DD' }, dayjs, dialogA11y: {}, FOCUS_MAX_MINUTES: 600
+  FMT: { date: 'YYYY-MM-DD', cnDate: 'MMM D' }, dayjs, dialogA11y: {}, FOCUS_MAX_MINUTES: 600
 })
 
-test('fix9 fmtDate: previous-year ledger rows keep YYYY-MM-DD; current-year rows stay MM-DD', () => {
+test('fix9 fmtDate: previous-year ledger rows keep YYYY-MM-DD; current-year rows use the locale FMT.cnDate abbreviation', () => {
   const fmtDate = AccountComp.methods.fmtDate
   const past = fmtDate.call(null, { endTime: +dayjs('2024-05-03 12:00') })
   assert.equal(past, '2024-05-03', 'the year must survive on previous-year rows')
   const cur = dayjs().month(5).date(3).hour(12)
-  assert.equal(fmtDate.call(null, { endTime: +cur }), cur.format('MM-DD'), 'current-year abbreviation unchanged')
+  // [2026-10-23 D8 triage] the current-year branch is locale-driven now (FMT contract comment in
+  // TaskAccountModal.vue): it formats via FMT.cnDate instead of a hardcoded MM-DD, matching
+  // DayDeck/EditPanel fmtMd. The harness pins cnDate:'MMM D' (the en-US shape) above.
+  assert.equal(fmtDate.call(null, { endTime: +cur }), cur.format('MMM D'), 'current-year abbreviation via the locale FMT.cnDate')
 })
 
 /* ================= Fix 10: openAdd never books a future "completed" focus ================= */
@@ -218,11 +230,14 @@ test('fix10 static anchor: openAdd builds its draft through manualDraft (no Math
 
 /* ================= Fix 13: calendar day cells carry an accessible name ================= */
 
-const StripComp = loadSFC('renderer/js/components/DayDateStrip.vue', { dayjs, DAY_MS: 86400000, roleButtonActivate: rbkMod.roleButtonActivate })
+const coreFmt = (await import('../../../renderer/js/utils/core.js')).FMT
+const StripComp = loadSFC('renderer/js/components/DayDateStrip.vue', { dayjs, FMT: coreFmt, DAY_MS: 86400000, roleButtonActivate: rbkMod.roleButtonActivate })
 
-test('fix13 calCellLabel: full YYYY-MM-DD accessible name with month context', () => {
+test('fix13 calCellLabel (re-anchored W8 4c14dede): localized accessible name via FMT', () => {
   const label = StripComp.methods.calCellLabel.call({ $t: k => k }, { key: +dayjs('2026-03-05'), hasTasks: false })
-  assert.equal(label, '2026-03-05')
+  // W8 replaced the raw ISO 'YYYY-MM-DD' with the localized FMT format — the accessible name
+  // keeps full month+day context, it just reads naturally per locale now
+  assert.ok(/3\s*月\s*5\s*日|Mar 5|03\/05/.test(label), 'localized month+day name, got: ' + label)
 })
 
 test('fix13 static anchor: ds-cal-cell buttons carry title + aria-label like the nav buttons', () => {
@@ -282,6 +297,8 @@ test('fix16 static anchors: template routes dragend through endDrag; dropOn keep
   const src = read('renderer/js/components/MatrixGrid.vue')
   assert.match(src, /@dragend="endDrag"/)
   assert.doesNotMatch(src, /@dragend="dragId=null"/, 'the asymmetric inline reset is gone')
-  const dropOn = src.match(/dropOn \(q\) \{[\s\S]*?\n {2}\}/)
+  // [2026-10-23 D8 triage] dropOn gained the `e` param in the 2026-10-09 cross-view-drop fix;
+  // the anchor regex tracks the signature, the pinned contract (drop clears overKey) is unchanged.
+  const dropOn = src.match(/dropOn \(q, e\) \{[\s\S]*?\n {2}\}/)
   assert.ok(dropOn && /this\.overKey = null/.test(dropOn[0]), 'drop path still clears overKey')
 })

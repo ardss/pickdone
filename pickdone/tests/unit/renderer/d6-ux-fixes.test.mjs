@@ -19,11 +19,15 @@ const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
 if (!globalThis.window.location) globalThis.window.location = { hash: '' }
 
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
+
 /* ---------- [F1] store-level: ui module against a fake todo module ---------- */
 const { default: Vue } = await import('vue')
 globalThis.window.Vue = Vue
 const Vuex = (await import('vuex')).default
 const ui = (await import('../../../renderer/js/store/ui.js')).default
+const search = await import('../../../renderer/js/utils/search.js')
 
 function makeStore ({ todoList = [], recycleList = [] } = {}) {
   const deletes = []
@@ -128,8 +132,8 @@ test('[F6r] inline-orphan undo routes through todo/restoreFromRecycle (chips sur
   assert.ok(!src.includes("patch: { delete: false, deletedAt: 0, status: 'update' }"), 'raw delete:false patch is gone')
 })
 
-/* ---------- [F13] multi-term highlight: per-term, anchored on source ---------- */
-const search = await import('../../../renderer/js/utils/search.js')
+/* ---------- [F13] multi-term highlight: per-term, anchored on source (module imported above
+ * the first test — see the ORDERING CONSTRAINT note there) ---------- */
 
 test('[F13] highlightHTML wraps each whitespace-separated term, not the raw query', () => {
   const html = search.highlightHTML('buy milk and bread', 'milk bread')
@@ -153,7 +157,7 @@ test('[F2/F3] Ctrl+N and addEvent route through focusQuickAdd with an unmounted-
   assert.ok(/if \(document\.querySelector\('\.qa-wrap'\)\)/.test(src), 'mounted-bar probe present')
   assert.ok(src.includes("router.push({ name: 'todo-list-today' }).then("), 'fallback routes to Today when the bar is unmounted')
   assert.ok(src.includes('focusQuickAdd()'), 'keydown handler delegates to the helper')
-  assert.ok(src.includes("case 'addEvent': focusQuickAdd(); break"), 'addEvent shortcut is dispatched (was a dead binding)')
+  assert.ok(src.includes("case 'addEvent': if (!modalOpen()) focusQuickAdd(); break"), 'addEvent shortcut is dispatched (was a dead binding); F3: modal-guarded')
 })
 
 test('[F5] pin/unpin announces state and refuses silently no-op when sort is not custom', () => {

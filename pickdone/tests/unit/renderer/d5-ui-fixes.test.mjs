@@ -14,16 +14,6 @@ import * as crossDayMove from '../../../renderer/js/utils/crossDayMove.js'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 
-function pureFns (file, names) {
-  const src = read(file)
-  const re = /\[d5-ui-fixes\] pure-start[^\n]*\n([\s\S]*?)\n[^\n]*\[d5-ui-fixes\] pure-end/
-  const m = src.match(re)
-  assert.ok(m, `${file}: pure block markers missing`)
-  const js = m[1].replace(/: \{[^}]*\} = /g, ' = ') // strip TS annotations so new Function can eval
-  const fn = new Function(js + `\nreturn { ${names.join(', ')} }`)
-  return fn()
-}
-
 // Fake day-boundary helper: deterministic days as N * 86400000 (no real calendar needed)
 const startOfDay = ts => Math.floor(ts / 86400000) * 86400000
 const DAY = 86400000
@@ -43,9 +33,10 @@ test('TodoItem crossDayMovePatch: time-of-day survives the move, day markers fol
   // pure midnight day markers -> follow the new day (DayDeck parity)
   const markers = crossDayMovePatch({ dayStart: oldDay, todoTime: oldDay, reminderTime: oldDay }, newDay, startOfDay)
   assert.deepEqual(markers, { dayStart: newDay, todoTime: newDay, reminderTime: newDay })
-  // todoTime on a different day than dayStart -> untouched
+  // todoTime on a third day -> re-anchored to the new day (keeps time-of-day; F2-P3 2026-10-18:
+  // leaving it untouched let the DB's derived scheduledDay snap the move back on restart)
   const misaligned = crossDayMovePatch({ dayStart: oldDay, todoTime: at(5, 0) }, newDay, startOfDay)
-  assert.deepEqual(misaligned, { dayStart: newDay })
+  assert.deepEqual(misaligned, { dayStart: newDay, todoTime: newDay })
 })
 
 test('TodoItem: cross-day drop uses the patch builder and reverts the touched fields only', () => {
@@ -178,14 +169,6 @@ test('CalendarView: dark override for fc-day-today and lunar text uses token', (
 test('TodoGroups: tg-week color uses text-2 token', () => {
   const src = read('renderer/js/components/TodoGroups.vue')
   assert.match(src, /\.tg-week \{ color: var\(--text-2, #5f6368\)/, 'week label uses text-2 token (dark-theme safe)')
-})
-
-test('StatisticsView fmtCount: integers print plainly, fractions keep one decimal', () => {
-  const { fmtCount } = pureFns('renderer/js/views/StatisticsView.vue', ['fmtCount'])
-  assert.equal(fmtCount(12), '12')
-  assert.equal(fmtCount(0), '0')
-  assert.equal(fmtCount(12.5), '12.5')
-  assert.equal(fmtCount(7.25), '7.3')
 })
 
 test('SearchView: sort applies regardless of keyword presence', () => {

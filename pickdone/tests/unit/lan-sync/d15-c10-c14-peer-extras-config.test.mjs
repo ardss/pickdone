@@ -76,7 +76,12 @@ test('C14/D19: sleepBackoff without Atomics.wait still elapses a REAL (capped) d
     // zero-wait), the rest of the slice is given up and the read proceeds to the
     // non-destructive transient path sooner (no quarantine, writes gated off).
     assert.ok(elapsed >= 30, 'still elapses a real delay (never zero-wait); got ' + elapsed + 'ms')
-    assert.ok(elapsed < 80, 'capped below the requested slice; got ' + elapsed + 'ms')
+    // [load-budget 2026-10-25] dropped the tight `< 80ms` upper bound: the fallback is a
+    // SYNCHRONOUS spin — OS preemption of this thread inflates wall-clock without any
+    // product change (run-all.mjs even named this test a burst casualty once). The
+    // contract is "capped well below the slice" — <300ms still proves the ~50ms cap
+    // fires early while tolerating preemption.
+    assert.ok(elapsed < 300, 'capped well below the requested slice; got ' + elapsed + 'ms')
   } finally { Atomics.wait = orig }
 })
 

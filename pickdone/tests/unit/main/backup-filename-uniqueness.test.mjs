@@ -57,9 +57,11 @@ test('D17/F21: a -dup name never shadows a real timestamped snapshot in the GFS 
   const stamp = stampOf(base)
   const dup = `auto-${stamp}-dup1.json`
   const later = `auto-${stampOf(base + 5000)}.json`
-  // ts=0 for the dup: it sorts oldest and is pruned first — it can never be mistaken for the
-  // newest twin in dedup (newestSameTag) nor shielded in retention.
-  assert.equal(fixUtil.backupNameTs(dup), 0)
+  // W10 update: backupNameTs now parses the dup's BASE stamp (autoBackup.nameToTs parity); the
+  // dup→0 ranking is autoBackup.rankTs's pruning-layer semantic and stays there. The dup still
+  // sorts below a later snapshot — it can never be mistaken for the newest twin in dedup
+  // (newestSameTag) nor shielded in retention.
+  assert.equal(fixUtil.backupNameTs(dup), fixUtil.backupNameTs(`auto-${stamp}.json`), 'dup parses to its base stamp')
   assert.equal(fixUtil.sortBackupNamesNewestFirst([dup, later])[0], later)
 })
 

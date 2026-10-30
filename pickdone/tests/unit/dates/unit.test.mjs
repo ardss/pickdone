@@ -4,7 +4,7 @@
  * Run: npm test (node --test, zero third-party test dependencies)
  */
 import '../../setup.mjs'
-import { test } from 'node:test'
+import { test } from '../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 
 import { parseNaturalDate } from '../../../renderer/js/utils/nlDate.js'
@@ -97,9 +97,13 @@ test('nlDate: regression - noon N means N+12 hours (not forced to 12:00)', () =>
 })
 
 test('repeat: regression - yearly repeats never silently carry nonexistent dates like Feb 30', () => {
+  // [f1 realign 2026-10-19] the yearly branch now CLAMPS to the month's last day (same convention
+  // as the month branch), instead of skipping the whole year: a Feb-29/30 rule lands on Feb 28 in
+  // non-leap/short Februaries. The key invariant kept: dayjs's silent carry into March must not happen.
   const base = +dj(new Date(2026, 1, 10, 9, 0))
   const out = expandRepeatDates(base, { repeatType: '年', repeatYearType: '公历', repeatYearMonth: 2, repeatYearMonthDay: 30, repeatYearCount: 1, repeatInterval: 1 }, [])
-  assert.equal(out.length, 0, 'Feb 30 does not exist -> no carried instance generated')
+  assert.equal(out.length, 1, 'Feb 30 clamps to Feb 28 (no carry, no vanished year)')
+  assert.equal(out[0].format('YYYY-MM-DD'), '2026-02-28')
   const ok = expandRepeatDates(base, { repeatType: '年', repeatYearType: '公历', repeatYearMonth: 2, repeatYearMonthDay: 28, repeatYearCount: 1, repeatInterval: 1 }, [])
   assert.equal(ok.length, 1)
   assert.equal(ok[0].format('YYYY-MM-DD'), '2026-02-28') // nearest Feb 28 after base 2026-02-10

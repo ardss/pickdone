@@ -25,8 +25,16 @@ import { readFileSync } from 'node:fs'
 
 const LS = globalThis.localStorage
 
-/* ---------------- 1. undo merge-window ---------------- */
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
 const undoMod = await import('../../../renderer/js/store/helpers/undo.js')
+const tomato = (await import('../../../renderer/js/store/tomato.js')).default
+const queueMod = await import('../../../renderer/js/store/helpers/tomatoPendingQueue.js')
+const settingsMod = (await import('../../../renderer/js/store/settings.js')).default
+const dbMirror = await import('../../../renderer/js/utils/dbMirror.js')
+const habits = await import('../../../renderer/js/store/habits.js')
+
+/* ---------------- 1. undo merge-window ---------------- */
 const { historyPush, historyBreakMerge, historyUndoPop } = undoMod
 const snapOf = rows => JSON.stringify({ todoList: rows, recycleList: [] })
 const freshHistState = () => ({ undoStack: [], redoStack: [], _histBytes: 0, _histEpoch: 0, _histLastPushAt: 0 })
@@ -54,8 +62,6 @@ test('R1: historyUndoPop breaks the 400ms merge window (post-undo edit starts a 
 })
 
 /* ---------------- 2. tomato giveUp / completeFocus ---------------- */
-const tomato = (await import('../../../renderer/js/store/tomato.js')).default
-const queueMod = await import('../../../renderer/js/store/helpers/tomatoPendingQueue.js')
 const CLAIM_KEY = 'tomatoLastPhaseDone'
 const TOMATO_LS = 'tomatoState'
 const tomatoCtx = state => ({
@@ -148,8 +154,6 @@ test('R3b: hydrate stamps legacy append entries that lack updatedAt (restart rep
 })
 
 /* ---------------- 4. settings write-back stamp ---------------- */
-const settingsMod = (await import('../../../renderer/js/store/settings.js')).default
-const dbMirror = await import('../../../renderer/js/utils/dbMirror.js')
 
 test('R4: settings.initFromDb write-back stamps _savedAt with the LS content age (no stale gate)', async () => {
   const KEY = 'db.settingsState'
@@ -184,7 +188,6 @@ test('R4: settings.initFromDb write-back stamps _savedAt with the LS content age
 })
 
 /* ---------------- 5. habits relay / replaceAll ---------------- */
-const habits = await import('../../../renderer/js/store/habits.js')
 const SYNC_KEY = 'habitsSyncPing'
 const HABITS_LS = 'habitsState'
 

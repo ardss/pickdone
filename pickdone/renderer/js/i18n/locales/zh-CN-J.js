@@ -134,6 +134,7 @@ export default {
   'statsJ.EditPanel.moveSubtaskUp': '上移子任务',
   'statsJ.EditPanel.moveSubtaskDown': '下移子任务',
   'statsJ.EditPanel.addSubtask': '添加子任务',
+  'statsJ.EditPanel.dblclickRenameTip': '双击可重命名',
   'statsJ.EditPanel.effortHint': '为任务标注难度等级，再点一次已选项可取消',
   'statsJ.EditPanel.urgencyHint': '高/中/低用于标记紧急程度',
   'statsJ.EditPanel.clearDueDate': '清除截止日期',
@@ -157,4 +158,20 @@ export default {
   'statsJ.EditPanel.priorityLabel': '优先级',
   'statsJ.EditPanel.openBtn': '打开',
   'statsJ.EditPanel.depsTruncated': '候选较多，仅显示前 {shown} 条，共 {total} 条',
+
+  // win-bind（T8 拖出窗口绑定）：任务↔窗口绑定的反馈与入口文案
+  'statsJ.winbind.bound': '已绑定窗口「{name}」',
+  'statsJ.winbind.boundFailed': '绑定窗口失败',
+  'statsJ.winbind.activated': '已找回绑定窗口',
+  'statsJ.winbind.notFound': '目标窗口已关闭',
+  'statsJ.winbind.ambiguous': '同名窗口有 {n} 个，无法确定目标',
+  'statsJ.winbind.activateFailed': '激活失败',
+  'statsJ.winbind.flashed': '未能置前，已闪烁任务栏提醒',
+  'statsJ.winbind.unbound': '已解除窗口绑定',
+  'statsJ.winbind.identifyFailed': '窗口识别失败，未绑定',
+  'statsJ.winbind.adapterUnavailable': '系统窗口探测不可用',
+  'statsJ.winbind.activateMenu': '找回窗口（{name}）',
+  'statsJ.winbind.unbindMenu': '解除窗口绑定',
+  'statsJ.winbind.badgeTip': '已绑定窗口：{name}，点击找回',
+  'statsJ.winbind.unbindTip': '解除窗口绑定',
 }

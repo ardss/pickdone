@@ -54,6 +54,7 @@ export default {
       "shortcutSavedMsg": "快捷键已保存",
       "backupLocationUpdatedMsg": "备份位置已更新",
       "autoBackupWrittenMsg": "已写入自动备份",
+      "backupDegradedToast": "自动备份写入失败：{err}。数据不受影响，但请注意近期没有新的备份点；详情见 设置→数据。",
       "noDataYet": "暂无数据",
       "yesLabel": "是",
       "exportedPrefix": "已导出：",
@@ -96,6 +97,7 @@ export default {
       "closeToTrayHint": "开启：点 × 最小化到托盘（提醒照常）；关闭：点 × 直接退出应用",
       "hardwareAccelLabel": "硬件加速（重启生效）：",
       "hwAccelRestartTip": "生效需重启应用",
+      "hwAccelRestartToast": "硬件加速已切换，重启应用后生效",
       "parentChecksSubtasksLabel": "完成父任务时连带勾选子任务：",
       "languageLabel": "界面语言：",
       "accountSection": "账户",
@@ -188,6 +190,16 @@ export default {
       "recentCopiesLabel": "近期保留份数：",
       "backupLocationLabel": "备份存储位置：",
       "changeBtn": "更改…",
+      "dataLocationSection": "数据存储",
+      "dataLocationCurrent": "当前数据目录：",
+      "dataLocationRedirected": "已通过引导文件重定向",
+      "dataLocationChangeBtn": "更改存储位置…",
+      "dataLocationDoneToast": "迁移完成，即将重启…",
+      "dataLocationFailPrefix": "迁移失败：",
+      "dataLocProgressTitle": "正在迁移数据，请勿关闭应用",
+      "dataLocProgressCopy": "正在拷贝数据文件…",
+      "dataLocProgressVerify": "正在校验拷贝结果…",
+      "dataLocProgressBoot": "正在切换启动位置…",
       "resetDefaultBtn": "恢复默认",
       "backUpNowLabel": "立即备份：",
       "autoBackUpNowBtn": "立即自动备份",
@@ -440,9 +452,20 @@ export default {
       "freqIntervalClamped": "间隔天数需在 {min} 到 {max} 之间",
       "renameTip": "点击重命名",
       "intervalAria": "间隔天数",
-      "renameEmpty": "习惯名不能为空"
+      "renameEmpty": "习惯名不能为空",
+      "notDueToday": "今日不打卡"
 
+    },
+
+    /* [w7 ux fixes 2026-10-23] cross-view UX batch */
+    "w7": {
+      "csvExportedSaved": "数据表已导出，CSV 保存在浏览器默认下载位置",
+      "memorialFutureDate": "纪念日不能选择未来的日期",
+      "accountTimeOverlap": "该时段与同任务的其他记录重叠，请调整开始时间或时长",
+      "accountDiscardConfirm": "台账有未保存的修改，确定放弃吗？",
+      "scClearHint": "录制时按 Delete/Backspace 可清除该快捷键"
     }
+
 
   }
 }

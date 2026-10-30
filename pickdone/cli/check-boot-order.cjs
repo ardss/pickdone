@@ -78,14 +78,17 @@ function collectUses (node, parent, skipIds, out) {
 
 function declaratorIds (decl) {
   const ids = []
+  // W18 fix: bind ONLY pattern bindings. The old generic walker recursed into every
+  // child key of a destructuring Property, so `{ a: b }` also registered the KEY 'a'
+  // as a phantom binding (and a require-below-first-use false red for a name that is
+  // not bound at all). Same walkNames shape as check-esm-graph.cjs:103.
   const walk = n => {
     if (!n || typeof n.type !== 'string') return
     if (n.type === 'Identifier') { ids.push(n); return }
-    for (const key of Object.keys(n)) {
-      const child = n[key]
-      if (Array.isArray(child)) child.forEach(walk)
-      else if (child && typeof child.type === 'string') walk(child)
-    }
+    if (n.type === 'ObjectPattern') { for (const p of n.properties) walk(p.value || p.argument); return }
+    if (n.type === 'ArrayPattern') { for (const el of n.elements) walk(el); return }
+    if (n.type === 'AssignmentPattern') { walk(n.left); return }
+    if (n.type === 'RestElement') { walk(n.argument); return }
   }
   for (const d of decl.declarations) walk(d.id)
   return ids
@@ -174,14 +177,46 @@ function main () {
   let files
   if (args.includes('--staged')) {
     const { execFileSync } = require('child_process')
-    const out = execFileSync('git', ['diff', '--cached', '--name-only', '--diff-filter=ACM'], { cwd: ROOT, encoding: 'utf8' })
+    // W18 fix: git runs hooks with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE injected; with GIT_DIR
+    // set, `rev-parse --show-toplevel` resolves against the hook's cwd instead of the real
+    // worktree root, so every joined path missed. Strip the injected git env for BOTH calls
+    // (mirrors check-file-size.cjs:92-97).
+    const gitEnv = () => {
+      const e = { ...process.env }
+      delete e.GIT_DIR; delete e.GIT_WORK_TREE; delete e.GIT_INDEX_FILE
+      return e
+    }
+    const gitOpts = { cwd: ROOT, encoding: 'utf8', env: gitEnv() }
+    // W16 fix(#2): ACMR — git mv 只产生 R 条目,ACM 漏掉改名文件(与 lint-staged.mjs 对齐)
+    // W17 fix(2026-10-28): quotePath=false — 非 ASCII 文件名默认被打成带引号八进制串,被扩展名
+    // 正则静默剔除 → 熔断守卫失效、门禁扫 0 假绿(pre-commit 的 `-c` 单次性不传播到本子进程)。
+    const out = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], gitOpts)
+    // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
+    // inside the repo root): the raw toplevel-relative paths never matched the src/main regex
+    // and --staged scanned ZERO files for its whole life while exiting green. Resolve every
+    // staged name against the toplevel, then re-express it relative to ROOT before matching
+    // (mirrors the 2026-10-10 check-file-size.cjs toplevel fix).
+    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], gitOpts).trim()
+    const names = out.split('\n').filter(Boolean)
+    const stagedMain = names
+      .filter(f => /\.(?:js|cjs|mjs)$/.test(f))
+      .map(f => path.relative(ROOT, path.join(top, f)))
+      .filter(rel => !rel.startsWith('..') && /^src[\\/]main[\\/]/.test(rel))
     // diff-filter=ACM only yields added/copied/modified paths, so every listed file MUST exist on
     // disk; silently dropping a missing one would shrink the scan surface to a fake-green.
-    const stagedMain = out.split('\n').filter(Boolean).filter(f => /^src[\\/]main[\\/]/.test(f))
     const missing = stagedMain.filter(f => !fs.existsSync(path.join(ROOT, f)))
     if (missing.length) {
       console.error('✗ boot-order --staged: staged src/main file(s) not found on disk — scan surface would silently shrink, refusing to fake-green:\n  ' + missing.join('\n  '))
       process.exit(1)
+    }
+    if (!stagedMain.length) {
+      // 假绿防线: toplevel 里确实 staged 了 src/main 的 js,但映射到 ROOT 后一个都没匹配上
+      // (路径归一化/前缀剥离失效) — 扫描面塌缩,拒绝静默放行 (与 check-file-size.cjs 同款)。
+      const anyMainStaged = names.some(f => /\.(?:js|cjs|mjs)$/.test(f) && /[\\/]src[\\/]main[\\/]/.test(f))
+      if (anyMainStaged) {
+        console.error('✗ boot-order --staged: 存在 staged 的 src/main js 文件但扫描清单为空（路径归一化失效），拒绝假绿')
+        process.exit(1)
+      }
     }
     files = stagedMain.map(f => path.join(ROOT, f))
   } else {

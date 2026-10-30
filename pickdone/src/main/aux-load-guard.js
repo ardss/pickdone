@@ -10,6 +10,15 @@
  *      reset — this module deliberately does not know about it).
  * Renderer crashes (render-process-gone) stay per-window: their policies differ (float reopens, quick-add
  * does not) and they predate this module.
+ *
+ * W16 (2026-10-28): did-finish-load / ready-to-show proved to be a FAKE health signal — on real
+ * hardware the float repeatedly ended up "window alive, load succeeded, card invisible". The guard
+ * now additionally WATCHES a renderer render-health handshake: after every successful main-frame
+ * load it arms a one-shot timer; when the caller's `isHandshakeHealthy` still says "no handshake"
+ * at fire time, `onHandshakeTimeout` runs (the float routes that into its bounded rebuild path).
+ * A handshake that does arrive within the window proves the page's Vue component actually mounted
+ * its card DOM — the only health signal that distinguishes "page not initialized / component render
+ * failure / blank paint" from a truly healthy float (see tomato-float.diagnose() for the layered probe).
  */
 const log = require('electron-log')
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
@@ -25,7 +34,12 @@ require('./log-isolation') // test isolation: redirect electron-log file transpo
  * @param {number}   [opts.backoffMs=400]       linear backoff base (delay = backoffMs × attempt)
  * @param {Function} [opts.onRetry]             called before each reload (e.g. float stops its hit poll)
  * @param {Function} [opts.onExhausted]         called before destroy (last-chance cleanup)
+ * @param {number}   [opts.handshakeTimeoutMs=10000] W16: how long to wait for the render handshake after did-finish-load
+ * @param {Function} [opts.isHandshakeHealthy]  W16: (armedAt:number) => boolean — did a renderer handshake arrive since this load armed?
+ * @param {Function} [opts.onHandshakeTimeout]  W16: called when the handshake is missing at timer fire (bounded rebuild belongs to the caller)
  */
+const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10000
+
 function attachLoadGuard (win, opts) {
   const { url, routeMark } = opts
   const tag = opts.tag || 'AuxWindow'
@@ -39,11 +53,36 @@ function attachLoadGuard (win, opts) {
   // on 'closed' and on 'did-finish-load'.
   let retryTimer = null
   const clearRetryTimer = () => { if (retryTimer) { clearTimeout(retryTimer); retryTimer = null } }
-  win.on('closed', clearRetryTimer)
-  win.webContents.on('did-finish-load', () => { clearRetryTimer(); retries = 0 })
+  // W16: the render-handshake watch timer — same lifecycle rule as the retry timer above (a timer
+  // armed by a window must die with that window, not fire against a destroyed one).
+  let handshakeTimer = null
+  const clearHandshakeTimer = () => { if (handshakeTimer) { clearTimeout(handshakeTimer); handshakeTimer = null } }
+  /** W16: after each successful main-frame load, watch for the renderer's "card DOM mounted" handshake. */
+  const armHandshakeWatch = () => {
+    if (typeof opts.onHandshakeTimeout !== 'function') return
+    clearHandshakeTimer()
+    const armedAt = Date.now()
+    handshakeTimer = setTimeout(() => {
+      handshakeTimer = null
+      try {
+        if (!win || win.isDestroyed()) return
+        const healthy = typeof opts.isHandshakeHealthy === 'function' ? !!opts.isHandshakeHealthy(armedAt) : true
+        if (healthy) return
+        log.warn(`[${tag}] render handshake missing within ${opts.handshakeTimeoutMs || DEFAULT_HANDSHAKE_TIMEOUT_MS}ms of did-finish-load — treating load as unhealthy`)
+        opts.onHandshakeTimeout()
+      } catch (err) { try { log.warn(`[${tag}] handshake check failed`, err) } catch { /* logging is best-effort */ } }
+    }, opts.handshakeTimeoutMs || DEFAULT_HANDSHAKE_TIMEOUT_MS)
+  }
+  win.on('closed', () => { clearRetryTimer(); clearHandshakeTimer() })
+  win.webContents.on('did-finish-load', () => { clearRetryTimer(); retries = 0; armHandshakeWatch() })
   win.webContents.on('did-fail-load', (e, code, desc, failUrl, isMain) => {
     if (!isMain) return // subframe/redirect noise never counts
     if (!String(failUrl).includes(routeMark)) return
+    // P3 (2026-10-30): a main-frame failure must also kill the W16 handshake watch armed by a
+    // previous did-finish-load — otherwise the retry chain (reload up to maxRetries) and the
+    // handshake-timeout path can run CONCURRENTLY: the stale watch fires mid-backoff, reads
+    // "no handshake" (the page is down, of course) and triggers a rebuild on top of the retry.
+    clearHandshakeTimer()
     if (retries < maxRetries) {
       retries++
       if (opts.onRetry) { try { opts.onRetry() } catch (err) { /* cleanup must not break the retry chain */ } }

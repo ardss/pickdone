@@ -87,6 +87,16 @@ export function extractTags (...texts) {
   return [...set]
 }
 
+/** [J4 2026-10-22] Display-title dedup: the row already renders #tag chips from extractTags, so
+ *  the title repeating the same tokens shows every tag twice on one row. Strip with the SAME
+ *  TAG_RE contract as extractTags (identical match set — a token stripped here is exactly a chip
+ *  shown there), collapse the leftover whitespace, and return '' when nothing survives so the
+ *  caller can fall back to the raw content (an only-tag title must not blank the row). */
+export function stripTagTokens (text) {
+  if (!text) return ''
+  return String(text).replace(TAG_RE, ' ').replace(/\s+/g, ' ').trim()
+}
+
 /** Wave-5 dedup: tag-count aggregation shared by SideNav / SnTagPanel / SnManageTagsModal via
  *  getters['todo/tagCounts'] — counts #tags across the todo list, backfills empty "New Tag"
  *  placeholder names (count 0), sorted count-desc, ties stable by first sight (Map insertion

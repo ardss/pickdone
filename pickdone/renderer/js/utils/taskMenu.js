@@ -15,7 +15,7 @@ import { toggleCompleteWithUndo } from './completeAction.js'
  * @param {Object} [caps] capability switches: { edit, complete, move, tomato, copy, del }, all on by default
  */
 export function buildTaskMenu (vm, t, caps = {}, extra = []) {
-  const c = { edit: true, complete: true, move: true, tomato: true, copy: true, del: true, recycle: false, ...caps }
+  const c = { edit: true, complete: true, move: true, tomato: true, copy: true, del: true, recycle: false, winbind: false, ...caps }
   // recycle view passes rows with t.delete=true: skip the soft-delete guard; menu items come entirely from extra (restore/purge)
   if (!t || (t.delete && !c.recycle)) return []
   const raw = () => vm.$store.state.todo.todoList.find(x => x.taskId === t.taskId) || t
@@ -30,7 +30,9 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       fn: () => toggleCompleteWithUndo({ store: vm.$store, message: vm.$message, todo: raw(), announce: m => vm.$announce && vm.$announce(m) })
     })
   }
-  if (c.move) {
+  // [c-wave 20261013] 已完成任务不再提供"移到今天/推迟到明天":与番茄项的 !t.complete 守卫、
+  // TodoItem 行内 moveUp/moveDown 的 !complete 守卫同型——对完成态行移动日期语义上无意义
+  if (c.move && !t.complete) {
     // Same semantics as TodoItem.moveDay: the target day lands on todoTime (dayStart derived by updateTodoFields);
     // [maint-0925 A1] the patch itself comes from crossDayMovePatch — the same single source as the
     // drag path — so a 14:30 schedule keeps its 14:30 and reminderTime/reminderExtra follow the new
@@ -39,7 +41,12 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
     // menu click = explicit operation, must carry the 5s undo toast (same layer as row-inline moveDay; drag stays silent by design)
     const move = (offset) => {
       const cur = raw()
-      const base = cur.todoTime ? dayjs(cur.todoTime) : dayjs().startOf('day')
+      // [w18] base prefers the task's own dayStart (same fix as TodoItem.moveDay): a PURE-DATE task
+      // (dayStart in the future, no todoTime) used to be Math.max-pulled back to tomorrow on
+      // "postpone", because the base defaulted to bare today and ignored the scheduled date.
+      const base = cur.dayStart
+        ? dayjs(cur.dayStart).startOf('day')
+        : (cur.todoTime ? dayjs(cur.todoTime) : dayjs().startOf('day'))
       const target = offset === 0
         ? +dayjs().startOf('day')
         : Math.max(+dayjs().add(offset, 'day').startOf('day'), +base.add(offset, 'day').startOf('day'))
@@ -59,7 +66,9 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
   }
   if (c.tomato && !t.complete) {
     items.push({
-      icon: 'clock',
+      // D6 (P3 2026-10-22): 'timer' — it shared 'clock' with postpone-to-tomorrow above, two
+      // different actions under one glyph in the same menu
+      icon: 'timer',
       label: vm.$t('statsE.TodoItem.togglePomodoroFocus'),
       fn: () => {
         const st = vm.$store.state.tomato
@@ -93,7 +102,9 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       vm.$message.success(vm.$t('statsJ.TodoItem.backfilled', { n: min2, name: cur.taskContent || vm.$t('statsJ.TodoItem.untitled') }))
     }
     items.push({
-      icon: 'timer',
+      // D6 (P3 2026-10-22): was 'timer' — the pomodoro item above now owns that glyph, the
+      // manual-backfill entry moves to 'plus' (in the AppIcon set)
+      icon: 'plus',
       label: vm.$t('statsG.DayRail.manualAdd'),
       fn: () => {
         vm.$prompt(vm.$t('statsG.DayRail.manualPrompt'), vm.$t('statsG.DayRail.manualAdd'), {
@@ -112,6 +123,25 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
         }).catch(() => {})
       }
     })
+  }
+  // [win-bind T8] window rows appear only for tasks WITH a binding, and only in views that opted
+  // in via caps.winbind (scope freeze: TodoItem today/list rows; other views unchanged).
+  // Defensive module read: stub stores in unit tests may not register the winbind module.
+  if (c.winbind) {
+    const wb = vm.$store.state.winbind
+    const wbRef = (wb && wb.bindings && wb.bindings[t.taskId]) || null
+    if (wbRef) {
+      items.push({
+        icon: 'locate',
+        label: vm.$t('statsJ.winbind.activateMenu', { name: wbRef.processName || '' }),
+        fn: () => vm.$store.dispatch('winbind/activate', t.taskId)
+      })
+      items.push({
+        icon: 'x',
+        label: vm.$t('statsJ.winbind.unbindMenu'),
+        fn: () => vm.$store.dispatch('winbind/unbind', t.taskId)
+      })
+    }
   }
   if (c.copy) {
     items.push({

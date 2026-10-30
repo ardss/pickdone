@@ -134,7 +134,9 @@ test('DayDateStrip: day-shift arrows have aria-label; selected day cell has aria
 
 test('DayDateStrip: calendar popover closes on Escape', () => {
   const src = read('components/DayDateStrip.vue')
-  assert.match(src, /ds-cal-pop[^>]*@keydown\.esc\.prevent="showCal = false"/s)
+  // [fix 2026-10-27] the popover now also .stop so the Esc never bubbles to EditPanel's
+  // window-level handler (panel was closing + inline task orphan-deleted behind the popover)
+  assert.match(src, /ds-cal-pop[^>]*@keydown\.esc\.prevent\.stop="showCal = false"/s)
 })
 
 test('HabitView: month nav mini arrows have aria-labels', () => {

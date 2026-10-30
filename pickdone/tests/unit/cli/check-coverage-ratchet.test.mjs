@@ -88,3 +88,21 @@ test('writeBaseline/loadBaseline: JSON round-trips via the real file', () => {
     fs.rmSync(dir, { recursive: true, force: true })
   }
 })
+
+test('W17 pin: summaryIsTierScoped flags tier-suffixed slot tags as polluted (compare-refusal contract)', () => {
+  // run-all's suiteTag = suites.join('+') | 'all', plus '+<tier>' when --tier=core|deep. A tier
+  // summary is a strict-subset instrument AND the summary file is a shared slot a concurrent
+  // tier run can overwrite mid-poll — the ratchet must refuse to compare (explicit red), not
+  // gate on the subset reading.
+  const { summaryIsTierScoped } = require_('../../../cli/check-coverage-ratchet.cjs')
+  assert.equal(summaryIsTierScoped({ suite: 'all+core' }), true)
+  assert.equal(summaryIsTierScoped({ suite: 'unit+core' }), true)
+  assert.equal(summaryIsTierScoped({ suite: 'unit+deep' }), true)
+  assert.equal(summaryIsTierScoped({ suite: 'all+deep' }), true)
+  assert.equal(summaryIsTierScoped({ suite: 'unit' }), false, 'calibration suite is clean')
+  assert.equal(summaryIsTierScoped({ suite: 'all' }), false, 'full run is clean')
+  assert.equal(summaryIsTierScoped({ suite: 'unit,integration' }), false, 'multi-suite full run is not tier-scoped')
+  assert.equal(summaryIsTierScoped({ suite: 'unit+integration' }), false, 'multi-suite (no tier) run is not tier-scoped')
+  assert.equal(summaryIsTierScoped({}), false, 'legacy unlabeled summary stays on the existing failCount guards')
+  assert.equal(summaryIsTierScoped(null), false)
+})

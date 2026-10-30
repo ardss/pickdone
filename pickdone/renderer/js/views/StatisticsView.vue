@@ -9,7 +9,8 @@
             <div class="title__text"> {{ $t('statsA.StatisticsView.pageTitle') }} </div>
           </div>
           <div class="title__append">
-            <div class="stat-view-tabs" role="tablist" :aria-label="$t('statsA.StatisticsView.ariaReviewViews')">
+            <!-- [W8] tablist arrow gesture: Left/Right switch views -->
+            <div class="stat-view-tabs" role="tablist" :aria-label="$t('statsA.StatisticsView.ariaReviewViews')" @keydown="onStatTabKey">
               <button v-for="v in views" :key="v.key" class="stat-view-tab"
                       :class="{on: view===v.key}" role="tab" :aria-selected="view===v.key"
                       tabindex="0" @click="view=v.key" @keydown.enter.prevent="view=v.key"><app-icon :name="v.icon" :size="13"/>{{ v.text }}</button>
@@ -88,7 +89,7 @@
             <div class="tl-card best-card">
               <div class="tl-head"><b>{{ $t('statsA.StatisticsView.bestsTitle') }}</b><span class="tl-sub">{{ $t('statsA.StatisticsView.bestsSub') }}</span></div>
               <div class="best-row">
-                <div v-for="b in periodBests"  :key="$t(b.titleKey || b.title)" class="best-item">
+                <div v-for="b in periodBests" :key="String(b.titleKey || b.title)" class="best-item">
                   <div class="best-item__title">{{ $t(b.titleKey || b.title) }}</div>
                   <div class="best-item__value">{{ b.value }}</div>
                   <div class="best-item__sub">{{ b.sub }}</div>
@@ -188,19 +189,20 @@
                 <div v-for="row in timelineRows" :key="row.dateKey" class="tl-row" :class="{'tl-row--empty': row.empty}">
                   <span class="tl-date">{{row.dateKey.slice(5)}}</span>
                   <div class="tl-track">
+                    <!-- [W8] bands/segments: role="img" + hover-title as aria-label (pointer-free reading) -->
                     <template v-for="(b, bi) in (row.bands || [])" :key="row.dateKey + '_' + bi">
-                      <div class="tl-band" :style="{left:b.left+'%', width:b.width+'%'}"
+                      <div class="tl-band" role="img" :aria-label="b.title" :style="{left:b.left+'%', width:b.width+'%'}"
                            @mouseenter="e => tlTip = { text: b.title, x: e.clientX, y: e.clientY }"
                            @mousemove="e => { if (tlTip) { tlTip.x = e.clientX; tlTip.y = e.clientY } }"
                            @mouseleave="tlTip=null">
-                        <div v-for="seg in b.segs" :key="seg.key" class="tl-seg unit"
+                        <div v-for="seg in b.segs" :key="seg.key" class="tl-seg unit" role="img" :aria-label="seg.title"
                              :style="{ left: ((seg.left-b.left)/b.width*100)+'%', width: (seg.width/b.width*100)+'%', '--ff': seg.ff+'%' }"
                              @mouseenter.stop="e => tlTip = { text: seg.title, x: e.clientX, y: e.clientY }"
                              @mousemove="e => { if (tlTip) { tlTip.x = e.clientX; tlTip.y = e.clientY } }"
                              @mouseleave="tlTip=null"></div>
                       </div>
                     </template>
-                    <div v-for="seg in row.segments.filter(x => x.kind==='rest')" :key="seg.key" class="tl-seg rest"
+                    <div v-for="seg in row.segments.filter(x => x.kind==='rest')" :key="seg.key" class="tl-seg rest" role="img" :aria-label="seg.title"
                          :style="{left:seg.left+'%', width:seg.width+'%'}"
                          @mouseenter="e => tlTip = { text: seg.title, x: e.clientX, y: e.clientY }"
                          @mousemove="e => { if (tlTip) { tlTip.x = e.clientX; tlTip.y = e.clientY } }"
@@ -239,7 +241,7 @@
  *   2. KPI comparison bars (done/focus/completion rate/give-ups, all from a "vs personal baseline" perspective, no absolute-count bragging) *   3. Activity heatmap (half-year/full-year toggle) 4. 24-hour focus timeline *   5. Attention allocation (per-category focus bars) 6. Completion trend line (with baseline reference band) *   7. Export long image / CSV
  * Engine and metrics live in statistics/metrics.js + insights.js (pure functions, covered by unit tests).
  * All copy goes through vue-i18n (statsA.* namespace); internal state like period/heatmap range uses stable keys, * display text is resolved via $t (the insights/achievements pure-function layer returns key+params, resolved in computeds/methods). */
-import { dayjs, DAY_MS } from '../utils/core.js'
+import { dayjs, DAY_MS, FMT } from '../utils/core.js'
 import ChartCard from './statistics/ChartCard.vue'
 import EmptyState from '../components/EmptyState.vue'
 import { roleButtonActivate, roleRadioActivate } from '../utils/roleButtonKey.js' // [A2/A6/A9] radiogroup + button activation
@@ -257,9 +259,6 @@ import { clampTipPos, clampHmTipPos } from './statistics/tooltipClamp.js'
 
 const T = 'statsA.StatisticsView.'
 
-/* [d5-ui-fixes] pure-start — CSV count formatting: integer counts print plainly (12, not "12.0"); fractions keep one decimal */
-function fmtCount (v) { return Number.isInteger(v) ? String(v) : v.toFixed(1) }
-/* [d5-ui-fixes] pure-end */
 export default {
   errorCaptured (err, vm, info) {
     console.error('[Stats-ErrorBoundary]', info, err && (err as any).stack || err)
@@ -274,8 +273,10 @@ export default {
   },
   /* Period/view state goes to the route query (calendar page convention): refresh/back keeps the selection */
   watch: {
-    view (v) { this.syncQuery() },
-    period (v) { this.syncQuery() },
+    /* [W8] heatmap rebuilds on view/period/range switch — a stale hover tip used to stay pinned */
+    view (v) { this.syncQuery(); this.hmTipHide() },
+    period (v) { this.syncQuery(); this.hmTipHide() },
+    heatRange () { this.hmTipHide() },
     /* After tooltip text/position changes, clamp into the viewport by measured size: near the right edge flip to the mouse's left, past the bottom edge flip back above */
     tlTip () { this.$nextTick(() => this.clampTip('tlTip', 'tlTip')) },
     hmTip () { this.$nextTick(() => this.clampHmTip()) }
@@ -297,6 +298,10 @@ export default {
   },
   beforeUnmount () {
     clearInterval(this._nowTimer)
+  },
+  /* [w7] keep-alive re-entry also clears the error latch (same doctrine as the watchers above) */
+  activated () {
+    this.cardError = false
   },
   computed: {
     todoList () { return this.$store.state.todo.todoList },
@@ -320,7 +325,12 @@ export default {
     },
     periodRangeLabel () {
       const { start, end } = this.periodBounds
-      return `${dayjs(start).format('MM.DD')} - ${dayjs(Math.min(end, +dayjs().endOf('day'))).format('MM.DD')}`
+      // [J5 stats journey-audit 2026-10-22] `end` is an EXCLUSIVE upper bound (see periodBounds),
+      // so displaying it as-is put an uncovered day in the label: 上周 10.12-10.19 (real last day
+      // 10.18), 上月 09.01-10.01 (real last day 09.30), a custom to=10.07 range showed 10.07.
+      // One millisecond back lands on the last covered day; wall-clock ends (end=now) are
+      // unaffected at MM.DD resolution.
+      return `${dayjs(start).format(FMT.cnDate)} - ${dayjs(Math.min(end, +dayjs().endOf('day')) - 1).format(FMT.cnDate)}`
     },
     customDraftDays () {
       if (!this.customDraft || !this.customDraft[0] || !this.customDraft[1]) return 0
@@ -340,7 +350,7 @@ export default {
     achievements () {
       return buildAchievements({ todos: this.todoList, records: this.tomatoRecordList })
     },
-    shareDate () { return dayjs().format('YYYY.MM.DD') },
+    shareDate () { return dayjs().format(FMT.cnFull) },
     /** Compact data shared by share cards */
     shareTopInsights () { return this.review.insights.slice(0, 3) },
     hasAnyData () { return this.todoList.length > 0 || this.tomatoRecordList.length > 0 },
@@ -400,6 +410,17 @@ export default {
       const key = el.getAttribute && el.getAttribute('data-heat-key')
       if (key) this.heatRange = key
     }),
+    /* [W8] tablist: ArrowLeft/Right switch + wrap; focus follows the selected tab */
+    onStatTabKey (e) {
+      const dir = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0
+      if (!dir) return
+      e.preventDefault()
+      const keys = this.views.map(v => v.key)
+      const i = keys.indexOf(this.view)
+      if (i < 0) return
+      this.view = keys[(i + dir + keys.length) % keys.length]
+      this.$nextTick(() => { const el = this.$el && this.$el.querySelector('.stat-view-tab.on'); if (el) el.focus() })
+    },
     /* [A9] custom-range trigger: Space joins Enter; the popover opens on click, so synthesize one */
     onRangeActivateKey: roleButtonActivate(function (e) { (e.currentTarget).click() }),
     /** Hover 3-hour dashed-grid toggle: state persisted to localStorage('tlHoverGrid'), on by default */
@@ -408,6 +429,10 @@ export default {
       try { localStorage.setItem('tlHoverGrid', this.tlGrid ? '1' : '0') } catch {}
     },
     syncQuery () {
+      // [w7] cardError is an error-boundary latch: without a reset it permanently condemns the
+      // page after one transient card failure — clear it whenever the data shape changes
+      // (period/view switch both funnel through here)
+      this.cardError = false
       const q = { ...this.$route.query }
       if (this.view === 'stat') delete q.view; else q.view = this.view
       delete q.period; delete q.from; delete q.to
@@ -471,10 +496,17 @@ export default {
       const csv = '﻿' + rows.map(r => r.map(c => csvField(c)).join(',')).join('\n')
       const a = document.createElement('a')
       a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
-      a.download = `${this.$t(T + 'fileDataReview')}_${this.period}_${dayjs().format('YYYYMMDD')}.csv`
+      // [w7] the filename used to embed the raw internal enum (`this.period`, e.g. "thisWeek"):
+      // use the localized period label instead (same source the pills render), with the
+      // custom-range case falling back to the visible date range; strip filesystem-illegal chars
+      const periodLabel = (this.periodOptions.find(p => p.key === this.period) || {}).label || this.periodRangeLabel
+      const safeLabel = String(periodLabel).replace(/[\\/:*?"<>|]/g, '-').trim() || 'custom'
+      a.download = `${this.$t(T + 'fileDataReview')}_${safeLabel}_${dayjs().format('YYYYMMDD')}.csv`
       a.click()
       setTimeout(() => URL.revokeObjectURL(a.href), 10000) // release the Blob URL
-      this.$message.success(this.$t(T + 'msgTableExported'))
+      // [w7] honest success copy: this export always lands in the browser's download location —
+      // the old unconditional "导出成功" implied a save dialog that never existed
+      this.$message.success(this.$t('statsE.w7.csvExportedSaved'))
     }
   },
 

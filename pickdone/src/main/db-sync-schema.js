@@ -29,7 +29,18 @@ const canonBlobKey = k => k === 'habitsState' ? 'db.habitsState' : k
 // doc's family: once the habits doc's `savedAt` stamp is accepted as a causal watermark, an
 // empty-habits mirror tombstones every older settings-family row (themeMode etc.) — the exact
 // cross-family destruction Sync-10b was pinned against. Each blob may only tombstone rows it owns.
-const HABITS_BLOB_OWNED = new Set(['habits', 'moments'])
+// W7 fix (2026-10-23): the habits persist shape grew top-level DELETION TOMBSTONE arrays —
+// `deleted` (habit ids, F3 fix) and `deletedMoments` (moments ids, W7-R 2026-10-23). They are
+// habits-family fields (renderer store/habits.js readDoc/persist both carry them), so they join
+// HABITS_BLOB_OWNED: absent from a habits mirror → their rows tombstone (previously the SETTINGS
+// blob's tombstoneAbsentRows owned them and could tombstone a live habits tombstone-array row
+// out from under the habits doc — resurrecting deleted habits on the next mirror round), and the
+// settings mirror can never tombstone them again. Key semantics of habits/moments untouched.
+// NOTE (fold side): folding an applied `deleted`/`deletedMoments` row back into db.habitsState
+// is routed by shared/settings-families.mjs HABITS_BLOB_FIELDS in lan-sync/apply-broadcast.js —
+// that file is outside this fix's scope; until it lists the two keys they fold into the SETTINGS
+// blob (rows still sync; the renderer blob restore needs the routing follow-up).
+const HABITS_BLOB_OWNED = new Set(['habits', 'moments', 'deleted', 'deletedMoments'])
 const blobOwnsRow = (blobKey, rowKey) =>
   blobKey === 'db.habitsState' ? HABITS_BLOB_OWNED.has(rowKey) : !HABITS_BLOB_OWNED.has(rowKey)
 
@@ -93,7 +104,14 @@ module.exports = ({ getDb, log }) => {
     // ordering between the blob save and the mirror; a genuinely stale echo is minutes behind,
     // so the Round-3 revert guard keeps its strength).
     const curTs = cur ? Math.min(Number(cur.updatedAt) || 0, Date.now()) : 0
-    if (Number.isFinite(gateTs) && cur && !cur.deleted && curTs - gateTs > 1000) return false // stale whole-blob echo: row wins
+    // W8 fix (2026-10-25): the gate applies to DELETED rows too. The old `!cur.deleted` guard
+    // exempted tombstones, so a stale whole-blob echo (snapshot authored before the deletion
+    // landed) re-inserted the row with deleted=0 / updatedAt=now — a stale mirror resurrecting a
+    // tombstone with a FRESH LWW age, unkillable by the next round. A stale echo (curTs more than
+    // 1s past the blob's _savedAt) must not resurrect the tombstone any more than it may
+    // re-stamp a live row; a FRESH mirror (same-tick, within the epsilon) is the legitimate
+    // resurrection path and still passes.
+    if (Number.isFinite(gateTs) && cur && curTs - gateTs > 1000) return false // stale whole-blob echo: row (or tombstone) wins
     getDb().prepare(`INSERT INTO settings_rows (key, value, updatedAt, deleted, deletedAt) VALUES (?, ?, ?, 0, 0)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt, deleted=0, deletedAt=0`)
       .run(key, value, now)

@@ -29,7 +29,9 @@ const os = require('node:os')
 const path = require('node:path')
 
 const ROOT = path.join(__dirname, '..')
-const BASELINE_FILE = path.join(__dirname, '.coverage-baseline.json')
+// F4 fix: env-overridable so the regression suite can point loadBaseline/writeBaseline at a
+// scratch file instead of the real ratchet baseline (which must never be touched by tests).
+const BASELINE_FILE = process.env.PICKDONE_COV_RATCHET_BASELINE_FILE || path.join(__dirname, '.coverage-baseline.json')
 const METRICS = [
   { key: 'lines', label: 'lines', column: 1 },
   { key: 'branches', label: 'branch', column: 2 },
@@ -57,31 +59,71 @@ function suiteMatchesCalibration (j) {
   return summarySuite(j) === CALIBRATION_SUITE
 }
 
-function loadBaseline () {
-  let base = { lines: 0, branches: 0, functions: 0 }
-  if (fs.existsSync(BASELINE_FILE)) {
-    const baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
-    base = { ...base, ...(baselines[PLATFORM] || {}) }
+// W17 fix (2026-10-28): run-all tags tier-scoped summaries as `<suites>+<tier>` (tier ∈ core|deep,
+// see the suiteTag write in tests/run-all.mjs). A tier run's file set is a strict subset of the
+// pool, so its coverage reading is a DIFFERENT instrument; worse, coverage-summary.json is a
+// SINGLE SHARED SLOT with no run identity — a concurrent pre-commit core-subset run OVERWRITES the
+// slot while this gate is polling it, and comparing against the subset reading false-reds.
+// Any tier-suffixed summary is therefore treated as slot pollution: do NOT compare, report why,
+// exit non-zero (an explicit red beats a silent wrong verdict — the operator re-runs).
+function summaryIsTierScoped (j) {
+  const s = summarySuite(j)
+  return typeof s === 'string' && /(^|[+])(core|deep)$/.test(s)
+}
+
+// F4 fix (2026-10-15): the baseline read used to be a bare JSON.parse — a corrupted file (crash
+// mid-write, hand edit) crashed the gate with a raw SyntaxError. Now: a clear report, exit non-zero,
+// and NO silent rebuild — a rebuilt baseline would erase the ratchet history (only-upward floor)
+// and instantly re-green a regression; a human must fix or delete the file deliberately.
+function readBaselineDoc () {
+  if (!fs.existsSync(BASELINE_FILE)) return null
+  let doc
+  try {
+    doc = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8'))
+  } catch (e) {
+    throw new Error(`coverage baseline file is corrupted (${BASELINE_FILE}): ${e.message} — fix or delete it BY HAND; the ratchet must not silently rebuild it (a rebuilt baseline loses its history)`)
   }
+  if (!doc || typeof doc !== 'object' || Array.isArray(doc) ||
+      (doc.baselines !== undefined && (typeof doc.baselines !== 'object' || Array.isArray(doc.baselines)))) {
+    throw new Error(`coverage baseline file has an unexpected shape (${BASELINE_FILE}): expected {"baselines":{platform:{lines,branches,functions}}} — fix it BY HAND; the ratchet must not silently rebuild it`)
+  }
+  return doc
+}
+
+function loadBaseline () {
+  const doc = readBaselineDoc()
+  let base = { lines: 0, branches: 0, functions: 0 }
+  if (doc) base = { ...base, ...((doc.baselines || {})[PLATFORM] || {}) }
   return base
 }
 
 function writeBaseline (measured) {
-  let baselines = {}
-  if (fs.existsSync(BASELINE_FILE)) {
-    baselines = JSON.parse(fs.readFileSync(BASELINE_FILE, 'utf8')).baselines || {}
-  }
+  // F4 fix: the read-modify-write used a bare JSON.parse (crash on corrupt existing file) and a
+  // bare writeFileSync (tear under crash/power-cut → the NEXT run hits the corrupt-file path
+  // above and the gate reds). Parse with the same clear-error guard, and persist atomically:
+  // tmp file → fsync → rename (same D22 convention as windows.js's durable marker write).
+  const doc = readBaselineDoc()
+  const baselines = (doc && doc.baselines) || {}
   // Floor to whole percent, matching the comparison (which floors the measured value too):
   // the coverage table reports at 0.1 granularity, so a float baseline like 73.32 can never be
   // reached by a 73.3 reading — the gate would red forever on its own calibration (2026-09-29).
   baselines[PLATFORM] = Object.fromEntries(
     Object.entries(measured).map(([k, v]) => [k, Math.floor(v)])
   )
-  fs.writeFileSync(BASELINE_FILE, JSON.stringify({
+  const data = JSON.stringify({
     // 覆盖率棘轮基线 - 由 check-coverage-ratchet.cjs 通过时自动回写,请勿手工下调
     _comment: 'ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent',
     baselines
-  }, null, 2) + '\n')
+  }, null, 2) + '\n'
+  const tmp = `${BASELINE_FILE}.tmp-${process.pid}`
+  const fd = fs.openSync(tmp, 'w')
+  try {
+    fs.writeSync(fd, data)
+    fs.fsyncSync(fd)
+  } finally {
+    fs.closeSync(fd)
+  }
+  fs.renameSync(tmp, BASELINE_FILE)
 }
 
 function runCoverage () {
@@ -114,7 +156,7 @@ function parseAllFiles (out) {
   return null
 }
 
-module.exports = { parseAllFiles, loadBaseline, writeBaseline, summarySuite, suiteMatchesCalibration }
+module.exports = { parseAllFiles, loadBaseline, writeBaseline, readBaselineDoc, BASELINE_FILE, summarySuite, suiteMatchesCalibration, summaryIsTierScoped }
 
 if (require.main !== module) return
 
@@ -174,6 +216,12 @@ const measuredFromSummary = preflight && (preflight.generatedAt && startedAt - D
 
 let measured
 let reuseSuiteMatches = true // own runCoverage() is always the calibration suite
+// W17 fix: a tier-scoped summary in the shared slot means a concurrent --tier run polluted it —
+// the subset reading must not be compared against the full-pool baseline. Explicit red, no comparison.
+if (measuredFromSummary && summaryIsTierScoped(measuredFromSummary)) {
+  console.error(`✗ [check-coverage-ratchet] coverage-summary.json is tier-scoped (suite="${summarySuite(measuredFromSummary)}") — a concurrent --tier run owns/polluted the shared slot and its file set is a strict subset (different instrument). Refusing to compare against it: re-run this gate after the tier run finishes (its own run writes a --suite=${CALIBRATION_SUITE} summary).`)
+  process.exit(1)
+}
 if (measuredFromSummary) {
   measured = { lines: measuredFromSummary.lines, branches: measuredFromSummary.branches, functions: measuredFromSummary.functions }
   console.log(`[check-coverage-ratchet] reused coverage summary (suite=${summarySuite(measuredFromSummary) || 'unknown/legacy'}) from the unit gate (${measured.lines}/${measured.branches}/${measured.functions})`)
@@ -196,7 +244,15 @@ if (!measured) {
   process.exit(1)
 }
 
-const baseline = loadBaseline()
+let baseline
+try {
+  baseline = loadBaseline()
+} catch (e) {
+  // F4 fix: a corrupted baseline is a HUMAN problem (ratchet history at stake) — report clearly
+  // and exit non-zero; never silently rebuild, never crash with a raw SyntaxError.
+  console.error('✗ [check-coverage-ratchet] ' + (e && e.message))
+  process.exit(1)
+}
 const hasBaseline = baseline.lines > 0 || baseline.branches > 0 || baseline.functions > 0
 if (force) {
   writeBaseline(measured)
@@ -204,6 +260,15 @@ if (force) {
   process.exit(0)
 }
 if (!hasBaseline) {
+  // W18 fix (2026-10-28): 首次校准分支此前无条件 writeBaseline(measured) 再事后警告口径不符 —
+  // 错误口径的全量/legacy 读数被固化进基线,后续 unit 口径实测永远"低于基线"假红,只能人工删基线。
+  // 与 W17 槽守卫同一教义:明确口径的基线只接受校准 suite 的读数 — summary 存在但 suite 非
+  // unit(tier 情形已在上面的槽守卫先行报红,此处兜 unknown/legacy 与其它命名 suite)→ 拒绝落
+  // 基线并报红,操作者重跑本门禁(自身 runCoverage 即 --suite=unit)后自然落正确基线。
+  if (measuredFromSummary && !suiteMatchesCalibration(measuredFromSummary)) {
+    console.error(`✗ [check-coverage-ratchet] first calibration refused: coverage-summary.json suite="${summarySuite(measuredFromSummary) || 'unknown/legacy'}" is not "${CALIBRATION_SUITE}" — a first baseline must only be calibrated from ${CALIBRATION_SUITE}-suite evidence (coverage differs per suite; writing a mismatched reading would permanently mis-set the floor). Re-run this gate standalone so its own run (--suite=${CALIBRATION_SUITE}) produces the summary.`)
+    process.exit(1)
+  }
   // First full-green run on this platform@node combo: calibrate, don't compare — comparing
   // against another instrument's numbers is exactly the 2026-09-29 86-vs-73 failure mode.
   writeBaseline(measured)

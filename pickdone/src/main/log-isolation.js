@@ -7,11 +7,20 @@
  * (%APPDATA%/pickdone/logs/main.log) — test-seam lines like "injected migration failure"
  * / "poison row" polluted the real user's log.
  *
- * Fix at the root: when TODO_DB_DIR or TODO_USER_DATA_DIR is set (hasIsolationEnv()),
- * redirect the file transport into <isolation dir>/logs/main.log. When neither var is
- * set (the real app), this is a strict no-op. Idempotent; safe to require at the top of
- * every module that acquires electron-log — resolution happens lazily on each write, so
- * the last write before process exit uses the redirected path either way.
+ * Fix at the root: install log.transports.file.resolvePathFn UNCONDITIONALLY at module
+ * load, and re-evaluate the isolation env (TODO_DB_DIR / TODO_USER_DATA_DIR) at every
+ * WRITE via the closure. The old shape installed the redirect only when hasIsolationEnv()
+ * happened to be true at require time, so a module loaded BEFORE the test set the env
+ * (the d9-drill-side harness, aux-load-guard chains) permanently no-op'd and wrote the
+ * real user log (2026-10-30 confirmed). Write-time evaluation is timing-immune: whether
+ * the env was set before or after this module loaded, the next write lands in
+ * <isolation dir>/logs/main.log when an isolation env is present, and in electron-log's
+ * default path (the original resolvePathFn) when it is not — the real app path is
+ * byte-identical in behavior.
+ *
+ * Semantics preserved: the hook still activates only where this module is explicitly
+ * required (idempotent — the first apply wins), and electron-log's own file rotation /
+ * fileName handling is untouched (we only override where the path resolves).
  *
  * Requires './user-dir' (path-only) — no electron dependency, loadable in plain Node.
  */
@@ -22,13 +31,20 @@ let applied = false
 
 function applyLogIsolation () {
   if (applied) return
-  if (!hasIsolationEnv()) return
-  applied = true
   let log
   try { log = require('electron-log') } catch { return /* no electron-log in this process */ }
+  applied = true
   try {
-    const dir = path.join(userDataDir(), 'logs')
-    log.transports.file.resolvePathFn = () => path.join(dir, 'main.log')
+    // Capture the transport's default resolver ONCE as the non-isolated fallback, so the
+    // real-app behavior (platform default dir + file rotation naming) is delegated to
+    // electron-log itself instead of being re-implemented here.
+    const defaultResolve = log.transports.file.resolvePathFn
+    log.transports.file.resolvePathFn = (...args) => {
+      // Write-time evaluation: the isolation env may have been set (or cleared) after this
+      // module was required — decide per write, never per install.
+      if (hasIsolationEnv()) return path.join(userDataDir(), 'logs', 'main.log')
+      return typeof defaultResolve === 'function' ? defaultResolve(...args) : undefined
+    }
   } catch { /* file transport unavailable in this runtime */ }
 }
 

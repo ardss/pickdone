@@ -10,15 +10,24 @@
  *                        contains todos.db (behavior unchanged)
  *   TODO_USER_DATA_DIR — the main-process isolation var (src/main/index.js); treated as the
  *                        userData root, which also contains todos.db at its top level
- * Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > platform default. Neither var set means the real
- * user database — scripts that spawn the App MUST fail fast instead (see e2e-walkthrough.js /
- * ui-smoke.js).
+ * Priority: TODO_DB_DIR > TODO_USER_DATA_DIR > boot redirect (data-location.cjs) > platform
+ * default. Neither var set means the real user database — scripts that spawn the App MUST fail
+ * fast instead (see e2e-walkthrough.js / ui-smoke.js).
+ *
+ * B#1 split-brain fix: after a data-location migration the App boots into the boot-redirect dir,
+ * but this default branch used to compute the platform default directly — the CLI then opened a
+ * DIFFERENT database than the running App. The boot file is consulted before the platform
+ * fallback (both are pure node; the require is safe and cheap). Read errors fall through.
  */
 const path = require('path')
 
 function userDataDir () {
   if (process.env.TODO_DB_DIR) return process.env.TODO_DB_DIR
   if (process.env.TODO_USER_DATA_DIR) return process.env.TODO_USER_DATA_DIR
+  try {
+    const boot = require('./data-location.cjs').readBootRedirect()
+    if (boot) return boot
+  } catch (e) { /* boot file unreadable / module issue → platform default */ }
   // Platform default must mirror Electron's app.getPath('userData') (~/.config/pickdone on Linux,
   // ~/Library/Application Support/pickdone on macOS) — APPDATA-only resolved to CWD-relative
   // './pickdone' on Linux, so CLI and App each opened a different database (2026-09-11 audit P1)

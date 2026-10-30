@@ -158,7 +158,8 @@ export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
   }
   let streak = 0
   // Streak walks back day by day using calendar math: on DST spring-forward days Date.now()-i*DAY yields a previous-day 23:xx key, breaking the streak early
-  for (let i = doneDays.has(dayKey(Date.now())) ? 0 : 1; i < 365; i++) {
+  // Cap 3650 unified with the achievements-wall caliber (achievements.js) — one metric, one bound.
+  for (let i = doneDays.has(dayKey(Date.now())) ? 0 : 1; i < 3650; i++) {
     if (doneDays.has(dayKey(+dayjs().subtract(i, 'day').startOf('day')))) streak++
     else break
   }

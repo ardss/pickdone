@@ -34,6 +34,11 @@ function installBridge () {
   }
 }
 
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
+const planChips = await import('../../../renderer/js/store/helpers/planChips.js?fix1009')
+const undoMod = await import('../../../renderer/js/store/helpers/undo.js?fix1009')
+
 beforeEach(() => {
   dbCalls.length = 0
   meta.clear()
@@ -100,9 +105,6 @@ const planBridge = async (op, p) => {
   if (op === 'planAddMany') { chips.push(...p); return p.map((c, i) => c.id || 'c' + i) }
   return []
 }
-
-const planChips = await import('../../../renderer/js/store/helpers/planChips.js?fix1009')
-const undoMod = await import('../../../renderer/js/store/helpers/undo.js?fix1009')
 
 const row = (taskId, over = {}) => ({
   taskId, taskContent: 't-' + taskId, delete: false, dayStart: 0, todoTime: 0,

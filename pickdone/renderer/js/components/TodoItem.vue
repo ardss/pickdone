@@ -1,5 +1,7 @@
 <template>
 
+  <!-- eslint-disable vue/use-v-on-exact -- @keydown.up 与 @keydown.ctrl.up 并存是刻意设计(Ctrl+Up 双路由),
+       加 .exact 会改变现有键位行为,且锚点测试锁定 @keydown.up.prevent 原文 -->
   <div class="td-item" :class="{'is-complete':todo.complete, selected, dragging, 'td-item--enter': entering, 'pd-hoverlink': $store.state.ui.hoverTaskId === todo.taskId, ['prio-'+(todo.priority||0)]: (todo.priority||0)>0}"
        draggable="true"
        tabindex="0"
@@ -28,8 +30,10 @@
            role="button" tabindex="0" :aria-label="$t('statsE.TodoItem.openTaskAria', { name: todo.taskContent || $t('statsE.TodoItem.untitled') })"
            @click.stop="openEdit" @keydown="onTitleKey">
         <!-- U-15: wire the search highlight (query prop existed but was never rendered; SearchView passes it) -->
+        <!-- [J4 2026-10-22] the title renders the tag-stripped displayTitle: the #tag chips below
+             already show every tag, and the old raw title echoed each token a second time on one row -->
         <span v-if="query" v-html="highlightedTitle"></span>
-        <template v-else>{{ todo.taskContent || $t('statsE.TodoItem.untitled') }}</template>
+        <template v-else>{{ displayTitle }}</template>
       </div>
       <div v-if="todo.taskDescribe" class="td-desc" :style="descLineClamp">{{todo.taskDescribe}}</div>
       <div v-if="subtasks.length" class="td-subs">
@@ -77,9 +81,15 @@
           {{ $t('statsJ.TodoItem.deadlineSpace', { d: dayjs(todo.deadlineTs).format(FMT.cnDate) }) }}
         </span>
         <span v-if="cat && showDateBadge===false" class="td-cat" :style="{color:cat.categoryColor}">{{cat.categoryName}}</span>
+        <!-- [win-bind T8] bound-window chip: click = bring the window back, ✕ = unbind -->
+        <WinBindBadge :task-id="todo.taskId"></WinBindBadge>
       </div>
     </div>
-    <div v-if="showDateBadge && dateLabel" class="td-right">
+    <!-- [c-wave 20261013] v-if guards only the date badge: the td-right container always renders, or undated
+         rows (empty dateLabel in SearchView which passes show-date-badge unconditionally) lose the
+         tomato capsule and quick-delete too. td-datetime itself guards dateLabel||timeLabel. -->
+
+    <div v-if="showDateBadge" class="td-right">
       <!-- Integrated pomodoro control (user-finalized 2026-09-03): start segment + ledger segment in one capsule; clicking the capsule = select this task and arm start
            (setTomatoTimer's attach semantics, clicking again on the same task cancels); ledger detail lives in the edit panel/context menu, one single action per capsule -->
       <span class="td-tom" role="button" tabindex="0"
@@ -95,7 +105,7 @@
               @click.stop.prevent="quickDelete">
         <app-icon name="trash" :size="14"/>
       </button>
-      <div class="td-datetime" :style="{color:badgeColor}">{{dateLabel}}</div>
+      <div v-if="dateLabel || timeLabel" class="td-datetime" :style="{color:badgeColor}">{{dateLabel}}<span v-if="timeLabel" class="td-datetime__time">{{ timeLabel }}</span></div>
       <!-- Quick delete: appears on hover/keyboard focus (Microsoft To Do pattern), soft delete + undoable, no confirmation dialog -->
     </div>
   </div>
@@ -107,7 +117,7 @@
  */
 import {dayjs, formatDayLabel, parseSubtasks, firstImageOfList, subsCompleteTarget, FMT } from '../utils/core.js'
 import { dateBadgeColor } from '../utils/core.js'
-import { extractTags, highlightHTML } from '../utils/search.js'
+import { extractTags, highlightHTML, stripTagTokens } from '../utils/search.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { chkColor, neighborInList } from '../utils/taskRow.js'
@@ -118,17 +128,42 @@ import { crossDayMovePatch, crossDayRevertPatch } from '../utils/crossDayMove.js
 import { taskContextMenu } from '../utils/taskMenu.js' // [maint-0925 A16] one menu builder for all views
 import { descLineClampStyle } from '../utils/descLines.js' // [B6 fix] consumes settings.todoDescriptionDisplayLineNumber
 import { roleButtonActivate, roleCheckboxActivate } from '../utils/roleButtonKey.js' // [A8/A9] Space+Enter activation
+import { isReleaseOutsideViewport, isCompletedDragRelease, isRejectedDropRelease } from '../utils/winbindGeometry.js' // [win-bind T8] pure release-point gate + [QA r1 #3] accepted-release gate + [QA r1-P1] rejected-release gate
+import WinBindBadge from './WinBindBadge.vue' // [win-bind T8] bound-window chip in the meta strip
 
 // Module-level drag-in-progress flag: a document.querySelector('.td-item.dragging') on every
 // dragover is O(document); this is set on dragstart and cleared on dragend/drop.
 let dragActive = false
+// D6 (P3 2026-10-22): set at dragstart when the current sort is non-custom (reorder writes are
+// ignored there) — suppresses the drop-time duplicate of the sortIgnored toast in _writeSort;
+// reset in onDragEnd, which always fires after a drag (drop included)
+let dragSortBlocked = false
+// [QA r1-P1] Escape-key evidence for the dropEffect==='none' outside release. That value is
+// ambiguous BY NATURE: an Esc cancel and a real release onto an OLE target that refuses
+// text/move (mspaint & friends) both report 'none' at dragend — nothing inside the event
+// object separates them (buttons is synthesized 0 in both, measured in QA r1 #3). Live probe
+// 2026-10-29 (isolated instance + real SendInput drags): an Esc cancel delivers the Escape
+// keydown/keyup to the drag-source DOM ~12ms AFTER dragend (Chromium re-routes the OLE
+// drag-loop keys once the modal loop exits), while a rejected real release delivers no key
+// events at all. Capture-phase document tracker, armed once per renderer session; a key seen
+// BEFORE this drag's dragstart (last row's cancel, a closed dialog) must not poison this drag,
+// hence the dragStartedAt baseline recorded in onDragStart.
+let lastEscKeyAt = -Infinity
+let dragStartedAt = 0
+function escKeyTracker (e) { if (e && e.key === 'Escape') lastEscKeyAt = performance.now() }
+try {
+  document.addEventListener('keydown', escKeyTracker, true)
+  document.addEventListener('keyup', escKeyTracker, true)
+} catch (err) { /* non-DOM host (source-anchor tests never execute this module) — tracker stays inert */ }
 
 // [maint-0924 A1] Cross-day move patch builder moved to utils/crossDayMove.js (single source now
 // shared with DayDeck.onDrop and TodoBoxView.batchToday — same time-of-day preservation rules,
 // plus reminderExtra shifting); imported below.
 
 export default {
-  name: 'TodoItem',  props: {
+  name: 'TodoItem',
+  components: { WinBindBadge }, // [win-bind T8] locally registered: today/list views only (scope freeze)
+  props: {
     todo: { type: Object, required: true },
     groupKey: { type: String, default: '' },
     query: { type: String, default: '' },
@@ -151,13 +186,22 @@ export default {
     }
   },
   beforeUnmount () { clearTimeout(this._enterTimer) },
+  mounted () {
+    // [win-bind T8] hydrate task↔window bindings once per renderer session (the store action
+    // itself is session-once guarded — every row dispatching here is fine)
+    this.$store.dispatch('winbind/initFromList')
+  },
   computed: {
     cat () { return this.$store.getters['category/byId'](this.todo.categoryId) },
     // D14-A3: deadline chip red only when the due DAY has passed (dueStateOf semantics: days<0
     // = overdue; today = due-soon) — the old `deadlineTs < Date.now()` fired on the due day itself
+    // [w19 midnight fix]: the "today" side reads the reactive store owner (todo.todayTimestamp,
+    // maintained by setTodayTs across midnight — same W9 caliber as RecycleBinView.isOverdue)
+    // instead of a bare dayjs(): a wall-clock read has no reactive dependency, so this computed
+    // cached its pre-midnight value and the red chip never appeared after the day flipped.
     deadlineOverdue () {
       if (!(this.todo.deadlineTs > 0) || this.todo.complete) return false
-      return dayjs(this.todo.deadlineTs).startOf('day').valueOf() < dayjs().startOf('day').valueOf()
+      return dayjs(this.todo.deadlineTs).startOf('day').valueOf() < this.$store.state.todo.todayTimestamp
     },
     // [B6 fix] the "Description visible lines" slider (todoDescriptionDisplayLineNumber) had a settings
     // UI but no consumer — the description never clamped. Apply the configured clamp to .td-desc.
@@ -181,7 +225,19 @@ export default {
       return this.$store.getters['tomato/actualCountByTask'].get(id) || 0
     },
     checkboxColor () { return chkColor(this.$store, this.todo) },
-    dateLabel () { return formatDayLabel(this.todo.dayStart || this.todo.todoTime, Date.now(), this.$t.bind(this)) },
+    // [w19 midnight fix] same reactive-today caliber as deadlineOverdue above: the label's
+    // "today/yesterday/tomorrow" comparison now reads todo.todayTimestamp instead of Date.now(),
+    // so the badge re-renders at rollover instead of showing a stale "today" all next day.
+    dateLabel () { return formatDayLabel(this.todo.dayStart || this.todo.todoTime, this.$store.state.todo.todayTimestamp, this.$t.bind(this)) },
+    // UX walk 2026-10-12: NL quick-add stores a clock time ("周四下午3点" → todoTime 15:00) but the
+    // row only showed the date, so the time looked silently dropped. Surface the time-of-day when
+    // the timestamp carries one (all-day tasks are midnight → no label).
+    timeLabel () {
+      const t = this.todo && this.todo.todoTime
+      if (!t) return ''
+      const d = dayjs(t)
+      return (d.hour() || d.minute()) ? d.format('HH:mm') : ''
+    },
 
     badgeColor () { return dateBadgeColor(this.todo, this.$store) },
     subtasks () { return parseSubtasks(this.todo.subtasks) },
@@ -189,8 +245,16 @@ export default {
     img () { return firstImageOfList(this.todo.image) },
     fileCount () { try { return JSON.parse(this.todo.files || '[]').length } catch { return 0 } },
     tags () { return extractTags(this.todo.taskContent, this.todo.taskDescribe) },
+    // [J4 2026-10-22] the visible title drops the tag tokens (the chips below already show them);
+    // an only-tag title falls back to the raw content so the row never goes blank. The tooltip
+    // (:title) and aria-label keep the full raw content.
+    displayTitle () {
+      const raw = this.todo.taskContent
+      if (!raw) return this.$t('statsE.TodoItem.untitled')
+      return stripTagTokens(raw) || raw
+    },
     // U-15: escape+wrap the query match (highlightHTML escapes first, safe for v-html)
-    highlightedTitle () { return highlightHTML(this.todo.taskContent || this.$t('statsE.TodoItem.untitled'), this.query) },
+    highlightedTitle () { return highlightHTML(this.displayTitle, this.query) },
     selected () { const ed = this.$store.state.ui.rightSidebarTodoEdit; return ed.visible && ed.taskId === this.todo.taskId },
     isRepeat () { return !!(this.todo.repeatId && this.todo.repeatId !== 'null') },
     hasExtras () {
@@ -210,14 +274,24 @@ export default {
     onTomatoKey: roleButtonActivate(function (e) { this.setTomatoTimer(e) }, { stop: true }),
     /* ===== Drag sorting (midpoint insertion into taskSort, aligned with the task_sort reference semantics) ===== */
     onDragStart (e) {
+      // D6 (P3 2026-10-22): taskSort only matters in the 'custom' sort (see _writeSort) — announce
+      // the ignore at drag START (none drop effect + one toast) instead of only after the row
+      // snaps back on drop. The flag suppresses the drop-time duplicate in _writeSort.
+      if (normalizeSortMode(this.$store.state.settings.sortMode) !== 'custom') {
+        e.dataTransfer.dropEffect = 'none'
+        dragSortBlocked = true
+        if (this.$message) this.$message.info(this.$t('statsH.main.sortIgnored'))
+      }
       e.dataTransfer.effectAllowed = 'move'
       e.dataTransfer.setData('text/plain', this.todo.taskId)
       this.dragging = true
       dragActive = true
+      dragStartedAt = performance.now() // [QA r1-P1] baseline: an Escape seen before this drag is not this drag's cancel
     },
     onDragOver (e) {
       if (!dragActive) return
       e.preventDefault()
+      if (dragSortBlocked) { e.dataTransfer.dropEffect = 'none'; return } // D6: no reorder affordance in non-custom sorts
       e.dataTransfer.dropEffect = 'move'
       const rect = this.$el.getBoundingClientRect()
       this.dropAfter = (e.clientY - rect.top) > rect.height / 2
@@ -226,7 +300,28 @@ export default {
       this.$el.classList.toggle('drag-above', !this.dropAfter)
     },
     onDragLeave () { this.$el.classList.remove('drag-above', 'drag-below') },
-    onDragEnd () { this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false; dragActive = false },
+    onDragEnd (e) {
+      this.$el.classList.remove('drag-above', 'drag-below'); this.dragging = false; dragActive = false; dragSortBlocked = false
+      // [win-bind T8] dragend fires on the source row after ANY native-dnd release, including
+      // outside this window (no drop event arrives then, so reorder is naturally skipped).
+      // Release OUTSIDE the window bounds = bind intent; inside (or Esc-drag-back) keeps the
+      // original behavior untouched. The gate is a pure predicate; cancel semantics (button still
+      // down / desktop / own window) are resolved by the main process and cancel silently.
+      // [QA r1 #3] isCompletedDragRelease (dropEffect === 'move') is the ACCEPTED-release fast
+      // path: an Esc-cancelled drag reports 'none', and the identify would race a fast
+      // Esc→release — so the accepted case is dispatched with zero extra ceremony.
+      // [QA r1-P1] the 'none' case is NO LONGER a hard no-op: dropEffect is negotiated with the
+      // OLE drop target under the cursor, so a REAL release onto a target that refuses text/move
+      // (mspaint & friends — the whole class of non-text drop targets) also reports 'none',
+      // which used to make the bind silently dead there. The dispatch still leaves immediately
+      // (identify snapshots the cursor while it is still at the release point, and the main
+      // process's buttonDown probe still catches a cancel while the button is held); the store
+      // then holds that snapshot for a short re-check window during which the Esc evidence
+      // recorded by the module-level tracker above decides cancelled-vs-completed (Escape keydown
+      // arrives ~12ms after dragend on a cancel; never on a rejected release).
+      if (e && isReleaseOutsideViewport(e, window) && isCompletedDragRelease(e)) this.$store.dispatch('winbind/releaseOutside', { taskId: this.todo.taskId })
+      else if (e && isReleaseOutsideViewport(e, window) && isRejectedDropRelease(e)) this.$store.dispatch('winbind/releaseOutside', { taskId: this.todo.taskId, wasCancelled: () => lastEscKeyAt >= dragStartedAt })
+    },
     async onDrop (e) {
       e.preventDefault()
       dragActive = false
@@ -281,7 +376,9 @@ export default {
     _writeSort (list) {
       if (normalizeSortMode(this.$store.state.settings.sortMode) !== 'custom') {
         // [maint-0924 A4] dedicated copy: this guard also fires for drag/keyboard REORDERING, which has nothing to do with pinning
-        if (this.$message) this.$message.info(this.$t('statsH.main.sortIgnored'))
+        // D6 (P3 2026-10-22): a drag that STARTED in a non-custom sort already announced the ignore
+        // (dragstart toast) — suppress the drop-time duplicate; the keyboard path still announces here
+        if (!dragSortBlocked && this.$message) this.$message.info(this.$t('statsH.main.sortIgnored'))
         return false
       }
       // F-B2 (dw wave 3): the 9999→-9999 linear scale moved to shared/sort-core.mjs reorderScale —
@@ -349,9 +446,12 @@ export default {
     // orphaned on the old day (the hand-written { todoTime: target } patch used to wipe both).
     moveDay (offset) {
       const cur = this.rawOf()
-      const base = cur.todoTime
-        ? dayjs(cur.todoTime)
-        : dayjs().startOf('day')
+      // [w17] base prefers the task's own dayStart: a PURE-DATE task (dayStart in the future, no
+      // todoTime) "+1 day" used to be Math.max-pulled back to tomorrow (direction inverted) because
+      // the base defaulted to bare today, ignoring the scheduled date.
+      const base = cur.dayStart
+        ? dayjs(cur.dayStart)
+        : (cur.todoTime ? dayjs(cur.todoTime) : dayjs().startOf('day'))
       const target = offset === 0
         ? +dayjs().startOf('day')
         // Postpone: at least to tomorrow; unexpired tasks are pushed forward from their original date
@@ -388,7 +488,7 @@ export default {
       // [maint-0925 A16] the hand-copied item list drifted from buildTaskMenu (this copy lacked the
       // shared guards and duplicated copy/delete verbatim). One builder for all views; view-specific
       // rows (reorder / repeat-scope delete) ride in as `extra`, tomato stays off the row menu.
-      taskContextMenu(this, this.rawOf(), e, { tomato: false, recycle: !!this.todo.delete }, [
+      taskContextMenu(this, this.rawOf(), e, { tomato: false, recycle: !!this.todo.delete, winbind: true }, [
         (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-up', label: this.$t('statsE.TodoItem.moveUp'), fn: () => this.keyboardMove(-1) } : null,
         (!this.todo.complete && this.todo.dayStart) ? { icon: 'chevron-down', label: this.$t('statsE.TodoItem.moveDown'), fn: () => this.keyboardMove(1) } : null,
         this.isRepeat ? { icon: 'repeat', label: this.$t('statsE.TodoItem.repeatDeleteMenu'), fn: () => this.$store.commit('ui/askRepeatDelete', this.todo.taskId), danger: true } : null
@@ -433,6 +533,8 @@ export default {
 </script>
 <style>/* 11. 待办 meta 徽章（日期/标签）hover 色过渡 */
 .td-meta .td-ico, .td-datetime, .sn-badge { transition: color var(--dur-fast), background-color var(--dur-fast); }
+/* 行内时刻（NL 快捷输入带入的 todoTime 时刻）：与日期同排、稍加字重区分 */
+.td-datetime__time { margin-left: 4px; font-weight: 600; }
 /* ==================== 3. TodoItem 条目微交互 ==================== */
 /* 整行选中高亮：设计稿 .todo-list-item--selected{background-color:#f5fafb}
    （base.css 用的是 brand-light，这里对齐设计稿） */
@@ -440,6 +542,10 @@ export default {
 .td-meta .td-ico, .td-meta .td-snow {
   opacity: 0; transition: opacity var(--dur-mid) cubic-bezier(.4, 0, .2, 1);
 }
+/* [c-wave 20261013] td-meta 元信息显影契约与 base.css 的 .td-remind .td-ico/.td-quick-del 对齐:
+   重复/附件图标与专注分钟胶囊原本 opacity:0 且 hover/键盘焦点都不显影(永久隐身) */
+.td-item:hover .td-meta .td-ico, .td-item:focus-within .td-meta .td-ico,
+.td-item:hover .td-meta .td-snow, .td-item:focus-within .td-meta .td-snow { opacity: 1; }
 /* —— 4. 主列表条目：设计稿 .todo-list-item[scoped]
       padding:10px 15px 10px 28px transition all .3s cubic-bezier(.23,1,.32,1) —— */
 .td-item { padding: 10px 15px 10px 28px; transition: all var(--dur-slow) cubic-bezier(.23, 1, .32, 1); }

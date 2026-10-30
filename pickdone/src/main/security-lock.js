@@ -76,13 +76,26 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   }
 
   function lockAppNow () {
-    lockingIntent = true // engaged BEFORE the window exists: no unlock gate opens during the build/rebuild gap
-    const win = getMainWindow()
-    if (win) win.hide()
-    // Broadcast the locked state to the renderer (ui.isLocked) — this was never sent before; the renderer's subscription was a dead channel
-    if (win) win.webContents.send('security-lock-on')
-    if (lockWin && !lockWin.isDestroyed()) { lockWin.focus(); return }
-    lockWin = new BrowserWindow({
+    // c-wave fix (2026-10-13): the intent set + main-window hide + lock-window build now share
+    // one try. Previously a throw between `lockingIntent = true` and the lockWin build (e.g.
+    // hide() on a main window that a racing quit had already destroyed) left the intent latched
+    // with NO lock window — isLocked() stuck true, main window hidden, no unlock surface: the
+    // whole app was wedged. Any throw on this path now takes the same availability-beats-the-lock
+    // fallback as a failed load (rolls the intent back, restores the main window).
+    try {
+      lockingIntent = true // engaged BEFORE the window exists: no unlock gate opens during the build/rebuild gap
+      const win = getMainWindow()
+      // a dying/destroyed main window must not abort the lock build — skip hide/send, keep going
+      if (win && !win.isDestroyed()) win.hide()
+      // Broadcast the locked state to the renderer (ui.isLocked) — this was never sent before; the renderer's subscription was a dead channel
+      if (win && !win.isDestroyed()) win.webContents.send('security-lock-on')
+      // d-wave fix (2026-10-14): hide the quick-add window too — it stayed visible while locked,
+      // so typed input kept flowing into it and the submit path was silently rejected by the
+      // lock gate (input loss with zero feedback). Same precedence index.js:88 already applies
+      // to summoning: the quick-add surface must not exist while locked.
+      try { require('./quick-add').hide() } catch { /* best-effort: lock must not depend on quick-add */ }
+      if (lockWin && !lockWin.isDestroyed()) { lockWin.focus(); return }
+      lockWin = new BrowserWindow({
       width: 400, height: 260, frame: false, resizable: false, closable: false,
       alwaysOnTop: true, skipTaskbar: false,
       webPreferences: {
@@ -116,7 +129,7 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
       async function tryUnlock () {
         err.textContent = ''
         const ok = await window.todoAPI.verifyLockPassword(pw.value)
-        if (ok) { await window.todoAPI.unlockApp() } else { err.textContent = ${JSON.stringify(i18n.mt('lockWrongPassword'))} }
+        if (ok) { await window.todoAPI.unlockApp() } else { err.textContent = ${jsStr(i18n.mt('lockWrongPassword'))} }
       }
       document.getElementById('go').onclick = tryUnlock
       pw.addEventListener('keydown', e => { if (e.key === 'Enter') tryUnlock() })
@@ -176,6 +189,11 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
       }
     })
     lockWin.on('closed', () => { lockWin = null })
+    } catch (e) {
+      // A throw between the intent latch and a usable lockWin must never wedge the app: roll the
+      // intent back and restore the main window via the existing availability fallback.
+      lockLoadFailedFallback('lockAppNow build threw: ' + (e && (e.message || e)))
+    }
   }
 
   function unlockAppNow () {
@@ -191,9 +209,26 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     showMainOrLock()
   }
 
+  // W19 (2026-10-30): verifyLockPassword used to readConfig() on EVERY unlock attempt — same
+  // ~1.5s synchronous AV-lock backoff D18 already removed from isLocked(). Cache the raw
+  // `securityLockPassword` STORED STRING (not the decrypted secret) with the same TTL + write-version
+  // invalidation as cachedLockFlag: config-store bumps _writeVersion on every successful writeConfig,
+  // so a password change / the disable-lock fallback wipe (both writeConfig) invalidates IMMEDIATELY.
+  // Only the opaque stored string is cached — decryption and comparison still run per attempt, and
+  // nothing plaintext ever sits in memory longer than the compare needs.
+  function cachedStoredPassword () {
+    let version = null
+    try { version = configVersion() } catch { /* no version source: TTL-only */ }
+    const now = Date.now()
+    if (now - pwCache.at < LOCK_FLAG_TTL_MS && (version === null || version === pwCache.version)) return pwCache.value
+    const v = String(readConfig().securityLockPassword || '')
+    pwCache = { value: v, version, at: now }
+    return v
+  }
+  let pwCache = { value: '', version: -1, at: 0 }
+
   function verifyLockPassword (plain) {
-    const c = readConfig()
-    const stored = String(c.securityLockPassword || '')
+    const stored = cachedStoredPassword()
     let expected = stored
     try {
       if (stored.startsWith('enc1:')) {
@@ -243,4 +278,11 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
   return { isLocked, lockAppNow, unlockAppNow, verifyLockPassword, isLockWindow, focusLock }
 }
 
-module.exports = { createSecurityLock, crashSelfHealAction, allowWithinRate }
+// M8B fix 7 (P3): JSON.stringify alone is NOT safe inside an inline <script> — a copy string
+// containing `</script>` closes the script block mid-literal (and `<!--` opens an HTML comment
+// trick). Escape `<`, `>`, `/`, `&` and line separators as \uXXXX AFTER stringify: the JSON
+// literal survives intact while the raw sequence never appears in the document. Module-level
+// so the escaping contract is directly unit-testable (lockWin build needs Electron).
+const jsStr = s => JSON.stringify(String(s)).replace(/[<>/&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
+
+module.exports = { createSecurityLock, crashSelfHealAction, allowWithinRate, jsStr }

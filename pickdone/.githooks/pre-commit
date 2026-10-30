@@ -9,16 +9,61 @@ echo "[pre-commit] 1/4 语法校验（node --check 变更的 .js/.mjs/.cjs）"
 fail=0
 # while-read 逐行处理而非 for 循环分词:for 会按空白切分,路径带空格的变更文件被静默跳过。
 # 过滤器 .[cm]?js 覆盖 .js/.cjs/.mjs(旧 '\.m?js$' 漏 .cjs);tr -d '\r' 容忍 CRLF 名单行。
-git diff --cached --name-only --diff-filter=ACM | grep -E '\.[cm]?js$' | tr -d '\r' | while IFS= read -r f; do
-  [ -f "$f" ] || continue
-  if ! node --check "$f" 2>/tmp/hook-check.err; then
-    echo "  ✗ 语法错误: $f"
-    cat /tmp/hook-check.err
-    exit 1
+# 2026-10-26 堵假绿:git 打印的是仓库根相对路径(pickdone/...),而钩子已 cd 进 pickdone/,
+# 旧的 [ -f "$f" ] 对每个文件都判"不存在",本阶段整个生命周期里实际检查了 0 个文件却一直绿。
+# 剥掉 pickdone/ 前缀后再做存在性判断(与 cli/lint-staged.mjs / check-file-size.cjs 同款),
+# 并在"有 staged js 却 0 个被检查"时拒绝放行。列表落盘再 while<file:管道子 shell 里改
+# checked 计数传不出来,重定向方式让循环跑在当前 shell。
+jslist=/tmp/hook-staged-js.$$
+errfile=/tmp/hook-check.err.$$  # 带 $$ 后缀:并发钩子实例互相覆盖对方的错误文件(与上行 jslist 同款)
+# W15 2026-10-27: /tmp 卫生——errfile 在任何路径都不删、jslist 在 `break→exit 1` 熔断路径也不删,
+# 每次运行留一对垃圾。EXIT trap 兜底清理(正常路径原有的 rm 保持不变,幂等);熔断语义不受影响。
+trap 'rm -f "$jslist" "$errfile" 2>/dev/null' EXIT
+# W16 fix(#2/#3): ACMR 补 Rename(git mv 后新路径不进静态门禁,与 lint-staged.mjs 对齐);
+# -c core.quotePath=false 防非 ASCII 文件名被打成八进制串致 [ -f ] 漏检(假红/漏检)。
+git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR | tr -d '\r' | grep -E '\.[cm]?js$' > "$jslist" || true
+checked=0
+missing=0
+# 2026-10-27 堵漏检:pickdone/ 前缀剥掉后按 pickdone 相对路径检查;仓根其他目录的 JS
+# (qa/**、analysis/**、test/** 等)原样加 ../ 前缀检查——旧逻辑只剥前缀,非 pickdone 路径
+# 的 [ -f ] 判不存在被静默跳过(混合提交时外部 JS 漏检)。
+# W20 fix(2026-10-30):被 git 列出却过不了 [ -f ] 的文件以前是 continue 静默跳过——阶段1
+# 的熔断只防"全灭"(checked==0),部分路径归一化失效时其余文件照常检查、整段照常绿。missing
+# 计数后大声报红(与 checked==0 同款拒绝)。
+while IFS= read -r f; do
+  case "$f" in
+    pickdone/*) rel="${f#pickdone/}" ;;
+    *) rel="../$f" ;;
+  esac
+  if [ ! -f "$rel" ]; then
+    echo "  ✗ 路径归一化失效: staged 文件在磁盘上找不到 \"$rel\"（git 报 \"$f\"）"
+    missing=$((missing + 1))
+    continue
   fi
-done || fail=1
+  if ! node --check "$rel" 2>"$errfile"; then
+    echo "  ✗ 语法错误: $f"
+    cat "$errfile"
+    fail=1
+    break
+  fi
+  checked=$((checked + 1))
+done < "$jslist"
 [ $fail -eq 1 ] && exit 1
-echo "  ✓ 通过"
+# 熔断只对"确实存在 staged js"生效:列表为空(如纯文档提交)检查 0 个是正常绿;
+# 列表非空却 0 个通过存在性判断 = 路径归一化失效,拒绝假绿(参照 check-file-size.cjs 2026-10-10 修复)。
+# 判断必须发生在 rm 之前。
+# W20 fix(2026-10-30):部分失效同样拒绝——missing>0 时上面已逐条点名,这里汇总报红退出。
+jslist_nonempty=0; [ -s "$jslist" ] && jslist_nonempty=1
+rm -f "$jslist"
+if [ "$missing" -gt 0 ]; then
+  echo "  ✗ 有 $missing 个 staged 的 js/cjs/mjs 文件在磁盘上找不到（路径归一化部分失效）——拒绝假绿"
+  exit 1
+fi
+if [ "$jslist_nonempty" -eq 1 ] && [ "$checked" -eq 0 ]; then
+  echo "  ✗ 有 staged 的 js/cjs/mjs 文件但 0 个通过了语法检查（路径归一化失效）——拒绝假绿（参照 check-file-size.cjs 2026-10-10 修复）"
+  exit 1
+fi
+echo "  ✓ 通过（检查 $checked 个文件）"
 
 echo "[pre-commit] 2/4 token 纪律（写死浅色背景=深色白块元凶）"
 node cli/check-tokens.js || exit 1
@@ -32,13 +77,16 @@ node cli/check-esm-graph.cjs || exit 1
 echo "  ✓ 通过"
 
 echo "[pre-commit] 3/4 ESLint（0 error 才放行，warning 不阻塞；--cache 热跑秒级,与 check:all 共用 .eslintcache）"
-npx eslint renderer/js cli src tests --quiet --cache || exit 1
+node cli/lint-staged.mjs || exit 1
 echo "  ✓ 通过"
 
-echo "[pre-commit] 4/4 单元测试（run-all.mjs 自动发现全量——只跑单文件会放过 store/utils 等核心回归）"
+echo "[pre-commit] 4/4 单元测试（core 层=纯进程内规格;深潜层套件——真 Electron/双实例 lan-sync/loopback 演练——归 check:all 全量）"
 # 2026-09-13 堵假绿:不再 `npm test | grep "# fail 0"`(管道吞 exit code + 任意来源字符串即假绿)。
 # 改由 cli/check-test-summary.cjs 统一校验:exit code 非 0 即红 + TAP 摘要 fail=0 + skip 棘轮(≤基线,超线提示"新增 skip 需要说明+降基线")
-node cli/check-test-summary.cjs || exit 1
+# 2026-10-23 效率波:改跑 --core 层。深潜层套件慢(分钟级/个)且负载敏感(宿主高载时级联出
+# 假红,2026-10-22 实锤 17 条 not ok 里 12 条属此类、隔离全绿),不该在每次提交时打全量;
+# 合并门禁 check:all 仍跑全池兜底。
+node cli/check-test-summary.cjs --core --affected --retry-once || exit 1
 echo "  ✓ 通过"
 
 echo "[pre-commit] 全部通过 ✓"

@@ -59,6 +59,17 @@ say('[Unreleased] 非空,待归版')
     fs.writeFileSync(pPkg, JSON.stringify(pkg, null, 2) + '\n')
     say(`package.json version -> ${version}`)
   }
+  // lock 版本同步(P1-4h tag-match 门比对 package.json 与 package-lock.json 两处——只写 pkg 会让
+  // 发版自身的 check:all 红在自己脚下:2026-10-29 beta.21 三连红实锤,旧账「bump skipped lockfile」)
+  const pLock = path.join(ROOT, 'package-lock.json')
+  const lockRaw = fs.readFileSync(pLock, 'utf8')
+  const lock = JSON.parse(lockRaw)
+  if (lock.version !== version || (lock.packages && lock.packages[''] && lock.packages[''].version !== version)) {
+    lock.version = version
+    if (lock.packages && lock.packages['']) lock.packages[''].version = version
+    fs.writeFileSync(pLock, JSON.stringify(lock, null, 2) + '\n')
+    say(`package-lock.json version -> ${version}`)
+  }
   const today = sh(['node', '-p', 'new Date().toISOString().slice(0,10)'])
   const promote = (text) => {
     // Rename [Unreleased] -> [X.Y.Z] and re-seed an empty [Unreleased] above it (keep-a-changelog
@@ -93,7 +104,7 @@ try {
   // cache stamps, changelog section renames) so a red check:all doesn't leave a dirty tree or renamed
   // [X.Y.Z] sections that block the re-run ("CHANGELOG 已存在 [X.Y.Z] 段"). Errors are swallowed on
   // purpose: the gate failure itself is what must be reported.
-  try { sh(['git', 'checkout', '--', 'package.json', 'renderer/index.html', 'browser-dev/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md']) } catch { /* best-effort */ }
+  try { sh(['git', 'checkout', '--', 'package.json', 'package-lock.json', 'renderer/index.html', 'browser-dev/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md']) } catch { /* best-effort */ }
   die('check:all 未全绿——修完再跑 npm run release(不会推任何东西)')
 }
 
@@ -102,7 +113,7 @@ try {
 // have touched; a blanket add would sweep unrelated local debris (stray test artifacts, editor
 // droppings) into the release commit. Paths are relative to ROOT (sh() cwd = pickdone/); the changelogs
 // live one level above it, inside the same repo.
-sh(['git', 'add', 'package.json', 'renderer/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md'])
+sh(['git', 'add', 'package.json', 'package-lock.json', 'renderer/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md'])
 // browser-dev/ is gitignore-listed (the tracked index.html was force-added historically) — plain add refuses it
 sh(['git', 'add', '-f', 'browser-dev/index.html'])
 // Anchor the pre-commit HEAD (2026-09-11 review P2): if the commit step took its "nothing to commit"

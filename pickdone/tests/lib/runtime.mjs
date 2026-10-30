@@ -6,6 +6,7 @@
  */
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,8 +58,19 @@ export async function pickFreePort () {
  * @param {string} [opts.userDataDir]       缺省 mkdtemp 临时目录（预置空 todos.db 跳过 legacy 迁移）
  * @param {string[]} [opts.appArgs]         额外命令行参数
  * @returns {Promise<{child, port, cdp, userDataDir, wsUrl:()=>string}>}
+ *
+ * Attach mode (2026-10-23 speed wave): when TODO_SHARED_CDP points at a live debug endpoint,
+ * spawnApp returns an ATTACHED ctx without spawning anything — the shared live-pool runner
+ * (tests/run-interactions-shared.mjs) owns the instance lifecycle. stopApp() on an attached
+ * ctx only drops the WebSocket; the instance is NOT ours to kill.
  */
 export async function spawnApp (opts = {}) {
+  const attachCdp = process.env.TODO_SHARED_CDP
+  if (attachCdp) {
+    let port = 0
+    try { port = Number(new URL(attachCdp).port) || 0 } catch { /* let connectCdp name the failure */ }
+    return { child: null, port, cdp: attachCdp, userDataDir: null, logFile: null, attached: true }
+  }
   const port = opts.port || await pickFreePort()
   const autoDir = !opts.userDataDir
   const userDataDir = opts.userDataDir || fs.mkdtempSync(path.join(os.tmpdir(), 'todo-test-'))
@@ -69,13 +81,31 @@ export async function spawnApp (opts = {}) {
   // data-isolated — TODO_USER_DATA_DIR points into a temp dir, never at %APPDATA%/pickdone.
   // Failing loudly here keeps future tests from regressing to attaching the real user data
   // (and, via src/main/log-isolation.js, from leaking log lines into the real main.log).
-  assert.ok(userDataDir && path.isAbsolute(userDataDir) && !path.resolve(userDataDir).toLowerCase().includes(process.env.APPDATA ? process.env.APPDATA.toLowerCase() : 'appdata'),
-    `spawnApp refuses non-isolated userData dir: ${userDataDir}`)
+  // W16 fix(#5): 校验口径从"不含 appdata 子串"改为"专用测试临时根(os.tmpdir() 的直接子目录)"
+  // ——旧裸子串匹配把含 "appdata" 字样的合法临时目录(如 %TEMP%\appdata-scratch\…)整批拒掉;
+  // 而 %APPDATA% 下的任何路径都必然落在 os.tmpdir() 之外,真 userData 误用依旧被拒绝。
+  const tmpRoot = path.resolve(os.tmpdir())
+  const resolvedDir = userDataDir ? path.resolve(userDataDir) : ''
+  assert.ok(resolvedDir && path.isAbsolute(resolvedDir) &&
+    resolvedDir.toLowerCase().startsWith(tmpRoot.toLowerCase() + path.sep),
+    `spawnApp refuses non-isolated userData dir (must live under the temp root ${tmpRoot}): ${userDataDir}`)
   const logFile = path.join(ARTIFACTS, `${opts.name || 'app'}-app.log`)
   const baseArgs = opts.allowFocus ? [] : ['--no-focus']
+  // 2026-10-24: per-instance sync port — without an override every spawned app binds the
+  // FIXED default 3442, colliding with concurrently-running instances (unit tier's
+  // lan-sync-journey pair rides the same gate). Ephemeral port per instance.
+  const syncPort = await new Promise((resolve, reject) => {
+    const srv = net.createServer()
+    srv.listen(0, '127.0.0.1', () => { const p = srv.address().port; srv.close(() => resolve(p)) })
+    srv.on('error', reject)
+  })
+  // strip ELECTRON_RUN_AS_NODE (same as the shared pool's bootInstance): harness/IDE host
+  // shells export it → electron.exe boots as plain Node and dies in src/main/index.js.
+  const env = { ...process.env, TODO_USER_DATA_DIR: userDataDir, TODO_SYNC_PORT: String(syncPort) }
+  delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(ELECTRON, ['.', ...baseArgs, '--remote-debugging-port=' + port, ...(opts.appArgs || []), ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: APP_CWD,
-    env: { ...process.env, TODO_USER_DATA_DIR: userDataDir },
+    env,
     // app 输出写文件：node:test 会捕获 hook console，启动日志必须落盘可查
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')],
     detached: false
@@ -83,12 +113,21 @@ export async function spawnApp (opts = {}) {
   return { child, port, cdp: `http://127.0.0.1:${port}`, userDataDir, logFile }
 }
 
-/** 优雅退出（Browser.close 触发 before-quit/mirror flush）→ 超时 taskkill 整树（win32 必须防锁残留） */
+/** 优雅退出（Browser.close 触发 before-quit/mirror flush）→ 超时 taskkill 整树（win32 必须防锁残留）
+ *  attached ctx（TODO_SHARED_CDP 共享实例）只断 WS,绝不杀实例——生命周期归共享 runner 所有 */
 export async function stopApp (ctx) {
+  if (ctx.attached) {
+    try { ctx._ws && ctx._ws.close() } catch {}
+    ctx._ws = null
+    return
+  }
   let graceful = false
   if (ctx._ws) {
     try {
-      const exited = new Promise(r => { if (ctx.child) ctx.child.on('exit', r); else r() })
+      // W16 fix(#7): once 而非 on——stopApp 对同一 ctx 可被多次调用,旧 on('exit') 每次累挂
+      // 一个永不移除的监听器(MaxListeners 警告/泄漏);且子进程已退出时(exitCode !== null)
+      // 该监听器永不触发,直接以已退出态进入后续清理,不再空等。
+      const exited = new Promise(r => { if (ctx.child && ctx.child.exitCode === null) ctx.child.once('exit', r); else r() })
       await Promise.race([ctx._send('Browser.close'), sleep(4000).then(() => 'timeout')])
       graceful = await Promise.race([exited.then(() => true), sleep(4000).then(() => false)])
     } catch {}
@@ -100,7 +139,20 @@ export async function stopApp (ctx) {
   } else if (!graceful && ctx.child) {
     try { ctx.child.kill('SIGKILL') } catch {}
   }
-  await sleep(2500) // 进程树退出 + SQLite WAL 落盘
+  // [load-budget 2026-10-25] wait for the tree to actually exit instead of a fixed
+  // sleep(2500) (idle-host figure): under load the tree can outlive 2.5s and the next
+  // step (dir deletion / port rebind) then trips over a dying process. Poll the OS for
+  // pid liveness; the fixed floor stays as the WAL-flush settle.
+  if (ctx.child && ctx.child.pid) {
+    const dl = Date.now() + 20000
+    while (Date.now() < dl) {
+      // W16 fix(#7): 先看 child 自己的退出态——pid 被系统复用后 process.kill(pid,0) 对着一个
+      // 无关进程持续"存活",旧循环白等满 20s;exitCode !== null 即进程本体已退,立即收尾。
+      if (ctx.child.exitCode !== null) break
+      try { process.kill(ctx.child.pid, 0); await sleep(200) } catch { break }
+    }
+  }
+  await sleep(2500) // SQLite WAL settle floor (fs flush lag, not process lifetime)
 }
 
 /** 连接主窗 page（过滤浮窗 target；保留 index.html 兜底——冷启动 hash 可能为空） */
@@ -119,6 +171,14 @@ export async function connectCdp (ctx, tries = 40) {
         const sendRaw = (method, params = {}) => new Promise(res => {
           const i2 = ++id; pending.set(i2, res); ws.send(JSON.stringify({ id: i2, method, params }))
         })
+        // bounded send: ws.send never rejects and a wedged/dead page never replies, so an
+        // unbounded sendRaw parks the boot sequence forever (outside any caller budget).
+        // Race each call against a 20s ceiling — a timeout rejects NAMED so the caller's
+        // catch (or the probe loop below) degrades to its own wait logic (2026-10-27).
+        const sendRawT = (method, params = {}) => Promise.race([
+          sendRaw(method, params),
+          sleep(20000).then(() => { throw new Error('timeout ' + method) })
+        ])
         ws.onmessage = e => {
           const m = JSON.parse(e.data)
           if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
@@ -129,18 +189,19 @@ export async function connectCdp (ctx, tries = 40) {
             consoleErrors.push(m.params.args.map(a => a.value ?? a.description ?? '').join(' ').slice(0, 300))
           }
         }
-        await sendRaw('Runtime.enable')
+        await sendRawT('Runtime.enable') // W15: bounded like every other call below — an unbounded sendRaw parked the boot forever on a wedged page
         ctx._ws = ws
         ctx._send = sendRaw
         ctx.consoleErrors = consoleErrors
         // 语言钉死 zh-CN:CI runner 系统语言 en-US,应用跟随系统变英文,全套中文选择器/文案断言全哑
         // (2026-09-06 公开 CI 实锤:body 文本以 "PickDone Completed…" 开头=导航已英文化)。pin appLocale=en-US (product default: en unless system zh) + reload + wait for shell ready.
         try {
-          await sendRaw('Page.enable')
-          await sendRaw('Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US')}catch(e){}" })
-          await sendRaw('Page.reload', { ignoreCache: true })
+          await sendRawT('Page.enable')
+          await sendRawT('Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US')}catch(e){}" })
+          // plain reload — ignoreCache hangs under the app:// protocol (ui-smoke lesson, run-interactions-shared.mjs:176)
+          await sendRawT('Page.reload')
           for (let i = 0; i < 40; i++) {
-            const rr = await sendRaw('Runtime.evaluate', { expression: '!!window.appUI && !!document.querySelector(.app-shell-INIT)'.replace('.app-shell-INIT', String.fromCharCode(39) + '.app-shell' + String.fromCharCode(39)), returnByValue: true }).catch(() => null)
+            const rr = await sendRawT('Runtime.evaluate', { expression: '!!window.appUI && !!document.querySelector(.app-shell-INIT)'.replace('.app-shell-INIT', String.fromCharCode(39) + '.app-shell' + String.fromCharCode(39)), returnByValue: true }).catch(() => null)
             if (rr && rr.result && rr.result.value === true) break
             await sleep(500)
           }
@@ -155,13 +216,18 @@ export async function connectCdp (ctx, tries = 40) {
 
 export async function send (ctx, method, params = {}) { return ctx._send(method, params) }
 
-/** 页面内求值（JSON 序列化往返；12s 超时=页面僵死或 WS 断连） */
+/** 页面内求值（JSON 序列化往返）
+ *  [load-budget 2026-10-25] 60s (was 12s, idle-host figure): this is THE shared evaluation
+ *  channel for every live target (ui-smoke/ui-coverage/cssom/overlay/integration-ui), and
+ *  caller-side seeds chain multiple 1s-class sleeps inside one expression — under a full
+ *  gate the whole IIFE legitimately ran past 12s and read as "page wedged". A truly wedged
+ *  page still times out at the budget; the timeout message keeps the old shape. */
 export async function evalJson (ctx, expression) {
   const r = await Promise.race([
     ctx._send('Runtime.evaluate', { expression: `(async () => JSON.stringify(await (${expression})))()`, returnByValue: true, awaitPromise: true }),
-    sleep(12000).then(() => null)
+    sleep(60000).then(() => null)
   ])
-  if (r === null) throw new Error('Runtime.evaluate timed out after 12s (page wedged or WS disconnected)')
+  if (r === null) throw new Error('Runtime.evaluate timed out after 60s (page wedged or WS disconnected)')
   const raw = r.result?.result?.value
   if (raw !== undefined && raw !== null && typeof raw !== 'string') {
     throw new Error('evalJson: non-string value | expr: ' + (expression && expression.slice ? expression.slice(0, 140) : String(expression)) + ' | got: ' + String(JSON.stringify(r.result && r.result.result)).slice(0, 80))
@@ -177,7 +243,23 @@ export async function waitBoot (ctx, { tries = 40, shellOnly = false } = {}) {
       const ok = shellOnly
         ? list.some(t => t.type === 'page')
         : list.some(t => t.type === 'page' && /#\/(todo-list|__widget\/list)/.test(t.url))
-      if (ok) { await sleep(1500); return true }
+      if (ok) {
+        // [load-budget 2026-10-25] post-boot settle is CONDITIONAL now: the old fixed
+        // sleep(1500) paid 1.5s on every fast boot AND still raced a slow renderer under
+        // load. Poll for the renderer actually answering evaluations, floor 300ms.
+        const settleDl = Date.now() + 8000
+        while (Date.now() < settleDl) {
+          await sleep(300)
+          try {
+            const probe = await Promise.race([
+              (await fetch(ctx.cdp + '/json/list', { signal: AbortSignal.timeout(1500) })).json(),
+              sleep(1200).then(() => null)
+            ])
+            if (probe && probe.some(t => t.type === 'page')) break
+          } catch { /* still settling — keep polling */ }
+        }
+        return true
+      }
     } catch { /* not ready */ }
     await sleep(500)
   }

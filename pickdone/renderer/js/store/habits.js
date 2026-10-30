@@ -26,6 +26,12 @@ export function normalizeHabitRecords (habits) {
   for (const h of (Array.isArray(habits) ? habits : [])) {
     if (!h || typeof h !== 'object') continue
     if (!h.records || typeof h.records !== 'object') h.records = {}
+    // [W8 fix] per-day un-check tombstones + check-in stamps ride INSIDE the habit object (not new
+    // blob top-level keys — the main process's db-sync-schema HABITS_BLOB_OWNED only enumerates
+    // blob top-level keys, so anything nested in `habits` syncs verbatim with no main-process
+    // registration).
+    if (h.uncheckedAt !== undefined && (h.uncheckedAt === null || typeof h.uncheckedAt !== 'object' || Array.isArray(h.uncheckedAt))) h.uncheckedAt = {}
+    if (h.recordsAt !== undefined && (h.recordsAt === null || typeof h.recordsAt !== 'object' || Array.isArray(h.recordsAt))) h.recordsAt = {}
   }
   return habits
 }
@@ -41,6 +47,165 @@ export function isStaleExternalRound (incomingSavedAt, currentSavedAt) {
   return (Number(incomingSavedAt) || 0) <= (Number(currentSavedAt) || 0)
 }
 
+/** D-wave (2026-10-14): union-max merge of two check-in records maps. Check-ins are monotonically
+ *  INCREASING events, so for each day key we keep the LARGER value (a boolean `true` counts as 1).
+ *  This is the semantics trade-off: a count-up style habit that was corrected DOWN on one device
+ *  can be resurrected by an older peer copy — we accept losing a decrement rather than silently
+ *  losing the other device's check-in, which the previous whole-array LWW replace did on EVERY
+ *  concurrent check-in (the LAN fold channel is one blob, unlike settings' per-field rows). */
+export function unionMaxRecords (incoming, local) {
+  const out = Object.assign({}, incoming || {})
+  for (const day of Object.keys(local || {})) {
+    const l = Number(local[day]) || 0
+    const cur = Number(out[day]) || 0
+    if (l > cur) out[day] = local[day]
+  }
+  return out
+}
+
+/** [W8 fix] per-day union-max over the un-check tombstone maps: an un-check (like a check-in) is a
+ *  per-day fact either device may record, so the LATEST tombstone per day survives the merge and
+ *  propagates to peers (otherwise the peer's stale blob union-max re-resurrects the check-in). */
+export function unionUncheckedAt (incoming, local) {
+  const a = (incoming && typeof incoming === 'object' && !Array.isArray(incoming)) ? incoming : {}
+  const b = (local && typeof local === 'object' && !Array.isArray(local)) ? local : {}
+  const out = Object.assign({}, a)
+  for (const day of Object.keys(b)) {
+    if ((Number(b[day]) || 0) > (Number(out[day]) || 0)) out[day] = b[day]
+  }
+  return out
+}
+
+/** [W8 fix] inbound-record filter for the un-check tombstones: a day's union-max'd check-in is
+ *  dropped when its tombstone is NEWER than the check-in's own write time (`recordsAt[day]`, a
+ *  per-day stamp written by toggleCheck/setCheck on every check-in — records values themselves
+ *  carry no timestamp). An un-check that happened after the check-in we know about cannot be
+ *  resurrected by the union-max; conversely a check-in written AFTER the un-check (a re-check on
+ *  another device) survives its stale tombstone. The tombstone keeps propagating
+ *  (unionUncheckedAt), so the peer's stale copy is suppressed there too. Legacy records without a
+ *  `recordsAt` stamp read as 0 → the tombstone wins (sticky default, same doctrine as the
+ *  habits `deleted` array). Same-stamp ties go to the un-check (the later op in sequence; the
+ *  D15-B9 "ties reject" doctrine). */
+function filterUncheckedDays (habit) {
+  if (!habit || !habit.uncheckedAt || typeof habit.uncheckedAt !== 'object') return habit
+  const at = (habit.recordsAt && typeof habit.recordsAt === 'object' && !Array.isArray(habit.recordsAt)) ? habit.recordsAt : {}
+  for (const day of Object.keys(habit.uncheckedAt)) {
+    if (habit.records && habit.records[day] !== undefined &&
+        (Number(habit.uncheckedAt[day]) || 0) >= (Number(at[day]) || 0)) {
+      delete habit.records[day]
+    }
+  }
+  return habit
+}
+
+/** Match incoming habits against the local array by id and fold the LOCAL check-ins that the
+ *  incoming blob never saw into the incoming records (union-max). Config fields (name/color/
+ *  frequency/deletion) still follow the blob-level savedAt LWW: habits absent from the incoming
+ *  array stay absent, incoming config values win — only the records map is conservatively merged.
+ *  [W8 fix] per-day un-check tombstones are union-max'd alongside (unionUncheckedAt) and then
+ *  filter the merged records (filterUncheckedDays) — an un-check on either side cannot be
+ *  resurrected by the union-max (sticky, same doctrine as the `deleted` array). */
+function mergeHabitRecords (incomingHabits, localHabits) {
+  const localById = new Map((localHabits || []).filter(h => h && h.id != null).map(h => [h.id, h]))
+  for (const h of incomingHabits) {
+    const local = h && h.id != null ? localById.get(h.id) : null
+    if (local && local.records && typeof local.records === 'object') {
+      h.records = unionMaxRecords(h.records, local.records)
+    }
+    if (local) {
+      // per-day max for BOTH timestamp maps (same semantics): the latest un-check and the latest
+      // check-in each survive the merge so the tombstone-vs-record arbitration stays global
+      h.uncheckedAt = unionUncheckedAt(h.uncheckedAt, local.uncheckedAt)
+      h.recordsAt = unionUncheckedAt(h.recordsAt, local.recordsAt)
+    }
+    filterUncheckedDays(h)
+  }
+  return incomingHabits
+}
+
+/** [F2 2026-10-19 P2] moments union-merge (same family as unionMaxRecords): an inbound blob only
+ *  carries the moments its author KNOWS about, so the previous whole-array LWW replace silently
+ *  deleted the other device's countdowns/anniversaries on every concurrent edit. Merge by id:
+ *  ids present on either side survive; for an id on both sides the incoming copy wins, and
+ *  undefined fields backfill from the local copy (records' per-key union-max analog). */
+export function unionMoments (incoming, local) {
+  const out = (incoming || []).filter(m => m && m.id != null).map(m => ({ ...m }))
+  const byId = new Map(out.map(m => [m.id, m]))
+  for (const m of (local || [])) {
+    if (!m || m.id == null) continue
+    const cur = byId.get(m.id)
+    if (!cur) { out.push({ ...m }); byId.set(m.id, out[out.length - 1]) }
+    else for (const k of Object.keys(m)) if (cur[k] === undefined) cur[k] = m[k]
+  }
+  return out
+}
+
+/** [F3 fix] delete tombstones: delHabit records `{ id, deletedAt }` in the blob's `deleted` array,
+ *  so a peer blob that still carries the habit (its savedAt may even be newer) can no longer
+ *  resurrect it through mergeHabitRecords/applyExternal/applyExternalPatch. Backward compatible:
+ *  blobs without a `deleted` field behave exactly as before (field optional, old readers ignore it,
+ *  old blobs merge to an empty list).
+ *  Cross-device caliber (minimal correct version): a tombstone WINS regardless of savedAt —
+ *  deletion is sticky. Rationale: a habit id is `Date.now() + random suffix`, so a "re-created"
+ *  habit with the same id is impossible by construction; any id reappearing in an inbound blob is
+ *  a stale peer copy, and re-adding through addHabit mints a fresh id that no tombstone shadows.
+ *  Records maps of surviving habits keep the d846a3e3 union-max merge — untouched.
+ *  [W11 2026-10-26 recalibration] the "WINS regardless of savedAt" caliber above proved too
+ *  blunt in multi-device setups: it let a peer's stale fold round carrying fields.deleted:[X]
+ *  re-infect the tombstone after an upstream UN-DELETE and silently re-delete the revived
+ *  habit on every inbound boundary. Inbound rounds now prune tombstones whose id arrives ALIVE
+ *  in the habits/moments arrays with deletedAt predating the round's savedAt (see
+ *  pruneSupersededTombstones); ids absent from the inbound arrays keep the full stickiness
+ *  described above (old backups still cannot resurrect). */
+export function mergeHabitTombstones (local, incoming) {
+  const out = new Map((local || []).filter(t => t && t.id != null).map(t => [t.id, Number(t.deletedAt) || 0]))
+  for (const t of (incoming || [])) {
+    if (!t || t.id == null) continue
+    const at = Number(t.deletedAt) || 0
+    if (!out.has(t.id) || at > (out.get(t.id) || 0)) out.set(t.id, at)
+  }
+  return Array.from(out, ([id, deletedAt]) => ({ id, deletedAt }))
+}
+
+/** Drop tombstoned ids from an inbound habits array (returns the array unchanged when nothing is
+ *  tombstoned). Applied at every inbound boundary so a peer blob can never resurrect a deletion. */
+export function applyHabitTombstones (habits, tombstones) {
+  const dead = new Set((tombstones || []).filter(t => t && t.id != null).map(t => t.id))
+  if (!dead.size) return habits
+  return habits.filter(h => !(h && h.id != null && dead.has(h.id)))
+}
+
+/** [W11 2026-10-26 P2] prune tombstones SUPERSEDED by an inbound round: if the inbound blob/patch
+ *  POSTDATES the delete (`deletedAt < inboundSavedAt`) AND still carries the id ALIVE in its
+ *  habits/moments array, the delete was undone upstream — the incoming alive row outranks the
+ *  stale tombstone. Rationale: mergeHabitTombstones is a union that only ADDS, so in any
+ *  multi-device setup a peer's fold round carrying `fields.deleted:[X]` re-infected the tombstone
+ *  after the W10 force-restore had pruned it locally, silently re-deleting the just-undone habit
+ *  on this device. Ids NOT present in the inbound array keep FULL stickiness (a peer that never
+ *  saw the habit is not evidence of an un-delete — an old backup without the id must not clear
+ *  the tombstone). Returns the SAME array when nothing is pruned (callers rely on reference
+ *  identity to avoid spurious `changed` flags). */
+function pruneSupersededTombstones (tombstones, inboundIds, inboundSavedAt) {
+  // non-array input (e.g. a state without the optional tombstone fields) passes through
+  // UNCHANGED — callers key their `changed` flags on reference identity
+  if (!Array.isArray(tombstones)) return tombstones
+  const list = tombstones
+  const at = Number(inboundSavedAt) || 0
+  if (!at || !list.length || !inboundIds || !inboundIds.size) return list
+  const out = list.filter(t => !(t && t.id != null && inboundIds.has(t.id) && (Number(t.deletedAt) || 0) < at))
+  return out.length === list.length ? list : out
+}
+
+/** [W7-R 2026-10-23 P2] moments deletion tombstones — same shape and stickiness caliber as the
+ *  habits `deleted` array above. delMoment used to only filter the local array, so a peer blob
+ *  (or a synced round with an equal/newer savedAt) whose `moments` still carried the deleted id
+ *  resurrected it through the unionMoments merge at every inbound boundary (union-merge keeps
+ *  ids present on EITHER side — exactly the resurrection vector). `deletedMoments` rides the
+ *  blob top level next to `deleted`; both the tombstone-shape helpers above are id-generic
+ *  ({ id, deletedAt }), so they are reused as-is (aliases exported for readability/tests). */
+export const mergeMomentTombstones = mergeHabitTombstones
+export const applyMomentTombstones = applyHabitTombstones
+
 function readLs () {
   try {
     const d = JSON.parse(localStorage.getItem(LS_KEY))
@@ -53,8 +218,8 @@ function readLs () {
 /** First-paint state: localStorage takes precedence (synchronously available); newer values from the main DB are merged by initFromDb at startup */
 function load () {
   const d = readLs()
-  if (d) return { habits: d.habits, moments: d.moments || [], savedAt: d.savedAt || 0 }
-  return { habits: [], moments: [], savedAt: 0 }
+  if (d) return { habits: d.habits, moments: d.moments || [], savedAt: d.savedAt || 0, deleted: d.deleted || [], deletedMoments: d.deletedMoments || [] }
+  return { habits: [], moments: [], savedAt: 0, deleted: [], deletedMoments: [] }
 }
 
 /** Aux-window detection: same judgment as dbMirror's writeNow (float / quick-add hashes).
@@ -76,7 +241,9 @@ import { localDayKey } from '../../../shared/date-key.mjs'
 /** Dual write: localStorage (synchronous fallback) + main DB meta table (source of truth, included in auto backup).
  *  Aux windows: LS write + relay ping only — the main window's storage listener persists to the DB on their behalf. */
 function persist (state) {
-  const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now() }
+  // [F3 fix] the blob now carries the deletion tombstones (additive field — old readers/blobs
+  // without it behave unchanged)
+  const blob = { schemaV: SCHEMA_V, habits: state.habits, moments: state.moments || [], savedAt: Date.now(), deleted: state.deleted || [], deletedMoments: state.deletedMoments || [] }
   state.savedAt = blob.savedAt
   try { localStorage.setItem(LS_KEY, JSON.stringify(blob)) } catch {}
   try {
@@ -235,16 +402,56 @@ export default {
      *  silently no-opped whenever local savedAt was newer and never reached DB/sync. */
     replaceAll (s, blob) {
       if (!blob || !Array.isArray(blob.habits)) return
+      // [W8 fix] downgrade protection, same caliber as settings.js initFromDb: a blob stamped by a
+      // FUTURE schema version must be refused outright (no state write, no LS rewrite, no mirror
+      // write-back) — old code misreading new-shape data can silently corrupt it; leave it for the
+      // upgraded version to consume.
+      if ((blob.schemaV || 1) > SCHEMA_V) return
       const force = blob.force === true
       if (!force && (blob.savedAt || 0) < (s.savedAt || 0)) return
       normalizeHabitRecords(blob.habits) // DB archive is the restore path for old backups — same missing-records guard as readLs
-      s.habits = blob.habits
-      s.moments = blob.moments || []
+      // [F3 fix] deletion is sticky across restores too: merge the blob's tombstones with the
+      // local ones, then drop tombstoned ids from the incoming array (an old backup without the
+      // `deleted` field cannot resurrect a habit deleted after it was taken).
+      // [W10 2026-10-27 live-probe fix] the UNDO path (force restore) previously resurrected
+      // NOTHING: delHabit's persist had just minted a tombstone for the id, the merge below kept
+      // it, and applyHabitTombstones then filtered the just-restored habit back out — force:true
+      // alone was not enough (caught by the e2e-journeys habit-undo trip, not by unit tests,
+      // which never had a tombstone in state). A FORCE restore is the user saying "this state is
+      // authoritative", so habits/moments present in the incoming blob outrank local tombstones:
+      // prune those tombstones (sync follows — the pruned tombstone + present habit re-propagates
+      // via the next persist, un-deleting on peers). Non-force restores keep full stickiness.
+      const incomingHabitIds = new Set(blob.habits.map(h => h && h.id).filter(Boolean))
+      const incomingMomentIds = new Set((blob.moments || []).map(m => m && m.id).filter(Boolean))
+      const pruneRevived = list => (Array.isArray(list) ? list : []).filter(t => !(t && (incomingHabitIds.has(t.id) || incomingMomentIds.has(t.id))))
+      if (force) {
+        s.deleted = pruneRevived(s.deleted)
+        s.deletedMoments = pruneRevived(s.deletedMoments)
+      }
+      // force 时 blob 自带的墓碑同样不得含复活 id（旧快照理论上不含，防御性对齐）
+      s.deleted = mergeHabitTombstones(s.deleted, force ? pruneRevived(blob.deleted) : blob.deleted)
+      // [W11 2026-10-26] non-force restores prune too: a restore blob with savedAt newer than the
+      // delete and the id alive in its array proves the delete was undone upstream — its stale
+      // local tombstone must not filter the alive row back out. Force keeps the unconditional
+      // pruneRevived above (authoritative snapshot; savedAt may be OLDER than the delete).
+      const inboundIds = new Set([...incomingHabitIds, ...incomingMomentIds])
+      if (!force) {
+        s.deleted = pruneSupersededTombstones(s.deleted, inboundIds, blob.savedAt)
+      }
+      s.habits = applyHabitTombstones(blob.habits, s.deleted)
+      // [W7-R P2] sticky tombstone merge for moments too (same caliber as the `deleted` line
+      // above): an old backup without `deletedMoments` cannot resurrect a moment deleted after
+      // the backup was taken; the inbound array is filtered before it lands.
+      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, force ? pruneRevived(blob.deletedMoments) : blob.deletedMoments)
+      if (!force) s.deletedMoments = pruneSupersededTombstones(s.deletedMoments, inboundIds, blob.savedAt) // [W11] after the merge, same re-infection ordering as the habits side
+      s.moments = applyMomentTombstones(blob.moments || [], s.deletedMoments)
       s.savedAt = blob.savedAt || 0
       // 2026-10-09 P3: `force` is an INTERNAL control flag (restore-backup override), not blob
       // content — strip it from the persisted copy so it never reaches LS/DB or the sync fan-out
       // (same internal-field discipline as todo.js's deleting flag strip).
       const clean = Object.assign({}, blob); delete clean.force
+      clean.deleted = s.deleted // tombstones survive the LS rewrite (see persist()'s blob shape)
+      clean.deletedMoments = s.deletedMoments
       try { localStorage.setItem(LS_KEY, JSON.stringify(clean)) } catch {}
       if (force) persist(s) // dual-write: durable DB meta row (single writer discipline kept — persist() IS the store's writer)
     },
@@ -260,9 +467,36 @@ export default {
       if (!blob || !Array.isArray(blob.habits)) return
       if (isStaleExternalRound(blob.savedAt, s.savedAt)) return
       normalizeHabitRecords(blob.habits)
-      s.habits = blob.habits
-      s.moments = blob.moments || []
-      s.savedAt = blob.savedAt || 0
+      // D-wave (2026-10-14): the blob still wins as a whole (config LWW), but its records maps are
+      // union-max merged with the local ones first — two devices checking in different days must
+      // not lose either side just because the newer blob replaced the whole array.
+      // [F3 fix] tombstones first (merged from the peer blob AND local), then filter the inbound
+      // array — a peer blob that still carries a deleted habit can no longer resurrect it.
+      s.deleted = mergeHabitTombstones(s.deleted, blob.deleted)
+      // [W11 2026-10-26 P2] force-restore un-delete must survive peer fold rounds: the W10 prune
+      // ran only inside the force path, and the tombstone merges above only ADD, so any peer
+      // round whose `deleted` still carried a just-undone id re-infected the tombstone and
+      // applyHabitTombstones below silently re-deleted the revived habit. After the merge, prune
+      // tombstones whose id is present ALIVE in the inbound arrays and whose deletedAt predates
+      // the inbound round's savedAt (the round postdating the delete proves the undo propagated
+      // upstream). Ids absent from the inbound arrays keep full stickiness.
+      const inboundIds = new Set([
+        ...blob.habits.map(h => h && h.id).filter(v => v != null),
+        ...(blob.moments || []).map(m => m && m.id).filter(v => v != null)
+      ])
+      s.deleted = pruneSupersededTombstones(s.deleted, inboundIds, blob.savedAt)
+      // moment tombstone merge must happen BEFORE the prune (same re-infection vector as above)
+      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, blob.deletedMoments)
+      s.deletedMoments = pruneSupersededTombstones(s.deletedMoments, inboundIds, blob.savedAt)
+      s.habits = mergeHabitRecords(applyHabitTombstones(blob.habits, s.deleted), s.habits)
+      // [W7-R P2] moments: merge the peer's deletion tombstones first, then filter the inbound
+      // array BEFORE the union-merge — unionMoments keeps ids present on either side, so an
+      // unfiltered deleted moment would be resurrected by the local copy every round. (Its
+      // merge + prune moved above, next to the habits tombstone handling — same W11 ordering.)
+      // F2 2026-10-19: same union-merge as records — a newer peer blob must not erase this
+      // device's moments (countdowns/anniversaries) it never saw.
+      s.moments = unionMoments(applyMomentTombstones(blob.moments, s.deletedMoments), s.moments)
+      s.savedAt = Math.max(blob.savedAt || 0, s.savedAt || 0)
     },
     /** F2 (2026-09-20): LAN-sync habits fold channel — S1's main process emits
      *  'external-habits-changed' with { fields: { habits?, moments? }, savedAt }. Merge the peer
@@ -282,8 +516,39 @@ export default {
       // tied patch is stale — drop it (ties previously slipped through `<`).
       if (isStaleExternalRound(savedAt, s.savedAt)) return // stale/tied peer round — already superseded
       let changed = false
-      if (Array.isArray(fields.habits)) { normalizeHabitRecords(fields.habits); s.habits = fields.habits; changed = true }
-      if (Array.isArray(fields.moments)) { s.moments = fields.moments; changed = true }
+      // D-wave (2026-10-14): same conservative records merge as applyExternal — the LAN fold
+      // channel used to swap the whole habits array, silently dropping the other device's
+      // concurrent check-in whenever the incoming savedAt was newer.
+      // [F3 fix] the peer round may also carry deletion tombstones (fields.deleted, or top-level
+      // on the bare-blob shape): merge them first, then filter the inbound array so a peer copy
+      // still holding a deleted habit cannot resurrect it.
+      const tombs = Array.isArray(fields.deleted) ? fields.deleted : (Array.isArray(payload.deleted) ? payload.deleted : null)
+      if (tombs) { s.deleted = mergeHabitTombstones(s.deleted, tombs); changed = true }
+      // [W7-R P2] moment tombstones ride the same two shapes as habit tombstones
+      const momentTombs = Array.isArray(fields.deletedMoments) ? fields.deletedMoments : (Array.isArray(payload.deletedMoments) ? payload.deletedMoments : null)
+      if (momentTombs) { s.deletedMoments = mergeMomentTombstones(s.deletedMoments, momentTombs); changed = true }
+      // [W11 2026-10-26 P2] force-restore un-delete must survive peer fold rounds: the merges
+      // above only ADD tombstones, so a peer round still carrying `deleted:[X]` for a habit that
+      // was undone upstream re-infected the tombstone and applyHabitTombstones below silently
+      // re-deleted the just-revived habit on every fold. Prune tombstones whose id arrives ALIVE
+      // in this round's arrays with deletedAt predating the round's savedAt (the round postdates
+      // the delete → the delete was undone upstream); ids absent from this round keep full
+      // stickiness. Run before the inbound arrays are tombstone-filtered.
+      const patchHabitIds = new Set((Array.isArray(fields.habits) ? fields.habits : []).map(h => h && h.id).filter(v => v != null))
+      const patchMomentIds = new Set((Array.isArray(fields.moments) ? fields.moments : []).map(m => m && m.id).filter(v => v != null))
+      const combinedPatchIds = new Set([...patchHabitIds, ...patchMomentIds])
+      const prunedDeleted = pruneSupersededTombstones(s.deleted, combinedPatchIds, savedAt)
+      const prunedMomentTombs = pruneSupersededTombstones(s.deletedMoments, combinedPatchIds, savedAt)
+      if (prunedDeleted !== s.deleted) { s.deleted = prunedDeleted; changed = true }
+      if (prunedMomentTombs !== s.deletedMoments) { s.deletedMoments = prunedMomentTombs; changed = true }
+      if (Array.isArray(fields.habits)) {
+        normalizeHabitRecords(fields.habits)
+        s.habits = mergeHabitRecords(applyHabitTombstones(fields.habits, s.deleted), s.habits)
+        changed = true
+      }
+      // F2 2026-10-19: union-merge, same caliber as applyExternal above — inbound moments are
+      // tombstone-filtered first so a peer copy of a deleted moment cannot resurrect it.
+      if (Array.isArray(fields.moments)) { s.moments = unionMoments(applyMomentTombstones(fields.moments, s.deletedMoments), s.moments); changed = true }
       if (!changed) return // nothing applicable: no state change, no savedAt bump
       s.savedAt = savedAt || s.savedAt
       // Deliberately NO persist() here — same no-echo contract as applyExternal above.
@@ -297,8 +562,13 @@ export default {
         color: PALETTE[s.habits.length % PALETTE.length],
         createdAt: Date.now(),
         frequency: frequency || { type: 'daily' },
-        records: {}
+        records: {},
+        uncheckedAt: {},
+        recordsAt: {}
       })
+      // [F3 fix] defensive: a deliberately re-added id (import/restore with a fixed id) clears its
+      // tombstone — addHabit always mints a fresh id in practice, so this is a no-op normally
+      s.deleted = (s.deleted || []).filter(t => t.id !== id)
       persist(s)
     },
     renameHabit (s, { id, name }) {
@@ -307,12 +577,31 @@ export default {
     },
     delHabit (s, id) {
       s.habits = s.habits.filter(x => x.id !== id)
+      // [F3 fix] record a delete tombstone so any peer blob (or older backup) that still carries
+      // this habit id can no longer resurrect it via applyExternal/applyExternalPatch/replaceAll.
+      s.deleted = mergeHabitTombstones(s.deleted, [{ id, deletedAt: Date.now() }])
       persist(s)
     },
     toggleCheck (s, { id, day }) {
       const h = s.habits.find(x => x.id === id); if (!h) return
-      if (h.records[day]) delete h.records[day]
-      else h.records[day] = true
+      if (h.records[day]) {
+        delete h.records[day]
+        // [W8 fix] un-check tombstone: the union-max inbound merge would otherwise resurrect this
+        // day's check-in from a peer blob that still carries it — and the un-check itself (a pure
+        // key delete) can never propagate to re-suppress it there. The per-day timestamp records
+        // WHEN the un-check happened so the inbound filter (filterUncheckedDays) can arbitrate
+        // against the peer's blob stamp, and a later re-check clears it (see below).
+        if (!h.uncheckedAt || typeof h.uncheckedAt !== 'object') h.uncheckedAt = {}
+        h.uncheckedAt[day] = Date.now()
+      } else {
+        h.records[day] = true
+        // [W8 fix] check-in stamp: the per-day write time the tombstone arbitration compares
+        // against (filterUncheckedDays); a re-check clears the tombstone — the day's un-check is
+        // superseded by a newer check-in
+        if (!h.recordsAt || typeof h.recordsAt !== 'object') h.recordsAt = {}
+        h.recordsAt[day] = Date.now()
+        if (h.uncheckedAt && typeof h.uncheckedAt === 'object') delete h.uncheckedAt[day]
+      }
       persist(s)
     },
     /** [A6 fix] set a specific day to an explicit value (not a toggle): the check-in Undo must
@@ -320,17 +609,58 @@ export default {
      *  click or an interleaved action would corrupt the day's state). */
     setCheck (s, { id, day, on }) {
       const h = s.habits.find(x => x.id === id); if (!h) return
-      if (on) h.records[day] = true
-      else delete h.records[day]
+      // [W8 fix] tombstone/stamp parity with toggleCheck: un-check records the tombstone,
+      // check stamps recordsAt and clears it
+      if (on) {
+        h.records[day] = true
+        if (!h.recordsAt || typeof h.recordsAt !== 'object') h.recordsAt = {}
+        h.recordsAt[day] = Date.now()
+        if (h.uncheckedAt && typeof h.uncheckedAt === 'object') delete h.uncheckedAt[day]
+      } else {
+        delete h.records[day]
+        if (!h.uncheckedAt || typeof h.uncheckedAt !== 'object') h.uncheckedAt = {}
+        h.uncheckedAt[day] = Date.now()
+      }
       persist(s)
     },
     addMoment (s, { name, date, kind }) {
-      // Same collision guard as addHabit
-      s.moments.push({ id: Date.now() + '-' + Math.random().toString(36).slice(2, 7), name, date, kind })
+      const id = Date.now() + '-' + Math.random().toString(36).slice(2, 7)
+      s.moments.push({ id, name, date, kind })
+      // [W7-R P2] defensive parity with addHabit: a deliberately re-added identical id clears its tombstone
+      s.deletedMoments = (s.deletedMoments || []).filter(t => t.id !== id)
       persist(s)
     },
     delMoment (s, id) {
       s.moments = s.moments.filter(x => x.id !== id)
+      // [W7-R P2] record a deletion tombstone so peer blobs (and old backups) still carrying the
+      // moment id cannot resurrect it through the union-merge inbound boundaries.
+      s.deletedMoments = mergeMomentTombstones(s.deletedMoments, [{ id, deletedAt: Date.now() }])
+      persist(s)
+    },
+    /** [W11 2026-10-26 P2] targeted un-delete for the delete-toast Undo: splice ONLY the deleted
+     *  entry back and clear its tombstone. The W10 undo force-restored the WHOLE pre-delete blob
+     *  via replaceAll, so any interleaved edit during the toast window (a check-in on another
+     *  habit, an added moment, a rename) was rolled back AND written to LS/DB by the force
+     *  persist — silent data loss. Here: the habit goes back at its snapshot shape (records
+     *  deep-copied by the caller), everything else in state is untouched. Idempotent if the id
+     *  already reappeared (peer sync/addHabit) — its live row wins, only the tombstone is
+     *  cleared. Tombstone removal is id-matched on BOTH lists (defensively — ids never collide
+     *  across habits/moments by construction). */
+    reviveHabit (s, { habit } = {}) {
+      if (!habit || habit.id == null) return
+      const entry = { ...habit, records: { ...(habit.records || {}) } }
+      normalizeHabitRecords([entry])
+      if (!s.habits.some(x => x && x.id === habit.id)) s.habits.push(entry)
+      s.deleted = (s.deleted || []).filter(t => t.id !== habit.id)
+      s.deletedMoments = (s.deletedMoments || []).filter(t => t.id !== habit.id)
+      persist(s)
+    },
+    /** [W11 2026-10-26 P2] moments twin of reviveHabit — see the comment above for the why. */
+    reviveMoment (s, { moment } = {}) {
+      if (!moment || moment.id == null) return
+      if (!s.moments.some(x => x && x.id === moment.id)) s.moments.push({ ...moment })
+      s.deletedMoments = (s.deletedMoments || []).filter(t => t.id !== moment.id)
+      s.deleted = (s.deleted || []).filter(t => t.id !== moment.id)
       persist(s)
     }
   },

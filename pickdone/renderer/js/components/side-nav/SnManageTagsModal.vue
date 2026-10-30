@@ -26,6 +26,7 @@
 <script lang="ts">
 import { defineComponent } from 'vue'
 import { extractTags } from '../../utils/search.js'
+import { isValidTagName } from '../../../../shared/tag-name.mjs' // F2 fix: rename-target legality, single source with the CLI's lib-tags.cjs
 import { showUndoToast } from '../../utils/undoToast.js'
 
 export default defineComponent({
@@ -127,16 +128,27 @@ export default defineComponent({
       const next = this.tagMgrName.trim().replace(/^#/, '')
       this.tagMgrEditing = null
       if (!next || next === t.name) return
+      // [F2 fix] rename-target legality (same-source guard with the CLI's lib-tags.cjs): a name
+      // containing a TAG terminator char (`.`/`，`/`。` …) could never be extracted by TAG_RE
+      // again — a ghost tag. Reject with an explicit error BEFORE any corpus rewrite.
+      if (!isValidTagName(next)) return this.$message.error(this.$t('statsG.SideNav.tagNameInvalid', { name: next }))
       if (this.tags.some(x => x.name === next)) return this.$message.warning(this.$t('statsG.SideNav.tagExists', { name: next }))
+      // [F3 fix] snapshot BEFORE the bulk rewrite (same contract as removeTag's [D15-A8] snapshot):
+      // a rename rewrites N task titles/descriptions across live AND recycle rows and was
+      // previously unrecoverable — the undo link restores every rewritten field verbatim and
+      // renames the userTags bookkeeping back.
+      const snapshot = this.tagTodos(t.name).map(todo => ({ taskId: todo.taskId, taskContent: todo.taskContent, taskDescribe: todo.taskDescribe }))
       const re = this.tagRewriteRe(t.name)
       const r = await this.rewriteTagTodos(t, todo => {
         const patch: any = {}
         if (todo.taskContent) {
-          const v = todo.taskContent.replace(re, '#' + next)
+          // F2 fix: FUNCTIONAL replacement — a string replacement would treat `$&` etc. in the
+          // new name as special patterns (renaming to `$&b` mangled every rewritten task).
+          const v = todo.taskContent.replace(re, () => '#' + next)
           if (v !== todo.taskContent) patch.taskContent = v
         }
         if (todo.taskDescribe) {
-          const v = todo.taskDescribe.replace(re, '#' + next)
+          const v = todo.taskDescribe.replace(re, () => '#' + next)
           if (v !== todo.taskDescribe) patch.taskDescribe = v
         }
         return patch
@@ -152,12 +164,38 @@ export default defineComponent({
         this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
         return
       }
-      this.$message.success(this.$t('statsG.SideNav.tagRenamed', { name: next }))
+      // [F3 fix] undo toast instead of a bare success (same showUndoToast shape as removeTag):
+      // restore the snapshot fields, then rename the meta bookkeeping back to the old name.
+      // Cross-device caliber: the undo is a local restore of THIS window's rewrite — a peer that
+      // already folded the renamed text keeps it (no sync channel for the undo).
+      showUndoToast(this.$message.bind(this), [
+        this.$t('statsG.SideNav.tagRenamed', { name: next }) + '　',
+        window.Vue.h('a', {
+          style: { color: 'var(--brand)', cursor: 'pointer' },
+          onClick: () => {
+            Promise.all(snapshot.map(snap => {
+              const patch: any = {}
+              if (snap.taskContent != null) patch.taskContent = snap.taskContent
+              if (snap.taskDescribe != null) patch.taskDescribe = snap.taskDescribe
+              return this.$store.dispatch('todo/updateTodoFields', { taskId: snap.taskId, patch })
+            })).then(() => {
+              return this.$store.dispatch('ui/renameUserTag', { from: next, to: t.name })
+            }).then(() => {
+              this.$message.closeAll()
+            }).catch(e => {
+              console.error('[sn-tags] tag-rename undo failed:', e)
+              this.$message.error(this.$t('statsG.SideNav.syncFailMsg'))
+            })
+          }
+        }, this.$t('statsA.core.undo'))
+      ])
     },
     async removeTag (t) {
       const targets = this.tagTodos(t.name)
       try {
-        await this.$confirm(this.$t('statsG.SideNav.delTagConfirm', { name: t.name, count: targets.length }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning' })
+        // [F2 fix] the default "OK" button understated a destructive op that rewrites N task
+        // titles/descriptions — name the button after the action (i18n, both locales).
+        await this.$confirm(this.$t('statsG.SideNav.delTagConfirm', { name: t.name, count: targets.length }), this.$t('statsE.SideNav.tipTitle'), { type: 'warning', confirmButtonText: this.$t('statsG.SideNav.tagDeleteConfirmBtn') })
       } catch { return }
       // [D15-A8] snapshot before the destructive rewrite so the confirm can be UNDONE via the
       // app-wide undo toast (same contract as habit delete / task completion) — a tag delete

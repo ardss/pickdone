@@ -41,6 +41,25 @@ interface TomatoRecord {
 }
 
 type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'deleteMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta' | 'syncGetSettings' | 'syncSetEnabled' | 'syncGetStatus' | 'syncGetPairingCode' | 'syncSetName' | 'syncPairWithCode' | 'getMetaMany' | 'commitSyncBatch' | 'tomatoGetById' | 'settingsRowsAll' | 'settingsRowPut' | 'settingsRowPutMany' | 'settingsRowDelete' | 'syncUnpairPeer' | 'syncPairRespond' | 'syncPairRequest' | 'syncConflictBackupsList' | 'syncConflictBackupRestore' | 'syncSetPeerAlias'
+
+/** T7 win-bind: the ONLY cross-layer window identity shape (six fields, frozen contract).
+ *  processName is normalized (lowercase, trailing .exe stripped); hwnd/pidHint are same-session
+ *  hints only (handle reuse across restarts means they are never trusted alone — see the pure
+ *  matcher's relocation ladder in src/main/win-bind/pure/match.js). */
+interface WinBindWindowRef {
+  /** normalized process name (matching key #1) */
+  processName: string
+  /** best-effort full executable path ('' when inaccessible — secondary signal only) */
+  execPath: string
+  /** root-window title at bind time (narrowing signal, not equality) */
+  title: string
+  /** OS pid at bind time (strong same-session signal, reused across restarts) */
+  pidHint: number
+  /** root HWND (GetAncestor GA_ROOT product), decimal — transient hint */
+  hwnd: number
+  /** Date.now() ms stamped by the main process at bind() (0 in identify results) */
+  boundAt: number
+}
 interface TodoAPI {
   /** DB 白名单调用面:渲染端所有持久化读写必须经此(db.call);op 联合与主进程白名单同源 */
   dbCall (op: DbCallOp, params?: any): Promise<any>
@@ -63,6 +82,12 @@ interface TodoAPI {
   exportXlsx: (...args: any[]) => any
   flushTomatoFloat: (...args: any[]) => any
   getDefaultBackupDir: (...args: any[]) => any
+  /** F-RELOC: data storage location info + safe migration (see src/main/data-location.cjs) */
+  getDataLocationInfo: (...args: any[]) => any
+  /** F-RELOC: relocate userData; targetDir omitted = main process pops the directory picker */
+  relocateDataDir: (...args: any[]) => any
+  /** F-RELOC: migration progress push {phase:'copy'|'verify'|'boot', done?, total?}; returns disposer */
+  onMigrateProgress: (...args: any[]) => any
   getSettings: (...args: any[]) => any
   /** Batch meta read (CONTRACT 2026-09-20, F-UI): replaces per-key getMeta loops */
   getMetaMany: (...args: any[]) => any
@@ -82,6 +107,7 @@ interface TodoAPI {
   onExternalSettingsChanged: (...args: any[]) => any
   onPlaySound: (...args: any[]) => any
   onQuickAddFocus: (...args: any[]) => any
+  onReminderOpenTask: (...args: any[]) => any
   onSecurityLock: (...args: any[]) => any
   onSecurityUnlock: (...args: any[]) => any
   onShortcutAction: (...args: any[]) => any
@@ -111,6 +137,7 @@ interface TodoAPI {
   runAutoBackup: (...args: any[]) => any
   setAppLocale: (...args: any[]) => any
   setTomatoFloatBounds: (...args: any[]) => any
+  tomatoFloatDiagnose: (...args: any[]) => any
   showMainFromFloat: (...args: any[]) => any
   showTomatoFloat: (...args: any[]) => any
   startTomatoFloatDrag: (...args: any[]) => any
@@ -131,6 +158,20 @@ interface TodoAPI {
   syncConflictBackupsList: (...args: any[]) => any
   syncConflictBackupRestore: (...args: any[]) => any
   notifyQuitFlushDone: (...args: any[]) => any
+  /** T7 win-bind (dedicated channels, NOT dbCall): zero-arg identify — PS owns the cursor;
+   *  { window: WinBindWindowRef|null, reason } with window non-null ⟹ reason null */
+  winBindIdentify: () => Promise<{ window: WinBindWindowRef | null, reason: 'NO_WINDOW' | 'OWN_WINDOW' | 'DESKTOP' | 'BUTTON_DOWN' | 'ADAPTER_ERROR' | 'TIMEOUT' | null }>
+  /** ref must be this process's identify result verbatim; re-binding a taskId overwrites */
+  winBindBind: (taskId: string, ref: WinBindWindowRef) => Promise<{ ok: true, binding: { taskId: string, ref: WinBindWindowRef } } | { ok: false, reason: 'BAD_ARGS' | 'STALE_REF' | 'OWN_WINDOW' | 'STORE_ERROR' }>
+  /** bring the bound window to the foreground; flashed=true means degraded to a taskbar flash;
+   *  candidates (current same-name windows) only present on AMBIGUOUS */
+  winBindActivate: (taskId: string) => Promise<{ ok: true } | { ok: false, reason: 'NO_BINDING' | 'NOT_FOUND' | 'AMBIGUOUS' | 'ACTIVATE_FAILED' | 'ADAPTER_ERROR', flashed?: boolean, candidates?: Array<{ hwnd: number, pid: number, processName: string, execPath: string, title: string }> }>
+  /** idempotent removal: { ok:true, removed } never rejects */
+  winBindUnbind: (taskId: string) => Promise<{ ok: boolean, removed: boolean }>
+  /** hydration pull; the renderer filters orphan bindings by its known taskIds */
+  winBindList: () => Promise<{ bindings: Array<{ taskId: string, ref: WinBindWindowRef }> }>
+  /** multi-window badge sync subscription; payload { reason:'bind'|'unbind', taskId }; returns disposer */
+  onWinBindChanged: (fn: (payload: { reason: 'bind' | 'unbind', taskId: string }) => void) => () => void
 }
 
 interface Window {

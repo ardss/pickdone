@@ -3,6 +3,7 @@
  * status: add/update/delete -> sync; local meta.todosVersion acts as the sync cursor
  */
 import { genTaskId, nextSort, dayjs, reportError, parsePredecessors } from '../utils/core.js'
+import { dayStart } from '../utils/todayBounds.js'
 import { wouldCycle, isTaskReady } from '../utils/deps.js'
 import { nextRepeatInstance, isLastRepeatInstance, renewalCarryFields } from '../utils/repeat.js'
 import { removeRenewedInstance } from '../utils/repeatUndo.js'
@@ -31,7 +32,7 @@ export { planSnapshotRowSync }
 export default {
   namespaced: true,
   state: () => ({
-    loaded: false,
+    loaded: false, initError: null, // [F3 2026-10-18] set when init:getAll fails — views show an error + retry instead of a fake empty list
     search: '',
     todoList: [],            // all active tasks (deleted=0)
     recycleList: [],         // recycle bin (deleted=1)
@@ -69,7 +70,7 @@ export default {
     byCategory: s => id => s.todoList.filter(t => t.categoryId === id)
   },
   mutations: {
-    setLoaded: (s, v) => { s.loaded = v },
+    setLoaded: (s, v) => { s.loaded = v; if (v) s.initError = null }, setInitError: (s, v) => { s.initError = v },
     setSearch: (s, v) => { s.search = v },
     setAllRows (s, rows) {
       s.todoList = rows.filter(r => !r.delete)
@@ -87,6 +88,8 @@ export default {
       if (j >= 0) other.splice(j, 1)
     },
     removeLocal (s, taskId) {
+      // [F7 P3] list membership changed, so views are stale: mark dirty, same contract as upsertLocal/hardRemove. Without this, the addTodo UNIQUE-loser fall-through (remove a ghost optimistic row, adopt failed, queued-retry) left a stale rendered row until the 60s viewsDirty day-rollover sweep recomputed.
+      s.viewsDirty = true
       const i = s.todoList.findIndex(t => t.taskId === taskId)
       if (i >= 0) s.todoList.splice(i, 1)
       else {
@@ -111,10 +114,7 @@ export default {
     historyRedoPop (s) { historyRedoPop(s) },
     historyRedoPush (s, snap) { historyRedoPush(s, snap) },
     viewsClean (s) { s.viewsDirty = false },
-    /* Echo-suppression stamp: the single writer of _lastLocalWriteAt (previously two direct
-       cross-module writes: index.js subscribeAction-after and tomato.js bumpSnow). Consumers:
-       main.js todosChanged echo gate (1500ms window, protects the undo stack from our own
-       broadcast echo's todo/init historyClear). */
+    /* Echo-suppression stamp: the single writer of _lastLocalWriteAt (previously two direct cross-module writes: index.js subscribeAction-after and tomato.js bumpSnow). Consumers: main.js todosChanged echo gate (1500ms window, protects the undo stack from our own broadcast echo's todo/init historyClear). */
     stampLocalWrite (s) { s._lastLocalWriteAt = Date.now() },
     setSyncing (s, v) { s.isSyncing = v },
     setViews (s, views) { s.views = views },
@@ -136,7 +136,7 @@ export default {
       let rows
       try {
         rows = await window.todoAPI.dbCall('getAll', {})
-      } catch (err) { reportError('init:getAll', err); rows = [] }
+      } catch (err) { reportError('init:getAll', err); commit('setInitError', (err && err.message) || String(err)); return } // [F3 2026-10-18] was rows=[] + setLoaded(true) — permanent empty list; now an observable error (loaded stays false) so views can offer a retry
       commit('setAllRows', rows)
       let v = 0
       try { v = parseInt(await window.todoAPI.dbCall('getMeta', 'todosVersion') || '0', 10) } catch (err) { reportError('init:getMeta', err) }
@@ -185,23 +185,44 @@ export default {
       // Renewal instance idempotency: skip when the same rid + same dayStart already exists (prevents concurrent multi-window + CLI double-triggering creating two renewals at the same moment)
       let targetDay = 0
       if (repeatId) {
-        targetDay = dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : 0)
+        // [day-caliber 2026-10-25] inline startOf('day') routed through todayBounds.dayStart
+        // (the counted ratchet: renderer inline sites shrink, never grow).
+        targetDay = dayOverride != null ? dayOverride : (todoDate ? dayStart(todoDate) : 0)
         if (targetDay) {
           try {
             const existing = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
             if (Array.isArray(existing) && existing.length) {
               return existing[0] // return the existing renewal instance, transparent to the caller
             }
+            // [F2 2026-10-17 renewal dedupe includes the recycle bin] the deleted:0 pre-check above
+            // missed a twin the user soft-deleted on the SAME rid+day, so the renewal re-minted the
+            // very day the user had deliberately removed (CLI twin: cli/lib-repeat.cjs, same caliber).
+            // A recycled twin on the target day skips the generation (return null, not the binned row —
+            // ensureNextRepeatInstance already guards a null result; RepeatModal counts it as generated
+            // either way). Deliberate deletion wins over renewal.
+            const binned = await window.todoAPI.dbCall('queryTodos', { deleted: 1, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
+            if (Array.isArray(binned) && binned.length) return null
           } catch (e) { /* a DB error doesn't block renewal; let addTodo continue its main flow */ }
         }
       }
+      // [F2 2026-10-13] sort pool follows the EFFECTIVE day: a todoTime-only add lands in the todoTime-derived day group, not the no-date pool
+      // [W8 fix] dayOverride is authoritative; dayOverride-only add sets todoTime = that day's local
+      // midnight so db-rows.js (scheduledDay kept only when todoTime truthy) converges — the row used
+      // to fork and the task jumped back to the box after restart.
+      const effectiveDay = dayOverride != null && Number(dayOverride) > 0
+        ? Number(dayOverride)
+        : (todoDate ? dayStart(todoDate) : (Number(todoTime) > 0 ? dayStart(Number(todoTime)) : 0))
+      // dayOverride-only (no todoTime, no todoDate): derive the converging todoTime
+      let effTodoTime = Number(todoTime) || 0
+      if (!effTodoTime && dayOverride != null && Number(dayOverride) > 0) {
+        effTodoTime = dayStart(Number(dayOverride))
+      }
       const sameDay = state.todoList.filter(t =>
-        !t.delete && t.dayStart && dayjs(t.dayStart).isSame(dayjs(todoDate).startOf('day'), 'ms'))
+        !t.delete && t.dayStart && effectiveDay && dayjs(t.dayStart).isSame(dayjs(effectiveDay).startOf('day'), 'ms'))
       let sort
       if (sameDay.length) {
-        const mins = sameDay.map(t => t.taskSort)
-        sort = nextSort(addToTop, Math.min(...mins), Math.max(...mins))
-      } else if (!todoDate) {
+        const mins = sameDay.map(t => t.taskSort); sort = nextSort(addToTop, Math.min(...mins), Math.max(...mins))
+      } else if (!effectiveDay) {
         // No-date tasks (todo box): previously a constant 1024, making addToTop ineffective; take min/max within the same pool
         const pool = state.todoList.filter(t => !t.delete && !t.dayStart).map(t => t.taskSort)
         sort = pool.length ? nextSort(addToTop, Math.min(...pool), Math.max(...pool)) : nextSort(addToTop, 0, 0)
@@ -224,13 +245,13 @@ export default {
         // design) -- recorded on the skip list. Mitigation: jitter well below the nextSort step (100), so
         // it only keeps collision-identical values distinct, ordered by actual arrival.
         taskId: genTaskId(userId), taskSort: Math.fround(sort + (Math.random() - 0.5) * 64),
-        todoTime: Number(todoTime) || Number(todoDate) || 0,
+        todoTime: effTodoTime || Number(todoDate) || 0,
         userId, status: 'add', version: 0,
         // dayStart derivation mirrors the DB rule (db.js re-derives unconditionally from todoTime): when only
         // todoTime is given (time-block cell without an explicit date), todoTime>0 while todoDate is missing —
         // deriving dayStart from todoDate alone split memory (dayStart=0 → todo box) from DB (scheduled day),
         // and the task switched groups after restart
-        dayStart: dayOverride != null ? dayOverride : (todoDate ? +dayjs(todoDate).startOf('day') : (Number(todoTime) > 0 ? +dayjs(Number(todoTime)).startOf('day') : 0))
+        dayStart: dayOverride != null ? dayOverride : effectiveDay
       }
       commit('upsertLocal', t)
       commit('setRecentlyAdded', t.taskId)
@@ -377,8 +398,8 @@ export default {
       // Only the group's last (latest) instance renews; no-date instances never renew (a bogus 1970 chain)
       if (!isLastRepeatInstance(completedTodo, group)) return
       // The rule's single source of truth is meta (same source as the CLI); the historical LS fallback has been dismantled (all hosts have the meta channel)
-      let rule = null
-      try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + rid) || 'null') } catch { /* empty */ }
+      let rule = null // [F2 2026-10-13] null = rule really absent; throw = IPC jitter — a failed read skips this round, never severs the chain
+      try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + rid) || 'null') } catch (e) { console.warn('[todo] repeat renewal: repeatRule meta read failed, skipping this round (rid=' + rid + '):', e); return }
       if (!rule) return
       // Single source: next occurrence + reminder time (same computation the CLI twin uses via todo-core.js)
       const next = nextRepeatInstance(completedTodo, group, rule, this.state.todo.holidayList || [])
@@ -483,12 +504,10 @@ export default {
       // excludes delete rows already acked with version > 0 — P3 2026-09-12)
       const merged = { ...raw, delete: true, deleting: true, deletedAt: Date.now(), updateTime: Date.now(), status: 'delete', version: 0 }
       commit('upsertLocal', merged)
-      // Cleanup of related attachments is left to manual action (on permanent deletion from the recycle bin)
-      // deleting is a local-dialect UI flag, not a schema column: strip it before persisting, otherwise the dirty field spreads forever via undo snapshots/sync
+      try { await snapshotForDelete(todo.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) } // [F2 2026-10-13] snapshot BEFORE row commit (deleteTodosMany's order): crash-safe — snapshot is idempotent; row-first left ghost chips
+      // Cleanup of related attachments is left to manual action; deleting is a local-dialect UI flag, not a schema column: strip before persisting (else it spreads forever via undo snapshots/sync)
       const row = { ...merged }; delete row.deleting
       safeUpsert(row)
-      // Schedule chip cascade: snapshot to meta first (written back when the task is restored), then clear rows (2026-09-03 P0 review: the original soft-delete path bypassed chip cleanup)
-      try { await snapshotForDelete(todo.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for deleted task:', e) }
       dispatch('computeViews')
       dispatch('writeCriticalBackup')
     },
@@ -554,6 +573,33 @@ export default {
     },
 
     async restoreFromRecycle ({ commit, dispatch }, todo) {
+      // [F2 2026-10-17 restore twin guard] the schema-v9 partial UNIQUE index idx_todos_repeat_day
+      // (recurGroupId + scheduledDay, live rows only) rejects a restore whose repeat group ALREADY
+      // has a live instance on the same day (peer/CLI renewed the chain while this instance sat in
+      // the bin) — the raw put used to hard-fail with a bare UNIQUE stack. Pre-check BEFORE the
+      // restore write: a live sibling on the same rid+day cancels the restore with a structured
+      // REPEAT_TWIN_EXISTS error. Chosen CANCEL over "restore without repeatId": cancellation keeps
+      // the user's own delete-decision intact (the day already lives in the surviving instance) and
+      // every restore caller (RecycleBinView / confirm.js undo link) already toasts on a rejection,
+      // so no new toast plumbing is needed — demoting silently would resurrect a THIRD visible task
+      // where the user sees one. A twin-query READ failure does not block the restore: the UNIQUE
+      // index remains the backstop and restore is the user's explicit intent.
+      if (todo && todo.repeatId) {
+        const raw = await resolveForEdit(this.state.todo, todo.taskId)
+        if (raw && !raw.notFound && raw.dayStart > 0) {
+          try {
+            const twins = await window.todoAPI.dbCall('queryTodos', { deleted: 0, repeatId: todo.repeatId, dayStartFrom: raw.dayStart, dayStartTo: raw.dayStart })
+            if (Array.isArray(twins) && twins.some(x => x && x.taskId !== todo.taskId)) {
+              const e = new Error('a live instance of this repeat group already exists on the same day — restore cancelled to avoid a duplicate scheduled day')
+              e.code = 'REPEAT_TWIN_EXISTS'
+              throw e
+            }
+          } catch (e) {
+            if (e && e.code === 'REPEAT_TWIN_EXISTS') throw e
+            console.warn('[todo] repeat twin pre-check failed, restoring anyway (UNIQUE index backstops):', e)
+          }
+        }
+      }
       // Row first, snapshot second (verify-then-commit): restoreSnapshot empties the snapshot meta as a side
       // effect, so consuming it before the row update was confirmed meant a mid-way failure (row missing,
       // updateTodoFields throwing) left the snapshot permanently lost and/or a ghost chip on the timeline.
@@ -578,37 +624,48 @@ export default {
       // and the chain just died. If the rule meta is gone, restore the task as a plain non-repeating task
       // (the rule data is gone; fabricating one would invent UX).
       if (r && todo.repeatId) {
-        let rule = null
-        try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + todo.repeatId) || 'null') } catch { /* treated as gone */ }
-        if (!rule) {
+        // [F2 2026-10-13] a FAILED repeatRule read ≠ "rule GCed": only a real absent meta strips repeatId (dangling guard), a read error keeps the chain
+        let rule = null, readFailed = false
+        try { rule = JSON.parse(await window.todoAPI.dbCall('getMeta', 'repeatRule:' + todo.repeatId) || 'null') } catch (e) { readFailed = true; console.warn('[todo] repeatRule meta read failed for restored task', todo.taskId, '— keeping repeatId this round:', e) }
+        if (!rule && !readFailed) {
           await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { repeatId: null, status: 'update' } })
           console.warn('[todo] restored task', todo.taskId, 'had a dangling repeatId (rule meta GCed) — restored as a non-repeating task')
         }
       }
+      // [F2 2026-10-17 post-restore dependency-cycle re-validation] the write-time guard in
+      // updateTodoFields (wouldCycle) only sees LIVE rows — while this task sat in the recycle bin
+      // a peer could close a cycle through it (x → t1 → x), and restoring then produced a live
+      // cycle the guard would have rejected at write time. Re-validate the restored row once and
+      // strip its predecessors when they now close a loop; the restore itself is NOT rolled back
+      // (stripping a dep edge is the least destructive resolution and the row content is intact).
+      let depCycleStripped = false
+      if (r && !r.notFound) {
+        try {
+          const preds = parsePredecessors(r.predecessors)
+          if (preds.length && wouldCycle(this.state.todo.todoList, todo.taskId, preds)) {
+            await dispatch('updateTodoFields', { taskId: todo.taskId, patch: { predecessors: null, status: 'update' } })
+            depCycleStripped = true
+            console.warn('[todo] restored task', todo.taskId, 'closed a dependency cycle — predecessors stripped (the recycled row was invisible to the write-time guard)')
+          }
+        } catch (e) { console.warn('[todo] dependency re-validation failed after restore:', e) }
+      }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the restore step
       commit('historyBreakMerge')
-      return r
+      return depCycleStripped ? Object.assign({}, r, { _depCycleStripped: true }) : r
     },
 
     async purgeIds ({ commit, dispatch, rootState, state }, ids) {
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
-      // F3 (dw wave6 2026-09-24): the snapshot result is no longer swallowed — a failed pre-purge
-      // snapshot (IPC error / {ok:false}) is logged loudly here and stamped into runtimeState
-      // (eventBackupLastFailAt/eventBackupLastError, surfaced via the Settings→Data status line)
-      // instead of purging silently with no evt-*.json on disk. The purge itself still proceeds:
-      // blocking the user's explicit destructive command on a backup IO failure trades one bug
-      // for a worse one (a purge that can never finish).
+      // F3 (dw wave6 2026-09-24): a failed pre-purge snapshot is logged + stamped into runtimeState
+      // instead of vanishing; the purge itself still proceeds (never block a destructive command on backup IO).
       if (ids.length && !(await dispatch('writeEventBackup', 'purge'))) console.error('[todo] purge proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)') // snapshot before permanent deletion
       // Permanently deleted tasks still bound by focus: detach (same as deleteTodo)
       const at = rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
-      // Delete per id and remove locally only the successful ones: Promise.all swallowing errors then hardRemove-ing the whole batch once let failed ids "revive" back into the recycle bin after restart.
-      // Perf (purge batch): one hardDeleteMany commit replaces the per-id hardDelete loop — the
-      // server-side bulk op already GCs chips/snow/estimate meta keys per id and returns only the
-      // PHYSICALLY deleted ids (absent ids excluded, same per-id honesty as the old loop). If the
-      // bulk op rejects wholesale (older host / bus error), fall back to the per-id loop so the
-      // failure isolation is preserved.
+      // Delete per id and remove locally only the successful ones (failed ids used to "revive" after restart).
+      // Perf (purge batch): one hardDeleteMany commit — bulk op returns only the PHYSICALLY deleted ids;
+      // on a wholesale rejection fall back to the per-id loop to keep the failure isolation.
       let done = []
       try {
         const deleted = await commitCommand("todo", "hardDeleteMany", ids)
@@ -621,28 +678,22 @@ export default {
           try { await commitCommand("todo", "hardDelete", id); done.push(id); clearSnapshot(id) } catch (e) { reportError('hardDelete', e) }
         }
       }
-      // [C15 fix] the empty catch here silently orphaned attachment files on disk when cleanup failed
-      // (main throws a structured per-file failure list). Log it like the adjacent hardDelete failures;
-      // rows are already hard-deleted, so the purge (and the historyBarrier re-baseline below) still proceeds.
-      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole batch instead of a per-id
-      // readdir+unlink IPC each.
+      // [C15 fix] attachment-cleanup failures are logged like the adjacent hardDelete failures (rows are gone either way).
+      // Perf (purge batch): ONE delete-todo-files-many IPC for the whole batch instead of a per-id readdir+unlink IPC each.
       try { if (done.length && window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(done) } catch (err) { reportError('deleteTodoFilesMany', err) }
-      // Drop the purged tasks' pomodoro-estimate meta keys from the renderer mirror: hardDeleteMany
-      // already deleted the DB keys server-side (deleteEstimateKeysFor per id, incl. the legacy
-      // per-id fallback) — MetaGC/DB owns the DB side; the id-based prune drops the local mirror
-      // entries so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
+      // Drop the purged tasks' pomodoro-estimate meta keys from the renderer mirror: hardDeleteMany owns the DB keys
+      // server-side; the id-based prune drops the local mirror so a recycled numeric id cannot resurrect a stale estimate (review M-C5).
       try { if (done.length) pruneEstimatesForPurged(done) } catch {}
       if (done.length) {
         // D17: scrub across ALL live categories, not just the purged rows' own ones — a milestone of
-        // ANOTHER project category may link the purged id (CLI parity: cli/lib.js scans every key);
-        // unaffected blobs are skipped by scrubMilestoneTaskIds' same-reference shortcut.
+        // ANOTHER project category may link the purged id (CLI parity: cli/lib.js scans every key).
         const purgedCatIds = [...new Set((((rootState && rootState.category) || {}).list || []).filter(c => c && !c.delete).map(c => c.categoryId))]
         commit('hardRemove', done)
-        // D5 (2026-09-20): scrub the purged ids from `projectMilestones:<catId>` taskIds — a past
-        // milestone whose last link was purged otherwise kept a phantom taskId set (milestoneState
-        // fell through to the date-driven 'done' branch, flipping an UNMET milestone to done).
-        // (Round-3 P1: shared with purgeAllRecycle — see scrubMilestonesForPurged below.)
+        // D5 (2026-09-20): scrub the purged ids from `projectMilestones:<catId>` taskIds (shared with purgeAllRecycle).
         await scrubMilestonesForPurged(purgedCatIds, done)
+        // F2 2026-10-19: purge must not leave dangling predecessors — surviving rows (incl. bin rows,
+        // which restore verbatim) referencing a purged id get that entry stripped via updateTodoFields.
+        await stripPurgedPredecessors({ dispatch, state }, done)
         // Rows are physically gone (hardDelete + attachment files + chip snapshot meta): undo must not
         // resurrect them. [TL-6] historyBarrier instead of historyClear: the barrier bumps the reload
         // epoch and re-baselines the post-purge table, which invalidates exactly the stale pre-purge
@@ -661,36 +712,33 @@ export default {
       if (!ids.length) return true // QC r3: empty bin = nothing to purge = success (a falsy return read as "purge failed" in SettingsDataTab when the bin drained during the confirm dialogs)
       // Discrete op: break the 400ms undo merge so following edits don't fuse into the purge step
       commit('historyBreakMerge')
-      // F3 (dw wave6 2026-09-24): same honest-failure handling as purgeIds above — a failed
-      // pre-purge snapshot is logged + stamped into runtimeState instead of vanishing
-      if (!(await dispatch('writeEventBackup', 'purge-all'))) console.error('[todo] purge-all proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)') // snapshot before emptying the recycle bin
+      // F3 (dw wave6): same honest-failure handling as purgeIds — a failed pre-purge snapshot is logged + stamped, not swallowed
+      if (!(await dispatch('writeEventBackup', 'purge-all'))) console.error('[todo] purge-all proceeded WITHOUT its pre-delete event snapshot (see eventBackupLastError)')
       // Round-3 P1 (parity with purgeIds): permanently deleted tasks still bound by focus detach first
       const at = rootState && rootState.tomato && rootState.tomato.attachTodo
       if (at && ids.includes(at.taskId)) dispatch('tomato/attach', null, { root: true })
-      // DB rows first, then attachment files: the other order leaves rows pointing at deleted files if the file purge fails.
-      // Converge only on success (aligned with purgeIds' per-id guard): when the purge IPC fails we keep the local
-      // rows untouched — the old flow hardRemoved locally + cleared the undo stack anyway, so the rows "revived"
-      // back into the recycle bin after restart while the user had been told they were gone for good
+      // DB rows first, then files; converge only on success — a failed purge IPC keeps the local rows (they would revive on restart)
       let purged = false
-      try { purged = await window.todoAPI.purgeRecycleBin() === true } catch (err) { reportError('purgeRecycleBin', err) }
+      try {
+        const res = await window.todoAPI.purgeRecycleBin()
+        // [J15 2026-10-22] main returns the PURGED IDS ARRAY (live j14b/j14c), never `true` — any array (incl. empty) is an ACK; only a rejection is failure
+        purged = res === true || Array.isArray(res)
+      } catch (err) { reportError('purgeRecycleBin', err) }
       if (!purged) { dispatch('computeViews'); return false }
-      // Attachment cleanup aligned with per-item permanent deletion (the main process's purgeRecycleBin only deletes rows, not files/)
-      // [C15 fix, same class as purgeIds] attachment-file cleanup failures are logged, not swallowed
+      // Attachment cleanup aligned with per-item permanent deletion (main's purgeRecycleBin deletes rows only, not files);
+      // [C15, same class as purgeIds] cleanup failures are logged, not swallowed
       // Perf (purge batch): ONE delete-todo-files-many IPC for the whole bin instead of a per-id readdir+unlink IPC each.
       try { if (window.todoAPI.deleteTodoFilesMany) await window.todoAPI.deleteTodoFilesMany(ids) } catch (err) { reportError('deleteTodoFilesMany', err) }
       // Drop the pre-delete chip snapshot meta too (rows are gone, the snapshot can never be restored)
       for (const id of ids) clearSnapshot(id)
-      // maint-d7: drop the purged tasks' pomodoro-estimate meta keys too — parity with purgeIds
-      // (review M-C5) and the CLI purge path (cli/lib.js deletes ESTIMATE_KEY_PREFIX per row); a
-      // recycled numeric taskId used to resurrect a stale estimate on the bulk "empty bin" path.
-      // DB keys are purged server-side per row; this prunes the local mirror (id-based prune).
+      // maint-d7: parity with purgeIds/review M-C5/CLI purge — drop the purged rows' estimate meta keys (local mirror; DB keys are purged server-side per row).
       try { pruneEstimatesForPurged(ids) } catch {}
-      // Round-3 P1: the bulk path used to SKIP the milestone scrub (phantom taskIds → unmet
-      // milestone flipping to 'done'). D17: same widening as purgeIds — ALL live categories
-      // (cross-category links), CLI parity.
+      // Round-3 P1/D17: the bulk path once skipped the milestone scrub — ALL live categories (cross-category links), CLI parity.
       const purgedCatIds = [...new Set((((rootState && rootState.category) || {}).list || []).filter(c => c && !c.delete).map(c => c.categoryId))]
       commit('hardRemove', ids)
       await scrubMilestonesForPurged(purgedCatIds, ids)
+      // F2 2026-10-19: same dangling-predecessor strip as purgeIds (survivors = live rows only here).
+      await stripPurgedPredecessors({ dispatch, state }, ids)
       // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this
       // generation. [TL-6] historyBarrier (see purgeIds): targeted re-baseline instead of a whole-stack wipe.
       commit('historyBarrier')
@@ -698,7 +746,7 @@ export default {
       dispatch('writeCriticalBackup')
       return true // QC r1: boolean success flag — RecycleBinView.clearAll toasts error instead of false success
     },
-    /** Recycle bin auto-expiry purge: deleted rows past N days by deletion time (updateTime) are permanently deleted (N=0 never).
+    /** Recycle bin auto-expiry purge: deleted rows past N days by their deletedAt are permanently deleted (N=0 never).
         Clock sanity check: when the system clock jumps back/forward more than 48h (BIOS battery loss, manual change), skip this round of auto purge,
         preventing the accident of "clock set to the future → startup hard-deletes the whole recycle bin" (finalized in the 2026-08-29 release review). */
     async purgeExpiredRecycle ({ state, rootState, dispatch }, { force = false } = {}) {
@@ -718,8 +766,10 @@ export default {
       // semantic (not a 24h interval); `force` bypasses it for tests/manual triggers.
       if (!force && lastPurgeAt && dayjs(lastPurgeAt).isSame(dayjs(), 'day')) return
       // Calendar-day basis: roll back N days from today at midnight, avoiding boundary drift from "deleted at an arbitrary moment"
+      // [F2 2026-10-19] cutoff trusts ONLY deletedAt: legacy rows without it (fallback updateTime)
+      // were indefinitely renewed by bin auto-save bumps — such rows now opt OUT of auto-purge.
       const cutoff = +dayjs().startOf('day').subtract(days, 'day')
-      const ids = state.recycleList.filter(t => (t.deletedAt || t.updateTime || 0) < cutoff).map(t => t.taskId)
+      const ids = state.recycleList.filter(t => (Number(t.deletedAt) || 0) > 0 && t.deletedAt < cutoff).map(t => t.taskId)
       try {
         if (ids.length) await dispatch('purgeIds', ids)
       } finally {
@@ -757,6 +807,21 @@ export default {
 
 /* Small helper for reading root settings (module-internal access) */
 function root_getCompleteWithSub (rootState) { return rootState && rootState.settings ? rootState.settings.isCompleteWithSubtasks !== false : true }
+
+/** [F2 2026-10-19 purge-preds fix] strip purged ids from survivors' predecessors via the normal update
+ *  channel (updateTodoFields — durable write + views/reminders follow). Removing edges can never close a
+ *  cycle (the write-time wouldCycle guard stays silent); bin rows are covered too — a restore hands their
+ *  predecessors back to the live table verbatim. */
+async function stripPurgedPredecessors (ctx, done) {
+  const dead = new Set(done)
+  const st = ctx.state || {}
+  for (const t of [...(st.todoList || []), ...(st.recycleList || [])]) {
+    let preds
+    try { preds = parsePredecessors(t.predecessors) } catch { continue }
+    if (!preds.some(p => dead.has(p))) continue
+    try { await ctx.dispatch('updateTodoFields', { taskId: t.taskId, patch: { predecessors: preds.filter(p => !dead.has(p)), status: 'update' } }) } catch (e) { reportError('purge:stripPredecessors', e) }
+  }
+}
 
 /** D15 (TL-5): durable-store existence authority for renderer write actions — ONE choke point.
  *  Previously every write action treated the in-memory table as the existence authority: on a  memory miss (the window between a peer/CLI write and the todos-changed broadcast reload —  docs/sync-matrix.md:60) updateTodoFields/deleteTodo/reorderTodos/deleteTodosMany silently

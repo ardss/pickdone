@@ -83,7 +83,18 @@ test('R4: time-block drop re-anchors reminders via the shared crossDayMovePatch 
   assert.equal(patch.reminderTime, today + 9 * 3600000, '9:00 reminder follows to the new day')
   assert.deepEqual(patch.reminderExtra, [today + 8 * 3600000], 'extra reminders follow too')
   const revert = crossDayRevertPatch(dragged, patch)
-  assert.deepEqual(revert, { dayStart: yesterday, todoTime: yesterday + 14 * 3600000, reminderTime: yesterday + 9 * 3600000, reminderExtra: [yesterday + 8 * 3600000] })
+  // [assertion-quality 2026-10-25] calendar-SEMANTIC asserts replace the whole-patch
+  // deepEqual (formula-echo snapshots shatter on representation changes and green-light
+  // a shared wrong formula). The contract: revert restores the ORIGINAL wall-clock time
+  // of every dragged field on the ORIGINAL day.
+  assert.equal(revert.dayStart, yesterday, 'revert returns to the original day')
+  const wallClock = ts => ({ h: new Date(ts).getUTCHours(), m: new Date(ts).getUTCMinutes() })
+  for (const field of ['todoTime', 'reminderTime']) {
+    assert.equal(revert[field], dragged[field], field + ' restored to the dragged value (same wall-clock, original day)')
+  }
+  assert.deepEqual(revert.reminderExtra, dragged.reminderExtra, 'extra reminders restored to the dragged values')
+  assert.equal(wallClock(revert.todoTime).h, 14, 'todoTime keeps its 14:00 wall-clock')
+  assert.equal(wallClock(revert.reminderTime).h, 9, 'reminderTime keeps its 9:00 wall-clock')
 })
 
 /* ---------- R6 todobox-done-disabled ---------- */

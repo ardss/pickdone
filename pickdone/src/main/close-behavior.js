@@ -10,4 +10,17 @@ function shouldShowTrayNotice (config) {
   return isCloseToTray(config) && !(config && config.closeTrayNotified)
 }
 
-module.exports = { isCloseToTray, shouldShowTrayNotice }
+// F1 (2026-10-22 window-chrome review): named three-way decision for the main window's X
+// (Alt+F4 fires the same 'close' event):
+//   'hide'  → tray mode (default): hide to tray + one-shot balloon (0.1.0 behavior, unchanged)
+//   'quit'  → exit mode (closeActionMinimize=false): the user explicitly chose "X quits the app"
+//             (onboarding step 4 / Settings→General) — the close must route through the guarded
+//             user-quit chain. The old else-branch merely let the window DESTROY while
+//             window-all-closed stayed resident, so the promised quit never happened.
+//   'close' → a quit chain is already in flight (quitByUser): let the window close for real.
+function closeIntent ({ quitByUser, closeToTray }) {
+  if (quitByUser) return 'close'
+  return closeToTray ? 'hide' : 'quit'
+}
+
+module.exports = { isCloseToTray, shouldShowTrayNotice, closeIntent }

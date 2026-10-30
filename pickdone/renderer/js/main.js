@@ -13,7 +13,7 @@ if (window.dayjs && window.dayjs.extend && window.dayjs_plugin_isoWeek) window.d
 window.dayjs = window.dayjs || window.dayJs
 
 import store from './store/index.js'
-import { onExternalHabitBlob } from './store/habits.js'
+import { onExternalHabitBlob, isStaleExternalRound } from './store/habits.js'
 import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
 import { loadRuntime } from './store/helpers/runtimeState.js'
 import { criticalBackupWrite, ackQuitFlushAfterWrite } from './store/helpers/todoBackup.js'
@@ -81,7 +81,12 @@ app.use(store)
 onExternalHabitBlob(blob => {
   const s = store.state.habits
   if (!blob || !Array.isArray(blob.habits)) return false
-  if ((blob.savedAt || 0) < (s.savedAt || 0)) return false
+  // W12 fix (2026-10-26): this pre-guard hand-rolled strict `<`, so on a TIE it reported
+  // accepted=true while habits/applyExternal rejected the blob via isStaleExternalRound (`<=`) —
+  // relayAuxBlob then wrote the REJECTED blob verbatim to the durable DB meta row, bypassing
+  // records union-max + tombstone merge/prune. Use the mutation's own predicate so the callback
+  // verdict and the mutation's verdict can never drift apart again.
+  if (isStaleExternalRound(blob.savedAt, s.savedAt)) return false
   store.commit('habits/applyExternal', blob)
   return true
 })
@@ -99,6 +104,22 @@ const epLocaleCfg = Vue.computed(() => ({ locale: EP_LOCALES[i18n.global.locale]
 ElementPlus.provideGlobalConfig(epLocaleCfg, app, true)
 Vue.watch(() => i18n.global.locale, () => { ElementPlus.provideGlobalConfig(epLocaleCfg, app, true) })
 
+// UX walk 2026-10-12: default toasts (top:16) covered the quick-add bar and the search filter row —
+// the undo toast even hid the filters while a search was active. Drop every toast 64px by default
+// so it lands below the chrome; callers passing an explicit offset still win.
+const _epMessage = ElementPlus.ElMessage
+function toastBelowChrome (opts, ctx) {
+  const o = typeof opts === 'string' ? { message: opts } : { ...(opts || {}) }
+  if (o.offset == null) o.offset = 64
+  return _epMessage(o, ctx)
+}
+for (const k of ['success', 'warning', 'info', 'error']) {
+  toastBelowChrome[k] = (opts, ctx) =>
+    toastBelowChrome(typeof opts === 'string' ? { message: opts, type: k } : { ...(opts || {}), type: k }, ctx)
+}
+toastBelowChrome.closeAll = _epMessage.closeAll
+app.config.globalProperties.$message = toastBelowChrome
+
 // v-click-outside="fn": callback when clicking outside the element (unified capture, auto cleanup, replacing hand-written document listeners in each component)
 app.directive('click-outside', {
   mounted (el, binding) {
@@ -115,6 +136,7 @@ app.directive('click-outside', {
 
 // Reload from DB when other windows modify data (runtime module registered outside the root module)
 store.registerModule('_rt', {
+  namespaced: true,
   actions: {
     async refreshFromDb () {
       let rows
@@ -198,6 +220,7 @@ window.appUI = null
 // F18 (2026-09-24): both hand-copied hash regexes here (isMainShell / isFloatShell) route through
 // utils/auxWindow.js now — one copy had drifted to miss __quick-add.
 import { isAuxWindow, isFloatWindow } from './utils/auxWindow.js'
+import { installSyncEventToasts } from './utils/syncDegradedToast.js'
 const isMainShell = !isAuxWindow()
 
 async function bootstrap () {
@@ -295,9 +318,11 @@ async function bootstrap () {
   // sanitized (unknown/type-mismatch keys dropped, numeric strings coerced) exactly like the
   // restore()/load() paths, so junk from a peer or an old CLI build cannot corrupt live settings.
   if (window.todoAPI.onExternalSettingsChanged) {
-    window.todoAPI.onExternalSettingsChanged(patch => {
+    // PACKED payload: store.dispatch() drops a bare third argument (it reads it as Vuex options),
+    // so the origin stamp must ride INSIDE the payload (updateExternal unpacks it).
+    window.todoAPI.onExternalSettingsChanged((patch, originSavedAt) => {
       try {
-        if (patch && Object.keys(patch).length) store.dispatch('settings/updateExternal', patch)
+        if (patch && Object.keys(patch).length) store.dispatch('settings/updateExternal', { patch, originSavedAt })
       } catch (e) { console.error('[cli-settings] hot-apply failed', e) }    })
   }
 
@@ -321,27 +346,16 @@ async function bootstrap () {
   // peer's version was applied). Aux windows (float/quick-add) do not own user notifications.
   // P2b (round 2): under edit-war a toast per round piles up — keep at most ONE visible conflict
   // toast (replace the previous instance) with a 30s minimum interval between shows.
-  let _conflictToast = null
-  let _conflictShownAt = 0
+  // [H2 2026-10-25] conflict (30s rate-limit) + increment-loss (once per type per session)
+  // syncEvent toasts: wired in utils/syncDegradedToast.js (structure ratchet split).
   if (window.todoAPI.onSyncEvent && isMainShell) {
-    window.todoAPI.onSyncEvent(evt => {
-      if (!evt || evt.type !== 'sync-conflict') return
-      try {
-        const EP = window.ElementPlus
-        if (!EP || !EP.ElMessage) return
-        if (Date.now() - _conflictShownAt < 30 * 1000) return // rate-limit: one conflict notice per 30s window
-        if (_conflictToast) { try { _conflictToast.close() } catch (e) { /* already gone */ } _conflictToast = null }
-        const key = evt.applied ? 'sync.conflictApplied' : 'sync.conflictKept'
-        _conflictToast = EP.ElMessage({ type: 'warning', message: i18n.global.t(key, { name: evt.name || '' }), duration: 6000, showClose: true })
-        _conflictShownAt = Date.now()
-      } catch (e) { console.warn('[lan-sync] conflict toast failed', e) }
-    })
+    installSyncEventToasts({ onSyncEvent: window.todoAPI.onSyncEvent, i18n, toast: toastBelowChrome, EP: window.ElementPlus })
   }
 
   // Quit-flush ack handshake (main waits for this before closing the DB, ≤2s cap): dbMirror/store flush
   // handlers registered this channel EARLIER (their modules load before main.js), so by the time our
   // listener runs their flush invokes are already dispatched — a short floor lets the queued IPC
-  // messages actually leave before we ack. [D13 #11] the ack now also waits (bounded at 1s) for the
+  // messages actually leave before we ack. [D13 #11] the ack now also waits (bounded at 1.8s) for the
   // retained critical-backup write to settle — the old fixed 60ms ack could fire mid-write and let
   // the main process cut off the last critical snapshot. Payload echoes the token so the main
   // process can drop stale acks.
@@ -539,7 +553,7 @@ async function bootstrap () {
   if (typeof window.todoAPI.onShortcutConflict === 'function') {
     const offConflict = window.todoAPI.onShortcutConflict(({ msg }) => {
       try {
-        window.ElementPlus.ElMessage({ type: 'warning', message: msg, duration: 6000, showClose: true })
+        toastBelowChrome({ type: 'warning', message: msg, duration: 6000, showClose: true })
       } catch { /* Silent if toast fails; don't add errors on top of the notice */ }
     })
     // Browser shim fallback Proxy may return a non-function: nothing was really subscribed then, and nuking the API property wouldn't unsubscribe — just leave it
@@ -559,13 +573,13 @@ async function bootstrap () {
         // settings never heard about the new version. Same long-lived toast shape as the ready toast.
         _availableToasted = true
         try {
-          window.ElementPlus.ElMessage({ type: 'info', message: i18n.global.t('statsH.update.availableToast'), duration: 12000, showClose: true })
+          toastBelowChrome({ type: 'info', message: i18n.global.t('statsH.update.availableToast'), duration: 12000, showClose: true })
         } catch { /* Silent if toast fails; Settings→About still offers the download */ }
       }
       if (d && d.status === 'ready' && !_readyToasted) {
         _readyToasted = true
         try {
-          window.ElementPlus.ElMessage({ type: 'success', message: i18n.global.t('update.readyToast'), duration: 12000, showClose: true })
+          toastBelowChrome({ type: 'success', message: i18n.global.t('update.readyToast'), duration: 12000, showClose: true })
         } catch { /* Silent if toast fails; the update still installs on quit */ }
       }
     })
@@ -585,6 +599,18 @@ async function bootstrap () {
       setTimeout(() => window.dispatchEvent(new CustomEvent('todo:focus-quickadd')), 120)
     }).catch(() => {})
   }
+  // F3 (2026-10-18): modal guard — before-input-event cannot see renderer overlays, so every
+  // shortcut entry point short-circuits while any overlay is open.
+  const modalOpen = () => {
+    const ui = store.state.ui
+    if (ui.isLocked || ui.showSettingsModal || ui.showFilterModal || ui.showFeedbackModal ||
+        ui.showRepeatModalFor || ui.showRepeatDeleteConfirm || ui.accountTaskId ||
+        ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible ||
+        (ui.contextMenu && ui.contextMenu.visible)) return true
+    // Component-local dialogs (tag/category managers, milestone editor) are store-invisible:
+    // sweep the DOM (el-overlay v-show carries display:none; el-message-box mounts per open)
+    return !!document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')
+  }
   if (window.todoAPI.onShortcutAction) window.todoAPI.onShortcutAction(action => {
     const selectedTaskId = () => {
       const el = document.querySelector('.td-item.selected')
@@ -596,12 +622,12 @@ async function bootstrap () {
     }
     switch (action) {
       case 'deleteEvent': {
-        // F-D2 (maint/dw 2026-09-23): the main-process before-input-event does not know about
-        // input focus, so typing Ctrl+D inside an input used to delete the selected/edited task
-        // outright. Same inEditor exemption the Ctrl+Z/Y branches below already honor.
+        // F-D2 (maint/dw 2026-09-23): before-input-event is input-focus-blind — the inEditor
+        // exemption keeps Ctrl+D in inputs local; F3: an open dialog owns Ctrl+D too
         const ae = document.activeElement
         const inEditor = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
         if (inEditor) break
+        if (modalOpen()) break
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
         if (t) deleteWithUndo(window.appUI, store, t).then(ok => { if (ok) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] undo-refresh computeViews failed:', e)) })
@@ -631,6 +657,8 @@ async function bootstrap () {
         break
       }
       case 'startPomodoro': {
+        // F3: same overlay ownership — no focus start behind a dialog
+        if (modalOpen()) break
         store.commit('ui/toggleTomatoPanel', true)
         store.dispatch('tomato/startFocus')
         break
@@ -640,21 +668,23 @@ async function bootstrap () {
         store.commit('settings/updateSettings', { isShowSubTask: !store.state.settings.isShowSubTask })
         break
       }
-      case 'switchToDaytodo': router.push({ name: 'todo-list-today' }).catch(() => {}); break
+      // F3: view-switch shortcuts stay silent under an open dialog
+      case 'switchToDaytodo': if (!modalOpen()) router.push({ name: 'todo-list-today' }).catch(() => {}); break
       // D6-F6: "Recent todos" was hard-wired to todo-list-today-x, which nav-gate hides for non-dev
       // users — the shortcut teleported to a page the sidebar refuses to show. Only route to the
       // experimental view under the same two-layer gate; everyone else lands on Today.
       case 'switchToRecentTodos': {
+        if (modalOpen()) break
         const s = store.state.settings
         router.push({ name: (s.developerMode && s.showTodayXModule === true) ? 'todo-list-today-x' : 'todo-list-today' }).catch(() => {})
         break
       }
-      case 'switchToSchedule': router.push({ name: 'todo-list-calendar' }).catch(() => {}); break
-      case 'switchToInbox': router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
+      case 'switchToSchedule': if (!modalOpen()) router.push({ name: 'todo-list-calendar' }).catch(() => {}); break
+      case 'switchToInbox': if (!modalOpen()) router.push({ name: 'todo-list-todo-box' }).catch(() => {}); break
       // D6-F3: 'addEvent' was registered in the binding table (src/main/shortcuts.js) but never
       // dispatched — the shortcut did nothing at all. Implement as "start inline create here":
       // focus the quick-add bar (the current view's inline-create entry point).
-      case 'addEvent': focusQuickAdd(); break
+      case 'addEvent': if (!modalOpen()) focusQuickAdd(); break
       // F-D1 (maint/dw 2026-09-23): sync is now a first-class in-app shortcut dispatched by the
       // main process's before-input-event table (the old Ctrl+S was a hardcoded keydown branch
       // below that ignored shortcutKeySettings.sync). Same feedback surface and in-flight guard.
@@ -682,10 +712,12 @@ async function bootstrap () {
     // Inside inputs/textareas, leave Ctrl+Z to text-level undo; don't steal it
     const ae = document.activeElement
     const inEditor = !!ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.isContentEditable)
-    if (e.ctrlKey && e.key.toLowerCase() === 'n') {
+    // F3: an open dialog owns these keys too — no quick-add focus / undo / redo behind an overlay
+    const modal = modalOpen()
+    if (e.ctrlKey && !modal && e.key.toLowerCase() === 'n') {
       e.preventDefault()
       focusQuickAdd()
-    } else if (!inEditor && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
+    } else if (!inEditor && !modal && e.ctrlKey && !e.shiftKey && e.key.toLowerCase() === 'z') {
       e.preventDefault()
       store.dispatch('todo/undo').then(r => {
         const ok = r && r.ok
@@ -697,7 +729,7 @@ async function bootstrap () {
         console.error('[todo] undo failed:', e)
         window.appUI && window.appUI.$message && window.appUI.$message.error(i18n.global.t('statsH.main.actionFailedMsg') + ((e && e.message) || ''))
       })
-    } else if (!inEditor && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
+    } else if (!inEditor && !modal && ((e.ctrlKey && e.key.toLowerCase() === 'y') || (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'z'))) {
       e.preventDefault()
       store.dispatch('todo/redo').then(r => {
         const ok = r && r.ok

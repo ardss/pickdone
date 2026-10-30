@@ -111,13 +111,20 @@ export function renewalCarryFields (t, next) {
   const nextDayStart = next && next.todoTime > 0 ? new Date(next.todoTime).setHours(0, 0, 0, 0) : 0
   const dayDiff = (nextDayStart > 0 && t.dayStart > 0) ? nextDayStart - t.dayStart : null
   const extras = Array.isArray(t.reminderExtra) ? t.reminderExtra : []
+  // [P2 2026-10-15] deadlineTs is ALSO an absolute timestamp anchored to the instance's day — the
+  // old `t.deadlineTs || 0` verbatim carry kept the deadline on the OLD instance's date while the
+  // renewed instance moved dayDiff days later: the new instance was born overdue and the stale
+  // deadline accumulated generation after generation. Shift it by the same pure dayDiff used for
+  // reminderExtra above; when the anchor is unknown (dayDiff == null) there is no correct target
+  // day, so fall back to the historical verbatim carry rather than silently zeroing a real deadline.
+  const deadlineTs = (dayDiff != null && t.deadlineTs > 0) ? t.deadlineTs + dayDiff : (t.deadlineTs || 0)
   return {
     reminderTime: next.reminderTime,
     reminderOffsets: Array.isArray(t.reminderOffsets) ? t.reminderOffsets : [],
     reminderExtra: dayDiff == null ? [] : extras.filter(v => Number.isFinite(v) && v > 0).map(v => v + dayDiff),
     difficulty: t.difficulty || 0,
     priority: t.priority || 0,
-    deadlineTs: t.deadlineTs || 0,
+    deadlineTs,
     important: t.important || 0,
     urgent: t.urgent || 0,
     image: t.image || null,
@@ -210,7 +217,9 @@ export function expandRepeatDates (baseTs, settings, holidayList = [], deps) {
       let anchor = dayjs(baseTs)
       for (let w = 0; w < s.repeatWeekCount; w++) {
         // Set dedupe: duplicated weekday entries must not produce duplicate instances
-        for (const wd of [...new Set(s.repeatWeekDays || [])].sort((a, b) => a - b)) {
+        // Range guard (dirty-data defense, same clamp convention as the month branch): wd=0 or wd=8
+        // used to cross into adjacent weeks via `wd - 1` offsets and mint extra instances.
+        for (const wd of [...new Set(s.repeatWeekDays || [])].filter(w => w >= 1 && w <= 7).sort((a, b) => a - b)) {
           // Weekdays within the current week that are >= the anchor day; then jumps one week at a time
           const startOfWeek = anchor.startOf('isoWeek')
           const target = startOfWeek.add(wd - 1, 'day')
@@ -229,7 +238,8 @@ export function expandRepeatDates (baseTs, settings, holidayList = [], deps) {
           // End-of-month clamp: the 31st in a 30-day month falls onto the month's last day
           // (universal calendar semantics); the old main-process `if (md > dim) continue` made a
           // 1-31 monthly repeat silently vanish for entire 2/4/6/9/11 months
-          const effDay = Math.min(md, dim)
+          // Lower-bound guard first: md=0 used to hit dayjs date(0) = the PREVIOUS month's last day.
+          const effDay = Math.min(Math.max(md, 1), dim)
           const target = cursor.date(effDay)
           if (target.isBefore(dayjs(baseTs).startOf('day'))) continue
           if (!skipDate(target)) out.push(target.hour(dayjs(baseTs).hour()).minute(dayjs(baseTs).minute()))
@@ -244,14 +254,15 @@ export function expandRepeatDates (baseTs, settings, holidayList = [], deps) {
       for (let yi = 0; yi < years; yi++) {
         const yy = y + yi * s.repeatInterval
         if (s.repeatYearType === 'gregorian') {
-          // Calendar validity check: non-existent dates like "Feb 30" are silently carried by dayjs into "Mar 2", must reject
+          // Same end-of-month clamp as the month branch above: a Feb-29 yearly repeat must land on
+          // Feb 28 in non-leap years instead of the whole year's instance silently vanishing
+          // (the old `if (dd > dim) skip` lost entire years for leap-day rules).
           const mm = String(s.repeatYearMonth).padStart(2, '0')
-          const dd = s.repeatYearMonthDay
-          if (dd <= dayjs(`${yy}-${mm}-01`).daysInMonth()) {
-            const target = dayjs(`${yy}-${mm}-${String(dd).padStart(2, '0')}`)
-            if (target.isValid() && !target.isBefore(dayjs(baseTs).startOf('day')) && !skipDate(target)) {
+          const dim = dayjs(`${yy}-${mm}-01`).daysInMonth()
+          const effDay = Math.min(s.repeatYearMonthDay, dim)
+          const target = dayjs(`${yy}-${mm}-${String(effDay).padStart(2, '0')}`)
+          if (target.isValid() && !target.isBefore(dayjs(baseTs).startOf('day')) && !skipDate(target)) {
               out.push(target.hour(dayjs(baseTs).hour()).minute(dayjs(baseTs).minute()))
-            }
           }
         } else if (s.repeatYearType === 'lunar') {
           // Lunar yearly: fixed lunar month/day → converted per solar year (leap month falls back to the plain month; years lacking 29th/30th lunar days are skipped automatically)

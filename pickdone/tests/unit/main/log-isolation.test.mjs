@@ -38,7 +38,7 @@ db.init(process.env.TODO_DB_DIR)
 require(${JSON.stringify(path.join(APP_ROOT, 'node_modules', 'electron-log'))}).info(${JSON.stringify(MARKER)})
 `
 
-test('child with only TODO_DB_DIR must not append to the REAL main.log', { timeout: 120000 }, (t) => {
+test('child with only TODO_DB_DIR must not append to the REAL main.log', { timeout: 240000 }, (t) => {
   const before = fs.existsSync(REAL_LOG) ? fs.statSync(REAL_LOG) : null
   if (!before) {
     t.skip(`real main.log does not exist at ${REAL_LOG} — nothing to protect; isolation still asserted below`)

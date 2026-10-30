@@ -173,6 +173,9 @@ export default {
     "repairWarning": "配对将采用新的共享密钥——已配对的设备会被断开，需要重新配对。",
     "conflictKept": "同步冲突：「{name}」已保留对方设备的版本，你早前的内容在回收站",
     "conflictApplied": "同步冲突：「{name}」已应用对方设备的版本",
+    "degradedOplog": "同步写入本地变更队列失败——本会话的增量可能没有同步出去，重启应用后自动恢复",
+    "degradedFlush": "一段同步数据无法应用，已隔离到冲突备份区——数据不会丢失，可在同步设置中查看",
+    "floatRecoveryExhausted": "番茄悬浮窗多次自动恢复失败，已停止自动重建并保持隐藏——可在「设置 → 番茄钟」中手动打开；详情见诊断日志",
     "unpairedByRemote": "已被对方解除配对，请重新配对",
     "conflictSection": "冲突数据备份",
     "conflictHint": "同步冲突时被覆盖的数据会自动备份在这里，确认没问题前不会真正丢失，可随时恢复。",
@@ -188,6 +191,9 @@ export default {
     "quarantineRows": "已暂存 {n} 行",
     "quarantineHint": "同步落库失败的行已暂存于本机，等待快照恢复（只读展示）。",
     "oversizedSegmentNotice": "传输数据超过单次同步上限（超长分段），需要升级对端版本或拆分数据后重新配对",
-    "hibernatingNotice": "连接失败次数较多，已暂停常规拨号，约 {n} 秒后自动重试"
+    "hibernatingNotice": "连接失败次数较多，已暂停常规拨号，约 {n} 秒后自动重试",
+    "peerTooNewNotice": "同步对端版本过新，请升级本端后重新同步",
+    "peerTooOldNotice": "同步对端版本过旧，请升级对端后重新同步",
+    "snapshotSchemaTooNewNotice": "对端快照格式过新，请升级本端后重新同步"
   }
 }

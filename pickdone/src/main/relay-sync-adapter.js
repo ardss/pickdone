@@ -88,9 +88,12 @@ async function defaultImportModules () {
 
 /** Retryable = transport-level uncertainty. 4xx answers are DECISIONS (auth, rotation guard,
  *  validation) — retrying them verbatim would hammer a policy rejection; replaying them is
- *  still safe, just pointless. Network throws carry no status → retryable. */
+ *  still safe, just pointless. Network throws carry no status → retryable. A pull-side
+ *  business apply failure is DETERMINISTIC local state (the client flags it noRetry) —
+ *  re-running the identical failing apply under backoff would just burn 3 rounds. */
 function isRetryable (e) {
   if (!e) return false
+  if (e.noRetry) return false
   if (e.status == null) return true
   return e.status >= 500 || e.status === 429
 }
@@ -118,13 +121,15 @@ function isRetryable (e) {
  * @param {number} [deps.retryBaseMs] backoff base (default 500, doubles per attempt)
  * @param {number} [deps.pushChunkBytes] relay-client per-POST budget override (tests)
  * @param {number} [deps.roundIntervalMs] polling cadence override (tests)
+ * @param {number} [deps.fetchTimeoutMs] per-request abort budget forwarded to the relay client
+ *   (default 30000; a half-dead relay used to hang each POST on undici's ~300s default)
  */
 function createRelayAdapter ({
   nodeId, settingsGet, settingsPut, loadStore, applyPulled,
   log = {}, fetchImpl = global.fetch, now = Date.now,
   env = process.env, importModules = defaultImportModules,
   sleep = defaultSleep, retryMax = RETRY_MAX, retryBaseMs = RETRY_BASE_MS,
-  pushChunkBytes, roundIntervalMs = ROUND_INTERVAL_MS,
+  pushChunkBytes, roundIntervalMs = ROUND_INTERVAL_MS, fetchTimeoutMs = 30_000,
 } = {}) {
   if (!nodeId || typeof nodeId !== 'string') throw new Error('relay-adapter: nodeId required')
   if (typeof settingsGet !== 'function' || typeof settingsPut !== 'function') throw new Error('relay-adapter: settingsGet/settingsPut required')
@@ -241,25 +246,63 @@ function createRelayAdapter ({
         const store = await loadStore()
         if (!store) throw new Error('relay-adapter: loadStore returned no revision store')
         const savedSecret = get('DEVICE_SECRET') || null
+        // Pull-side materialization (relay-sync-apply via the bootstrap) now runs INSIDE
+        // the client's cursor gate (2026-10-14): the gate fires after the pull frames are
+        // decrypted+merged but BEFORE the ack/cursor commit, so a batch the business
+        // layer could not fully materialize is never acked into relay GC. The old
+        // post-round ordering let the client ack the full cursor first — relay gc()
+        // then deleted the unmaterialized envelopes (settings/tomato/...) and their
+        // remote changes were silently lost forever (LAN channel unaffected).
+        let businessApplied = 0
+        let businessSkipped = 0
+        let warning = null
         const client = createRelayClient({
           nodeId, account, baseUrl, store, dataKey, fetchImpl,
           deviceSecret: savedSecret,
           enrollment: get('ENROLLMENT') || null,
           pushChunkBytes,
+          fetchTimeoutMs,
           state: loadPersistedState(),
           onDeviceSecret: secret => { try { put('DEVICE_SECRET', secret) } catch (e) { if (log.warn) log.warn('[RelaySync] device secret persist failed: ' + (e && e.message)) } },
+          // Cursor gate: walk the batch's decrypted frames in serverSeq order; advance
+          // the cursor through frames the business layer vouches for ('ok' = materialized
+          // or no-op) and STOP at the first 'blocked' frame (entity this slice cannot
+          // materialize). Everything behind the stop is re-pulled next round — duplicate
+          // pulls are idempotent (revisionId dedup + LWW no-ops); silent loss is not
+          // recoverable. A missing/absent verdict map keeps the legacy advance-all
+          // behavior (bare stub hosts in tests).
+          onBeforeAck: typeof applyPulled === 'function'
+            ? async ({ applied, fromSeq, items, ownIds }) => {
+                const outcome = await applyPulled(items, client.store, nodeId)
+                businessApplied = (outcome && outcome.businessApplied) || 0
+                businessSkipped = (outcome && outcome.businessSkipped) || 0
+                metrics.appliedTotal += businessApplied
+                const verdicts = outcome && outcome.verdicts
+                if (!(verdicts instanceof Map)) return applied // legacy stub: no per-frame verdicts → historical semantics
+                const isOwn = id => !!(ownIds && ownIds.has(id))
+                let safe = Math.max(0, (Number.isFinite(fromSeq) ? fromSeq : 1) - 1)
+                let blocked = false
+                for (const it of (Array.isArray(items) ? items : [])) {
+                  const id = it.envelope && it.envelope.revisionId
+                  // Own-device frames (this device pushed them) never hold the cursor:
+                  // their content already lives in the local business tables + DAG, and
+                  // the v2 recorder mints non-todo bookkeeping revisions on every write —
+                  // holding on those would pin the cursor at the relay head forever.
+                  if (verdicts.get(id) === 'blocked' && !isOwn(id)) { blocked = true; continue }
+                  if (!blocked && Number.isFinite(it.serverSeq)) safe = Math.max(safe, it.serverSeq)
+                }
+                if (blocked) {
+                  warning = `cursor held at seq ${safe} (relay head ${applied}): ` +
+                    `${businessSkipped} pulled envelope(s) not yet materializable by this build ` +
+                    `(non-todo entities) — re-pulled each round until per-entity materialization lands (re-pull is idempotent)`
+                  if (log.warn) log.warn('[RelaySync] ' + warning)
+                }
+                return blocked ? safe : applied
+              }
+            : undefined,
         })
         if (!savedSecret) await step('register', () => client.register())
         const r = await step('round', () => client.round())
-        // Pull-side materialization (relay-sync-apply via the bootstrap) BEFORE the commit
-        // point: pulled envelopes land in the local DAG + business tables, or the round
-        // fails and the durable state replays (never ack what did not land, spec §18).
-        let businessApplied = 0
-        if (typeof applyPulled === 'function' && Array.isArray(r.received) && r.received.length) {
-          const outcome = await applyPulled(r.received, client.store, nodeId)
-          businessApplied = (outcome && outcome.businessApplied) || 0
-          metrics.appliedTotal += businessApplied
-        }
         // commit point (spec §18): persist ONLY past a fully successful round — a crash
         // before this line replays from the previous snapshot, which is duplicate-safe.
         persistState(client.state())
@@ -269,7 +312,7 @@ function createRelayAdapter ({
         metrics.pushedTotal += r.pushed || 0
         metrics.pulledTotal += r.pulled || 0
         metrics.quarantinedTotal += r.quarantined || 0
-        metrics.lastResult = { pushed: r.pushed || 0, pulled: r.pulled || 0, quarantined: r.quarantined || 0, cursor: r.cursor, regressionReset: !!r.regressionReset, businessApplied }
+        metrics.lastResult = { pushed: r.pushed || 0, pulled: r.pulled || 0, quarantined: r.quarantined || 0, cursor: r.cursor, regressionReset: !!r.regressionReset, businessApplied, businessSkipped, ...(warning ? { warning } : {}) }
         return { ok: true, ...metrics.lastResult }
       } catch (e) {
         metrics.lastError = (e && e.message) || String(e)
@@ -327,8 +370,15 @@ function createRelayAdapter ({
    * open registration). Fail-open on first-round connectivity (a relay that is
    * temporarily down must not block configuration) but strict on configuration
    * validity — bad input never persists.
+   *
+   * F4 #8 (2026-10-21): opts.deferStart runs ONLY validation + config persistence and skips the
+   * built-in first round + poller start. The bootstrap uses it to run the revisionsFlag flip and
+   * the v1 backfill BETWEEN the validated config writes and the first round — the backfill MUST
+   * precede the first pull, or a head-less untracked local row can lose its causal race against
+   * the first pulled envelope (the exact hazard syncv2-untracked-local-backfill pins). Callers
+   * that defer must round()+start() themselves.
    */
-  async function enable ({ account, baseUrl, rootKey, enrollment } = {}) {
+  async function enable ({ account, baseUrl, rootKey, enrollment } = {}, { deferStart = false } = {}) {
     account = String(account || '').trim()
     baseUrl = String(baseUrl || '').trim()
     if (!ACCOUNT_RE.test(account)) throw new Error('relay-adapter: account must match ' + ACCOUNT_RE.source)
@@ -342,7 +392,19 @@ function createRelayAdapter ({
     }
     if (rootKey != null && !ROOT_KEY_RE.test(String(rootKey))) throw new Error('relay-adapter: rootKey must be 64 hex chars')
     if (enrollment != null && String(enrollment).length > 512) throw new Error('relay-adapter: enrollment too long (max 512)')
-    const key = rootKey != null ? String(rootKey) : (get('ROOT_KEY') || randomBytes(32).toString('hex'))
+    // An existing deviceSecret and durable cursor belong to one relay account/origin.
+    // A silent rebind can reuse a wrong bearer token or skip remote history. Fail
+    // BEFORE any settings writes; explicit forget/key migration requires review.
+    const priorAccount = get('ACCOUNT')
+    const priorBaseUrl = get('BASE_URL')
+    const priorRootKey = get('ROOT_KEY')
+    if (priorAccount && (priorAccount !== account || (priorBaseUrl && priorBaseUrl !== baseUrl))) {
+      throw new Error('relay-adapter: different account or relay origin requires explicit forget; refusing to rebind existing identity')
+    }
+    if (rootKey != null && priorRootKey && String(rootKey) !== priorRootKey) {
+      throw new Error('relay-adapter: different root key requires explicit key migration; refusing silent key rotation')
+    }
+    const key = rootKey != null ? String(rootKey) : (priorRootKey || randomBytes(32).toString('hex'))
     put('ACCOUNT', account)
     put('BASE_URL', baseUrl)
     if (enrollment != null) put('ENROLLMENT', String(enrollment)) // absent = keep the previously configured one
@@ -352,13 +414,26 @@ function createRelayAdapter ({
     // revision DAG — with the flag off there is nothing to push (inert locally, so it is
     // left on after disable; recording without a transport is harmless).
     if (log.info) log.info(`[RelaySync] enabled for account=${account} baseUrl=${baseUrl} (${remoteAllowed && !isLoopbackBaseUrl(baseUrl) ? 'REMOTE via env gate' : 'loopback'})`)
+    if (deferStart) return { ...status() } // validation + persist only; the caller owns flag/backfill/round/start ordering
     const r = await round()
     start()
     return { ...status(), firstRound: r }
   }
 
+  // F4 #7: hoisted to a real closure binding (it used to exist only as a property of the
+  // returned facade — a bare `whenIdle()` inside disable/forget would be a ReferenceError
+  // silently swallowed by the catch below). disable/forget and the quit path share this.
+  const whenIdle = () => (inFlight || Promise.resolve()).then(() => {})
+
+  // F4 #7 (2026-10-21): disable/forget now await the in-flight round BEFORE mutating durable
+  // state — the same `stop(); await whenIdle()` contract stopForQuit already uses. The old
+  // fire-and-forget stop() let a round that was mid-flight keep running while we flipped
+  // ENABLED/cleared keys: its final persistState could land AFTER (or clobber) the disable/forget
+  // writes, resurrecting config the user just turned off, and its pull-apply could commit remote
+  // rows a moment after the identity was wiped. When idle the await resolves immediately.
   async function disable () {
     stop()
+    try { await whenIdle() } catch { /* round already failed into lastError */ }
     put('ENABLED', '0')
     if (log.info) log.info('[RelaySync] disabled (config + secrets retained for re-enable)')
     return status()
@@ -368,18 +443,17 @@ function createRelayAdapter ({
    *  device identity against the relay (new register). */
   async function forget () {
     stop()
+    try { await whenIdle() } catch { /* round already failed into lastError */ }
     for (const k of Object.keys(K)) del(k)
     if (log.info) log.info('[RelaySync] forgot relay identity (secrets + durable state cleared)')
     return status()
   }
 
-  return { nodeId, status, enable, disable, forget, round, start, stop, kick,
-    /** Resolves when no round is in flight (quit path: persist must beat the db close). */
-    whenIdle: () => (inFlight || Promise.resolve()).then(() => {}),
+  return { nodeId, status, enable, disable, forget, round, start, stop, kick, whenIdle,
     // test/introspection surface
     __test: { K, loadPersistedState, persistState, metrics, MAX_PERSISTED_PUSHED,
       // M2 2026-10-09: bounded-timer-registry regression seam — live pending timers only.
       timers, schedule, clearTimers } }
 }
 
-module.exports = { createRelayAdapter, isLoopbackBaseUrl, SETTINGS_KEYS: K, REMOTE_GATE_ENV, MAX_PERSISTED_PUSHED }
+module.exports = { createRelayAdapter, isLoopbackBaseUrl, isRetryable, SETTINGS_KEYS: K, REMOTE_GATE_ENV, MAX_PERSISTED_PUSHED }

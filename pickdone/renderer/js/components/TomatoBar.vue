@@ -18,7 +18,11 @@
         </template>
         <template v-else>
           <app-icon name="timer" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : 'var(--tt-work-accent)'}"/>
-          <span>{{ $t('statsE.TomatoBar.readyStatus') }}</span>
+          <!-- J1 (2026-10-22 journey audit): the no-attach branch hardcoded readyStatus, so a FREE
+               focus/rest showed the READY label for its whole run while panel/float/taskbar showed
+               the phase copy (focusing/resting). statusText (the existing computed) carries the
+               phase-aware copy for all three states. -->
+          <span>{{ statusText }}</span>
         </template>
       </div>
       <!-- Only the inner span is clickable; no row-level cursor (a cursor here advertised a dead click area) -->
@@ -115,12 +119,21 @@ export default {
   },
 
   mounted () {
+    // [w16 P2 fix] Seed the pips-tour baseline with the CURRENT count: _prevTodayDone had no
+    // initialization, so a genuine 0→1 jump saw prev===undefined (blocked by `prev !== 0`) and
+    // every later completion was blocked by `todayDone < 1` — only undo-then-redo ever taught.
+    this._prevTodayDone = this.todayDone
     this._iv = setInterval(() => {
       this.ts = Date.now() // completion check / bookkeeping live in store/tomato's shared tick (dispatched per window by main.js); this only refreshes the display
       // While idle (non-running) the status does not change; push once after each flip instead of pushing IPC every second
+      // w16 fix (2026-10-28): while RUNNING the signature now carries the exact remaining second —
+      // the old minute-granularity gate (floor(remainSec/60)) only refreshed the Windows taskbar
+      // progress bar once per minute, so the bar sat a frozen stub near the origin for the first
+      // minutes of a focus. main-process tomato-taskbar.update debounces at 0.004 (~6s of a 25:00
+      // focus), so per-second IPC stays cheap and the bar now tracks the real countdown.
       const st = this.$store.state.tomato
-      // Remaining seconds sourced like pushTaskbar (the component has no remainSec data field; it used to be always undefined, freezing the taskbar countdown after phase switches)
-      const sig = (st.status || '') + ':' + (st.status && st.status !== 'default' ? Math.floor(this.remainSecNow() / 60) : '')
+      const isRunning = !!st.status && st.status !== 'default'
+      const sig = (st.status || '') + ':' + (isRunning ? this.remainSecNow() : '')
       if (sig !== this._lastTbSig) { this._lastTbSig = sig; this.pushTaskbar() }
       // Re-align the float window's real visibility every 15s (tray/shortcut closing the float bypasses this component, so the local toggle state drifts)
       this._floatSyncN = (this._floatSyncN || 0) + 1
@@ -142,10 +155,25 @@ export default {
     if (window.todoAPI && window.todoAPI.tomatoFloatShown) {
       window.todoAPI.tomatoFloatShown().then(v => { this.floatOn = !!v }).catch(() => {})
     }
+    // J2 (2026-10-22 journey audit): the float's OWN close (✕ / minimize on TomatoFloatPage) left
+    // this toggle stale for up to 15s and INVERTED the next click (hide on an already-hidden float
+    // = swallowed first reopen click; live-verified). The float page writes a localStorage ping
+    // after its own hides; the storage event fires here cross-window and we re-query the REAL
+    // visibility. The ping is a signal token only — its value is never read, so a stale ping
+    // surviving a reboot can never mislead: mount-time sync below stays the authoritative IPC
+    // query, and this handler always re-queries too.
+    this._onFloatVisPing = e => {
+      if (!e || e.key !== 'tomatoFloatVisPing' || e.newValue == null) return
+      if (window.todoAPI && window.todoAPI.tomatoFloatShown) {
+        window.todoAPI.tomatoFloatShown().then(v => { this.floatOn = !!v }).catch(() => {})
+      }
+    }
+    window.addEventListener('storage', this._onFloatVisPing)
   },
   beforeUnmount () {
     this._unmounted = true // pending pips-tour setTimeout callbacks use this to skip popping
     clearInterval(this._iv)
+    if (this._onFloatVisPing) window.removeEventListener('storage', this._onFloatVisPing)
     if (typeof this._offTaskbar === 'function') this._offTaskbar() // the browser shim once downgraded it to a Promise (non-function); a bare truthiness check would crash
     // Clear taskbar traces on unmount, preventing leftover progress bar/countdown title from the previous session
     // Not cleared while focus is running (avoids the countdown flashing blank for a beat on future remounts/refactors)
@@ -161,6 +189,12 @@ export default {
       this._prevTodayDone = this.todayDone
       if (this.todayDone < 1 || this._pipsTourDone) return
       if (prev !== 0) return // only a real 0→1 jump within this session teaches; users starting with existing completions get no popup
+      // A ledger REPLACE (recordsReplace: boot hydration or a broadcast reload re-reading seeded
+      // rows) landing moments ago is bulk fill, not this session's first completion — local
+      // bookings go through their own mutations and never refresh the stamp. Re-baseline (prev
+      // above already carries the new count) instead of force-firing the tour (2026-10-28 pool:
+      // seeded rows made the tour pop under every later target, inert on the whole shell).
+      if (Date.now() - ((this.s && this.s.lastLedgerReplaceAt) || 0) < 2500) return
       import('../utils/onboardingTours.js').then(mod => {
         if (mod.tourSeenState().pips) { this._pipsTourDone = true; return }
         this._pipsTourDone = true
@@ -241,7 +275,7 @@ export default {
         // Give the main process a beat to apply the change, then write back from its real visibility
         await new Promise(r => setTimeout(r, 300))
         this.floatOn = !!(await window.todoAPI.tomatoFloatShown())
-      } catch { /* keep the previous state on error */ } finally { this._floatToggling = false }
+      } catch (e) { this.reportDispatchFail(e) /* [w7] a failed float toggle is surfaced, not swallowed */ } finally { this._floatToggling = false }
     },
 
   },
@@ -273,7 +307,7 @@ export default {
   height: 100%;
   padding: 0 25px;
   background-color: var(--tomato-bg);
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
 }
 .tomato-timer--work { background-color: var(--tomato-bg); }
 .tomato-timer--rest { background-color: #f6e8d1; }
@@ -285,7 +319,7 @@ export default {
   font-weight: 400;
   font-size: var(--fs-sm);
   line-height: 18px;
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
 }
 .tomato-timer__status > div { display: flex; align-items: center; }
 .tomato-timer__status > div:first-of-type { margin-bottom: var(--space-1); }
@@ -330,7 +364,7 @@ export default {
   background-color: #0c8172;
   border: none;
   border-radius: var(--radius-sm);
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
 }
 .tomato-timer__play:focus { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
 .tomato-timer__play:hover { background-color: #008284; }
@@ -380,7 +414,7 @@ export default {
   font-weight: 600;
   font-size: 26px;
   line-height: 42px;
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
   font-variant-numeric: tabular-nums;
   letter-spacing: 1px;
   pointer-events: none;
@@ -396,7 +430,7 @@ export default {
   flex-shrink: 0;
   padding: 0 25px;
   background-color: var(--tomato-bg);
-  transition: all .2s;
+  transition: all var(--dur-fast, .2s);
   overflow: visible;
 }
 .tomato-timer--rest { background-color: #f6e8d1; }
@@ -423,7 +457,7 @@ export default {
   position: absolute; right: 25px; top: 0; bottom: 0; margin: auto;
   width: 138px; height: 48px; padding: 0;
   color: #fff; font-weight: 400; font-size: var(--fs-lg); line-height: 21px;
-  border: none; border-radius: var(--radius-sm); transition: all .2s;
+  border: none; border-radius: var(--radius-sm); transition: all var(--dur-fast, .2s);
   display: flex; align-items: center; justify-content: center; gap: 8px;
 }
 /* —— 窄条变体：非今日视图专注/休息进行中的兜底形态（相位+倒计时+放弃，收成/白噪音/小窗已 v-if 收起） —— */

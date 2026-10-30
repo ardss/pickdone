@@ -33,9 +33,14 @@ const WHITELIST = [
 ]
 
 const RULES = [
-  [/background(?:-color)?:\s*#fff(?:fff)?\b/i, 'R1 面板白底硬编码 → var(--panel, #fff)'],
+  // 2026-10-28 W18: 旧 `#fff(?:fff)?\b` 只认 3/6 位,漏 4 位(#fff8 半透明白)与 8 位(#ffffffee
+  // 带α白)——深色模式同样破损。扩成 #f{3} + 0..5 个 hex + 词边界:覆盖 3/4/6/8 位(以及保守
+  // 的 5/7 位非法长度,误报成本可忽略);\b + 回溯使 `#ffffffx` 这类更长非 hex 词不被吃进。
+  [/background(?:-color)?:\s*#f{3}[0-9a-f]{0,5}\b/i, 'R1 面板白底硬编码 → var(--panel, #fff)'],
   [/background(?:-color)?:\s*rgba?\(\s*255\s*,\s*255\s*,\s*255\s*,\s*(?:\.[5-9]\d*|1)\s*\)/i, 'R1b 高不透明白面板底(α≥.5)硬编码 → var(--panel)'],
-  [/background(?:-color)?:\s*#(fafbfc|f5f7f7|f8f9fa|f5f5f5|f0f2f5)\b/i, 'R2 近白浅底 → var(--gray-bg) 或 var(--panel)'],
+  // R2 同理(W18):6 位近白 + 可选 2 位 hex α → 同时覆盖 8 位(#f5f7f7ee);4 位/3 位展开(#fafa
+  // /#f5f)不是这批近白色,不纳入以免误伤。
+  [/background(?:-color)?:\s*#(fafbfc|f5f7f7|f8f9fa|f5f5f5|f0f2f5)(?:[0-9a-f]{2})?\b/i, 'R2 近白浅底 → var(--gray-bg) 或 var(--panel)'],
   [/color:\s*#(333\b|333333|000\b|000000|6d6d6d|606266)\b/i, 'R3 文字灰散值 → var(--text-1)/var(--text-2)/var(--text-3)'],
   // R4/R5 档位纪律（2026-09-04 归一）：原 scope 的 style-2/3.css 已在组件吸收重构中退役，
   // 存量散值随规则迁入各组件 <style>，全局层不再拦截（component-level 规则由组件作者维护）
@@ -62,7 +67,10 @@ for (const rel of FILES) {
     }
   })
 }
-for (const { rel, css } of cssSources().filter(src => src.rel.includes("renderer"))) {
+// W19: pass OUR ROOT (GATE_ROOT-aware) so golden fixture trees' component <style> blocks enter
+// the scan — cssSources() otherwise always used the real checkout root and fixture-injected
+// component-level violations could never be seen (the detector half of the gate was untestable)
+for (const { rel, css } of cssSources(ROOT).filter(src => src.rel.includes("renderer"))) {
   const lines = css.split(/\r?\n/)
   lines.forEach((line, i) => {
     for (const [re, msg] of RULES) {
@@ -89,8 +97,13 @@ if (process.env.TOKEN_SELFTEST === '1') {
   const samples = [
     ['R1 面板白底硬编码 → var(--panel, #fff)', 'background: #fff;'],
     ['R1 面板白底硬编码 → var(--panel, #fff)', 'background: #ffffff;'],
+    // W18: 4 位与 8 位白 hex 形态(护栏腐烂恒绿的防回归样本)
+    ['R1 面板白底硬编码 → var(--panel, #fff)', 'background: #fff8;'],
+    ['R1 面板白底硬编码 → var(--panel, #fff)', 'background: #ffffffee;'],
     ['R1b 高不透明白面板底(α≥.5)硬编码 → var(--panel)', 'background: rgba(255,255,255,.9);'],
     ['R2 近白浅底 → var(--gray-bg) 或 var(--panel)', 'background: #f5f7f7;'],
+    // W18: 8 位近白(带 α)
+    ['R2 近白浅底 → var(--gray-bg) 或 var(--panel)', 'background: #f5f7f7ee;'],
     ['R3 文字灰散值 → var(--text-1)/var(--text-2)/var(--text-3)', 'color: #333;'],
     ['R3 文字灰散值 → var(--text-1)/var(--text-2)/var(--text-3)', 'color: #000000;'],
   ]

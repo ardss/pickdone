@@ -28,6 +28,7 @@ import { dayShift } from '../utils/todayBounds.js'
 import { tagStaleDone } from '../utils/expiryGroups.js' // [B9] completed fallback predicate
 import { rescheduleExpired, rangeLabel } from '../utils/core.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
+import { crossDayRevertPatch } from '../utils/crossDayMove.js' // [reschedule-undo-reminder fix]
 import { extractTags } from '../utils/search.js'
 import TodoGroupBlock from '../components/TodoGroupBlock.vue'
 import EmptyState from '../components/EmptyState.vue'
@@ -100,7 +101,7 @@ export default {
           batchMoveWithUndo(this, {
             label: this.$t('statsC.Tag.rescheduled'),
             snap,
-            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: crossDayRevertPatch(r.orig, r.patch) })
           })
         } else {
           this.$message.info(this.$t('statsC.Tag.nothingToReschedule'))

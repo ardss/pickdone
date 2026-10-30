@@ -147,10 +147,11 @@
  * The header answers four questions: when it started (earliest task creation time) / how it progresses (progress bar) / how much was invested (focus minutes = sum of estimate) / when it was last advanced.
  * Task list reuses the category list view's grouping semantics (past completed/expired uncompleted/today/tomorrow/day after tomorrow/later/no date) + a fully collapsed final "completed" group.
  */
-import {dayjs, DAY_MS, rescheduleExpired, FMT } from '../utils/core.js'
+import {dayjs, DAY_MS, rescheduleExpired, FMT, rangeDays } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
-import { buildExpiryGroups } from '../utils/expiryGroups.js'
+import { crossDayRevertPatch } from '../utils/crossDayMove.js' // [reschedule-undo-reminder fix]
+import { buildExpiryGroups, staleDoneExclusive } from '../utils/expiryGroups.js'
 import { loadMilestones, saveMilestones, parseMilestoneDate, milestoneState, milestoneProgress, dueStateOf, newMilestoneId } from '../utils/milestones.js'
 import { COLOR_PALETTE } from '../store/category.js'
 import { PROJECT_STATUSES, statusI18nKey } from '../utils/projectStatus.js'
@@ -276,7 +277,8 @@ export default {
         const d1 = dayShift(d0, 1)
         days.push({
           n: this.inCat.filter(t => t.complete && t.completedAt >= d0 && t.completedAt < d1).length,
-          label: i === 0 ? this.$t('statsB.ProjectView.today') : dayjs(d0).format('MM-DD')
+          // [FMT contract] was hardcoded 'MM-DD', bypassing the locale-aware FMT system (cf. DayDeck fmtMd)
+          label: i === 0 ? this.$t('statsB.ProjectView.today') : dayjs(d0).format(FMT.cnDate)
         })
       }
       return days
@@ -358,8 +360,10 @@ export default {
           noDate: 'statsB.ProjectView.noDate'
         },
         // [D13 A2] today's completions moved into the shared catTodayDone bucket (exactly-one-group
-        // invariant) — projDone keeps covering only completions OUTSIDE the today bucket
-        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => t.complete && t.dayStart !== this.todayTs, props: { showDate: true } }]
+        // invariant) — projDone keeps covering only completions OUTSIDE the today bucket.
+        // [w21] exclusive predicate (see CategoryView): also excludes catExpDone / catTomorrow /
+        // catDat members so no completed row double-renders.
+        extraGroups: [{ key: 'projDone', titleKey: 'statsB.ProjectView.done', filter: t => staleDoneExclusive(t, this.todayTs, rangeDays(this.settings.expiredCompletedTodoRange, 7)), props: { showDate: true } }]
       })
     }
   },
@@ -405,6 +409,25 @@ export default {
     addMilestone () { this.msModal = { mode: 'add' } },
     /** Edit milestone (click node/card): same single dialog, pre-filled */
     editMilestone (m) { this.msModal = { mode: 'edit', ms: m } },
+    /** [F3 fix] ONE confirmed-write path for EVERY milestone mutation (add / edit / remove /
+     *  toggleMsTask): saveMilestones exposes the durable write on .savePromise (utils/milestones.js
+     *  — consumed here, never modified). The four call sites used to assign the returned array
+     *  unconditionally and toast success even when the meta put failed, so the UI showed the edit
+     *  while the next launch silently reverted it. Now: await the write; on failure keep the UI at
+     *  the pre-write list and toast the shared actionFailedMsg; success only after the put landed. */
+    async saveMilestonesConfirmed (next) {
+      const prev = this.milestones
+      const saved = saveMilestones(this.catId, next)
+      let ok = false
+      try { ok = await saved.savePromise } catch { ok = false }
+      if (ok !== true) {
+        this.milestones = prev
+        this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+        return null
+      }
+      this.milestones = saved
+      return saved
+    },
     async onMsSave ({ title, date }) {
       const modal = this.msModal
       this.msModal = null
@@ -415,8 +438,8 @@ export default {
         // Pre-generate the id (saveMilestones keeps caller-supplied ids): the entrance animation must
         // target the just-added entry, not whichever entry happens to carry the latest date
         const entry = { id: newMilestoneId(), title, date: parsed }
-        const saved = saveMilestones(this.catId, [...this.milestones, entry])
-        this.milestones = saved
+        const saved = await this.saveMilestonesConfirmed([...this.milestones, entry])
+        if (!saved) return
         this.msNewId = resolveMsNewId(entry.id, saved) // entrance animation for the new node
         setTimeout(() => { this.msNewId = null }, 1200)
         this.$message.success(this.$t('statsB.ProjectView.msAdded'))
@@ -434,42 +457,47 @@ export default {
             base = latest
           }
         } catch { /* re-read failure: fall back to the open-time snapshot */ }
-        this.milestones = saveMilestones(this.catId, base.map(x => x.id === ms.id ? { ...x, title, date: parsed } : x))
+        const saved = await this.saveMilestonesConfirmed(base.map(x => x.id === ms.id ? { ...x, title, date: parsed } : x))
+        if (!saved) return
         this.$message.success(this.$t('statsB.ProjectView.msUpdated'))
       }
     },
     async removeMilestone (m) {
       try { await this.$confirm(this.$t('statsB.ProjectView.msRemoveConfirm', { title: m.title }), this.$t('statsB.ProjectView.tip'), { type: 'warning' }) } catch { return }
-      this.milestones = saveMilestones(this.catId, this.milestones.filter(x => x.id !== m.id))
+      await this.saveMilestonesConfirmed(this.milestones.filter(x => x.id !== m.id))
     },
     toggleMsExpand (id) { this.msExpanded = { ...this.msExpanded, [id]: !this.msExpanded[id] } },
     /** Link/unlink tasks to a milestone (N2): progress grows automatically with the task completion ratio */
-    toggleMsTask (ms, taskId) {
+    async toggleMsTask (ms, taskId) {
       const ids = new Set(ms.taskIds || [])
       ids.has(taskId) ? ids.delete(taskId) : ids.add(taskId)
-      this.milestones = saveMilestones(this.catId, this.milestones.map(x => x.id === ms.id ? { ...x, taskIds: [...ids] } : x))
+      await this.saveMilestonesConfirmed(this.milestones.map(x => x.id === ms.id ? { ...x, taskIds: [...ids] } : x))
     },
     /* ---- Project editing (the ... menu; same data path as CLI/manage categories) ---- */
     async renameProject () {
+      // [F3 fix] the old single try/catch wrapped BOTH the $prompt and the persist, so every
+      // rejection — including a real persistence failure — fell into the "user cancelled" swallow
+      // and died silently. Cancel handling is now scoped to the dialog await ONLY; everything
+      // after it reports honestly (cancel / duplicate-name / persist failure are distinct paths).
+      let value
       try {
-        const { value } = await this.$prompt(this.$t('statsB.ProjectView.namePrompt'), this.$t('statsB.ProjectView.renameTitle'), { inputValue: this.cat.categoryName, inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectView.nameRequired') })
-        const name = (value || '').trim()
-        if (!name || name === this.cat.categoryName) return
-        // [A4 fix] the store persist is async: only toast success once the SQLite write confirmed;
-        // on failure keep the in-memory rename but say so (was: unconditional success toast).
-        // Duplicate live names are rejected by the store with CATEGORY_EXISTS — that must NOT fall
-        // into the cancel-swallowing catch below (it silently ate the rename as "user cancelled",
-        // same fix family as ProjectOverviewView.createProject): surface the warning and keep the
-        // prompt-dialog semantics (the dialog is already closed at this point, nothing to keep).
-        try {
-          const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryName: name })
-          if (ok === false) return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
-          this.$message.success(this.$t('statsB.ProjectView.renamed'))
-        } catch (e) {
-          if (e && e.code === 'CATEGORY_EXISTS') { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
-          throw e
-        }
-      } catch { /* cancelled */ }
+        ({ value } = await this.$prompt(this.$t('statsB.ProjectView.namePrompt'), this.$t('statsB.ProjectView.renameTitle'), { inputValue: this.cat.categoryName, inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectView.nameRequired') }))
+      } catch { return } // user cancelled the dialog — nothing to report
+      const name = (value || '').trim()
+      if (!name || name === this.cat.categoryName) return
+      // [A4 fix] the store persist is async: only toast success once the SQLite write confirmed;
+      // on failure keep the in-memory rename but say so (was: unconditional success toast).
+      // Duplicate live names are rejected by the store with CATEGORY_EXISTS — that gets its own
+      // warning (same fix family as ProjectOverviewView.createProject); any OTHER rejection is a
+      // real persistence error and now surfaces instead of being read as a cancel.
+      try {
+        const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryName: name })
+        if (ok === false) return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+        this.$message.success(this.$t('statsB.ProjectView.renamed'))
+      } catch (e) {
+        if (e && e.code === 'CATEGORY_EXISTS') { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
+        this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) ? e.message : e))
+      }
     },
     async setColor (color) {
       // [A4 fix] same confirmed-write contract as renameProject: surface a failed persist
@@ -517,6 +545,15 @@ export default {
     async removeFromProject () {
       try { await this.$confirm(this.$t('statsB.ProjectView.unprojectConfirm', { name: this.cat.categoryName }), this.$t('statsB.ProjectView.tip'), { type: 'warning' }) } catch { return }
       this.$store.commit('category/setProject', { id: this.catId, flag: false })
+      // [F2 fix] setProject is a SYNC mutation (Vuex commit discards the handler's return), whose
+      // durable flag write settles asynchronously; the store's onFail revert of the in-memory
+      // projectIds is its failure signal. Wait out the immediate-failure window, then only toast
+      // success + navigate when the in-memory list actually dropped the id. A rejection arriving
+      // later than this window is still reverted by the store's own error-safety path.
+      await new Promise(r => setTimeout(r, 0))
+      if (this.$store.state.category.projectIds.includes(this.catId)) {
+        return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+      }
       this.$message.success(this.$t('statsB.ProjectView.restored'))
       this.$router.push({ name: 'todo-list-projects' }).catch(() => {})
     },
@@ -531,7 +568,7 @@ export default {
           batchMoveWithUndo(this, {
             label: this.$t('statsB.ProjectView.rescheduled'),
             snap,
-            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: { dayStart: r.dayStart, todoTime: r.todoTime } })
+            revertOf: r => this.$store.dispatch('todo/updateTodoFields', { taskId: r.id, patch: crossDayRevertPatch(r.orig, r.patch) })
           })
         } else {
           // [maint-0924 A13] n=0 was silent — say there is nothing to reschedule

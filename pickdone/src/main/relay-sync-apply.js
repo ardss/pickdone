@@ -28,6 +28,16 @@
  * frames (duplicate-safe by revisionId PK and by LWW no-ops). Business flush reports
  * { ok: false } only when quarantine parking failed too — that also throws (dropped
  * rows must never be acked as applied).
+ * W14 (2026-10-27, P1): applyRowSafe RETHROWS on exception instead of returning false —
+ * a transient DB failure (SQLITE_BUSY during the hydration reads) used to surface as a
+ * legitimate no-op here, and the false branch below advanced the cursor with verdict
+ * 'ok': the remote change was lost one-way and never retried. The false branch remains
+ * ONLY for DECIDED no-ops (LWW loser / identical content / ghost tombstone) — those
+ * still verdict 'ok' because the local table provably holds at-least-as-new content.
+ * An exception fails the whole round (before flushPendingWrites; withTransaction rolls
+ * the DAG ingest back) — fail-closed, idempotent replay. The LAN ingestSegment loop and
+ * the snapshot receivers get the same alignment for free: a throw fails the round, the
+ * ack/watermark stays below the segment, the peer re-pushes.
  */
 
 const syncApply = require('./sync-apply')
@@ -88,10 +98,19 @@ function createState (deviceId) {
  * @param {object} [store] the engine store AFTER the client round (source of truth for
  *   which envelope is the materialized current — mirrors the persisted pointer decision)
  * @param {string} [deviceId] this device's sync id (LWW tie-break stamp)
- * @returns {{dagIngested: number, businessApplied: number, businessSkipped: number}}
+ * @returns {{dagIngested: number, businessApplied: number, businessSkipped: number,
+ *   verdicts: Map<string, 'ok'|'blocked'>}} verdicts: per-envelope materialization verdict
+ *   keyed by revisionId — 'blocked' = a PEER-originated envelope this slice cannot
+ *   materialize (non-todo entity) or could not even map the payload: the relay cursor
+ *   must NOT be advanced past it (acking + relay GC would make the remote change
+ *   unrecoverable, 2026-10-14). Own-device envelopes are always 'ok' when not applied —
+ *   their content already lives in the local business tables/DAG (the app's recorder
+ *   mints many bookkeeping revisions per write; holding on those would pin the cursor
+ *   forever). 'ok' = materialized, own frame, or a no-op (LWW loser / identical content /
+ *   ghost tombstone — the local state already holds at-least-as-new content).
  * @throws when the DAG ingest or the business flush fails durably (round must not commit its cursor)
  */
-function applyPulledEnvelopes (received, store, deviceId) {
+function applyPulledEnvelopesCore (received, store, deviceId) {
   const log = logger()
   const items = (Array.isArray(received) ? received : [])
     .map(r => r && r.envelope ? r : null).filter(Boolean)
@@ -118,12 +137,50 @@ function applyPulledEnvelopes (received, store, deviceId) {
   state.applyCache = syncApply.createHydrationCache(state)
   let businessApplied = 0
   let businessSkipped = 0
+  const verdicts = new Map()
+  // Origin check (2026-10-14): only PEER-originated envelopes can carry changes this
+  // device has never seen. An own-device frame (any entity — the v2 recorder mints
+  // settings/meta bookkeeping revisions on every write) is by construction already in
+  // the local business tables + DAG; blocking on those would pin the relay cursor at
+  // its head forever (every pull contains own bookkeeping frames).
+  const ownFrame = env => !!(env && (env.authorDeviceId === deviceId || (env.hlc && env.hlc.nodeId === deviceId)))
   for (const r of items) {
+    const vid = r.envelope && r.envelope.revisionId
     const row = envelopeToWireRow(r.envelope)
-    if (!row) { businessSkipped++; continue }
+    if (!row) {
+      // Non-todo entities (settings/tomato/category/plan/filter/meta) stay DAG-only in
+      // this slice: report 'blocked' for peer frames so the durable host holds the relay
+      // cursor BELOW this envelope instead of acking it into relay GC (silent-loss fix,
+      // 2026-10-14). Own frames advance (see ownFrame above). NOTE: this check must stay
+      // BEFORE the replay skip — the blocked envelope is ingested into the DAG on its
+      // first round, so a naive "known ⇒ skip" would flip it to 'ok' on round 2 and
+      // reopen the ack+GC loss hole.
+      businessSkipped++
+      if (vid) verdicts.set(vid, ownFrame(r.envelope) ? 'ok' : 'blocked')
+      continue
+    }
+    // Replay skip (2026-10-14 regression fix): with the cursor held below a blocked
+    // envelope, every round re-pulls ALREADY-APPLIED todo envelopes. Their DAG row
+    // already exists (INSERT OR IGNORE lost ⇒ knownIds), and re-running the business
+    // fold over them re-arms the LWW/conflict machinery against the since-advanced
+    // local head — S1 v2 regression: a second spurious conflict copy per replay. The
+    // previous round's fold committed durably; the replay is a no-op by construction.
+    if (vid && dag.knownIds && dag.knownIds.includes(vid)) {
+      businessSkipped++
+      verdicts.set(vid, 'ok')
+      continue
+    }
     if (isCurrent(r.envelope)) row.causalCurrent = true
-    if (syncApply.applyRowSafe(state, row)) businessApplied++
-    else businessSkipped++
+    if (syncApply.applyRowSafe(state, row)) {
+      businessApplied++
+      if (vid) verdicts.set(vid, 'ok')
+    } else {
+      // no local write needed (LWW loser / identical content no-op / ghost tombstone):
+      // the business table already holds at-least-as-new content — advancing the cursor
+      // loses nothing.
+      businessSkipped++
+      if (vid) verdicts.set(vid, 'ok')
+    }
   }
   const flush = syncApply.flushPendingWrites(state)
   if (!flush || !flush.ok) {
@@ -132,7 +189,15 @@ function applyPulledEnvelopes (received, store, deviceId) {
   if (businessApplied) {
     log.info(`[RelaySync] materialized ${businessApplied} pulled todo row(s) into the business table (dag +${dag.ingested})`)
   }
-  return { dagIngested: dag.ingested, businessApplied, businessSkipped }
+  return { dagIngested: dag.ingested, businessApplied, businessSkipped, verdicts }
+}
+
+// Commit DAG ingestion and business writes atomically. A failed flush must roll
+// back both; otherwise the replay's knownIds optimization hides unfinished rows.
+// The existing ingestRemote and bulk-write transactions become SQLite savepoints.
+function applyPulledEnvelopes (received, store, deviceId) {
+  const revisions = require('./db').__revisionsForTests
+  return revisions.withTransaction(() => applyPulledEnvelopesCore(received, store, deviceId))
 }
 
 module.exports = { envelopeToWireRow, applyPulledEnvelopes }

@@ -226,11 +226,14 @@ test('fix 6: a meta key seeded at stamp 1 loses LWW to a peer edit with a mid-pa
   db.close()
 })
 
-test('fix 6: a pointer without ts still backfills at now (callers unchanged)', () => {
+test('fix 6 (re-anchored W8 d9aaa99e): a no-ts pointer backfills by entity — meta gets the epoch-oldest 1, others now', () => {
   freshDevice('seed-now')
-  db.call('appendOplogPointers', [{ entity: 'meta', id: 'd13k6b' }])
-  const ptr = (db.call('syncOplogSince', { sinceSeq: 0, limit: 10000 }) || []).find(r => r.entityId === 'd13k6b')
-  assert.ok(Math.abs(ptr.ts - Date.now()) < 5000, 'no-ts rows keep the now-stamp behavior')
+  db.call('appendOplogPointers', [{ entity: 'meta', id: 'd13k6b' }, { entity: 'todo', id: 'd13k6t' }])
+  const ptrs = db.call('syncOplogSince', { sinceSeq: 0, limit: 10000 }) || []
+  const meta = ptrs.find(r => r.entityId === 'd13k6b')
+  const todo = ptrs.find(r => r.entityId === 'd13k6t')
+  assert.equal(meta.ts, 1, 'meta pointers carry the D13 epoch-oldest fallback (never out-age a real peer edit)')
+  assert.ok(Math.abs(todo.ts - Date.now()) < 5000, 'non-meta no-ts rows keep the now-stamp behavior')
   db.close()
 })
 

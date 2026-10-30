@@ -50,7 +50,7 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
      F-B3 (dw wave 3): the storage contract (key prefix / 0..20 clamp / TS_KEY / legacy blob key) moved
      to shared/estimate-core.mjs — single source with the renderer's utils/tomatoEstimate.js (the
      renderer consumes the same module in its wave). */
-  const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY, ESTIMATE_MAX } = require('../shared/estimate-core.mjs')
+  const { ESTIMATE_KEY_PREFIX, estimateKeyOf, clampEstimate, TS_KEY: ESTIMATE_TS_KEY, LEGACY_KEY: ESTIMATE_LEGACY_KEY, ESTIMATE_MIN, ESTIMATE_MAX } = require('../shared/estimate-core.mjs')
   const estimateKey = estimateKeyOf
   /** Lazy legacy migration (first write): old whole-doc blob → per-task keys, then the legacy doc key
    *  is deleteMeta'd (a sync tombstone, so peers drop it too). Corrupt blob → dropped, not fatal. */
@@ -68,7 +68,15 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
   }
   function setEstimate (input, n) {
     const t = resolveTask(input, liveTasks())
+    // C1 fix 6: clampEstimate used to silently rewrite 99→20 and "abc"→0 while the CLI reported
+    // success — the caller could never tell its input was discarded. Warn on stderr (the CLI is
+    // locale-independent English) and tag the JSON result with clamped:true / ignored:true.
+    const rawNum = Number(n)
+    const ignored = n != null && !Number.isFinite(rawNum)
     const v = clampEstimate(n)
+    const clamped = !ignored && Number.isFinite(rawNum) && (rawNum > ESTIMATE_MAX || rawNum < ESTIMATE_MIN)
+    if (ignored) process.stderr.write(`warning: --estimate "${n}" is not a number — ignored (stored as 0/cleared)\n`)
+    else if (clamped) process.stderr.write(`warning: --estimate ${rawNum} is outside the 0-${ESTIMATE_MAX} range — clamped to ${v}\n`)
     const legacy = migrateLegacyEstimateBlob()
     // Setting = setMeta plain integer string; clearing = deleteMeta (tombstone propagates the removal)
     if (v > 0) commit('meta', 'put', [estimateKey(t.taskId), String(v)])
@@ -76,7 +84,10 @@ module.exports = ({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks
     // Timestamp convention mirrors the renderer's tomatoEstimate/initFromDb: when meta is newer it takes over LS at startup (otherwise CLI writes get clobbered by the UI's stale LS)
     commit('meta', 'put', [ESTIMATE_TS_KEY, String(Date.now())])
     audit.record({ action: 'edit', targets: [t], changes: [{ before: { tomatoEstimate: getEstimateOf(t.taskId, legacy && legacy[t.taskId]) }, after: { tomatoEstimate: v || null } }], note: 'tomato estimate set to ' + (v || '(none)') })
-    return { taskId: t.taskId, content: t.taskContent, tomatoEstimate: v }
+    return {
+      taskId: t.taskId, content: t.taskContent, tomatoEstimate: v,
+      ...(ignored ? { ignored: true } : {}), ...(clamped ? { clamped: true } : {})
+    }
   }
   function getEstimateOf (taskId, legacyVal) {
     // Readers: per-task key first; legacy doc blob only as a read fallback (per-task miss)

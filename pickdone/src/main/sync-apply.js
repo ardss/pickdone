@@ -26,6 +26,10 @@ const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-
 // helpers moved out of this file (meta conflict backup trio, S2 causal receive seam) to
 // honor the structure-size ratchet (only-split-never-grow).
 const adjudicate = require('./sync-adjudicate')
+// F4 (2026-10-17): remote category tombstones must cascade saved filters like a local delete does
+// (renderer purgeFiltersForVictims / CLI deleteCategory P1-3) — the doomed-filter selection plus
+// the stamped catFiltersBak backup core lives in db-category-ops (store-free main-process core).
+const categoryOps = require('./db-category-ops')
 
 // Hydration layer (entity classification + per-pass caches + hydrateRow) lives in // sync-apply-hydrate.js (structure-size ratchet, verbatim move) — re-exported below so the // bootstrap and the test harness keep their single require surface.
 const {
@@ -59,6 +63,11 @@ const META_CONFLICT_BACKUP_CAP = adjudicate.META_CONFLICT_BACKUP_CAP
 let backupSeq = 0
 // rowContentDiffers lives in sync-apply-content.js (structure-size ratchet, verbatim move):
 const { rowContentDiffers } = require('./sync-apply-content')
+// F1 (2026-10-21): array-shaped user-data meta blobs (projectMilestones:<catId>,
+// projectDocs:<catId>) used to sync whole-key LWW — concurrent adds meant the writer's blob
+// silently swallowed the loser's entries. Entry-level union merge in shared/blob-union-merge.mjs;
+// D2: isUnionMergeContentNoOp — a legacy local serialization no longer echoes a per-round write.
+const { isUnionMergeMetaKey, mergeBlobMetaValue, isUnionMergeContentNoOp } = require('../../shared/blob-union-merge.mjs')
 
 /**
  * Local account id (round-3 review, item: userId passthrough). Inbound rows carry the PEER's
@@ -287,7 +296,12 @@ function applyRowInner (state, incoming) {
   // S4: this keep used to be completely silent — record the explicit ruling + surface it
   // (flag-gated; flag off → byte-identical silence).
   if ((entity === 'plan' || entity === 'filter') && localRow && localRow.deleted &&
-      incoming && !incoming.deleted && stampNum(localRow.deletedAt) > stampNum(incoming.updatedAt)) {
+      incoming && !incoming.deleted && stampNum(localRow.deletedAt) >= stampNum(incoming.updatedAt)) {
+    // W8 fix (2026-10-25): the guard was strict `>`, so an EXACT-STAMP tie (deletedAt ==
+    // updatedAt — the peer edited at the same millisecond it (or a peer) deleted) fell through to
+    // the generic LWW, where the tiebreak (deviceId / seq) could hand the win to the inbound live
+    // edit and RESURRECT the deleted chip/filter with no conflict backup of the loser. Delete
+    // must hold ties: same tombstone-keep + backup surface as the strictly-fresher case.
     if (incoming.data != null) {
       writeMetaConflictBackup(state, `${entity}:${incoming.id}`, incoming.data)
       markConflict(state, entity, incoming.id, false)
@@ -299,6 +313,23 @@ function applyRowInner (state, incoming) {
   // SNAPSHOT rows carry it in the payload (allRows data = the full todo payload). Missing = ''.
   if (entity === 'todo' && incoming.author == null) incoming.author = (incoming.data && incoming.data.syncAuthor) || ''
   if (!incoming.deleted && !incoming.data) return false // payload-less pointer, nothing to merge
+  // F1 union-merge seam (BEFORE the generic whole-key LWW): the array-shaped user-data blobs
+  // merge BY ENTRY ID on a live-vs-live collision instead of one blob swallowing the other.
+  // Only both-sides-live engages; absent-local / inbound delete / unparsable shapes stay whole-key.
+  if (entity === 'meta' && !incoming.deleted && localRow && localRow.data && localRow.data.value != null &&
+      incoming.data && incoming.data.value != null && isUnionMergeMetaKey(incoming.id)) {
+    const merged = mergeBlobMetaValue(incoming.id, localRow.data.value, incoming.data.value)
+    if (merged != null) {
+      // D2 (2026-10-21): content-based idempotency no-op (see the shared
+      // isUnionMergeContentNoOp) — legacy local serializations no longer echo a write per round.
+      const isNoOp = isUnionMergeContentNoOp(merged, localRow.data.value)
+      if (isNoOp) return false // local is already the union superset — identical-content no-op, no echo
+      log.warn('[LanSync] union-merge on meta', incoming.id, '(entry-level: local-only entries preserved, no whole-blob loss)')
+      busWrite(state, 'setMeta', [incoming.id, merged])
+      return true
+    }
+    log.warn('[LanSync] union-merge skipped on meta', incoming.id, '— non-array/unaddressable blob shape, falling back to whole-key LWW')
+  }
   // Merge rules come from sync-core only (adapter boundary). Todos/chips/ledger have dedicated
   // rules; the remaining entities use the generic LWW shape.
   let winner
@@ -473,10 +504,46 @@ function applyRowInner (state, incoming) {
       // blobs like the local purge routes (renderer scrubMilestonesForPurged, cli purgeBin) —
       // a peer purge otherwise leaves a phantom taskId and flips an UNMET milestone to done.
       try { scrubMilestoneBlobsFor(state, [incoming.id]) } catch { /* best-effort, never block the delete */ }
-      state.pendingWrites.todos.push({ taskId: incoming.id, delete: 1, deletedAt: winner.deletedAt || incoming.deletedAt || 0, updateTime: winner.deletedAt || incoming.deletedAt || 0, syncAuthor: incoming.author || '' })
+      // W7 root-cause fix (2026-10-23): the old bare shape `{taskId, delete:1, deletedAt,
+      // updateTime, syncAuthor}` went through upsertMany → todoToRow, which normalizes EVERY
+      // absent field to its zero value, and db.js stmts.upsert is a FULL-COLUMN
+      // `SET col = excluded.col` overwrite — so landing a peer's deletion WIPED the local row:
+      // the recycle bin lost the deleted task's content (it could no longer be restored) and
+      // recurGroupId was nulled (bypassing restore's twin-record guard). A bare tombstone must
+      // not rebuild the row — it may only flip the tombstone columns. Root fix here: base the
+      // write on the freshly-read LOCAL row (cache.todo → getAll → rowToTodo shape, which
+      // todoToRow maps back column-for-column, recurGroupId via repeatId) and override only
+      // deleted/deletedAt/updateTime/syncAuthor — semantically the column-level UPDATE the
+      // tombstone is, with no zeroed columns. The ghost guard above already returned for the
+      // no-local-row case, so the minimal fallback shape below is defensive only. The winner's
+      // LWW age still rides updateTime (= deletedAt, Sync-1) so the landed tombstone keeps its
+      // delete-ordering against the local row's own (strictly older) live stamp.
+      const tombAt = winner.deletedAt || incoming.deletedAt || 0
+      const base = localRow && localRow.data ? localRow.data : null
+      state.pendingWrites.todos.push({
+        ...(base ? { ...base, taskId: incoming.id } : { taskId: incoming.id }),
+        delete: 1,
+        deletedAt: tombAt,
+        updateTime: tombAt,
+        syncAuthor: incoming.author || ''
+      })
       return true
     }
     if (!winner.data) return false
+    // W8 fix (2026-10-25): 840001-blind-fallback. The localUserId scan only reads LOCAL todos —
+    // on a first-sync device whose own table is empty (fresh install, peer-push-first), every
+    // landed todo was stamped with the 840001 OFFLINE-DEFAULT guess while the PEER's row carried
+    // W8 fix (re-anchored bootstrap-apply): LOCAL evidence outranks peer evidence — resolve
+    // localUserId() first (scan + durable memo); learn the peer id only when that produced the
+    // 840001 guess. Learning first let an early inbound row hijack a device with local todos.
+    const localId = localUserId(state)
+    if ((localId === 840001 || localId == null) && winner.data && winner.data.userId != null) {
+      const peerId = Number(winner.data.userId)
+      if (Number.isFinite(peerId) && peerId > 0 && peerId !== 840001) {
+        state.localUserId = peerId
+        persistLocalUserId(state, peerId)
+      }
+    }
     // userId normalization at the sync boundary (round-3 review): the row lands with THIS
     // device's account id, never the peer's. Provenance: keep the ORIGINAL author — winner is
     // always `incoming` here (a local winner returned above), and re-stamping self would break
@@ -530,6 +597,21 @@ function applyRowInner (state, incoming) {
       deletedAt: winner.deletedAt || incoming.deletedAt || 0,
       updatedAt: winner.updatedAt || incoming.updatedAt || 0,
     })
+    // F4 (2026-10-17): a LOCAL delete purges saved filters referencing the victim
+    // (renderer purgeFiltersForVictims: catFiltersBak backup + filterDelete), but a REMOTE
+    // tombstone landing used to skip the cascade — a filter whose conds.catId referenced the
+    // deleted category kept haunting the sidebar on this device while the peer had purged it
+    // (two-device divergence). Same core, store-free (sync-apply has no Vuex): doomed filters are
+    // selected from the DB, backed up under the stamped `catFiltersBak.<deletedAt>.<victim>` key,
+    // and tombstoned through the bus (audit + oplog) exactly like renderer/CLI deletes. The
+    // cascade runs at apply time while the tombstone row itself flushes from the buffer; filters
+    // must never block a category tombstone, so failures are logged, not fatal (best-effort
+    // contract, same rule as renderer softDelete). Re-landed tombstones are idempotent: the
+    // doomed set is empty the second time.
+    try {
+      const tombStamp = winner.deletedAt || incoming.deletedAt || 0
+      categoryOps.purgeFiltersForCategoryVictims(state.db, [incoming.id], tombStamp, (op, p) => busWrite(state, op, p))
+    } catch (e) { log.warn('[LanSync] category tombstone filter cascade failed for', incoming.id, e.message) }
     return true
   } else if (entity === 'category' && winner.data) {
     // Bulk-buffered (2026-09-18): a first-sync snapshot can carry hundreds of categories —
@@ -647,7 +729,7 @@ function applyRowSafe (state, incoming) {
     const ok = applyRowInner(state, incoming)
     if (ok) markApplied(state, incoming && incoming.entity)
     return ok
-  } catch (e) { log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); return false }
+  } catch (e) { /* W14 P1: a throw = an UNDECIDED row, never a decided no-op — rethrow so the round fails and the cursor/watermark stays (rationale: relay-sync-apply.js Failure contract) */ log.warn('[LanSync] apply failed for', incoming && incoming.entity, incoming && incoming.id, e.message); throw e }
 }
 
 /**
@@ -745,6 +827,8 @@ module.exports = {
   hydrateRow,
   metaSnapshotRows,
   rowContentDiffers,
+  isUnionMergeMetaKey, // F1: exported for unit tests (union-merge key classifier, single source)
+  mergeBlobMetaValue, // F1: exported for unit tests (pure union merge)
   localUserId,
   clampSkew,
   applyRowSafe,

@@ -94,6 +94,13 @@ const i18n = (window.VueI18n && window.VueI18n.createI18n)
   })
   : { global: { locale: getLocale(), t: (k) => k, setLocale: () => {} } }
 
+// D2-HTMLLANG (2026-10-22 d2-crosscutting-audit): boot never calls setLocale — the LS/config-carried
+// locale flips $t everywhere while <html lang> kept the static index.html value ('zh-CN') for the
+// WHOLE session (live dump: { i18n: 'en-US', htmlLang: 'zh-CN' }). Screen readers and CJK/Latin
+// font selection read this attribute. Apply it once at module load; setLocale keeps maintaining it
+// on every in-session switch.
+try { document.documentElement.setAttribute('lang', i18n.global.locale === 'en-US' ? 'en' : 'zh-CN') } catch (e) { /* document-less hosts (tests / stub env) */ }
+
 // Context-free fallback lookup: when the i18n instance is unavailable (e.g. node unit-test environments), look the key up directly in the flat table
 function flatOf (o, prefix, dst) {
   for (const k of Object.keys(o)) {

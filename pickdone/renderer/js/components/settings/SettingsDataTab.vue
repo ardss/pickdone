@@ -38,6 +38,14 @@
         </div></div>
     </div>
     <div class="form">
+      <div class="form-label">{{ $t('statsE.SettingsModal.dataLocationSection') }}</div>
+      <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dataLocationCurrent') }}</span>
+        <div class="form-item__control">
+          <span class="tip">{{ dataDirShown || $t('statsE.SettingsModal.loadingPlaceholder') }}<template v-if="dataDirRedirected"> · {{ $t('statsE.SettingsModal.dataLocationRedirected') }}</template></span>
+          <button class="mini" :disabled="relocating" @click="relocateData">{{ $t('statsE.SettingsModal.dataLocationChangeBtn') }}</button>
+        </div></div>
+    </div>
+    <div class="form">
       <div class="form-label">{{ $t('statsE.SettingsModal.dataManagementSection') }}</div>
       <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.exportExcelLabel') }}</span>
         <div class="form-item__control"><button class="primary mini-lg" :disabled="exporting" @click="exportXlsx">{{ $t('statsE.SettingsModal.exportXlsxBtn') }}</button>
@@ -73,6 +81,13 @@
       <div class="form-item danger-row"><span class="form-item__label">{{ $t('statsE.SettingsModal.emptyBinLabel') }}</span>
         <div class="form-item__control"><button class="danger-btn" :disabled="purging" @click="purgeRecycle">{{ $t('statsE.SettingsModal.emptyBinBtn') }}</button></div></div>
     </div>
+    <!-- Migration modal: shown for the whole close→copy→verify→boot→relaunch window. Unclosable
+         on purpose — closing the settings tab is harmless, but the copy must not be second-guessed;
+         main keeps the DB closed and flips the boot file only after full verification. -->
+    <el-dialog :model-value="relocating" :title="$t('statsE.SettingsModal.dataLocProgressTitle')" width="420px" :show-close="false" :close-on-click-modal="false" :close-on-press-escape="false">
+      <el-progress :percentage="migratePct" :status="migratePct >= 100 ? 'success' : undefined" />
+      <p class="tip" style="margin-top:8px">{{ migratePhaseText }}</p>
+    </el-dialog>
   </div>
 </template>
 
@@ -159,7 +174,15 @@ export default {
       eventBackupLastError: '',
       backupDirShown: '',
       autoBackupFiles: [] as any,
-      autoBackupPick: ''
+      autoBackupPick: '',
+      // F-RELOC: data storage location display + migration busy flag
+      dataDirShown: '',
+      dataDirRedirected: false,
+      relocating: false,
+      // migration progress modal state (data-migrate-progress push; 0/-1 = indeterminate)
+      migrateDone: 0,
+      migrateTotal: -1,
+      migratePhase: '' as string
     }
   },
   computed: {
@@ -179,13 +202,67 @@ export default {
         return this.$t('statsH.SettingsModal.lastBackupFailPrefix') + (this.autoBackupLastError || this.$t('statsH.SettingsModal.backupFailed')) + ' (' + this.dfmt(this.autoBackupLastFailAt) + ')'
       }
       return this.autoBackupLastAt ? this.$t('statsE.SettingsModal.lastRunPrefix') + this.dfmt(this.autoBackupLastAt) : this.$t('statsH.SettingsModal.notRunYet')
+    },
+    // Migration modal: percentage (0 before the first copy tick, 100 through verify/boot) and
+    // the phase line under the bar
+    migratePct () {
+      if (this.migratePhase === 'verify' || this.migratePhase === 'boot') return 100
+      if (this.migrateTotal <= 0) return 0
+      return Math.min(100, Math.round(this.migrateDone / this.migrateTotal * 100))
+    },
+    migratePhaseText () {
+      if (this.migratePhase === 'verify') return this.$t('statsE.SettingsModal.dataLocProgressVerify')
+      if (this.migratePhase === 'boot') return this.$t('statsE.SettingsModal.dataLocProgressBoot')
+      return this.$t('statsE.SettingsModal.dataLocProgressCopy')
     }
   },
   mounted () {
     this.loadBackupDirDisplay()
+    this.loadDataDir()
+    // Migration progress push — subscribed for the component lifetime; the disposer pattern
+    // matches onShortcutConflict/onReminderOpenTask in preload
+    this._disposeMigrateProgress = window.todoAPI.onMigrateProgress((p: any) => {
+      if (!p || typeof p !== 'object') return
+      this.migratePhase = p.phase || ''
+      if (p.phase === 'copy') { this.migrateDone = p.done || 0; this.migrateTotal = p.total || -1 }
+    })
+  },
+  unmounted () {
+    if (this._disposeMigrateProgress) this._disposeMigrateProgress()
   },
   methods: {
     dfmt (ts) { return dayjs(ts).format(FMT.dateTime) },
+    // F-RELOC: read-only data-location info (current dir + boot-redirect state); a lookup
+    // failure degrades to the loading placeholder, never a crash.
+    async loadDataDir () {
+      try {
+        const info = await window.todoAPI.getDataLocationInfo()
+        this.dataDirShown = (info && info.currentDir) || ''
+        this.dataDirRedirected = !!(info && info.bootRedirect)
+      } catch (e) {
+        console.error('[settings] getDataLocationInfo failed:', e)
+        this.dataDirShown = ''
+      }
+    },
+    // F-RELOC: relocate data storage. The main process pops the directory picker (targetDir
+    // omitted), validates, confirms via a native dialog disclosing what moves + source-kept
+    // rollback, closes the DB, copies, writes the boot file and relaunches. Failures come back
+    // as { ok:false, error } with the app re-inited on the untouched source dir.
+    async relocateData () {
+      if (this.relocating) return
+      this.relocating = true
+      try {
+        const r = await window.todoAPI.relocateDataDir()
+        if (r && r.ok === false) {
+          if (r.canceled) return // user cancelled picker or confirm dialog — not an error
+          this.$message.error(this.$t('statsE.SettingsModal.dataLocationFailPrefix') + (r.error || ''))
+        } else if (r && r.ok) {
+          this.$message.success(this.$t('statsE.SettingsModal.dataLocationDoneToast'))
+        }
+      } catch (e) {
+        this.$message.error(this.$t('statsE.SettingsModal.dataLocationFailPrefix') + ((e && e.message) || String(e)))
+      } finally { this.relocating = false }
+    },
     set (patch) {
       this.$store.dispatch('settings/update', patch).then(r => { if (r && r.ok === false) this.$message.error(this.$t('statsE.SettingsModal.settingsSaveFailed')) }) // goes through the action to sync to config.json (same ledger as the parent's set()); ok:false = config write failed — honest error toast
     },
@@ -468,7 +545,13 @@ export default {
         return this.applyEvtPurgeDump(b, failed)
       }
       const seg = (name, fn) => { try { fn() } catch (e) { console.error('[settings] restore segment failed: ' + name, e); failed.push(name) } }
-      if (b.settingsState) seg('settings', () => this.$store.commit('settings/restore', JSON.parse(b.settingsState)))
+      // W12 fix (2026-10-26): the settings segment is a stamped segment too (the settings module
+      // stamps schemaV on its persisted blobs, see settings.js persist/initFromDb) but it was
+      // restored via a bare JSON.parse, skipping the parseStampedSeg downgrade guard every sibling
+      // applies — a backup from a NEWER build was silently downgrade-read and the misread values
+      // re-persisted on the next persist. Route it through the same shared guard (absent/0
+      // schemaV = legacy blob, allowed — same contract as category/habits/filter/plan).
+      if (b.settingsState) seg('settings', () => { const st = this.parseStampedSeg(b.settingsState); this.$store.commit('settings/restore', st) })
       // setListRestore: backup-time tombstones must not win category LWW and re-delete peer-recovered
       // categories (round-6 P2) — live restored rows still take the fresh stamp (backup wins locally)
       if (b.categoryState) seg('category', () => { const c = this.parseStampedSeg(b.categoryState); if (c.list) this.$store.commit('category/setListRestore', c.list) })

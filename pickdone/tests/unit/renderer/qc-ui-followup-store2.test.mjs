@@ -35,9 +35,12 @@ globalThis.window.todoAPI = {
 const callsOf = op => dbCalls.filter(([o]) => o === op).map(([, p]) => p)
 const resetCalls = () => { dbCalls.length = 0 }
 
+// ORDERING CONSTRAINT: all test() registrations must come AFTER these awaits — a test registered
+// above them lets node:test force-exit the file mid-load under load (D7, see docs/perf-debt-ledger.md).
 const tomatoEstimate = await import('../../../renderer/js/utils/tomatoEstimate.js')
 const undo = await import('../../../renderer/js/store/helpers/undo.js')
 const habits = await import('../../../renderer/js/store/habits.js')
+const tomatoModule = await import('../../../renderer/js/store/tomato.js')
 
 /* ---------- [U-3] legacy blob kept when fan-out fails ---------- */
 
@@ -138,7 +141,7 @@ test('[U-10] relayAuxBlob skips the DB meta write when the applier rejects the b
   assert.ok(metas[0][1].includes('"savedAt":5000'), 'the accepted blob itself was written (not a stale copy)')
 })
 
-const tomatoModule = await import('../../../renderer/js/store/tomato.js')
+/* ---------- [U-11] todayCountPatch is idempotent per startedAt (retry path counts the focus once) ---------- */
 
 test('[U-11] todayCountPatch is idempotent per startedAt (retry path counts the focus once)', () => {
   const { todayCountPatch } = tomatoModule

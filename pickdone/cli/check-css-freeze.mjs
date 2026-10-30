@@ -5,14 +5,22 @@
  * 全局沉积文件(theme-dark.css;style-1..4 已于 2026-09 退役)只许删不许增:
  *   括号数(≈规则数)工作区/暂存版不得多于 git HEAD;迁移批次从全局文件删规则搬进 SFC,天然通过。
  * 需要新增共享样式时,唯一出口是 base.css(token/骨架)或组件自身的 <style> 块。
- * 临时豁免: 环境变量 CSS_FREEZE_OFF=1(仅限当次命令,台账须注明理由)。
+ * 临时豁免: CLI 显式参数 --off(仅限当次命令)。
+ * W21 (2026-10-30) fail-closed 对齐 check-test-summary.cjs 先例: 旧的 CSS_FREEZE_OFF=1 环境
+ * 豁免可被任何杂散环境变量(CI job env / shell rc / 环境泄漏)整体关闭门禁——fail-open。
+ * 教义: 豁免只认 CLI 显式参数,环境形态一律不认(连"带 REASON 才放行"的软形态也不留,
+ * 因为泄漏的环境变量同样能带上 REASON)。
  */
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-if (process.env.CSS_FREEZE_OFF === '1') { console.log('  (css-freeze) CSS_FREEZE_OFF=1 跳过本次'); process.exit(0) }
+if (process.argv.slice(2).includes('--off')) { console.log('  (css-freeze) --off 显式豁免跳过本次（责任在调用方命令行，台账须注明理由）'); process.exit(0) }
+if (process.env.CSS_FREEZE_OFF) {
+  console.error('  ✗ css-freeze: CSS_FREEZE_OFF 环境变量已不被接受（fail-open 环境泄漏通道，W21 移除）——需要豁免请在命令行显式传 --off')
+  process.exit(1)
+}
 
 const ROOT = process.env.GATE_ROOT || path.join(path.dirname(fileURLToPath(import.meta.url)), '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const FILES = ['theme-dark.css'].map(f => 'pickdone/assets/css/' + f)
@@ -22,12 +30,12 @@ const ruleCount = css => (css.replace(/\/\*[\s\S]*?\*\//g, '').match(/\{/g) || [
 let failed = false
 let compared = 0
 const existsInHead = f => {
-  try { execSync(`git cat-file -e HEAD:${f}`, { cwd: ROOT, stdio: 'ignore' }); return true } catch { return false }
+  try { execFileSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore' }); return true } catch { return false }
 }
 for (const f of FILES) {
   let head = null, work = null
   try {
-    head = execSync(`git show HEAD:${f}`, { cwd: ROOT, encoding: 'utf8' })
+    head = execFileSync('git', ['show', `HEAD:${f}`], { cwd: ROOT, encoding: 'utf8' })
   } catch (e) {
     // Fail closed: a registered file missing from HEAD is a red, and any other git error is a red too —
     // never let the scan surface collapse to zero and still print green (same policy as cli/check-tokens.js).
@@ -37,16 +45,24 @@ for (const f of FILES) {
     continue
   }
   try {
-    work = execSync(`git show :${f}`, { cwd: ROOT, encoding: 'utf8' })
-  } catch { /* unstaged: fall through to worktree */ }
-  if (work == null) {
-    try {
-      work = readFileSync(path.join(ROOT, f.slice('pickdone/'.length)), 'utf8')
-    } catch (e) {
+    work = execFileSync('git', ['show', `:${f}`], { cwd: ROOT, encoding: 'utf8' })
+  } catch { /* not in the index: fall through to worktree */ }
+  // W15 2026-10-27: `git show :f` succeeds for ANY file present in the index — including an
+  // UNMODIFIED one — so a worktree-only (unstaged) edit was never compared and the gate
+  // silently compared HEAD↔HEAD while claiming to guard the working tree. Read the worktree
+  // version too and compare against the LARGER of (index, worktree) rule counts: whichever
+  // version is bigger is the one that could grow the deposit file.
+  try {
+    const wt = readFileSync(path.join(ROOT, f.slice('pickdone/'.length)), 'utf8')
+    work = work == null ? wt : (ruleCount(wt) > ruleCount(work) ? wt : work)
+  } catch (e) {
+    if (work == null) {
       console.error(`  ✗ css-freeze: HEAD:${f} 存在但工作区/暂存区均读不到（${String(e.message).split('\n')[0]}）`)
       failed = true
       continue
     }
+    // worktree read failed but the index version exists (e.g. staged-deleted file): the index
+    // comparison above still guards — keep going.
   }
   compared++
   const h = ruleCount(head), w = ruleCount(work)

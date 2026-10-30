@@ -16,6 +16,10 @@ const { deriveAuthCode } = require('./pairing')
 const { packSegmentChunks } = require('./segments-chunk')
 const { finalizeSnapshot } = require('./snapshot')
 const { createAttachmentPuller } = require('./att-transfer')
+// W16 (2026-10-28) schemaVersion reject gate: our own ceiling for incoming snapshot payloads —
+// the SAME constant the write side advertises (lan-sync-bootstrap passes it as
+// opts.snapshotSchemaVersion). merge.mjs is require()-able from CJS (the bootstrap already does).
+const { SYNC_SCHEMA_VERSION } = require('../../../shared/sync-core/merge.mjs')
 
 // Round deadline: 120s of TOTAL silence fails the round; every PROGRESS event (a chunk
 // received, an ack, a snapshot trailer) re-arms the timer at PROGRESS_MS instead, so a slow
@@ -28,6 +32,23 @@ const ROUND_PROGRESS_MS = 45 * 1000
 // the budget resets to 0 on any round where the peer's increments applied again.
 const SNAPSHOT_FATAL_BUDGET = 3
 const SNAPSHOT_ERROR_COOLDOWN_ROUNDS = 2
+
+// W16 (2026-10-28) snapshot schemaVersion REJECT gate. The old `Number(msg.schemaVersion) || 1`
+// silently fell back to 1 and ingested ANY version: a peer on a FUTURE schema could push rows
+// this build cannot adjudicate, corrupting the local store. Now a schemaVersion GREATER than
+// our SYNC_SCHEMA_VERSION rejects the whole snapshot round (nothing is ingested; the round
+// fails with the structured 'snapshot-schema-too-new' code). Missing/0/NaN keeps the legacy
+// lenient path — old peers (pre-schemaVersion field) stay compatible.
+function snapshotSchemaTooNewError (sv) {
+  return Object.assign(
+    new Error(`snapshot schema too new: peer schemaVersion ${sv}, local max ${SYNC_SCHEMA_VERSION} — round rejected, upgrade this app`),
+    { code: 'snapshot-schema-too-new', peerSchemaVersion: sv }
+  )
+}
+function rejectSnapshotSchema (sv) {
+  const n = Number(sv) || 0
+  return n > SYNC_SCHEMA_VERSION ? snapshotSchemaTooNewError(n) : null
+}
 
 /**
  * @param {object} ctx — the node's shared state + callbacks (see createLanSyncNode):
@@ -117,6 +138,11 @@ function createClientRound(ctx) {
       let ownsSnapshotBusy = false // Round-3 P1: THIS round set clientSnapshotBusy (only its owner may clear it)
       let awaitingSnapshot = false // snapshot-request sent; the round ends at snapshot-end, not ack
       let authRejected = false // P1-3: the peer's server refused our hello (terminal, see finish)
+      // W16 (2026-10-28): peer is OUTSIDE our protoVer window ('peer-too-new' / 'peer-too-old').
+      // NOT a revoked pairing — the pairing is intact, the peer's BUILD is incompatible — so
+      // unlike authRejected it must stay retryable (an app update on either side heals it); the
+      // code rides the round-error emission for the structured syncEvent consumer.
+      let versionRejectCode = null
       // Fix-round (2026-09-22, lan-sync-6): snapshot-busy is a scheduling collision, not a dial
       // failure — finish's error path must not advance the dial-failure streak toward hibernate.
       let snapshotBusyCollision = false
@@ -198,6 +224,13 @@ function createClientRound(ctx) {
         // never reach the only-documented-exit-is-re-pair terminal.
         onUnauthorized: (info) => {
           const reason = info && info.error
+          // W16: a structured version-gate rejection is NOT a revoked pairing — keep the peer
+          // retryable (no terminal unpaired), remember the code for the round-error fan-out.
+          if (info && (info.code === 'peer-too-new' || info.code === 'peer-too-old')) {
+            versionRejectCode = info.code
+            em.emit('peer-unauthorized', info)
+            return
+          }
           if (reason !== 'secret-unavailable' && reason !== 'auth throttled') authRejected = true
           em.emit('peer-unauthorized', info)
         },
@@ -277,7 +310,11 @@ function createClientRound(ctx) {
           pushRecent({ at: Date.now(), kind: 'error', peer: peer.deviceId, detail: { error: err.message } })
           refreshOnline(peer.deviceId)
           if (streak <= DIAL_FAILURE_BUDGET) {
-            em.emit('round-error', { peer: peer.deviceId, error: err })
+            // W16: the structured code (version gate from onUnauthorized, or a tagged
+            // snapshot-schema-too-new error) rides the round-error payload for the syncEvent
+            // consumer; legacy consumers that only read `error` keep working unchanged.
+            const rejectCode = versionRejectCode || (err && err.code)
+            em.emit('round-error', { peer: peer.deviceId, error: err, ...(rejectCode ? { code: rejectCode } : {}) })
           }
           // Round-1 P0 (2026-09-21): before letting the peer slide into backoff/hibernate, re-resolve
           // its address through the discovery layer (mDNS/UDP) WITHIN this round — see
@@ -503,6 +540,12 @@ function createClientRound(ctx) {
               // caller's ingestSnapshotChunk — the full snapshot never materializes in memory.
               // Crash semantics are unchanged: the pull watermark still advances ONLY at
               // snapshot-end, and chunk-merge-apply is idempotent.
+              // W16 schemaVersion gate: a chunk from a NEWER schema rejects the round here,
+              // before the first row of it is ingested. Clearing awaitingSnapshot first keeps
+              // finish() from re-arming the snapshot trigger — re-requesting a schema we cannot
+              // read is futile until this app is upgraded.
+              const tooNew = rejectSnapshotSchema(msg.schemaVersion)
+              if (tooNew) { awaitingSnapshot = false; throw tooNew }
               ingestSnapshotChunk({ schemaVersion: Number(msg.schemaVersion) || 1, deviceId: peer.deviceId, rows: msg.rows })
               chunkRowCounts.set(idx, msg.rows.length)
             } else {
@@ -553,6 +596,11 @@ function createClientRound(ctx) {
             // (merge-apply is idempotent), and the next round re-requests (the trigger re-fires
             // because the watermark did not advance).
             if (!awaitingSnapshot) throw new Error('unsolicited snapshot-end')
+            // W16 schemaVersion gate (fallback assembly path): reject BEFORE finalize/ingest so
+            // a newer-schema snapshot never reaches ingestSnapshot. Same awaitingSnapshot=false
+            // rationale as the streaming chunk gate above (no futile re-request loop).
+            const endTooNew = rejectSnapshotSchema(msg.schemaVersion)
+            if (endTooNew) { awaitingSnapshot = false; throw endTooNew }
             const totalRows = Number(msg.totalRows) || 0
             const fin = finalizeSnapshot({ declaredChunks: Number(msg.totalChunks), chunkTotal, totalRows, chunkBuf, chunkRowCounts })
             if (!fin.ok) throw new Error(fin.reason)

@@ -163,7 +163,166 @@ module.exports = function systemHandlers (ctx) {
     // (status stays readable — it leaks nothing and the settings page polls it from the main window only anyway).
     'updater:check': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.check() },
     'updater:download': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.downloadUpdate() },
-    'updater:quit-and-install': (e) => { assertMainWindow(e); if (isLocked()) throw new Error('locked'); return updater.quitAndInstall() },
-    'updater:status': () => updater.getStatus()
+    // F4 (2026-10-21): the install-quit path used to bypass the tray-quit confirmation — a running
+    // pomodoro died silently when the user clicked "restart to update" (quitAndInstall skips the
+    // whole quit chain's confirm gates). Reuse the tray confirm (index.js quitFromTrayInner):
+    // ask via the SAME durable-session gate + i18n copy; cancel returns false so the settings UI
+    // sees "not installed" instead of a silent success.
+    'updater:quit-and-install': async (e) => {
+      assertMainWindow(e); if (isLocked()) throw new Error('locked')
+      try {
+        const sessionLive = ctx.tomatoSession ? ctx.tomatoSession.hasRunningSession() : false
+        if (sessionLive) {
+          const { response } = await require('electron').dialog.showMessageBox({
+            type: 'question',
+            title: i18n.mt('quitFocusActiveTitle'),
+            message: i18n.mt('quitFocusActiveTitle'),
+            detail: i18n.mt('quitFocusActiveMsg'),
+            buttons: [i18n.mt('quitFocusQuit'), i18n.mt('quitFocusCancel')],
+            cancelId: 1, defaultId: 1, noLink: true,
+          })
+          if (response !== 0) return false // user kept the pomodoro: no install
+        }
+      } catch (err) {
+        // Symmetric with index.js quitFromTrayInner: a failed confirm dialog must carry cancel
+        // semantics — never tear down a live pomodoro because the dialog could not open.
+        log.warn('[IPC] quit-and-install confirm dialog failed, aborting install-quit', err)
+        return false
+      }
+      return updater.quitAndInstall()
+    },
+    'updater:status': () => updater.getStatus(),
+
+    // --- Data storage location (F-RELOC: configurable userData + safe migration) ---
+    // Read-only info for the settings page: current dir, boot-redirect state, free bytes.
+    'data:location-info': (e) => {
+      assertMainWindow(e)
+      const dl = require('../data-location.cjs')
+      const ud = app.getPath('userData')
+      return { currentDir: ud, bootRedirect: dl.readBootRedirect(), freeBytes: dl.volumeFreeBytes(ud) }
+    },
+    // Migration: {targetDir} optional — when absent the main process pops the native directory
+    // picker (same pattern as pick-backup-dir). Pipeline: validate → i18n confirm dialog →
+    // close the DB (better-sqlite3 close checkpoints TRUNCATEs the WAL, so the source files are
+    // static for the copy) → data-location.migrateData → relaunch. On ANY failure the DB is
+    // re-inited against the UNTOUCHED source dir so the app keeps running on the old location.
+    'data:relocate': async (e, payload) => {
+      assertMainWindow(e); if (isLocked()) throw new Error('locked')
+      const dl = require('../data-location.cjs')
+      // D1 #1 (P1) test-isolation guard: under TODO_USER_DATA_DIR/TODO_DB_DIR the "current dir"
+      // is the isolated env dir, but migrateData writes the boot file into the REAL home dir —
+      // a migrated test instance would redirect the user's PRODUCTION install on its next boot.
+      // Refuse structurally before anything else (no dialogs, no db close).
+      if (process.env.TODO_USER_DATA_DIR || process.env.TODO_DB_DIR) {
+        return { ok: false, error: 'relocation is disabled in isolated/test instances' }
+      }
+      const { dialog } = require('electron')
+      const ud = app.getPath('userData')
+      const o = (payload && typeof payload === 'object') ? payload : {}
+      let targetDir = typeof o.targetDir === 'string' ? o.targetDir : ''
+      if (!targetDir) {
+        const r = await dialog.showOpenDialog(getMainWindow() || undefined, { title: i18n.mt('dataLocPickTitle'), properties: ['openDirectory', 'createDirectory'] })
+        if (r.canceled || !r.filePaths[0]) return { ok: false, canceled: true }
+        targetDir = r.filePaths[0]
+      }
+      const v = dl.validateTarget(targetDir, ud)
+      if (!v.ok) return { ok: false, error: v.reason }
+      // D1 #8b: a running pomodoro must not die inside the migration's close→relaunch window.
+      // Reuses the exact updater:quit-and-install confirm pattern (same durable-session gate +
+      // i18n copy); cancel aborts BEFORE the DB handle is touched.
+      try {
+        const sessionLive = ctx.tomatoSession ? ctx.tomatoSession.hasRunningSession() : false
+        if (sessionLive) {
+          const { response } = await dialog.showMessageBox({
+            type: 'question',
+            title: i18n.mt('quitFocusActiveTitle'),
+            message: i18n.mt('quitFocusActiveTitle'),
+            detail: i18n.mt('quitFocusActiveMsg'),
+            buttons: [i18n.mt('quitFocusQuit'), i18n.mt('quitFocusCancel')],
+            cancelId: 1, defaultId: 1, noLink: true,
+          })
+          if (response !== 0) return { ok: false, canceled: true }
+        }
+      } catch (err) {
+        // Same cancel semantics as the updater sibling: a failed dialog never tears down state.
+        log.warn('[IPC] data:relocate pomodoro confirm dialog failed, aborting migration', err)
+        return { ok: false, canceled: true }
+      }
+      // Confirm AFTER validation so the dialog only ever describes a feasible migration; the
+      // copy discloses the moved surfaces + the source-is-preserved rollback guarantee.
+      try {
+        const { response } = await dialog.showMessageBox({
+          type: 'question',
+          title: i18n.mt('dataLocConfirmTitle'),
+          message: i18n.mt('dataLocConfirmTitle'),
+          detail: i18n.mt('dataLocConfirmMsg', { d: targetDir }),
+          buttons: [i18n.mt('dataLocConfirmBtn'), i18n.mt('quitFocusCancel')],
+          cancelId: 1, defaultId: 0, noLink: true,
+        })
+        if (response !== 0) return { ok: false, canceled: true }
+      } catch (err) {
+        // A failed confirm dialog must carry cancel semantics (same rule as updater:quit-and-install):
+        // never tear down a live DB handle because the dialog could not open.
+        log.warn('[IPC] data:relocate confirm dialog failed, aborting migration', err)
+        return { ok: false, canceled: true }
+      }
+      // Close the DB before the copy. Best-effort scheduler flush first (reminder dedupe ledger),
+      // then close; a close failure aborts BEFORE any file was touched — nothing to roll back.
+      try {
+        // D1 #8a: stop the external-write fs.watchFile poll FIRST — a tick firing between close()
+        // and the copy would read/write through the moved tree (and a pending debounce kick would
+        // fire against the closed handle). Re-exported by external-db-watch.js (index.js untouched).
+        try { require('../external-db-watch').stopLatestDbWatch() } catch (werr) { log.warn('[IPC] data:relocate stop external db watch failed', werr) }
+        try { if (ctx.scheduler && ctx.scheduler.flushFiredNow) ctx.scheduler.flushFiredNow() } catch { /* best-effort */ }
+        if (ctx.dbm && ctx.dbm.close) ctx.dbm.close()
+      } catch (err) {
+        const msg = String((err && err.message) || err)
+        try { if (ctx.dbm && ctx.dbm.init) ctx.dbm.init(ud) } catch { /* re-init is best-effort; close() already swallowed real errors */ }
+        return { ok: false, error: i18n.mt('dataLocCloseFailed', { msg }) }
+      }
+      const r = await dl.migrateData(ud, targetDir, {
+        // Progress fan-out to the asking renderer (the migration modal subscribes via
+        // onMigrateProgress; copy yields the event loop every few files so these actually fire).
+        onProgress: p => {
+          try {
+            const win = e.sender && !e.sender.isDestroyed() ? e.sender : getMainWindow()
+            if (win && !win.isDestroyed()) win.webContents.send('data-migrate-progress', p)
+          } catch (err) { /* progress is best-effort */ }
+        },
+      })
+      if (!r.ok) {
+        // Source untouched by contract (data-location.cjs never deletes/modifies the source) —
+        // re-init on the old dir restores the running state and the user gets an honest error.
+        try { if (ctx.dbm && ctx.dbm.init) ctx.dbm.init(ud) } catch (e2) { log.error('[IPC] data:relocate re-init after failed migration also failed', e2) }
+        // M8B fix 1 (P1): the watch was stopped before close(); after a successful re-init the
+        // poll must be re-armed, or CLI direct-write detection stays blind for the whole session.
+        // Only when re-init succeeded (probe the handle with a getMeta) — restarting the poll
+        // over a dead handle would just warn-loop on every tick.
+        // W9 fix 2 (2026-10-26): `ctx.dbm && ctx.dbm.init` is always true — the probe replaces
+        // that vacuous gate. The re-init above is best-effort and may have been swallowed by its
+        // own try/catch; only a live getMeta round-trip proves the handle actually works.
+        let watchRestarted = false
+        try {
+          let probeOk = false
+          try { probeOk = !!ctx.dbm && ctx.dbm.call('getMeta', 'schemaVersion') != null } catch { /* dead handle: no restart */ }
+          if (probeOk) {
+            require('../external-db-watch').restartLatestDbWatch()
+            watchRestarted = true
+          }
+        } catch (e3) { log.warn('[IPC] data:relocate restart external db watch after failed migration failed', e3) }
+        log.error('[IPC] data:relocate migration failed:', r.error, watchRestarted ? '(external db watch re-armed)' : '(external db watch NOT re-armed — re-init failed)')
+        return { ok: false, error: r.error }
+      }
+      log.info('[IPC] data:relocate migrated to', r.target, '— relaunching')
+      // Success: inform the user synchronously (showMessageBoxSync BLOCKS until OK, so the
+      // "migration done, old location preserved" notice is actually seen — the async
+      // showMessageBox promise resolved into a modal that the relaunch timer destroyed after
+      // 400ms, i.e. effectively never read), THEN relaunch into the new location via the boot
+      // file written by migrateData. exit() skips the quit-flush chain, which is correct here:
+      // the DB handle is already closed and the source dir is intact.
+      try { dialog.showMessageBoxSync({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg', { old: ud }) }) } catch { /* best-effort */ }
+      setTimeout(() => { try { app.relaunch(); app.exit(0) } catch { /* dying anyway */ } }, 400)
+      return { ok: true, target: r.target }
+    }
   }
 }

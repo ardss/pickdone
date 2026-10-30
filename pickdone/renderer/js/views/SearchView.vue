@@ -48,7 +48,11 @@
       </div>
 
       <!-- reference: todo-list-empty structure -->
-      <empty-state v-if="!results.length" inline><template #text>{{ q ? $t('statsC.Search.notFound', { q }) : $t('statsC.Search.empty') }}</template></empty-state>
+      <!-- D6 (P3 2026-10-22): the empty state gains a one-tap exit — clear filters + keyword, then refocus -->
+      <empty-state v-if="!results.length" inline>
+        <template #text>{{ q ? $t('statsC.Search.notFound', { q }) : $t('statsC.Search.empty') }}</template>
+        <template #action><button type="button" class="mini primary" @click="clearAndRescan">{{ $t('statsC.Search.clearAndRescan') }}</button></template>
+      </empty-state>
     </div>
   </div>
 </template>
@@ -194,6 +198,12 @@ export default {
     esc (s) { return escapeHtml(s) },
     resetFilter () { // reference resetFilter: zero out the three options then re-search
       this.$store.commit('settings/updateSettings', { searchCategory: '', searchComplete: '', searchDateRange: '' })
+    },
+    // D6 (P3 2026-10-22): empty-state exit — restore the default query (filters + keyword) and refocus the input
+    clearAndRescan () {
+      this.resetFilter()
+      this.clearQ()
+      this.$nextTick(() => { this.$refs.inp && this.$refs.inp.focus() })
     },
     patch (k, v) { this.$store.commit('settings/updateSettings', { [k]: v }) },
     // F-C6 clear button: bypass the debounce — clearing must take effect immediately

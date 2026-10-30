@@ -93,7 +93,10 @@ test('QC2: a successful load cancels a pending retry (no double loadURL)', (t) =
 test('QC2: source pin — retryTimer tracked, cleared on closed + did-finish-load, null-reset on fire', () => {
   const src = readMain('aux-load-guard.js')
   assert.match(src, /let retryTimer = null/)
-  assert.match(src, /win\.on\('closed', clearRetryTimer\)/)
+  // W16 (2026-10-28): 'closed' now clears BOTH the retry timer and the new render-handshake watch
+  // timer in one combined handler — the clearRetryTimer call site moved inside it.
+  assert.match(src, /win\.on\('closed', \(\) => \{[^}]*clearRetryTimer\(\)[^}]*\}\)/)
+  assert.match(src, /clearRetryTimer\(\); clearHandshakeTimer\(\)/, 'the W16 handshake timer shares the closed-path cleanup')
   assert.match(src, /did-finish-load.*clearRetryTimer\(\); retries = 0/s, 'did-finish-load clears the timer too')
   const handler = src.slice(src.indexOf("win.webContents.on('did-fail-load'"), src.indexOf('module.exports'))
   assert.match(handler, /clearRetryTimer\(\)\s*\n\s*retryTimer = setTimeout/, 'armed under the tracker')

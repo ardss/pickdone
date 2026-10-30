@@ -43,6 +43,7 @@ const ALLOW = [
 
 
 // —— Collect source files(SFC 迁移后:递归扫,.vue 模板+script 同扫) ——
+import { stripHtmlComments } from './html-comment-strip.mjs'
 const srcFiles = []
 for (const dir of ['components', 'views', 'store', 'utils']) {
   const d = path.join(ROOT, dir)
@@ -63,7 +64,12 @@ const hardcoded = []
 for (const f of srcFiles) {
   const rel = path.relative(ROOT, f).split(path.sep).join('/')
   if (rel.endsWith('nlDate.js')) continue // Chinese natural-language date parser: by design only parses Chinese input
-  const lines = fs.readFileSync(f, 'utf8').split('\n')
+  // HTML template comments are documentation, not UI copy — strip them before the line scan
+  // (the J1 fix note quoting zh phase words inside TomatoBar.vue's template red-ed the whole
+  // gate, 2026-10-22). JS block/line comment handling below stays untouched for script parts.
+  let raw = fs.readFileSync(f, 'utf8')
+  if (rel.endsWith('.vue')) raw = stripHtmlComments(raw)
+  const lines = raw.split('\n')
   let inBlock = false // multi-line block comment state: comment body skipped entirely
   lines.forEach((line, i) => {
     let code = line

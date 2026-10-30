@@ -1,8 +1,49 @@
 {
-  "cli/lib.js": 821,
-  "src/main/lan-sync-bootstrap.js": 832,
-  "renderer/js/store/category.js": 733,
-  "renderer/js/store/todo.js": 777,
-  "src/main/db.js": 813,
-  "src/main/index.js": 854
+  "files": {
+    "cli/lib.js": {
+      "lines": 811,
+      "net": null
+    },
+    "renderer/js/store/category.js": {
+      "lines": 763,
+      "net": null
+    },
+    "renderer/js/store/habits.js": {
+      "lines": 709,
+      "net": null
+    },
+    "renderer/js/store/todo.js": {
+      "lines": 842,
+      "net": null
+    },
+    "renderer/js/store/tomato.js": {
+      "lines": 728,
+      "net": null
+    },
+    "renderer/js/views/StatisticsView.vue": {
+      "lines": 832,
+      "net": null
+    },
+    "renderer/js/views/TomatoFloatPage.vue": {
+      "lines": 816,
+      "net": null
+    },
+    "src/main/index.js": {
+      "lines": 860,
+      "net": null
+    },
+    "src/main/lan-sync/transport.js": {
+      "lines": 855,
+      "net": 22348
+    },
+    "src/main/lan-sync-bootstrap.js": {
+      "lines": 844,
+      "net": null
+    },
+    "src/main/sync-apply.js": {
+      "lines": 841,
+      "net": null
+    }
+  },
+  "commitments": {}
 }

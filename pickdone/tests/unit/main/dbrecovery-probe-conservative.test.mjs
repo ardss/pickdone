@@ -66,12 +66,16 @@ test('F20: unreadable key keeps the HEALTHY db alive end-to-end (no rename, no r
   } finally { fs.rmSync(ud, { recursive: true, force: true, maxRetries: 3 }) }
 })
 
-test('F20: a READABLE non-64-hex key still probes no (keyless plaintext continuation, unchanged)', () => {
+test('F20: a READABLE non-64-hex key probes unknown (M2a conservative parity with db.js keyless rule)', () => {
   const ud = fs.mkdtempSync(path.join(os.tmpdir(), 'dw6-probe-'))
   try {
     makeEncryptedDb(ud, KEY)
     fs.writeFileSync(path.join(ud, 'db.key'), 'not-hex-at-all', 'utf8')
     const probe = dbRecovery.encryptedProbe(path.join(ud, 'todos.db'), path.join(ud, 'db.key'))
-    assert.equal(probe, 'no', 'readable but non-hex key = db.js keyless rules apply')
+    // M2a (P2): db.js treats a non-64-hex key as NO-KEY — the db is healthy PLAINTEXT, so an
+    // encrypted-open failure cannot classify it. The old 'no' ("genuinely corrupt") let recovery
+    // rename a healthy db aside and roll back to a stale backup — the wave5 hole reopened through
+    // this side door. Conservative 'unknown' (no rename, no rollback) is the corrected contract.
+    assert.equal(probe, 'unknown', 'readable non-hex key = cannot classify = stay conservative')
   } finally { fs.rmSync(ud, { recursive: true, force: true, maxRetries: 3 }) }
 })

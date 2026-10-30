@@ -99,15 +99,21 @@ test('[F6] dayShift keeps every stepped timestamp on local midnight across the w
     assert.equal(d.getMinutes(), 0)
     assert.equal(d.getSeconds(), 0)
     // one calendar day apart from its neighbor (date-of-month normalized, no hour drift)
-    assert.equal(dayShift(ts, 1) - ts !== 86400000 || true, true)
+    // [assertion-quality 2026-10-25] removed `assert.equal(dayShift(ts,1)-ts!==86400000 || true, true)`
+    // — literally always green (zero signal); DST semantics are owned by day-caliber-dst.test.mjs
+    // with real notEqual asserts.
     assert.equal(dayStart(dayShift(t0, i)), ts, 'stepped ts IS its own day start (bucketing-safe)')
   }
 })
 
-test('[F6] DayDeck no longer invents raw ms day arithmetic; days use dayShift', () => {
+test('[F6] DayDeck no longer invents raw ms day arithmetic; days step via dayShift', () => {
   const src = read('renderer/js/components/DayDeck.vue')
   assert.match(src, /import \{ dayShift, dayStart \} from '\.\.\/utils\/todayBounds\.js'/)
-  assert.match(src, /dayShift\(t0, i - SPAN\)/)
+  // [w16-deck 2026-10-28] the days array is built by utils/dayWindow.js deckWindowDays, whose
+  // dayShift loop is unit-tested in w16-deck-card-view.test.mjs; pin the delegation here
+  assert.match(src, /deckWindowDays\(this\.today0/, 'days delegate calendar-day stepping to the shared helper')
+  const dayWindow = read('renderer/js/utils/dayWindow.js')
+  assert.match(dayWindow, /dayShift\(ts, 1\)/, 'the helper still steps via dayShift, never raw ms products')
   assert.match(src, /dayShift\(today, -1\)/, 'yesterday label comparison steps via dayShift too')
   assert.ok(!/\*\s*DAY\b/.test(src.replace(/\/\/[^\n]*/g, '').replace(/\/\*[\s\S]*?\*\//g, '')),
     'no `* DAY` day arithmetic left in DayDeck (comments excluded)')

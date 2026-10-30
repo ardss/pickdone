@@ -47,6 +47,13 @@
             <span class="habit-name" role="button" tabindex="0" :title="$t('statsE.HabitView.renameTip')" :aria-label="$t('statsE.HabitView.renameTip')" @click="startRename(h)" @keydown="onRenameKey(h, $event)">{{ h.name }}</span>
           </template>
           <span class="habit-freq-label">{{ freqLabel(h) }}</span>
+          <!-- [W8] not scheduled today: the missing check circle used to read as a rendering gap —
+               say so explicitly (isDueToday = frequency says this weekday/interval hits today).
+               [fix 2026-10-25] standalone v-if, NOT v-else-if: the adjacent v-if/v-else chain
+               belongs to the rename template above (an intervening span/comment breaks an
+               else-if chain = build failure); the condition is already the exact negative of
+               the check circle's v-if, so semantics are unchanged. -->
+          <span v-if="!isDueToday(h)" class="habit-not-due" role="note">{{ $t('statsE.HabitView.notDueToday') }}</span>
           <span class="habit-streak" :title="$t('statsB.HabitView.streakTip')"><app-icon name="flame" :size="12"/> {{ $t('statsB.HabitView.streak', { n: streakOf(h.id) }) }}</span>
           <button class="mini danger habit-del" @click.stop="delHabitConfirm(h)">{{ $t('statsB.HabitView.del') }}</button>
         </div>
@@ -90,9 +97,12 @@
       <div class="moment-sec">
         <div class="habit-add moment-add">
           <span class="moment-sec-title">{{ $t('statsB.HabitView.momentTitle') }}</span>
-          <input v-model="newMoment" class="habit-add-input" :placeholder="$t('statsB.HabitView.momentNamePlaceholder')" :aria-label="$t('statsB.HabitView.momentNameAria')"/>
-          <input v-model="newMomentDate" type="date" class="habit-add-input" :aria-label="$t('statsB.HabitView.dateAria')"/>
-          <select v-model="newMomentKind" class="habit-add-input" :aria-label="$t('statsB.HabitView.kindAria')">
+          <input v-model="newMoment" class="habit-add-input" :placeholder="$t('statsB.HabitView.momentNamePlaceholder')" :aria-label="$t('statsB.HabitView.momentNameAria')"
+                 @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; addMoment() }"/>
+          <input v-model="newMomentDate" type="date" class="habit-add-input" :aria-label="$t('statsB.HabitView.dateAria')" :max="newMomentKind === 'memorial' ? todayKey : null"
+                 @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; addMoment() }"/>
+          <select v-model="newMomentKind" class="habit-add-input" :aria-label="$t('statsB.HabitView.kindAria')"
+                  @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; addMoment() }">
             <option value="countdown">{{ $t('statsB.HabitView.countdown') }}</option>
             <option value="memorial">{{ $t('statsB.HabitView.memorial') }}</option>
           </select>
@@ -196,7 +206,7 @@ export default {
     freqLabel (h) {
       const f = h.frequency || { type: 'daily' }
       if (f.type === 'daily') return this.$t('statsB.HabitView.freqDaily')
-      if (f.type === 'weekdays') return (f.weekdays || []).map(w => this.WD[w]).join(' ')
+      if (f.type === 'weekdays') return (f.weekdays || []).slice().sort((a, b) => a - b).map(w => this.WD[w]).join(' ')
       return this.$t('statsB.HabitView.freqEveryN', { n: f.intervalN || 1 })
     },
     addHabit () {
@@ -270,40 +280,55 @@ export default {
     prevMonth () { if (this.calOffset > CAL_MIN_OFFSET) this.calOffset-- },
     nextMonth () { if (this.calOffset < 0) this.calOffset++ },
     // [D15-A10] habit/moment deletes now ride the app-wide undo-toast contract (same as the
-    // check-in toggle above): snapshot the whole blob, restore it on Undo via the store's
-    // replaceAll mutation (the same restore path backups use — no parallel undo channel invented)
+    // check-in toggle above): snapshot, restore on Undo via a store mutation.
+    // [W10 2026-10-26] undo snapshots carried force:true + the WHOLE blob (replaceAll restore
+    // path). [W11 2026-10-26 P2] that wholesale force-restore rolled back AND re-persisted every
+    // interleaved edit made during the toast window (a check-in on another habit, an added
+    // moment, a rename) — silent data loss. The undo now snapshots ONLY the deleted entry and
+    // revives it via the targeted habits/reviveHabit / habits/reviveMoment mutations, which
+    // splice just that entry back and clear its tombstone; everything else in state is untouched.
     delHabitWithUndo (h) {
-      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(m => ({ ...m })), savedAt: Date.now() }
+      const snap = { habit: { ...h, records: { ...(h.records || {}) } }, savedAt: Date.now() }
       this.$store.commit('habits/delHabit', h.id)
-      this.undoToastFor(this.$t('statsB.HabitView.deletedToast', { n: h.name }), snap)
+      this.undoToastFor(this.$t('statsB.HabitView.deletedToast', { n: h.name }),
+        { mutation: 'habits/reviveHabit', payload: { habit: snap.habit } })
     },
     delMomentWithUndo (m) {
-      const snap = { habits: this.$store.state.habits.habits.map(x => ({ ...x, records: { ...(x.records || {}) } })), moments: this.$store.state.habits.moments.map(x => ({ ...x })), savedAt: Date.now() }
+      const snap = { moment: { ...m }, savedAt: Date.now() }
       this.$store.commit('habits/delMoment', m.id)
-      this.undoToastFor(this.$t('statsB.HabitView.momentDeletedToast', { n: m.name }), snap)
+      this.undoToastFor(this.$t('statsB.HabitView.momentDeletedToast', { n: m.name }),
+        { mutation: 'habits/reviveMoment', payload: { moment: snap.moment } })
     },
-    undoToastFor (text, snap) {
+    undoToastFor (text, revive) {
       showUndoToast(this.$message.bind(this), [
         text + '　',
         window.Vue.h('a', {
           style: { color: 'var(--brand)', cursor: 'pointer' },
           onClick: () => {
-            this.$store.commit('habits/replaceAll', snap)
+            // [W11] targeted revive (habits/reviveHabit | habits/reviveMoment) — replaces the W10
+            // wholesale habits/replaceAll force-restore that rolled back interleaved edits
+            this.$store.commit(revive.mutation, revive.payload)
             this.$message.closeAll()
           }
         }, this.$t('statsA.core.undo'))
       ])
     },
     async delHabitConfirm (h) {
-      try { await this.$confirm(this.$t('statsB.HabitView.delConfirm', { name: h.name }), this.$t('statsB.HabitView.delTitle'), { type: 'warning' }) } catch { return }
+      // [F5 2026-10-21] named confirm buttons reusing the existing statsC.TodoBox.btnDelete key
+      try { await this.$confirm(this.$t('statsB.HabitView.delConfirm', { name: h.name }), this.$t('statsB.HabitView.delTitle'), { type: 'warning', confirmButtonText: this.$t('statsC.TodoBox.btnDelete') }) } catch { return }
       this.delHabitWithUndo(h)
     },
     async delMomentConfirm (m) {
-      try { await this.$confirm(this.$t('statsB.HabitView.delMomentConfirm', { name: m.name }), this.$t('statsB.HabitView.delMomentTitle'), { type: 'warning' }) } catch { return }
+      try { await this.$confirm(this.$t('statsB.HabitView.delMomentConfirm', { name: m.name }), this.$t('statsB.HabitView.delMomentTitle'), { type: 'warning', confirmButtonText: this.$t('statsC.TodoBox.btnDelete') }) } catch { return }
       this.delMomentWithUndo(m)
     },
     addMoment () {
       if (!this.newMoment.trim() || !this.newMomentDate) return this.$message.warning(this.$t('statsB.HabitView.nameAndDateRequired'))
+      // [w7] a memorial (anniversary) dated in the future renders a nonsense "已保持 N 天":
+      // reject at submit (the :max on the date input is only a picker hint, keyboard entry bypasses it)
+      if (this.newMomentKind === 'memorial' && this.newMomentDate > this.todayKey) {
+        return this.$message.warning(this.$t('statsE.w7.memorialFutureDate'))
+      }
       const n = this.newMoment.trim()
       this.$store.commit('habits/addMoment', { name: n, date: this.newMomentDate, kind: this.newMomentKind })
       // [maint-0924 A12] creation feedback (was silent)
@@ -346,7 +371,7 @@ export default {
   width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: var(--fs-xs); color: var(--text-3); cursor: pointer;
-  transition: all .12s; appearance: none; padding: 0; background: transparent; font-family: inherit;
+  transition: all var(--dur-fast); appearance: none; padding: 0; background: transparent; font-family: inherit;
 }
 .habit-wd:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
 
@@ -369,6 +394,8 @@ export default {
 
 
 .habit-freq-label { font-size: var(--fs-xs); color: var(--text-3); flex-shrink: 0; }
+/* [W8] "not scheduled today" note for non-due habits (sits where the check circle would be) */
+.habit-not-due { font-size: var(--fs-xs); color: var(--text-3); flex-shrink: 0; }
 
 
 
@@ -481,7 +508,7 @@ export default {
   width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--line-strong); background: var(--panel, #fff);
   display: inline-flex; align-items: center; justify-content: center;
   font-size: var(--fs-md); color: transparent; cursor: pointer; flex-shrink: 0;
-  transition: all .15s, transform .1s;
+  transition: all var(--dur-fast), transform var(--dur-fast);
 }
 
 

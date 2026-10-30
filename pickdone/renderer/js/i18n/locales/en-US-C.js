@@ -41,6 +41,8 @@ export default {
       expandAll: 'Expand all',
       collapseAll: 'Collapse all',
       empty: 'No events',
+      initFailed: 'Failed to load data',
+      retryInit: 'Retry loading',
       ariaGroup: 'Expand or collapse group {name}',
       tipAria: 'View completed-page tips',
       undone: 'Restored to incomplete',
@@ -78,7 +80,8 @@ export default {
       notFound: '{q} - no matching events',
       undatedHidden: '{n} undated tasks hidden by the date filter',
       clearDateRange: 'Clear date range',
-      empty: ' No events '
+      empty: ' No events ',
+      clearAndRescan: 'Clear filters and search again'
     },
     TodoBox: {
       title: 'To-do Box',
@@ -92,6 +95,9 @@ export default {
       batchExit: 'Exit batch',
       batchManage: 'Batch manage',
       empty: 'No events',
+      initFailed: 'Failed to load data',
+      retryInit: 'Retry loading',
+      emptyCreate: 'Create a task',
       ariaCheck: 'Select task',
       ariaComplete: 'Mark as complete',
       titleComplete: 'Mark as complete: {name}',

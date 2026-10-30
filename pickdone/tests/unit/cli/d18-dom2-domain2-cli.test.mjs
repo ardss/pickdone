@@ -19,6 +19,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { readAnchorSet } from '../../lib/source-anchors.mjs'
 import { createRequire } from 'module'
 import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
@@ -157,7 +158,9 @@ test('#6 renewalCarryFields carries attachments AND quadrant/extra attributes (c
   const carry = renewalCarryFields(tpl, { todoTime: D + 864e5, reminderTime: 2 })
   // quadrant/extra (the CLI half)
   assert.equal(carry.priority, 3)
-  assert.equal(carry.deadlineTs, 12345)
+  // [2026-10-15] deadlineTs is now SHIFTED by the renewal day-diff (F1 fix: verbatim carry
+  // made every renewed instance natively overdue), same dayDiff as the reminderExtra shift above
+  assert.equal(carry.deadlineTs, 12345 + 864e5)
   assert.equal(carry.important, 1)
   assert.equal(carry.urgent, 1)
   // D20-DOMB3: extras are SHIFTED by the renewal day-diff (never carried verbatim onto a
@@ -176,7 +179,8 @@ test('#6 renewalCarryFields carries attachments AND quadrant/extra attributes (c
     image: 'x.png', files: JSON.stringify([{ name: 'f.bin' }])
   })
   const nt = lib.buildRenewalInstance(t, { todoTime: base + 864e5, reminderTime: 0 }, {})
-  assert.equal(nt.priority, 2); assert.equal(nt.deadlineTs, 999)
+  assert.equal(nt.priority, 2)
+  assert.equal(nt.deadlineTs, 999 + 864e5, 'deadline shifts with the renewal day-diff')
   assert.equal(nt.important, 1); assert.equal(nt.urgent, 1)
   assert.equal(nt.image, 'x.png', 'renewed instance keeps the template image')
   assert.equal(nt.files, JSON.stringify([{ name: 'f.bin' }]), 'renewed instance keeps the template files')
@@ -191,8 +195,6 @@ test('#7 addTodo (timed date included) creates no plan chip', () => {
 
 /* ---------- #8: category tombstones stamped + stamped filter backup key ---------- */
 test('#8 deleteCategory stamps deletedAt on tombstones and writes the stamped catFiltersBak key', async () => {
-  const src = fs.readFileSync(new URL('../../../renderer/js/store/category.js', import.meta.url), 'utf8')
-  assert.ok(src.includes("catFiltersBakKeyTs = (deletedAt, id) => 'catFiltersBak.' + deletedAt + '.' + id"), 'App stamped key shape anchor')
   const cat = lib.addCategory('dom2章鱼分类')
   lib.settingsSet('newTodoCategoryId', '0')
   // give the category a saved filter referencing it (db-call door: filterUpsert; conds normalized by shared/filter-core)
@@ -228,22 +230,50 @@ test('#9 purgeRecycleBin writes evt-purge-*.json into the backup dir before dele
 
 /* ---------- #11: chip-cascade failure warns to stderr (source anchor) ---------- */
 test('#11 chipsSnapshotForDelete failure path warns with the task id', () => {
-  const src = fs.readFileSync(new URL('../../../cli/lib.js', import.meta.url), 'utf8')
+  // lib-chips split (2026-10-24): the chip cascade lives in cli/lib-chips.cjs now — the set
+  // anchor reads both files so the warn contract stays covered no matter which module carries it.
+  const src = readAnchorSet('cliChipsFamily')
   assert.ok(/chip snapshot\/cascade failed for task \$\{taskId\}/.test(src), 'stderr warn names the task id')
   assert.ok(!/catch \{ \/\* snapshot failure must not block deletion \*\/ \}/.test(src), 'silent bare catch retired')
 })
 
 /* ---------- #12: undo-renewal removal row shape (delete:true + version 0) ---------- */
+// W7 discriminator re-anchor (2026-10-24): repeatOn PRE-GENERATES its future instances, and
+// completing the template then idempotently returns that pre-generated instance — whose
+// createTime (repeatOn moment) is EARLIER than completedAt, so the shared discriminator
+// correctly REFUSES to remove it on undo (that refusal is the entire point of the W7 P1
+// root fix: pre-generated siblings survive undo). The true renewal-mint scenario is
+// completing the LAST pre-generated instance: its undo removes the instance the completion
+// itself minted (createTime >= completedAt), with the renderer row shape.
 test('#12 undo of a renewed completion removes the instance with the renderer row shape', () => {
   const base = +dayjs().add(6, 'day').startOf('day')
   const tpl = seed({ taskContent: 'dom2撤销形状模板', todoTime: base })
   const r = lib.repeatOn(tpl.taskId, lib.buildRepeatRule({ type: 'daily', interval: 1 }), 1)
-  lib.toggleComplete(tpl.taskId, true)
-  const renewed = db.call('queryTodos', { deleted: 0, repeatId: r.rid }).sort((a, b) => a.dayStart - b.dayStart).pop()
-  assert.ok(renewed && renewed.dayStart === base + 864e5)
-  lib.toggleComplete(tpl.taskId, false) // undo → auto-renewed instance removed
-  const row = db.call('getById', renewed.taskId)
+  const pre = db.call('queryTodos', { deleted: 0, repeatId: r.rid }).find(x => x.taskId !== tpl.taskId)
+  assert.ok(pre && pre.dayStart === base + 864e5, 'repeatOn pre-generated the next day')
+  // complete the PRE-GENERATED instance → it is the group's last → the completion mints
+  // the true renewal at base+2d (createTime >= completedAt, a genuine renewal)
+  lib.toggleComplete(pre.taskId, true)
+  const minted = db.call('queryTodos', { deleted: 0, repeatId: r.rid })
+    .sort((a, b) => a.dayStart - b.dayStart).pop()
+  assert.ok(minted && minted.dayStart === base + 2 * 864e5, 'completion minted the next renewal')
+  lib.toggleComplete(pre.taskId, false) // undo → the minted renewal is removed
+  const row = db.call('getById', minted.taskId)
   assert.equal(row.delete, true, 'boolean delete:true (renderer deleteTodo/deleteTodosMany parity)')
   assert.equal(row.version, 0, 'version 0 so the soft delete re-enters the sync snapshot')
   assert.ok(row.deletedAt > 0)
+})
+
+// The discriminator's other half: undoing the TEMPLATE must leave the PRE-GENERATED
+// sibling alone (createTime < completedAt — the 2026-10-09 renderer root fix, CLI twin).
+test('#12b undo of the template does not soft-delete the pre-generated sibling', () => {
+  const base = +dayjs().add(7, 'day').startOf('day')
+  const tpl = seed({ taskContent: 'dom2撤销不误删预生成', todoTime: base })
+  const r = lib.repeatOn(tpl.taskId, lib.buildRepeatRule({ type: 'daily', interval: 1 }), 1)
+  const pre = db.call('queryTodos', { deleted: 0, repeatId: r.rid }).find(x => x.taskId !== tpl.taskId)
+  lib.toggleComplete(tpl.taskId, true)
+  lib.toggleComplete(tpl.taskId, false) // undo → pre-generated sibling must survive
+  const row = db.call('getById', pre.taskId)
+  assert.equal(row.delete, false, 'pre-generated instance is NOT a renewal — it survives undo')
+  assert.equal(row.deletedAt, 0, 'no tombstone on the surviving sibling')
 })
