@@ -222,7 +222,10 @@ function main () {
       process.exit(1)
     }
     files = sourceNames.map(f => path.join(top, f))
-    if (!files.length) {
+    // W21 fix(#2) regression guard (2026-10-30): an empty sourceNames is NORMAL (docs-only commit —
+    // the extension filter already removed them); red only when source files were staged but none
+    // resolved, which the per-file missing tripwire above has by then already named exactly.
+    if (!files.length && sourceNames.length) {
       console.error('✗ [file-size] staged names resolved to zero existing files (toplevel mismatch) — refusing to pass blindly')
       process.exit(1)
     }
