@@ -246,6 +246,24 @@ export default {
       }
       if (this._roTarget !== el) { this._ro.disconnect(); this._ro.observe(el); this._roTarget = el }
     },
+    /** Delegate keydown/click listeners onto the CURRENT fcEl. View switching swaps in a new
+     *  fcEl via v-if, so whenever renderCalendar runs the handlers must be re-bound to the fresh
+     *  element — the listeners used to be attached once in mounted() and after a
+     *  timeblock → month/week round trip they stayed on the discarded element, permanently
+     *  killing keyboard task creation and the day-cell expand/+ buttons for the session. */
+    bindFcElDelegates () {
+      const el = this.$refs.fcEl
+      if (!el) return
+      if (this._onKey) {
+        if (this._fcElBound) this._fcElBound.removeEventListener('keydown', this._onKey)
+        el.addEventListener('keydown', this._onKey)
+      }
+      if (this._onExpandClick) {
+        if (this._fcElBound) this._fcElBound.removeEventListener('click', this._onExpandClick, true)
+        el.addEventListener('click', this._onExpandClick, true)
+      }
+      this._fcElBound = el
+    },
     renderCalendar (initialDateTs) {
       const el = this.$refs.fcEl
       if (!el) return
@@ -257,6 +275,7 @@ export default {
       if (this.cal) { this.cal.destroy(); this.cal = null }
       // View switching swaps in a new fcEl via v-if, so the observer must be re-attached to the new element
       if (typeof ResizeObserver !== 'undefined') this.attachSizeObserver()
+      this.bindFcElDelegates()
       const self = this
       // initialDate: keep the user's current month on fallback rebuilds during navigation, don't jump back to today
       // markRaw: FullCalendar instances must not enter Vue's reactive proxy — proxy wrapping breaks its internal render scheduling
@@ -461,7 +480,6 @@ export default {
       // double-submit guard (double Enter used to mint duplicate orphan "(untitled)" tasks)
       this.createAt(+dayjs(cell.dataset.date))
     }
-    if (this.$refs.fcEl) this.$refs.fcEl.addEventListener('keydown', this._onKey)
     // 格子右上角展开钮:FC 动态重绘格子,事件委托到容器;挡住冒泡防触发 dateClick 建任务
     this._onExpandClick = (e) => {
       const create = e.target.closest && e.target.closest('.day-create-btn')
@@ -477,7 +495,9 @@ export default {
       e.preventDefault()
       this.openDayPeek(dayStart(btn.dataset.expandDate), btn.closest('.fc-daygrid-day'))
     }
-    if (this.$refs.fcEl) this.$refs.fcEl.addEventListener('click', this._onExpandClick, true)
+    // Both handlers defined — bind once via the shared rebinding helper (a second bindFcElDelegates
+    // in renderCalendar() right below is idempotent and covers the initial timeblock-view swap)
+    this.bindFcElDelegates()
     // Initial view: route query takes priority (deep link/refresh), then the localStorage memory (time block view is restored too; it used to be ignored and fall back to month view)
     const qView = this.$route.query.view
     if (qView === 'week') this.view = 'dayGridWeek'
@@ -514,8 +534,12 @@ export default {
     this._destroyed = true
     if (this._offChanged) this._offChanged()
     if (this._ro) { this._ro.disconnect(); this._ro = null }
-    if (this.$refs.fcEl && this._onKey) this.$refs.fcEl.removeEventListener('keydown', this._onKey)
-    if (this.$refs.fcEl && this._onExpandClick) this.$refs.fcEl.removeEventListener('click', this._onExpandClick, true)
+    // Listeners may live on an older (swapped-out) fcEl if a view switch raced unmount — remove
+    // from the element bindFcElDelegates actually recorded, falling back to the current ref
+    const bound = this._fcElBound || this.$refs.fcEl
+    if (bound && this._onKey) bound.removeEventListener('keydown', this._onKey)
+    if (bound && this._onExpandClick) bound.removeEventListener('click', this._onExpandClick, true)
+    this._fcElBound = null
     if (this._onDragMove) document.removeEventListener('mousemove', this._onDragMove)
     clearTimeout(this._edgeTimer)
     if (this.cal) { this.cal.destroy(); this.cal = null }
