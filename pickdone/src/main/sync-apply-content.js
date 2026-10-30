@@ -5,6 +5,12 @@
  */
 const mergeCore = require('../../shared/sync-core/merge.mjs')
 
+// Test isolation (2026-10-30): hasEquivalentConflictCopy's catch writes through electron-log —
+// install the file-transport redirect at module load (same shape as tomato-announce.js), so a
+// plain-Node test process can never resolve the REAL %APPDATA% log (write-time env evaluation
+// inside log-isolation makes the order-vs-env timing immaterial).
+require('./log-isolation')
+
 /** Content equality mirroring merge.mjs's contentDiffers (not exported there): bookkeeping fields
  *  (id/updatedAt/seq/deviceId/deletedAt markers + `deleted`) are excluded; `userId` too — peers
  *  stamp rows with their own local account id, so a userId-only difference must never churn.

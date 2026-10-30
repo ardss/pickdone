@@ -78,6 +78,11 @@ function attachLoadGuard (win, opts) {
   win.webContents.on('did-fail-load', (e, code, desc, failUrl, isMain) => {
     if (!isMain) return // subframe/redirect noise never counts
     if (!String(failUrl).includes(routeMark)) return
+    // P3 (2026-10-30): a main-frame failure must also kill the W16 handshake watch armed by a
+    // previous did-finish-load — otherwise the retry chain (reload up to maxRetries) and the
+    // handshake-timeout path can run CONCURRENTLY: the stale watch fires mid-backoff, reads
+    // "no handshake" (the page is down, of course) and triggers a rebuild on top of the retry.
+    clearHandshakeTimer()
     if (retries < maxRetries) {
       retries++
       if (opts.onRetry) { try { opts.onRetry() } catch (err) { /* cleanup must not break the retry chain */ } }

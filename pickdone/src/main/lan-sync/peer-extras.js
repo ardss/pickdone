@@ -1,6 +1,10 @@
 /* Peer display alias + missing-attachment key collection, extracted from lan-sync-bootstrap.js
  * (2026-09-25 structure size ratchet) — same injected-settings pattern as lan-sync/paired-peers.js,
  * so the swappable module-level `state`/settings (bootstrap __test.setState) still applies. */
+/* C8 residue cleanup (2026-10-30): log-isolation used to be required only AFTER the electron-log
+ * warn in missingAttachmentKeys — the exact after-the-write shape C8 removed everywhere else.
+ * Hoisted to module load so the transport redirect is installed before any write. */
+require('../log-isolation')
 module.exports = ({ settingGet }) => {
   /* ---------- per-peer machine-local display alias (round-2 P1) ---------- */
   const K_PEER_ALIAS_PREFIX = 'sync.peerAlias.'
@@ -52,7 +56,6 @@ function missingAttachmentKeys (st, inject = {}) {
     return keys
   } catch (e) {
     try { require('electron-log').warn('[LanSync] missing-attachment key collection failed this round:', e && e.message) } catch { /* noop */ }
-    try { require('../log-isolation') } catch { /* standalone test context */ }
     return null
   }
 }

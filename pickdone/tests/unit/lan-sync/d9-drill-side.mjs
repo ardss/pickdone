@@ -28,6 +28,15 @@ Module._load = function (request, parent, isMain) {
 }
 
 const require = createRequire(import.meta.url)
+
+// Log-isolation timing fix (2026-10-30): this process's TODO_DB_DIR is only known at `start`
+// time, but the production modules below (db.js → electron-log, aux chains) are required NOW.
+// log-isolation's write-time re-evaluation (P1 fix) handles the redirect, but belt-and-braces:
+// give the process a PER-PROCESS isolation env before any production module loads, so even a
+// write that slips through before `start` lands in a throwaway dir — never %APPDATA%. The
+// per-side dir from `start` (db.init) remains the real data dir; this env only guards logs.
+process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'd9-side-logiso-'))
+
 const db = require('../../../src/main/db.js')
 const syncApply = require('../../../src/main/sync-apply.js')
 const { createLanSyncNode } = require('../../../src/main/lan-sync/index.js')

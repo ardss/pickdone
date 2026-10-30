@@ -21,8 +21,20 @@ const here = path.dirname(fileURLToPath(import.meta.url))
 export const SIDE = path.join(here, 'd9-drill-side.mjs')
 export const sleep = ms => new Promise(r => setTimeout(r, ms))
 
+/** Spawn env WITHOUT any inherited TODO_DB_DIR/TODO_USER_DATA_DIR: the drill side owns its
+ *  isolation env (set in its own head before the first production require). */
+export function cleanSideEnv () {
+  const env = { ...process.env }
+  delete env.TODO_DB_DIR
+  delete env.TODO_USER_DATA_DIR
+  return env
+}
+
 export function launch () {
-  const child = spawn(process.execPath, [SIDE], { stdio: ['pipe', 'pipe', 'inherit'] })
+  // Log-isolation (2026-10-30): do NOT leak the parent test process's isolation env into the
+  // side — the side sets its own per-process TODO_DB_DIR (d9-drill-side.mjs head) before any
+  // production require; a blank slate here keeps that guarantee the single source of truth.
+  const child = spawn(process.execPath, [SIDE], { stdio: ['pipe', 'pipe', 'inherit'], env: cleanSideEnv() })
   const pending = new Map()
   let buf = ''
   let nextId = 1

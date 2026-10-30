@@ -23,6 +23,7 @@ function createQuitAckTracker () {
   const abandoned = new Set()
   const expectedSenders = new Set() // P2 2026-09-19: exact sender set when the caller passes ids
   let expected = 0
+  let idSetRound = false // true when the round was opened with the exact sender-id array
   return {
     /** Open a new round; returns the token to broadcast.
      *  liveWindows: either a COUNT (legacy — any sender may ack) or the ARRAY of webContents ids we
@@ -36,8 +37,10 @@ function createQuitAckTracker () {
       if (Array.isArray(liveWindows)) {
         for (const id of liveWindows) expectedSenders.add(id)
         expected = expectedSenders.size
+        idSetRound = true
       } else {
         expected = liveWindows
+        idSetRound = false
       }
       return token
     },
@@ -65,10 +68,21 @@ function createQuitAckTracker () {
      *  webContents id from an ABORTED previous round (destroyed after its round ended, abandon
      *  delivered into the new round) decremented the CURRENT round's expected count for senders
      *  that were never sent to, driving expected to 0 and satisfying allAcked() prematurely
-     *  (truncating the 2s flush window before the real windows acked). */
+     *  (truncating the 2s flush window before the real windows acked).
+     *  W21 (2026-10-30, P3): the W14 gate only covered id-set rounds. In the legacy COUNT form
+     *  (beginRound(n)) expectedSenders is empty, so ANY senderId — including a stale id from an
+     *  aborted round that was never part of this count — still decremented expected, driving it
+     *  to 0 with zero real acks. Audit of both callers (index.js before-quit passes the
+     *  liveWindows id array; updater.js runFlushRound passes the `senders` array it just sent
+     *  to) confirms NO caller uses the count form anymore, so abandon in a count round is by
+     *  definition a stale/unknown sender: warn loudly and refuse (no decrement). */
     abandon (senderId) {
       if (senderId == null || abandoned.has(senderId)) return false
-      if (expectedSenders.size > 0 && !expectedSenders.has(senderId)) return false
+      if (!idSetRound) {
+        try { console.warn('[quit-ack] abandon() on a count-form round — no id-set membership gate exists; refusing a likely-stale sender:', senderId) } catch { /* noop */ }
+        return false
+      }
+      if (!expectedSenders.has(senderId)) return false
       abandoned.add(senderId)
       if (acked.has(senderId)) return false
       expected = Math.max(0, expected - 1)

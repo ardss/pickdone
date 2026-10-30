@@ -131,12 +131,24 @@ test('w14 quit-ack abandon: a stale webContents id from an aborted round cannot 
   assert.equal(t.allAcked(), true, 'all genuine members accounted → allAcked')
 })
 
-test('w14 quit-ack abandon: legacy count-based rounds keep the old behavior', () => {
+test('w14→w21 quit-ack abandon: count-based rounds now REFUSE abandon (no membership gate exists there)', () => {
+  // W21 (2026-10-30): the W14 gate only covered id-set rounds; in the legacy COUNT form a stale
+  // arbitrary id could still decrement expected to 0 with zero real acks. No production caller
+  // uses the count form anymore (index.js and runFlushRound both pass the sender-id array), so
+  // abandon on a count round is by definition stale — refused loudly. See quit-ack.js abandon().
   const t = createQuitAckTracker()
   const tok = t.nextToken()
-  t.beginRound(2, tok) // legacy COUNT form: no membership set, any sender may abandon/ack
-  assert.equal(t.abandon(777), true, 'legacy form has no membership gate')
-  assert.equal(t.allAcked(), false)
-  assert.equal(t.ack(tok, 888), true)
+  t.beginRound(2, tok) // legacy COUNT form
+  const warn = console.warn
+  let warned = ''
+  console.warn = m => { warned = String(m) }
+  let refused
+  try { refused = t.abandon(777) } finally { console.warn = warn }
+  assert.equal(refused, false, 'count-form abandon is refused, not decremented')
+  assert.match(warned, /count-form/, 'refusal announced loudly')
+  assert.equal(t.allAcked(), false, 'expected untouched')
+  assert.equal(t.ack(tok, 888), true, 'count-form ack semantics unchanged (any sender may ack)')
+  assert.equal(t.allAcked(), false, 'with the abandon refused, both counted windows must ack')
+  assert.equal(t.ack(tok, 999), true)
   assert.equal(t.allAcked(), true)
 })

@@ -22,7 +22,12 @@ const SIDE = path.join(here, 'd9-drill-side.mjs')
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 function launch () {
-  const child = spawn(process.execPath, [SIDE], { stdio: ['pipe', 'pipe', 'inherit'] })
+  // Same env discipline as d9-drill-helpers.launch: strip the parent's isolation env — the
+  // side sets its own per-process TODO_DB_DIR (2026-10-30 log-isolation timing fix).
+  const env = { ...process.env }
+  delete env.TODO_DB_DIR
+  delete env.TODO_USER_DATA_DIR
+  const child = spawn(process.execPath, [SIDE], { stdio: ['pipe', 'pipe', 'inherit'], env })
   const pending = new Map()
   let buf = ''
   let nextId = 1
