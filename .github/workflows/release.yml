@@ -52,6 +52,11 @@ jobs:
 
       - name: Check all gates (must be >= CI level; a tag must not bypass gates)
         working-directory: pickdone
+        # 2026-10-30: several date/weekday tests hardcode UTC+8 epochs ("00:00 local"); runners are UTC
+        # and failed deterministically (C6 day-pool, calendar weekday label, lan-sync same-host).
+        # Pin to the app's target timezone, same value as ci.yml's job env.
+        env:
+          TZ: Asia/Shanghai
         run: npm run check:all
 
       - name: Clean dist (verify must never run against a stale or mixed build)
