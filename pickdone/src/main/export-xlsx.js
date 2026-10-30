@@ -31,7 +31,9 @@ function parseExportColumns (raw, expected = EXPECTED_EXPORT_COLS) {
  *  forces the .xlsx suffix (same shape as the backup.js read-whitelist precedent). */
 function sanitizeExportFileName (raw) {
   const DEFAULT = 'todos'
-  let name = path.basename(String(raw == null ? '' : raw)).replace(/[\\/:*?"<>|]/g, '_').trim()
+  // normalize backslashes before basename: POSIX basename does not treat '\' as a separator, and
+  // fileName arrives over IPC from the renderer (untrusted) so the traversal cut must hold cross-platform
+  let name = path.basename(String(raw == null ? '' : raw).replace(/\\/g, '/')).replace(/[\\/:*?"<>|]/g, '_').trim()
   if (!name || name === '.' || name === '..') name = DEFAULT
   if (name.toLowerCase().endsWith('.xlsx')) name = name.slice(0, -5)
   return name + '.xlsx'

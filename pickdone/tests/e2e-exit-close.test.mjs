@@ -135,6 +135,13 @@ async function cdpEval (wsUrl, expression, timeoutMs = 8000) {
 }
 
 /** Boot one isolated instance; returns { child, wsUrl, cleanup }. exit-mode = pre-seeded config. */
+// tree-kill that works on both platforms: taskkill /T on Windows (child.kill() leaves the
+// electron process tree alive there), SIGKILL on the pid elsewhere (Linux has no taskkill)
+function killTree (pid) {
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+  else try { process.kill(pid, 'SIGKILL') } catch { /* already gone */ }
+}
+
 async function bootInstance ({ exitMode }) {
   const dataDir = await mkdtemp(join(tmpdir(), 'pickdone-exitclose-'))
   await mkdir(join(dataDir, 'db'), { recursive: true })
@@ -163,7 +170,7 @@ async function bootInstance ({ exitMode }) {
   try {
     return await bootInstanceAfterSpawn({ child, dataDir, exitMode })
   } catch (err) {
-    try { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* best-effort */ }
+    killTree(child.pid)
     await rm(dataDir, { recursive: true, force: true }).catch(() => {})
     throw err
   }
@@ -172,7 +179,7 @@ async function bootInstance ({ exitMode }) {
 async function bootInstanceAfterSpawn ({ child, dataDir, exitMode }) {
   const cleanup = async () => {
     if (!child.killed && child.exitCode === null) {
-      try { spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' }) } catch { /* best-effort */ }
+      killTree(child.pid)
     }
     await rm(dataDir, { recursive: true, force: true }).catch(() => {})
   }

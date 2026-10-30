@@ -189,7 +189,13 @@ let tomatoSession = null
 function createTray () {
   const iconPath = path.join(__dirname, '../../assets/tray/tray.png')
   const usedPath = fs.existsSync(iconPath) ? iconPath : path.join(__dirname, '../../assets/icon.png')
-  tray = new Tray(usedPath)
+  // headless Linux (xvfb/CI) throws inside new Tray; boot must survive — whenReady catch treats any throw as fatal
+  try {
+    tray = new Tray(usedPath)
+  } catch (e) {
+    log.warn('[Tray] unavailable on this desktop, continuing without tray:', e && e.message)
+    return
+  }
   tomatoTaskbar.attachTray(tray, usedPath) // during a pomodoro the tray is redrawn as a progress ring; restores the original icon when idle
   rebuildTrayMenu()
   tray.setToolTip(i18nM.mt('appName'))
@@ -264,14 +270,8 @@ function rebuildTrayMenu () {
   tray.setContextMenu(Menu.buildFromTemplate(tpl))
 }
 
-/* ================= Custom protocol privileges (must run before ready) ================= */
-{
-  const { protocol } = require('electron')
-  protocol.registerSchemesAsPrivileged([
-    { scheme: 'app', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true } },
-    { scheme: 'local', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
-  ])
-}
+/* Custom protocol privileges: moved to ./protocol-privileges (required at module top, timing unchanged — must run before 'ready') */
+require('./protocol-privileges')
 
 /* ================= Single-instance lock & startup ================= */
 // D10: true only for the singleton-lock WINNER after full startup. Declared before its first

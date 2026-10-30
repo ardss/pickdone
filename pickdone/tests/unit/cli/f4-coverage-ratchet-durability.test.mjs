@@ -56,13 +56,16 @@ test('F3: loadBaseline on a shape-broken baseline (baselines: "string") throws t
 test('F3: writeBaseline round-trips atomically — other platforms preserved, no .tmp residue, no torn file', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'f4-ratchet-'))
   const file = path.join(dir, '.coverage-baseline.json')
-  fs.writeFileSync(file, JSON.stringify({ baselines: { 'linux@node22': { lines: 86, branches: 81, functions: 77 } } }, null, 2) + '\n')
+  // seed key must never collide with the running platform's key (${process.platform}@node${major},
+  // see check-coverage-ratchet.cjs PLATFORM): 'linux@node22' overwrote itself on ubuntu CI and the
+  // "other platform survives" lookup went undefined
+  fs.writeFileSync(file, JSON.stringify({ baselines: { 'darwin@node99': { lines: 86, branches: 81, functions: 77 } } }, null, 2) + '\n')
   const m = freshModule(file)
   try {
     m.writeBaseline({ lines: 90.4, branches: 70.98, functions: 61.2 })
     const doc = JSON.parse(fs.readFileSync(file, 'utf8'))
-    assert.deepEqual(doc.baselines['linux@node22'], { lines: 86, branches: 81, functions: 77 }, 'existing platforms must survive the read-modify-write')
-    const mine = Object.keys(doc.baselines).find(k => k !== 'linux@node22')
+    assert.deepEqual(doc.baselines['darwin@node99'], { lines: 86, branches: 81, functions: 77 }, 'existing platforms must survive the read-modify-write')
+    const mine = Object.keys(doc.baselines).find(k => k !== 'darwin@node99')
     assert.deepEqual(doc.baselines[mine], { lines: 90, branches: 70, functions: 61 }, 'new platform entry is floored to whole percent')
     const residue = fs.readdirSync(dir).filter(f => f.includes('.tmp-'))
     assert.deepEqual(residue, [], 'atomic write must leave no tmp residue')

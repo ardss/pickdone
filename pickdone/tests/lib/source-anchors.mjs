@@ -90,7 +90,9 @@ export function anchorSetPaths (key, base = REPO_ROOT) {
     if (typeof rel !== 'string' || rel.length === 0) {
       throw new Error(`source anchor set ${key} contains a non-string/empty entry`)
     }
-    if (path.isAbsolute(rel) || rel.split(/[\\/]/).includes('..')) {
+    // Windows drive-absolute paths are not path.isAbsolute on POSIX — this is an escape defense,
+    // so it must reject them on every platform
+    if (path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel) || rel.split(/[\\/]/).includes('..')) {
       throw new Error(`source anchor set ${key} entry must be repo-relative without '..' escapes: ${rel}`)
     }
     if (seen.has(rel)) {

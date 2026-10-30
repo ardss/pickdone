@@ -99,8 +99,10 @@ test('F3-2: claimSlot survives a fake fs where wx races are lost (EEXIST until s
     closeSync () {}
   }
   const won = attachments.claimSlot('D:\\dir', 'dup.png', fakeFs)
-  assert.equal(won, 'D:\\dir\\dup-2.png')
-  assert.equal(fakeFs.__claimed, 'D:\\dir\\dup-2.png')
+  // expected form follows the running platform's path.join: POSIX keeps the input's '\' intact
+  // and joins with '/', so the literal 'D:\\dir\\dup-2.png' only matches on Windows
+  assert.equal(won, path.join('D:\\dir', 'dup-2.png'))
+  assert.equal(fakeFs.__claimed, path.join('D:\\dir', 'dup-2.png'))
 })
 
 test('F3-2: non-EEXIST open errors propagate (not swallowed as "occupied")', () => {
