@@ -8,7 +8,7 @@
  *   catNameOf(categoryId) — category id -> name (the caller falls back to "uncategorized" when there is none)
  * Period: { start, end, label }, where start/end are millisecond timestamps and end is an exclusive upper bound.
  */
-import { dayjs, DAY_MS, FMT } from '../../utils/core.js'
+import { dayjs, FMT } from '../../utils/core.js'
 
 /** Unified completion timestamp semantics: completedAt takes priority (updateTime gets polluted by later edits) */
 export function doneTsOf (t) {
@@ -118,8 +118,12 @@ export function topEntries (map, n = 6) {
  */
 export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
   const { start, end, label } = period
-  // days stays in milliseconds terms (last 7 days = 7; a calendar difference including today would give 8); DST protection only for calendar math on window endpoints/series/streaks
-  const days = Math.max(1, Math.round((end - start) / DAY_MS))
+  // days is a calendar-day count (inclusive of both endpoint days): periodBounds end = +now (today's
+  // current time), so a millisecond round trip under-counted before noon (chart drawn only to
+  // yesterday while the KPI window already included today) and flipped day count at noon (a "last 7
+  // days" trend suddenly sprouting 8 bars). Calendar math here and in byDaySeries keeps the bar
+  // count stable across the day and always includes today; DST safety comes free via dayjs.
+  const days = Math.max(1, dayjs(end).startOf('day').diff(dayjs(start).startOf('day'), 'day') + 1)
   const taskById = indexTodosByTaskId(todos) // built once, reused by all 5 windows (O(R*T) -> O(R+T))
   const cur = windowCounts(todos, records, catNameOf, start, end, taskById)
 
