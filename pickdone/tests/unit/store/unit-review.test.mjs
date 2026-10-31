@@ -88,7 +88,7 @@ test('buildReviewMetrics: baseline = the mean daily value of the previous 4 equa
     for (let i = 0; i < 10; i++) todos.push(todo({ complete: true, completedAt: ws + i * 3600000 }))
   }
   const m = buildReviewMetrics({ todos, records: [], catNameOf }, period)
-  const days = Math.round((period.end - period.start) / DAY_MS) // same convention as the implementation (calendar days incl. today)
+  const days = dayjs(period.end - 1).startOf('day').diff(dayjs(period.start).startOf('day'), 'day') + 1 // same convention as the implementation (end-1ms: partial today included, exclusive-midnight end excluded)
   assert.equal(m.days, days)
   assert.ok(Math.abs(m.baseline.done - 10 / days) < 0.01)
   const d = pctDiff(0, m.baseline.done)

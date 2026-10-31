@@ -123,7 +123,7 @@ export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
   // yesterday while the KPI window already included today) and flipped day count at noon (a "last 7
   // days" trend suddenly sprouting 8 bars). Calendar math here and in byDaySeries keeps the bar
   // count stable across the day and always includes today; DST safety comes free via dayjs.
-  const days = Math.max(1, dayjs(end).startOf('day').diff(dayjs(start).startOf('day'), 'day') + 1)
+  const days = Math.max(1, dayjs(end - 1).startOf('day').diff(dayjs(start).startOf('day'), 'day') + 1) // end-1ms: 排他性午夜端（整周 end=次日00:00）归前一历日（=7 天），含今天的部分日端（end=now）仍含今天（正午不翻转）
   const taskById = indexTodosByTaskId(todos) // built once, reused by all 5 windows (O(R*T) -> O(R+T))
   const cur = windowCounts(todos, records, catNameOf, start, end, taskById)
 
