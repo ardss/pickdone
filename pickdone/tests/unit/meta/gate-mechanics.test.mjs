@@ -27,7 +27,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createRequire } from 'node:module'
 
 const require_ = createRequire(import.meta.url)
@@ -75,15 +75,19 @@ test('meta#1 nonzero test exit code -> red', () => {
 test('meta#2 test crash -> red + own children cleaned', () => {
   const dir = sandbox('crash', { 'tests/unit/suicide.test.mjs':
     "process.kill(process.pid, 'SIGKILL')\n" })
-  // REGISTRY_DIR resolves against the module's own location (the real repo), not the sandbox cwd.
-  const reg = path.join(PICKDONE, 'tests', '.artifacts', 'runner-children')
-  fs.mkdirSync(reg, { recursive: true })
-  const before = new Set(fs.readdirSync(reg))
-  const p = runAll(dir)
-  record('crash-cleanup', 'sandbox test SIGKILLs itself', p, 'run-all exits 1, registry gains no residue')
+  // [2026-10-31 P0] the sandbox run uses a PRIVATE registry dir (PICKDONE_CHILD_REGISTRY_DIR):
+  // the old real-dir before/after global diff false-red'd whenever ANY concurrent lane
+  // (check-all's parallel stage/live pool) registered a child in tests/.artifacts/runner-children
+  // mid-run — the 2026-10-31 release-gate 5x red with drifting failure lineups. The leak
+  // semantics are unchanged: the private dir must come out EMPTY.
+  const reg = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-meta-registry-'))
+  const p = runAll(dir, [], { PICKDONE_CHILD_REGISTRY_DIR: reg })
+  record('crash-cleanup', 'sandbox test SIGKILLs itself', p, 'run-all exits 1, PRIVATE registry left empty')
   assert.equal(p.status, 1, 'a crashed test must turn the gate red')
-  const leftovers = fs.readdirSync(reg).filter(f => f.endsWith('.json') && !before.has(f))
-  assert.equal(leftovers.length, 0, 'the run must fully clean its own child registry (no new leftovers)')
+  const leftovers = fs.existsSync(reg)
+    ? fs.readdirSync(reg).filter(f => f.endsWith('.json'))
+    : []
+  assert.equal(leftovers.length, 0, 'the run must fully clean its own child registry (private dir empty, no leftovers)')
 })
 
 test('meta#3 missing dir / zero tests executed -> red (fail-closed)', () => {
@@ -110,24 +114,31 @@ test('meta#4 skip count over ratchet budget -> red; under budget -> green', () =
   assert.equal(green.status, 0, 'skips under the budget stay green')
 })
 
-test('meta#5 coverage below threshold -> red (sandbox summary + scratch baseline)', () => {
+test('meta#5 coverage below threshold -> red (FULLY sandboxed ratchet run)', () => {
+  // [2026-10-31 P1] the old version OVERWROTE the real repo's tests/.artifacts/coverage-summary.json
+  // with a fake 10/10/10 summary — a concurrent check-coverage-ratchet lane read the poison slot.
+  // Now the ratchet CLI itself runs inside a sandbox cwd: SUMMARY_FILE is __dirname-anchored, so a
+  // copy of the script + a fresh sandbox summary gives the REAL gate the poisoned input, with the
+  // baseline routed to a scratch file via its own env override. The real summary is never touched.
   const scratchBase = path.join(os.tmpdir(), 'gate-meta-cov-baseline.json')
-  // re-anchored W8 2026-10-24: the baseline key must match the CURRENT platform (the machine
-  // moved node22→node24; a pinned key silently calibrated instead of going red)
   const platKey = `${process.platform}@node${process.versions.node.split('.')[0]}`
   fs.writeFileSync(scratchBase, JSON.stringify({ _comment: 'gate-meta sandbox baseline', baselines: { [platKey]: { lines: 80, branches: 80, functions: 80 } } }))
-  const summaryPath = path.join(PICKDONE, 'tests', '.artifacts', 'coverage-summary.json')
-  const prev = fs.existsSync(summaryPath) ? fs.readFileSync(summaryPath, 'utf8') : null
-  try {
-    fs.writeFileSync(summaryPath, JSON.stringify({ lines: 10, branches: 10, functions: 10, failCount: 0, suite: 'unit', generatedAt: new Date().toISOString() }))
-    const p = spawnSync(process.execPath, ['cli/check-coverage-ratchet.cjs'],
-      { cwd: PICKDONE, encoding: 'utf8', timeout: 240000,
-        env: { ...process.env, PICKDONE_COV_RATCHET_BASELINE_FILE: scratchBase } })
-    record('coverage-below-threshold', 'fresh sandbox summary 10/10/10 vs baseline 80/80/80', p, 'red')
-    assert.equal(p.status, 1, 'coverage below baseline must be red')
-  } finally {
-    if (prev === null) fs.rmSync(summaryPath, { force: true }); else fs.writeFileSync(summaryPath, prev)
-  }
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-meta-cov-'))
+  fs.mkdirSync(path.join(dir, 'cli'), { recursive: true })
+  fs.mkdirSync(path.join(dir, 'tests', '.artifacts'), { recursive: true })
+  fs.copyFileSync(path.join(PICKDONE, 'cli', 'check-coverage-ratchet.cjs'), path.join(dir, 'cli', 'check-coverage-ratchet.cjs'))
+  fs.writeFileSync(path.join(dir, 'tests', '.artifacts', 'coverage-summary.json'), JSON.stringify({
+    lines: 10, branches: 10, functions: 10, failCount: 0, suite: 'unit', generatedAt: new Date().toISOString()
+  }))
+  const realSummary = path.join(PICKDONE, 'tests', '.artifacts', 'coverage-summary.json')
+  const realBefore = fs.existsSync(realSummary) ? fs.readFileSync(realSummary, 'utf8') : null
+  const p = spawnSync(process.execPath, ['cli/check-coverage-ratchet.cjs'],
+    { cwd: dir, encoding: 'utf8', timeout: 120000,
+      env: { ...process.env, PICKDONE_COV_RATCHET_BASELINE_FILE: scratchBase } })
+  record('coverage-below-threshold', 'sandbox ratchet reads a fresh 10/10/10 summary vs baseline 80/80/80', p, 'red')
+  assert.equal(p.status, 1, 'coverage below baseline must be red')
+  const realAfter = fs.existsSync(realSummary) ? fs.readFileSync(realSummary, 'utf8') : null
+  assert.equal(realAfter, realBefore, 'the REAL coverage-summary.json slot must never be touched by this meta-test')
 })
 
 test('meta#6 artifact size over limit -> error tier (limitFor decision)', () => {
@@ -203,16 +214,24 @@ test('meta#8 nested runner ownership: exit-reap spares other runners\' children'
   }
 })
 
-test('meta#9 service ports are per-boot ephemeral, probes never collide', async () => {
+test('meta#9 live-pool port allocation (pickFreePort) never collides', async () => {
+  // [2026-10-31 P2] was a fake-green: it probed bare net.createServer().listen(0) — zero gate
+  // code exercised. The REAL allocator the live pool boots with is tests/lib/runtime.mjs
+  // pickFreePort (multi-span dodge for WinNAT reserved ranges). Exercise it: pick one port,
+  // HOLD it (as a booting instance would), then pick again — the second pick must neither
+  // collide nor return an unbindable port.
   const net = await import('node:net')
-  const once = () => new Promise((res, rej) => {
-    const s = net.createServer()
-    s.listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => res(p)) })
-    s.on('error', rej)
-  })
-  const [a, b] = [await once(), await once()]
-  record('port-collision', 'two free-port probes', { status: a === b ? 1 : 0 }, 'distinct ports')
-  assert.notEqual(a, b, 'two consecutive probes must never return the same port')
+  const { pickFreePort } = await import(pathToFileURL(path.join(PICKDONE, 'tests', 'lib', 'runtime.mjs')).href)
+  const a = await pickFreePort()
+  const holder = net.createServer()
+  await new Promise((res, rej) => { holder.once('error', rej); holder.listen(a, '127.0.0.1', res) })
+  try {
+    const b = await pickFreePort()
+    record('port-collision', 'two pickFreePort probes with the first port held', { status: a === b ? 1 : 0 }, 'distinct, bindable ports')
+    assert.notEqual(b, a, 'a held port must never be handed out again by the live-pool allocator')
+  } finally {
+    await new Promise(res => holder.close(res))
+  }
 })
 
 test('meta#10 all sandbox tests pass -> green', () => {
