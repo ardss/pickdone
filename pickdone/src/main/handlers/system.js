@@ -55,7 +55,9 @@ module.exports = function systemHandlers (ctx) {
       // missing title falls back to an i18n-safe default, non-string fields are sanitized to empty strings — the notification channel never crashes on bad input.
       const o = (opt && typeof opt === 'object') ? opt : {}
       if (!allowWithinRatePerSender(e, NOTIFICATION_RATE)) {
-        log.warn('[IPC] notification rate-capped, sender:', e.sender.id)
+        // W22 (2026-10-30): same sender guard as allowWithinRatePerSender above (:31) — a bare
+        // e.sender.id dereference threw on a sender-less event instead of degrading to the warn log.
+        log.warn('[IPC] notification rate-capped, sender:', e && e.sender && e.sender.id)
         return false
       }
       // Same sanitization as scheduler.fire: renderer-supplied title/body goes straight to system notifications; control characters/RTL override characters must be stripped

@@ -127,6 +127,20 @@ function reportRecoveryExhausted (code) {
 function rebuildAfterHandshakeFailure (code) {
   stopDrag()
   stopHitPoll()
+  // W22 (2026-10-30): the unconditional destroy+reopen used to TRAMPLE the user's close intent.
+  // Trigger window: the page mounts but never delivers the handshake, and the user hides/docks the
+  // float inside the 10s watch window. reopen() unconditionally clears dockedToTray and the
+  // tomatoFloatClosedByUser marker — so the "recovery" resurrected a float the user had just
+  // closed/docked (renderer auto-show gate reads the marker). When a close intent is present,
+  // silently drop: destroy only (state cleanup already done by stopDrag/stopHitPoll above), keep
+  // the marker/dock state, and let the next EXPLICIT open lazily rebuild (same lazy-create path
+  // the tray undock uses). The DB-not-open branch of isUserClosed() returning false is kept: in a
+  // bare/early-startup env there is no persisted marker to honor, so rebuild proceeds as before.
+  if (dockedToTray || isUserClosed()) {
+    log.warn('[TomatoFloat] ' + code + ' — user close intent present (docked=' + dockedToTray + ', userClosed=' + isUserClosed() + '), skipping auto-rebuild; float stays down until explicitly reopened')
+    try { if (win && !win.isDestroyed()) win.destroy() } catch (e) { /* already gone */ }
+    return
+  }
   if (!crashRebuild.allow()) { reportRecoveryExhausted(code); return }
   log.warn('[TomatoFloat] ' + code + ' — rebuilding float window (' + crashRebuild.count + '/' + CRASH_REBUILD_CAP + ' auto-rebuilds in the last 5min)')
   try { if (win && !win.isDestroyed()) win.destroy() } catch (e) { /* already gone */ }
@@ -595,6 +609,7 @@ module.exports = {
   __renderHealth: { note: noteRenderHandshake, healthySince: handshakeHealthySince, timeoutMs: HANDSHAKE_TIMEOUT_MS }, // W16 test seam
   __forceWin (w) { win = w }, // C8 test seam: inject a stub window so the guarded path is reachable
   __clearWin () { win = null }, // C8 test seam
+  __rebuildAfterHandshakeFailure: rebuildAfterHandshakeFailure, // W22 test seam: user-intent skip path
   /** Show (setBounds + showInactive if already created; common practice: do not steal focus) */
   show () {
     crashRebuild.reset() // C10: an explicit user open is the strongest health signal — refill rebuild slots
