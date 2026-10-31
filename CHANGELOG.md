@@ -5,6 +5,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/). The 0.x series is the initial-development band: from 0.4.0 on, any user-visible new feature bumps MINOR; PATCH is fixes/internal hardening only. 1.0.0 marks stable data format + sync. Historical versions (≤0.3.7) are not retro-renumbered.
 
 ## [Unreleased]
+
+## [0.4.0-beta.23] - 2026-10-31
 - Tomato phase chain: finishRest no longer wedges the phase forever when the ledger write throws (phase-claim released so the next tick retries, same guard shape as completeFocus); startFocus now re-reads the shared transient before starting, so a stale float-window copy can no longer silently overwrite an in-progress pomodoro started elsewhere; a failed inline-save no longer deletes the just-typed task as an unnamed orphan (flush results are now observed, failures keep the task and log).
 - Habits reliability: the aux-window relay now persists the merged main-window state (LS + DB meta) instead of the raw aux blob — union-max merged check-ins no longer vanish on restart; repeatSettings gained a key-level whitelist at all three ingest points (LS load, sync blob, settings sanitizer), closing the nested-object bypass of the F-C2 unknown-key policy.
 - Float window: a handshake-timeout rebuild no longer resurrects a float the user just hid or docked (user-intent markers checked before rebuild; close marker preserved, lazy rebuild on next explicit summon); notification rate-cap log guarded against a missing event sender.
