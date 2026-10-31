@@ -72,7 +72,13 @@ test('C4: flushNow steals in-flight chunks exactly once — no duplicate appends
   for (let i = 0; i < 64; i++) audit.recordCustom('c4t', ['op' + i], [], [], null)
   await new Promise(r => setImmediate(r)) // writer chain issues the async appendFile
   audit.flushNow()
-  await new Promise(r => setTimeout(r, 100)) // let the racing async callback land (if it would)
+  // [load-budget 2026-10-31] poll, not a bare sleep: absence assert (a duplicate must NEVER land),
+  // so the window must fully elapse — fail fast the moment a duplicate line appears.
+  for (let t0 = Date.now(); Date.now() - t0 < 100;) {
+    const cur = fs.readFileSync(path.join(auditDir, 'cli-audit.jsonl'), 'utf8').trim().split('\n')
+    if (cur.length !== 64) break // final assert names it
+    await new Promise(r => setTimeout(r, 20))
+  }
   const lines = fs.readFileSync(path.join(auditDir, 'cli-audit.jsonl'), 'utf8').trim().split('\n')
   assert.equal(lines.length, 64, 'each entry appended exactly once, got ' + lines.length)
 })

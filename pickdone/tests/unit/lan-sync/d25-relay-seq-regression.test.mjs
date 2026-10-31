@@ -58,7 +58,17 @@ test('d25 relay torn-state reset: fresh writes still converge after the relay lo
     relay = await startRelay(dataDir) // quarantines the torn file, seq restarts at 1
 
     // pre-fix, this is where writes died: client cursor=1..2, pushed-set full, relay seq=0
-    await new Promise(r => setTimeout(r, 150)) // let the old listener's socket fully release the port
+    // [load-budget 2026-10-31] poll until the rebooted relay actually ACCEPTS connections
+    // (replaces the bare sleep(150) port-release wait — predicate decides, bounded).
+    for (let i = 0; i < 40; i++) {
+      const open = await new Promise(res => {
+        const s = net.connect(relayPort, '127.0.0.1')
+        s.once('connect', () => { s.destroy(); res(true) })
+        s.once('error', () => res(false))
+      })
+      if (open) break
+      await new Promise(r => setTimeout(r, 100))
+    }
     await a.commit('ta-post', { title: 'post-torn fresh write' })
     // rounds tolerate the reboot window's transient conn errors (same retry shape as the drill harness)
     let lastErr = null

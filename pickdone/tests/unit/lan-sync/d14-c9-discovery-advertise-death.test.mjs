@@ -84,7 +84,11 @@ test('C9: post-bind socket death stops the advertise interval (no warn-forever l
   // kill the socket underneath (simulates the interface/handle dying after bind)
   const sock = disc._udpSocket()
   sock.close()
-  await new Promise(r => setTimeout(r, 150))
+  // [load-budget 2026-10-31] poll until the close callback clears the interval or the cap —
+  // the bare sleep(150) raced the socket's async close callback under load.
+  for (let t0 = Date.now(); disc._udpAdvertiseActive() && Date.now() - t0 < 5000;) {
+    await new Promise(r => setTimeout(r, 50))
+  }
   assert.equal(disc._udpAdvertiseActive(), false, 'advertise interval cleared on unexpected post-bind close (red before the fix: warn every 2s forever)')
   disc.stop()
 })

@@ -47,6 +47,11 @@ const tomatoFloat = require('../../../src/main/tomato-float.js')
 const db = require('../../../src/main/db.js')
 
 const sleep = ms => new Promise(ok => setTimeout(ok, ms))
+// [load-budget 2026-10-31] the rebuild timer fires at 500ms; the old sleep(700) left a 200ms
+// margin that CI load regularly ate. Polls below replace the bare sleeps:
+//   absence cases poll until the BAD condition appears (fail fast) or a window that comfortably
+//   outlives the 500ms timer elapses; the positive case polls until the reopen lands (5s cap).
+const WAIT_REOPEN_WINDOW = 900
 
 /** Minimal stub window good enough for dock()/stopDrag()/stopHitPoll()/applyIgnore/destroy paths. */
 function makeStubWin () {
@@ -95,7 +100,7 @@ test('W22 fix 1: docked float + handshake timeout → silent drop (no reopen, do
   try {
     tomatoFloat.__rebuildAfterHandshakeFailure('render-handshake-timeout')
     assert.equal(win.destroyed, true, 'dead window is still destroyed')
-    await sleep(700)
+    for (let t0 = Date.now(); Date.now() - t0 < WAIT_REOPEN_WINDOW && reopens === 0;) await sleep(25)
     assert.equal(reopens, 0, 'RED before the fix: reopen() ran and un-docked + cleared the close marker')
     assert.equal(tomatoFloat.isDocked(), true, 'docked state survives the failure path')
     assert.ok(!dbCalls.some(([op, p]) => op === 'deleteMeta' && p && p[0] === 'tomatoFloatClosedByUser'),
@@ -128,7 +133,7 @@ test('W22 fix 1: persisted user-closed marker + handshake timeout → silent dro
   try {
     tomatoFloat.__rebuildAfterHandshakeFailure('render-handshake-timeout')
     assert.equal(win.destroyed, true, 'dead window destroyed, rebuild deferred to the next explicit open')
-    await sleep(700)
+    for (let t0 = Date.now(); Date.now() - t0 < WAIT_REOPEN_WINDOW && reopens === 0;) await sleep(25)
     assert.equal(reopens, 0, 'no auto reopen while the user-closed marker stands')
     assert.ok(!dbCalls.some(([op]) => op === 'deleteMeta'), 'marker not cleared behind the user\'s back')
   } finally {
@@ -153,7 +158,7 @@ test('W22 fix 1: no close intent → behavior unchanged (destroy + delayed reope
   try {
     tomatoFloat.__rebuildAfterHandshakeFailure('render-handshake-timeout')
     assert.equal(win.destroyed, true)
-    await sleep(700)
+    for (let t0 = Date.now(); reopens < 1 && Date.now() - t0 < 5000;) await sleep(25)
     assert.equal(reopens, 1, 'RED before the fix would pass here too: the rebuild path is unchanged without user intent')
   } finally {
     tomatoFloat.reopen = origReopen

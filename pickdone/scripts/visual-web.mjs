@@ -37,21 +37,31 @@ const STAMP = 'v' + Date.now()
 // 定格后 today 高亮恒为 10:00 行、统计周窗恒为 09.07 起,基线跨真实日期不再漂移。
 const FREEZE = '2026-09-09T10:05:00'
 
+// 场景 = { hash, tag?, modal?, setup? }:W23 起从字符串数组升级为对象数组(既有 7 条行为不变)。
+// tag 追加到场景名;setup 在导航后执行(打开弹窗等);modal 是弹窗可见性选择器,进 settle 条件。
 const ROUTES = [
-  '#/todo-list/today', '#/todo-list/todo-box', '#/todo-list/calendar',
-  '#/todo-list/completed', '#/todo-list/statistics', '#/todo-list/projects',
-  '#/todo-list/recycle-bin'
+  { hash: '#/todo-list/today' }, { hash: '#/todo-list/todo-box' }, { hash: '#/todo-list/calendar' },
+  { hash: '#/todo-list/completed' }, { hash: '#/todo-list/statistics' }, { hash: '#/todo-list/projects' },
+  { hash: '#/todo-list/recycle-bin' },
+  // 设置弹窗(W23 #1):general 默认页是确定性的——sync 子页 v-if 未渲染(peers 状态进不了 DOM),
+  // updater 在 5175 shim 下是 no-op(updStatus 恒 'idle',模板 v-if 全不展示),无需额外稳定化。
+  {
+    hash: '#/todo-list/today', tag: 'settings', modal: '.modal--settings',
+    setup: `(() => { try { const st = window.appUI && window.appUI.$store; if (!st) return 'nostore'; st.commit('ui/toggleSettings', true); return 'ok' } catch (e) { return 'err' } })()`
+  }
 ]
 
 import { execSync, spawn as cpSpawn } from 'node:child_process'
 // agent-browser 偶发 ETIMEDOUT(浏览器实例跨 vite 重启后坏连接,实际命令已生效)——重试兜底,别让单点抖动掀翻整道门禁
 // --profile: 所有调用统一挂专用 profile(全局选项,附着已启动实例时被忽略),把门禁与默认 profile 彻底隔离开
+// W23 #3: ab 改 async,重试退避用 await Promise+setTimeout——win32 没有 `sleep` 命令,
+// execSync('sleep 3') 在干净 CI 上必 ENOENT(本机能跑纯因装了 Git 的 sleep)。调用点全部 await。
 const abOnce = (args) => {
   const out = execSync('agent-browser ' + args.map(a => JSON.stringify(a)).join(' ') + ' --profile ' + JSON.stringify(PROFILE_DIR), { encoding: 'utf8', timeout: 120000, shell: true })
   // 附着到已按专用 profile 启动的 daemon 时每次都告警——纯噪音(探针已确保 profile 正确),滤掉
   return out.split('\n').filter(l => !l.includes('--profile ignored')).join('\n')
 }
-const ab = (args) => {
+const ab = async (args) => {
   let lastErr
   for (let i = 0; i < 2; i++) {
     try { return abOnce(args) } catch (e) {
@@ -63,7 +73,7 @@ const ab = (args) => {
       if (/Could not configure browser|os error 10060|ETIMEDOUT/i.test(blob) && i === 0) {
         try { execSync('agent-browser close', { encoding: 'utf8', timeout: 30000, shell: true, stdio: 'pipe' }) } catch {}
       }
-      execSync('sleep 3', { shell: true, stdio: 'ignore' })
+      await new Promise(r => setTimeout(r, 3000))
     }
   }
   throw lastErr
@@ -159,7 +169,7 @@ try {
   process.exit(2)
 }
 
-const readBoot = () => ab(['--session', SESSION, 'eval', 'String(window.__pdBootId)']).trim().replace(/"/g, '')
+const readBoot = async () => (await ab(['--session', SESSION, 'eval', 'String(window.__pdBootId)'])).trim().replace(/"/g, '')
 async function setEnv (theme) {
   // theme 走 URL 参数(pdTheme),由宿主 head 脚本在应用启动前写 LS。此前是 eval 在上一个页面世界
   // 里改 LS 再 reload——旧世界的设置回写竞态覆盖成 light,前 4 个 dark 场景 100% 翻车(2026-09-09)。
@@ -171,14 +181,14 @@ async function setEnv (theme) {
   // 陈旧帧风险;close 仍保留在 run 级清理里。
   let boot = ''
   for (let i = 0; i < 3 && (!boot || boot === 'undefined'); i++) {
-    ab(['--session', SESSION, 'open', url])
+    await ab(['--session', SESSION, 'open', url])
     // D23: pin the viewport to the baseline geometry — the daemon otherwise inherits whatever
     // window size the ambient environment last used (a 1254x564 -> 1262x568 drift failed all 14
     // scenes on SIZE alone, masking the pixel compare entirely). Idempotent per scene.
-    ab(['--session', SESSION, 'set', 'viewport', '1254', '564'])
+    await ab(['--session', SESSION, 'set', 'viewport', '1254', '564'])
     for (let t = 0; t < 15000; t += 400) {
       await new Promise(r => setTimeout(r, 400))
-      try { boot = readBoot(); if (boot && boot !== 'undefined') break } catch (e) { /* retry */ }
+      try { boot = await readBoot(); if (boot && boot !== 'undefined') break } catch (e) { /* retry */ }
     }
   }
   // 2026-10-23: pin and onboarding-click used to share ONE eval. On a cold profile the wizard
@@ -197,24 +207,24 @@ async function setEnv (theme) {
   // reds NAMED here instead of ghost-diffing 14 scenes for 13 minutes.
   let pinned = false
   for (let attempt = 1; attempt <= 3 && !pinned; attempt++) {
-    ab(['--session', SESSION, 'eval', `(() => { const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
-    ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} return 'ok' })()`])
+    await ab(['--session', SESSION, 'eval', `(() => { const b = [...document.querySelectorAll('button')].find(x => ['Stay yesterday', '留在昨天', 'Skip', '稍后'].includes(x.textContent.trim())); if (b) b.click(); return 'ok' })()`])
+    await ab(['--session', SESSION, 'eval', `(() => { try { localStorage.setItem('appLocale', 'en-US'); localStorage.setItem('sidebarCollapsed', 'false'); localStorage.setItem('onboardingToursSeen', '1'); localStorage.setItem('onboardingDone', '1') } catch (e) {} return 'ok' })()`])
     // The LS write is only the BOOT CACHE — the locale's authority is the synced settings
     // blob (Y1): first boot persists a zh-CN default into the DB, and every later boot's
     // store hydration re-applies it over the LS pin (deterministic Chinese despite the
     // pin - final8/final13 evidence). Commit through the app's own store channel so the
     // DB truth flips too (same path setLocale itself uses).
-    ab(['--session', SESSION, 'eval', `(() => { try { const st = window.appUI && window.appUI.$store; if (st) { st.commit('settings/updateSettings', { appLocale: 'en-US' }); return 'ok' } return 'nostore' } catch (e) { return 'err' } })()`])
-    ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
+    await ab(['--session', SESSION, 'eval', `(() => { try { const st = window.appUI && window.appUI.$store; if (st) { st.commit('settings/updateSettings', { appLocale: 'en-US' }); return 'ok' } return 'nostore' } catch (e) { return 'err' } })()`])
+    await ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
     // reload 同样断言纪元变化(未变则重试一次)
     for (let i = 0; i < 2; i++) {
       let changed = false
       for (let t = 0; t < 8000; t += 400) {
         await new Promise(r => setTimeout(r, 400))
-        try { if (readBoot() !== boot) { changed = true; break } } catch (e) { /* retry */ }
+        try { if (await readBoot() !== boot) { changed = true; break } } catch (e) { /* retry */ }
       }
       if (changed) break
-      ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
+      await ab(['--session', SESSION, 'eval', `location.reload(); 'r'`])
     }
     // VERIFY: an unreadable locale means the tab still isn't live — keep polling.
     // Read form is quote-free by necessity: abOnce JSON.stringify-wraps every arg,
@@ -223,7 +233,7 @@ async function setEnv (theme) {
     for (let t = 0; t < 8000 && !pinned; t += 400) {
       await new Promise(r => setTimeout(r, 400))
       try {
-        const v = ab(['--session', SESSION, 'eval', 'String(localStorage.appLocale)']).trim().replace(/"/g, '')
+        const v = (await ab(['--session', SESSION, 'eval', 'String(localStorage.appLocale)'])).trim().replace(/"/g, '')
         if (v === 'en-US') pinned = true
       } catch (e) { /* retry */ }
     }
@@ -288,17 +298,18 @@ if (probe.includes('--profile ignored')) {
   killVite()
   process.exit(2)
 }
-try { ab(['--session', SESSION, 'close']) } catch { /* probe tab closes with the first scene's open anyway; a flaky daemon close must not crash the run (final17 pass-1 crash was exactly here) */ }
+try { await ab(['--session', SESSION, 'close']) } catch { /* probe tab closes with the first scene's open anyway; a flaky daemon close must not crash the run (final17 pass-1 crash was exactly here) */ }
 
 async function runAll () {
   // 硬期限:自愈(宿主重生/场景重试)必须让位于 check:all 的看门狗——超 20min 自断,
   // 否则"看门狗杀宿主→ensureHost 救活"无限循环,阶段永不出裁决(2026-09-09 实锤)
   const deadline = Date.now() + Number(process.env.VISUAL_DEADLINE_MIN || 20) * 60 * 1000
   let fail = 0
-  for (const route of ROUTES) {
+  for (const scene of ROUTES) {
+    const route = scene.hash
     for (const theme of ['light', 'dark']) {
       if (Date.now() > deadline) { console.log('✗ hard 20min deadline — aborting remaining scenes'); fail++; return fail }
-      const name = route.replace(/\//g, '_').replace(/^_/, '') + '-' + theme + '.png'
+      const name = route.replace(/\//g, '_').replace(/^_/, '') + (scene.tag ? '-' + scene.tag : '') + '-' + theme + '.png'
       const file = path.join(DIR, name)
     // 场景级重试:偶发一帧抖动/一次数据未及 hydrate,整个场景重来一次即可自愈
     let verdict = null // null=成功;字符串=最终失败原因
@@ -315,15 +326,20 @@ async function runAll () {
         // 主题 10s 仍不就位 = open 静默未导航(纪元断言被旧页面的 reload 骗过,URL 还是上一场景的)
         // ——重开整场景 URL 自愈,只靠重导航 hash 治不了错 URL(2026-09-09 验证轮实锤:整批主题错位)
         if ((readyDl - Date.now()) % 10000 < 600) { await setEnv(theme) }
-        try { ready = ab(['--session', SESSION, 'eval', readyExpr]).trim().replace(/"/g, '') } catch (e) { /* retry */ }
+        try { ready = (await ab(['--session', SESSION, 'eval', readyExpr])).trim().replace(/"/g, '') } catch (e) { /* retry */ }
       }
-      ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'nav'`])
       // 等待场景沉降:同文档(__pdBootId 不变,免疫宿主种子/自愈的 reload 级联——2026-09-09 后半场
       // 曾截到刚重播种的 Today 启动帧)+ 主题 + 挂载 + hash 全部就位,且连续 8 次读数(≈4s)稳定:
-      // 窗口短了会在任务数据 hydrate 完成前拍到「No events」空态帧(同日实锤)
-      const settleExpr = `JSON.stringify((function(){ return { boot: window.__pdBootId || '?', themed: document.documentElement.getAttribute('data-theme') === '${theme}', mounted: !!document.querySelector('#app .side-nav'), hash: location.hash } })())`
-      const readSettle = () => {
-        const raw = ab(['--session', SESSION, 'eval', settleExpr]).trim()
+      // 窗口短了会在任务数据 hydrate 完成前拍到「No events」空态帧(同日实锤)。
+      // W23 #1: 有 setup 的场景(setup 弹窗)进沉降轮询——hash/modal 不对或纪元变化时重导航+重执行 setup。
+      const enterScene = async () => {
+        await ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'nav'`])
+        if (scene.setup) { try { await ab(['--session', SESSION, 'eval', scene.setup]) } catch (e) { /* retry next poll */ } }
+      }
+      await enterScene()
+      const settleExpr = `JSON.stringify((function(){ return { boot: window.__pdBootId || '?', themed: document.documentElement.getAttribute('data-theme') === '${theme}', mounted: !!document.querySelector('#app .side-nav'), hash: location.hash, modal: ${scene.modal ? `!!document.querySelector('${scene.modal}')` : 'true'} } })())`
+      const readSettle = async () => {
+        const raw = (await ab(['--session', SESSION, 'eval', settleExpr])).trim()
         return JSON.parse(raw.replace(/^"|"$/g, '').replace(/\\"/g, '"').replace(/\\\\/g, '\\'))
       }
       let lastBoot = null
@@ -332,10 +348,10 @@ async function runAll () {
       while (Date.now() < settleDl && stable < 8) {
         await new Promise(r => setTimeout(r, 500))
         try {
-          const s = readSettle()
-          if (s.boot !== lastBoot) { lastBoot = s.boot; stable = 0; ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'renav'`]); continue }
+          const s = await readSettle()
+          if (s.boot !== lastBoot) { lastBoot = s.boot; stable = 0; await enterScene(); continue }
           // hash 不对(启动期 router 未就绪会吞掉首次 hash 导航)必须主动补导航,不能只靠纪元变化触发
-          if (s.hash !== route) { stable = 0; ab(['--session', SESSION, 'eval', `location.hash='${route}'; 'renav2'`]); continue }
+          if (s.hash !== route || !s.modal) { stable = 0; await enterScene(); continue }
           stable = (s.themed && s.mounted) ? stable + 1 : 0
         } catch (e) { stable = 0 }
       }
@@ -349,9 +365,9 @@ async function runAll () {
         // 绘制栅栏:高负载下 DOM 就绪但合成滞后,截图会拿到陈旧帧(空白/上一场景残影实锤)。
         // 双 rAF 等一次真实出帧;5s 兜底防止 rAF 被节流时挂死。
         // D23: 视口钉死在截图前重申一次(幂等)——守门截面=视口,任何环境漂移直接坏 14 场景。
-        ab(['--session', SESSION, 'set', 'viewport', '1254', '564'])
-        ab(['--session', SESSION, 'eval', `new Promise(r => { const t = setTimeout(() => r('timeout'), 5000); requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); r('painted') })) })`])
-        ab(['--session', SESSION, 'screenshot', shotPath])
+        await ab(['--session', SESSION, 'set', 'viewport', '1254', '564'])
+        await ab(['--session', SESSION, 'eval', `new Promise(r => { const t = setTimeout(() => r('timeout'), 5000); requestAnimationFrame(() => requestAnimationFrame(() => { clearTimeout(t); r('painted') })) })`])
+        await ab(['--session', SESSION, 'screenshot', shotPath])
           const b = fs.readFileSync(shotPath)
           if (b.length > 10000) {
             if (prev) {
@@ -391,7 +407,7 @@ async function runAll () {
       // 诊断:截图时刻的主题属性 + dark 样式表是否真挂上(区分属性层/CSS 层翻车)
       let seen = 'eval-err'
       try {
-        seen = ab(['--session', SESSION, 'eval', `(() => { const t = document.documentElement.getAttribute('data-theme'); const l = document.querySelector('link[href*="theme-dark"]'); return 'theme=' + t + '|darkRules=' + (l && l.sheet ? l.sheet.cssRules.length : 'none') })()`]).trim().replace(/"/g, '')
+        seen = (await ab(['--session', SESSION, 'eval', `(() => { const t = document.documentElement.getAttribute('data-theme'); const l = document.querySelector('link[href*="theme-dark"]'); return 'theme=' + t + '|darkRules=' + (l && l.sheet ? l.sheet.cssRules.length : 'none') })()`])).trim().replace(/"/g, '')
       } catch (e) { /* keep */ }
       if (ok) {
         console.log('PASS ' + name + ' diff ' + (ratio * 100).toFixed(3) + '% [' + seen + ']' + (sceneAttempt > 0 ? ' (retry)' : ''))
@@ -411,6 +427,6 @@ async function runAll () {
 // 抗抖动职责收敛在场景级重试 + 专用 profile 隔离上;真回归一轮就该红。
 const fail = await runAll()
 console.log(fail ? `✗ ${fail} failures` : '✓ all web visual checks passed')
-try { ab(['--session', SESSION, 'close']) } catch { /* 收尾关浏览器,别让常驻实例占着 profile */ }
+try { await ab(['--session', SESSION, 'close']) } catch { /* 收尾关浏览器,别让常驻实例占着 profile */ }
 killVite()
 process.exit(fail ? 1 : 0)

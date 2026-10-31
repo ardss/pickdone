@@ -131,7 +131,11 @@ test('P3: a dial timeout emits close exactly once', async () => {
     })
     // Deliberately NO 'error' listener: the guarded timeout path emits 'close' as the contract.
     client.on('close', () => closes.push(1))
-    await new Promise((r) => setTimeout(r, 400))
+    // [load-budget 2026-10-31] poll until the close lands or the cap — dial deadline is 80ms, so
+    // 4s is ~50x; under load the bare sleep(400) was the thin margin.
+    for (let t0 = Date.now(); closes.length < 1 && Date.now() - t0 < 4000;) {
+      await new Promise((r) => setTimeout(r, 50))
+    }
     assert.equal(closes.length, 1, `red before the fix: close emitted ${closes.length} times (manual timeout emit + socket close handler)`)
   } finally {
     await server.close()
