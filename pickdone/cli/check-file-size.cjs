@@ -42,7 +42,7 @@ const fs = require('fs')
 const path = require('path')
 
 const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
-const BASELINE = path.join(__dirname, 'structure-baseline.json')
+const BASELINE = process.env.GATE_BASELINE || path.join(__dirname, 'structure-baseline.json') // GATE_BASELINE (W22): commitments self-tests point the ratchet at a fixture baseline
 
 // 新文件严档（W21）：无 baseline/grandfather 的新文件按这对判；存量文件用各自分级上限。
 const NEW_FILE_LIMITS = { warn: 400, error: 600 }
@@ -283,7 +283,10 @@ function main () {
   }
 
   // commitments：限期拆分承诺，超期或无 note 即红（承诺不是永久豁免，是倒计时）。
-  const today = new Date().toISOString().slice(0, 10)
+  // W22 fix(2026-10-30)：用本地日期拼 YYYY-MM-DD —— toISOString().slice(0,10) 是 UTC 日,
+  // UTC+8 的每天 0-8 点会把"今天"错算成昨天,让到期承诺晚 8 小时才熔断。
+  const _now = new Date()
+  const today = `${_now.getFullYear()}-${String(_now.getMonth() + 1).padStart(2, '0')}-${String(_now.getDate()).padStart(2, '0')}`
   for (const [rel, c] of Object.entries(baseline.commitments)) {
     if (!c || !c.note || String(c.note).trim().length < 4) {
       errors.push(`commitments: ${rel} 的拆分承诺缺 note（须写明拆分方案与去向）`)

@@ -17,7 +17,7 @@
  */
 const fs = require('fs')
 const path = require('path')
-const { execSync } = require('child_process')
+const { execSync, execFileSync } = require('child_process')
 
 const ROOT = path.join(__dirname, '..')
 const VDIR = path.join(ROOT, 'browser-dev')
@@ -31,8 +31,11 @@ const BASELINE_MIN = 14
 function blessedCheckout () {
   // First entry of `git worktree list --porcelain` is the MAIN checkout —
   // the blessed source for gitignored machine-state (baselines).
+  // W22 fix(2026-10-30): quotePath=false — git 默认把非 ASCII 路径打成带引号八进制串,
+  // checkout 路径含中文时 baseline 读取会指到不存在的转义路径（同 check-boot-order W17 /
+  // check-file-size W17 / check-test-scope W18 的修法）。
   try {
-    const out = execSync('git worktree list --porcelain', { cwd: ROOT, encoding: 'utf8' })
+    const out = execFileSync('git', ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain'], { cwd: ROOT, encoding: 'utf8' })
     const first = out.split('\n').find(l => l.startsWith('worktree '))
     return first ? first.slice('worktree '.length).trim() : null
   } catch { return null }

@@ -142,7 +142,15 @@ test('E2E: close the settings modal', { skip: !available || !isolated }, async (
 })
 
 test('E2E: quick add -> delete to recycle bin -> hard purge (self-created self-cleaned, no user data left behind)', { skip: !available || !isolated }, async () => {
-  await evalJson(`location.hash='#/todo-list/today'`); await sleep(800)
+  await evalJson(`location.hash='#/todo-list/today'`)
+  // W22 fix: bare sleep(800) raced view mount (a cold first launch can take longer) —
+  // poll for the quick-add input like the boot/settings tests above, then assert.
+  let qaReady = false
+  for (let i = 0; i < 15 && !qaReady; i++) {
+    await sleep(200)
+    qaReady = await evalJson(`!!document.querySelector('.qa-input')`)
+  }
+  assert.ok(qaReady, 'the quick-add input (.qa-input) did not appear within 3s of navigating to today')
   const name = 'E2E全生命周期 ' + Math.random().toString(36).slice(2, 6)
   const added = await evalJson(`(async () => {
     const i = document.querySelector('.qa-input');
