@@ -67,22 +67,25 @@ test('F1/F2: settings/restore fans out to repeatSettings, tours LS and the tomat
   const { default: store } = await importSrc('renderer/js/store/index.js')
 
   // pre-state: module/LS carry values that DIFFER from what the backup blob will restore
-  store.commit('repeatSettings/updateSettings', { pomodoroMinutes: 25 })
+  // W22 P2: probe key switched to a DECLARED REPEAT_DEFAULTS key (pomodoroMinutes never existed in
+  // app code — it used to slip in via the bare assign; the key-level whitelist now drops it, see
+  // tests/unit/renderer/w22-repeat-settings-whitelist.test.mjs).
+  store.commit('repeatSettings/updateSettings', { repeatInterval: 25 })
   store.commit('settings/updateSettings', { tomatoTime: 25, restTime: 5, dailyTomatoTarget: 8 })
   mem.set('onboardingToursSeen', JSON.stringify({ localTour: 999 }))
-  assert.equal(store.state.repeatSettings.pomodoroMinutes, 25)
+  assert.equal(store.state.repeatSettings.repeatInterval, 25)
 
   // the restore blob carries DIFFERENT durations + repeat defaults + a tour stamp
   store.commit('settings/restore', {
     tomatoTime: 50, restTime: 15, dailyTomatoTarget: 12,
-    repeatDefaultSettings: { pomodoroMinutes: 45 },
+    repeatDefaultSettings: { repeatInterval: 45 },
     onboardingToursSeen: { restoredTour: 500 }
   })
 
   assert.equal(store.state.settings.tomatoTime, 50, 'restore assigned the blob into live settings')
-  assert.equal(store.state.repeatSettings.pomodoroMinutes, 45,
+  assert.equal(store.state.repeatSettings.repeatInterval, 45,
     'F1: repeatSettings module adopted the restored blob (was stuck at 25 before the fix)')
-  assert.equal(JSON.parse(mem.get('repeatSettingsV2State')).pomodoroMinutes, 45,
+  assert.equal(JSON.parse(mem.get('repeatSettingsV2State')).repeatInterval, 45,
     'F1: the module LS cache is write-through updated too')
   assert.equal(JSON.parse(mem.get('onboardingToursSeen')).restoredTour, 500,
     'F1: restored tour ledger is written through to LS')
@@ -94,8 +97,8 @@ test('F1/F2: settings/restore fans out to repeatSettings, tours LS and the tomat
 
   // F1 full user-visible chain: after restore, a repeat-default change must NOT re-commit the
   // stale pre-restore package over the fresh blob (the original silent-rollback bug)
-  store.commit('repeatSettings/updateSettings', { pomodoroMinutes: 46 })
-  assert.equal(store.state.settings.repeatDefaultSettings.pomodoroMinutes, 46,
+  store.commit('repeatSettings/updateSettings', { repeatInterval: 46 })
+  assert.equal(store.state.settings.repeatDefaultSettings.repeatInterval, 46,
     'post-restore edit persists the restored+edited value, not the stale pre-restore one')
   assert.equal(store.state.tomato.tomatoTime, 50, 'tomato ledger untouched by the repeat edit')
 })

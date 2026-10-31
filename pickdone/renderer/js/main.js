@@ -223,7 +223,27 @@ import { isAuxWindow, isFloatWindow } from './utils/auxWindow.js'
 import { installSyncEventToasts } from './utils/syncDegradedToast.js'
 const isMainShell = !isAuxWindow()
 
+// W23 (P1): auto-show armed as bootstrap()'s FIRST statement — the old tail-of-chain registration was silently skipped when anything above it threw ("小窗没弹出来"); gates fire-time evaluated.
+function registerFloatAutoShow () {
+  try {
+    if (!isMainShell) return // quick-add/float windows also load this file; popping would "revive" a closed float
+    setTimeout(() => {
+      if (!window.todoAPI) return
+      if (store.state.settings.enableTomatoFloating === false) { // W23 (P2): legitimate, but no longer a SILENT return (get-settings type-cleanses residue)
+        console.info('[float-auto-show] skipped: enableTomatoFloating ===', store.state.settings.enableTomatoFloating, '(switch off, or stale config.json residue)'); return
+      }
+      let markerRead = null // db unavailable below: default to showing
+      try { markerRead = window.todoAPI.dbCall('getMeta', 'tomatoFloatClosedByUser') } catch { }
+      Promise.resolve(markerRead).then(v => {
+        if (v === '1') return // the user explicitly closed the float last run: keep it closed
+        Promise.resolve(window.todoAPI.showTomatoFloat()).catch(e => console.warn('[float-auto-show] invoke rejected:', e)) // W23 (P3): the rejection used to be swallowed
+      }).catch(() => { /* marker read failed: err on the visible side */ })
+    }, 6000)
+  } catch (e) { console.error('[float-auto-show] registration failed:', e && e.stack || e) } // W23: failure-proof + loud
+}
+
 async function bootstrap () {
+  registerFloatAutoShow() // W23 (P1): armed BEFORE anything that can throw
   // 2026-09-02 measurement verdict: keep it serial. Tried settings∥category in parallel; measured total time actually rose ~50ms
   // (category's DB IPC contended with settings, todo/init went from ~57ms to ~150ms), reverted.
   // First frame paints at mount (+11ms); the data pipeline reacts in within 350ms, so serial is enough.
@@ -322,6 +342,8 @@ async function bootstrap () {
     // so the origin stamp must ride INSIDE the payload (updateExternal unpacks it).
     window.todoAPI.onExternalSettingsChanged((patch, originSavedAt) => {
       try {
+        // W23 (P2): a peer machine that turned the float off CAN flip this switch over the sync channel — product semantics, kept, but zero trace before.
+        if (patch && 'enableTomatoFloating' in patch) console.info('[cli-settings] cross-machine settings restore flips enableTomatoFloating →', patch.enableTomatoFloating)
         if (patch && Object.keys(patch).length) store.dispatch('settings/updateExternal', { patch, originSavedAt })
       } catch (e) { console.error('[cli-settings] hot-apply failed', e) }    })
   }
@@ -527,26 +549,6 @@ async function bootstrap () {
   const isFloatShell = isFloatWindow()
   if (isMainShell || isFloatShell) {
     setInterval(() => { store.dispatch('tomato/tick').catch(() => {}) }, 1000)
-  }
-
-  // When the tomato timer is enabled and the float window hasn't been closed, auto-show the float window 6 seconds after start — main window only
-  // (quick-add/float windows also load this file; indiscriminate popping would "revive" a float window the user closed)
-  // F12 (2026-09-24, adversarial-review round 2): the "user explicitly closed" marker lives in the todo
-  // DB meta table ('tomatoFloatClosedByUser'), owned by main-process tomato-float.js — the single
-  // convergence point of every open/close path (hide() sets it; show()/undock() clear it), so all
-  // bypass re-open paths (SettingsModal switch, TomatoPanel button, tray undock) are covered by
-  // construction and no renderer-side wiring can drift. (An earlier localStorage + todoAPI-wrapper
-  // attempt failed: contextBridge objects are read-only.) dbCall round-trips the marker read.
-  if (isMainShell) {
-    setTimeout(() => {
-      if (!window.todoAPI || store.state.settings.enableTomatoFloating === false) return
-      let markerRead = null
-      try { markerRead = window.todoAPI.dbCall('getMeta', 'tomatoFloatClosedByUser') } catch { /* db unavailable: default to showing */ }
-      Promise.resolve(markerRead).then(v => {
-        if (v === '1') return // the user explicitly closed the float last run: keep it closed
-        window.todoAPI.showTomatoFloat()
-      }).catch(() => { /* marker read failed: err on the visible side */ })
-    }, 6000)
   }
 
   // Global shortcut conflict notice: sent only after the main process exhausts retries, at most once per key per run; uses a non-blocking toast (the modal-dialog approach was dropped)

@@ -31,7 +31,10 @@ const IGNORE_FILES = new RegExp([
   // CONTAINING it was skipped, so a legit `renderer/js/vue-i18n-ext/` or `my-i18n/` subtree
   // silently left the scan surface (same rot the walk-side filter at line ~75 had already
   // fixed). Anchor to a whole path segment: `(^|[/\\])i18n[/\\]`.
-  '(^|[/\\\\])i18n[/\\\\]|check-i18n|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
+  // 2026-10-31 W23: same rot class for `check-i18n` — the bare substring exempted any path
+  // CONTAINING it (e.g. `renderer/js/check-i18n-helpers/` would silently leave the scan).
+  // Anchor to the gate script itself, js or mjs: `(^|[\\/])check-i18n\.m?js$`.
+  '(^|[/\\\\])i18n[/\\\\]|(^|[/\\\\])check-i18n\\.m?js$|shared[/\\\\](nl-date-core|parse-date|repeat-core)\\.mjs$',
   'src[/\\\\]main[/\\\\]db\\.js$',
   'src[/\\\\]main[/\\\\]scheduler\\.js$',
   'browser-dev[/\\\\]todo-browser-shim\\.js$',

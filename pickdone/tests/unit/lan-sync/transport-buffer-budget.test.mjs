@@ -80,7 +80,12 @@ test('C4: pushing the AGGREGATE past the cap closes the offending socket, not th
     assert.equal(secondClosed, true, 'red before the fix: no aggregate budget — both readers could buffer freely')
     // Settle window before the negative assertion (absence of a close): longer = STRONGER,
     // since it gives a hypothetical wrong late close more room to show up.
-    await new Promise((r) => setTimeout(r, 500))
+    // [load-budget 2026-10-31] poll, not a bare sleep — fail fast if the innocent reader is
+    // killed mid-window; the pass path still burns the full window (absence needs it).
+    for (let t0 = Date.now(); Date.now() - t0 < 500;) {
+      if (first._socket.destroyed) break // final assert names it
+      await new Promise((r) => setTimeout(r, 50))
+    }
     assert.equal(first._socket.destroyed, false, 'the innocent reader (under the aggregate) is untouched')
     assert.deepEqual(closed.includes('device-b'), true)
   } finally {
@@ -103,7 +108,11 @@ test('C4: a single legitimate large buffer under the default budget is never clo
     // 4MB buffered unterminated — far under the 64MB default aggregate.
     client._socket.write('y'.repeat(4 * 1024 * 1024))
     // Settle window before the negative assertion — see the 500ms rationale in the C4 test above.
-    await new Promise((r) => setTimeout(r, 500))
+    // [load-budget 2026-10-31] poll, not a bare sleep — fail fast on a wrong close, full window on pass.
+    for (let t0 = Date.now(); Date.now() - t0 < 500;) {
+      if (client._socket.destroyed) break // final assert names it
+      await new Promise((r) => setTimeout(r, 50))
+    }
     assert.equal(client._socket.destroyed, false, 'solo round buffering is business as usual')
   } finally {
     try { if (client) await client.close() } catch { /* already closed */ }

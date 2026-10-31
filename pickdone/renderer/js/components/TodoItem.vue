@@ -45,6 +45,18 @@
         </div>
       </div>
       <div class="td-meta">
+        <!-- W23 (2026-10-31) list-row thumbnail: the old `img` computed (firstImageOfList) was dead
+             code — a pasted-image task showed no trace in the list. Render ONE 28px rounded
+             thumbnail + an overflow count badge. Beacon contract preserved: only urls passing
+             isRenderableAttachmentUrl (local://) get a :src; synced remote metadata rows never
+             render here. Broken loads fall back to the '！' placeholder (ep-img-broken twin). -->
+        <span v-if="listThumbs.length" class="td-imgthumb" :class="{'is-broken': thumbBroken}"
+              role="button" tabindex="0" :title="$t('statsJ.EditPanel.zoomImage')"
+              :aria-label="$t('statsJ.EditPanel.zoomImage')"
+              @click.stop="openEdit" @keydown="onTitleKey">
+          <img :src="listThumbs[0].url" alt="" loading="lazy" @error="onThumbErr">
+          <b v-if="listThumbs.length>1" class="td-imgthumb__n">{{ listThumbs.length }}</b>
+        </span>
         <span v-if="todo.reminderTime>0 && !todo.complete" class="td-remind" :title="$t('statsE.TodoItem.reminderLabel')">
           <img class="td-ico" src="app://app/assets/img/icon-clock.svg" alt="">{{dayjs(todo.reminderTime).format(FMT.time)}}
         </span>
@@ -115,7 +127,7 @@
 /**
  * Todo item -- aligned with the todo-list-item reference: square checkbox / relaxed line spacing / thin separators / light gray on hover
  */
-import {dayjs, formatDayLabel, parseSubtasks, firstImageOfList, subsCompleteTarget, FMT } from '../utils/core.js'
+import {dayjs, formatDayLabel, parseSubtasks, isRenderableAttachmentUrl, subsCompleteTarget, FMT } from '../utils/core.js' // W23: firstImageOfList dropped — its computed was dead code, superseded by listThumbs
 import { dateBadgeColor } from '../utils/core.js'
 import { extractTags, highlightHTML, stripTagTokens } from '../utils/search.js'
 import { deleteWithUndo, moveWithUndo } from '../utils/confirm.js'
@@ -171,8 +183,11 @@ export default {
     // Project association badge: opt-in (today view only) so every other list renders exactly as before
     projectBadge: { type: Boolean, default: false }
   },
-  data () { return { dragging: false, dropAfter: false, entering: false } },
+  data () { return { dragging: false, dropAfter: false, entering: false, thumbBroken: false } },
   watch: {
+    // W23: when the row's attachment metadata changes (upload lands, sync arrives), re-arm the
+    // broken-placeholder state so a healed url re-renders its thumbnail.
+    'todo.image' () { this.thumbBroken = false },
     // New task entrance animation: "drops into" the today group from the quick-add bar
     '$store.state.todo.recentlyAddedTaskId': {
       immediate: true,
@@ -242,7 +257,16 @@ export default {
     badgeColor () { return dateBadgeColor(this.todo, this.$store) },
     subtasks () { return parseSubtasks(this.todo.subtasks) },
     subDone () { return this.subtasks.filter(s => s.checked).length },
-    img () { return firstImageOfList(this.todo.image) },
+    // W23: replaced the dead `img` computed (firstImageOfList result never rendered). The thumb
+    // list keeps ONLY renderable (local://) attachment urls — synced remote metadata rows keep the
+    // beacon contract (no :src, never fetched) and simply don't show here. First entry renders,
+    // the count badge carries the overflow.
+    listThumbs () {
+      let arr = null
+      try { arr = JSON.parse(this.todo.image || 'null') } catch (e) { arr = null }
+      if (!Array.isArray(arr)) return []
+      return arr.filter(x => x && isRenderableAttachmentUrl(x.url))
+    },
     fileCount () { try { return JSON.parse(this.todo.files || '[]').length } catch { return 0 } },
     tags () { return extractTags(this.todo.taskContent, this.todo.taskDescribe) },
     // [J4 2026-10-22] the visible title drops the tag tokens (the chips below already show them);
@@ -263,6 +287,9 @@ export default {
     }
   },
   methods: {
+    /* W23: thumbnail load failure → '！' placeholder (same contract as EpAttachments.onImgErr),
+       not Chromium's broken-image glyph */
+    onThumbErr () { this.thumbBroken = true },
     /* [A8] checkbox keys: Space + Enter both toggle, stop so the row's own activation doesn't double-fire */
     onCheckKey: roleCheckboxActivate(function (e) { this.onCheckClick(e) }),
     /* [A8] subtask checkboxes: factory re-created per event is fine (cheap closure); `this` is the component */
@@ -578,4 +605,23 @@ export default {
 .td-proj:hover { color: var(--text-1); background: color-mix(in srgb, var(--proj-c, var(--brand)) 14%, transparent); }
 .td-proj-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--proj-c, var(--brand)); flex-shrink: 0; }
 .td-proj-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* ===== W23 (2026-10-31) list-row attachment thumbnail: one 28px rounded image + overflow count,
+   first item of the todo's renderable (local://) image list. Lives in the meta strip, before the
+   reminder chip; click opens the edit panel (row activation contract). ===== */
+.td-imgthumb {
+  position: relative; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; border-radius: var(--radius-sm, 6px); overflow: hidden;
+  background: var(--gray-bg); cursor: zoom-in; flex-shrink: 0;
+  vertical-align: middle; align-self: center;
+}
+.td-imgthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* broken-load fallback: centered '！' instead of Chromium's broken-image glyph (ep-img-broken twin) */
+.td-imgthumb.is-broken::after { content: '！'; color: var(--text-3); font-size: 14px; }
+.td-imgthumb.is-broken img { display: none; }
+.td-imgthumb__n {
+  position: absolute; right: -2px; bottom: -2px; min-width: 13px; height: 13px;
+  padding: 0 3px; border-radius: 8px; background: var(--brand); color: #fff;
+  font-size: 9px; font-weight: 600; line-height: 13px; text-align: center;
+  box-shadow: 0 0 0 1.5px var(--bg, #fff);
+}
 </style>

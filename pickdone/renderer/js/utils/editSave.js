@@ -166,10 +166,16 @@ export function createSaveQueue (store, opts) {
       // previously clearTimeout here dropped `queued.patch` entirely).
       const all = Object.assign({}, sameTask.patch, patch)
       if (Object.keys(all).length) {
-        outs.push(store.dispatch('todo/updateTodoFields', { taskId, patch: all }).catch(() => {
+        // W22 P2: the failure must be OBSERVABLE to awaiting callers (ui/cleanupInlineCreated) — the
+        // old .catch swallowed the rejection and resolved the flush, so the caller believed the save
+        // landed and orphan-deleted the inline-created task. Each slot now settles to a boolean
+        // (true = persisted, false = failed + already requeued/re-flagged); the return stays
+        // Promise.all(outs) (the awaited contract anchored by wave-d-fixes).
+        outs.push(store.dispatch('todo/updateTodoFields', { taskId, patch: all }).then(() => true, e => {
           restore(keys)
           requeue([sameTask]) // P2-5: the immediate half of the failed batch must survive too
           if (opts.onFail) opts.onFail()
+          return false
         }))
       }
       return Promise.all(outs)
@@ -180,16 +186,18 @@ export function createSaveQueue (store, opts) {
       // enqueue-time task (same snapshot semantics as the debounce callback); dirty fields go to
       // the current task. [w16 fix] a failed entry requeues ONLY itself — never clobbers the
       // other tasks' pending slots.
-      outs.push(store.dispatch('todo/updateTodoFields', { taskId: ent.taskId, patch: ent.patch }).catch(() => {
+      outs.push(store.dispatch('todo/updateTodoFields', { taskId: ent.taskId, patch: ent.patch }).then(() => true, e => {
         requeue([ent])
         if (opts.onFail) opts.onFail()
+        return false
       }))
     }
     if (taskId && keys.length) {
-      outs.push(store.dispatch('todo/updateTodoFields', { taskId, patch }).catch(() => {
+      outs.push(store.dispatch('todo/updateTodoFields', { taskId, patch }).then(() => true, e => {
         // Restore the dirty flags for the keys that failed to persist and surface the failure banner
         restore(keys)
         if (opts.onFail) opts.onFail()
+        return false
       }))
     }
     // Review P2 (2026-09-22): the flush promise is now RETURNED so callers (ui/closeEditCleanup's

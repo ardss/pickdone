@@ -48,6 +48,16 @@ module.exports = function settingsHandlers (ctx) {
       if (isLocked && isLocked() && !(isLockWindow && e && isLockWindow(e.sender)) &&
           !(e && tomatoFloat.isSelfSender && tomatoFloat.isSelfSender(e.sender))) throw new Error('app is locked')
       const c = readConfig()
+      // W23 (P2, 2026-10-31): type-cleanse enableTomatoFloating at the IPC boundary. config.json is a
+      // user-editable + cross-machine-transported blob (LAN restore / manual copy); a beta.15 residue
+      // or a flipped value can land here as a non-boolean (string "0", null, ...), and the renderer
+      // auto-show gate tests `=== false` — only a REAL boolean false legitimately disables the float.
+      // Anything else is dropped in favor of the schema default (true) instead of feeding the gate
+      // a value that neither enables nor (visibly) disables it — the silent "小窗没弹出来" class.
+      if ('enableTomatoFloating' in c && typeof c.enableTomatoFloating !== 'boolean') {
+        log.warn('[settings] config.json enableTomatoFloating is not boolean (' + typeof c.enableTomatoFloating + ':' + JSON.stringify(c.enableTomatoFloating) + ') — dropping it, schema default (true) applies')
+        c.enableTomatoFloating = true
+      }
       delete c.securityLockPassword
       delete c.securityLockQuestion
       return c

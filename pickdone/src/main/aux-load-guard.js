@@ -43,6 +43,7 @@ const DEFAULT_HANDSHAKE_TIMEOUT_MS = 10000
 function attachLoadGuard (win, opts) {
   const { url, routeMark } = opts
   const tag = opts.tag || 'AuxWindow'
+  let exhaustionReported = false // W23: one structured recovery report per guard instance (see exhausted branch)
   const maxRetries = opts.retries != null ? opts.retries : 5
   const backoffMs = opts.backoffMs != null ? opts.backoffMs : 400
   let retries = 0
@@ -98,6 +99,26 @@ function attachLoadGuard (win, opts) {
     // (and for the float: still hit-polled) until restart. Destroy it — 'closed' resets the owner's
     // win reference and the next show()/toggle() lazily recreates a fresh window.
     log.error(`[${tag}] 页面加载重试耗尽，销毁窗口等待下次唤起重建`, code, desc)
+    // W23 (P2, 2026-10-31): exhaustion used to be pure console silence (the log.error above only
+    // reaches the log file). Report it once per guard instance over the SAME recovery channel the
+    // W16 handshake timeout uses (the existing 'float-recovery-exhausted' syncEvent type — no new
+    // enum entry, so the r4 set-equality gate stays intact), with a code that names the cause.
+    // Renderer side (syncDegradedToast) surfaces it; lazy-require keeps aux windows without a
+    // live sync bootstrap working, and every failure here is best-effort by design.
+    if (!exhaustionReported) {
+      exhaustionReported = true
+      try {
+        const bootstrap = require('./lan-sync-bootstrap')
+        if (typeof bootstrap.emitSyncEvent === 'function') bootstrap.emitSyncEvent('float-recovery-exhausted', { code: 'load-guard-retries-exhausted' })
+        else throw new Error('emitSyncEvent unavailable')
+      } catch (e) {
+        try {
+          const { getMainWindow } = require('./window-ref')
+          const mw = getMainWindow()
+          if (mw && !mw.isDestroyed()) mw.webContents.send('syncEvent', { type: 'float-recovery-exhausted', code: 'load-guard-retries-exhausted', at: Date.now() })
+        } catch (e2) { /* renderer notification is best-effort */ }
+      }
+    }
     if (opts.onExhausted) { try { opts.onExhausted() } catch (err) { /* already best-effort */ } }
     try { if (win && !win.isDestroyed()) win.destroy() } catch (err) { /* already gone */ }
   })

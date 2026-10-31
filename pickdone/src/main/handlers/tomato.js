@@ -59,7 +59,13 @@ module.exports = function tomatoHandlers (ctx) {
     // and TomatoFloatPage (the float itself).
     'show-tomato-float': (e) => {
       assertFloatControl(e, 'show-tomato-float')
-      if (!process.argv.includes('--no-focus')) { tomatoFloat.show(); rebuildTrayMenu() }
+      if (process.argv.includes('--no-focus')) {
+        // W23 (P3, 2026-10-31): the skip used to be silent — indistinguishable from a broken show
+        // chain when debugging "小窗没弹出来" on a test instance. Name the flag as the cause.
+        log.info('[tomato] show-tomato-float suppressed by --no-focus (test instance; float intentionally not shown)')
+        return
+      }
+      tomatoFloat.show(); rebuildTrayMenu()
     },
     'hide-tomato-float': (e) => { assertFloatControl(e, 'hide-tomato-float'); return tomatoFloat.hide() },
     'tomato-float-shown': () => tomatoFloat.isVisible(),

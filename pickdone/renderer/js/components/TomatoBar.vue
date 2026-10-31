@@ -39,6 +39,26 @@
           <app-icon name="matrix" :size="12"/>
           <span>{{ floatOn ? $t('statsH.TomatoBar.floatBtnOn') : $t('statsH.TomatoBar.floatBtnOff') }}</span>
         </button>
+        <!-- W23：主界面白噪音入口（此前唯一入口在浮窗）——完整形态 today 视图 ♪ 按钮 + 上弹 chips；
+             清单复用 utils/mediaRegistry.js NOISES，选中写 settings.whiteNoiseAudio（播放由 main.js
+             的全局 dispatcher 按专注状态自动 start/stop，与浮窗/设置页同一状态天然同步）。窄条不加。 -->
+        <div v-if="!slim" class="tb-noise" ref="noiseWrap">
+          <button ref="noiseBtn" type="button" class="tb-noise-toggle" :class="{on: noiseOpen}"
+                  :title="$t('statsB.TomatoFloatPage.noiseSection')" :aria-label="$t('statsB.TomatoFloatPage.noiseSection')"
+                  :aria-expanded="noiseOpen ? 'true' : 'false'" aria-haspopup="true"
+                  @click="toggleNoise">
+            <span class="tb-noise-note" aria-hidden="true">♪</span>
+            <span class="tb-noise-cur">{{ noiseCurrentLabel }}</span>
+          </button>
+          <div v-if="noiseOpen" class="tb-noise-pop" role="menu" :aria-label="$t('statsB.TomatoFloatPage.noiseSection')">
+            <button v-for="c in noiseChips" :key="c.id || 'none'" type="button" role="menuitem"
+                    class="tb-noise__item" :class="{on: noiseCurrent === c.id}"
+                    :title="c.label" @click="pickNoise(c.id)">
+              <span class="tb-noise__name">{{ c.label }}</span>
+              <i v-if="noiseCurrent === c.id" class="tb-noise__tick" aria-hidden="true">✓</i>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -63,6 +83,7 @@
  */
 import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
+import { NOISES } from '../utils/mediaRegistry.js'
 import { remainingSecOfState } from '../store/tomato.js'
 import store from '../store/index.js'
 import { roleButtonActivate } from '../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
@@ -72,7 +93,7 @@ import { observeDispatch } from '../utils/dispatchObserved.js' // [maint/d23 FIX
 
 export default {
   name: 'TomatoBar',
-  data () { return { ts: 0, floatOn: false } },
+  data () { return { ts: 0, floatOn: false, noiseOpen: false } },
   computed: {
     s () { return this.$store.state.tomato },
     status () { return this.s.status || 'default' },
@@ -115,6 +136,17 @@ export default {
       if (this.isWork) return this.$t('statsE.TomatoBar.giveUpFocusBtn')
       if (this.isRest) return this.$t('statsE.TomatoBar.giveUpBreakBtn')
       return this.$t('statsE.TomatoBar.pomodoroTitle')
+    },
+    /* W23：白噪音 chips（首项 = 不播放 ''），清单/文案键同 TomatoFloatPage（mediaRegistry 单一来源） */
+    noiseChips () {
+      return [{ id: '', label: this.$t('statsB.TomatoFloatPage.noiseNone') }]
+        .concat(NOISES.map(n => ({ id: n.id, label: this.$t(n.labelKey) })))
+    },
+    /* 当前选中音 = settings.whiteNoiseAudio（与浮窗/设置页同一状态） */
+    noiseCurrent () { return this.$store.state.settings.whiteNoiseAudio || '' },
+    noiseCurrentLabel () {
+      const c = this.noiseChips.find(x => x.id === this.noiseCurrent)
+      return c ? c.label : ''
     }
   },
 
@@ -169,11 +201,16 @@ export default {
       }
     }
     window.addEventListener('storage', this._onFloatVisPing)
+    // W23：噪音 popover 的点外关闭 / Esc 关闭
+    document.addEventListener('click', this._onNoiseDocClick)
+    document.addEventListener('keydown', this._onNoiseKey)
   },
   beforeUnmount () {
     this._unmounted = true // pending pips-tour setTimeout callbacks use this to skip popping
     clearInterval(this._iv)
     if (this._onFloatVisPing) window.removeEventListener('storage', this._onFloatVisPing)
+    document.removeEventListener('click', this._onNoiseDocClick)
+    document.removeEventListener('keydown', this._onNoiseKey)
     if (typeof this._offTaskbar === 'function') this._offTaskbar() // the browser shim once downgraded it to a Promise (non-function); a bare truthiness check would crash
     // Clear taskbar traces on unmount, preventing leftover progress bar/countdown title from the previous session
     // Not cleared while focus is running (avoids the countdown flashing blank for a beat on future remounts/refactors)
@@ -260,6 +297,28 @@ export default {
     onAttachChange (id) {
       // The id is resolved inside the action; when the local todoList lags behind the broadcast and find misses, it no longer silently nulls attachTodo
       store.dispatch('tomato/attach', id || null)
+    },
+
+    /* W23：噪音 popover 交互——click 开合、点外关闭、Esc 关闭（对齐 tb-float-toggle 的轻交互） */
+    toggleNoise () { this.noiseOpen = !this.noiseOpen },
+    closeNoise () { this.noiseOpen = false },
+    _onNoiseDocClick (e) {
+      if (!this.noiseOpen) return
+      const wrap = this.$refs.noiseWrap
+      if (wrap && !wrap.contains(e.target)) this.closeNoise()
+    },
+    _onNoiseKey (e) {
+      if (e.key === 'Escape' && this.noiseOpen) { this.closeNoise(); e.stopPropagation() }
+    },
+
+    /* 白噪音选中：只写 settings.whiteNoiseAudio（持久化在 action 内），播放由 main.js 的
+       全局 dispatcher 按专注状态自动 start/stop——与浮窗 pickNoise 同一写法 */
+    async pickNoise (id) {
+      try {
+        const r = await this.$store.dispatch('settings/update', { whiteNoiseAudio: id })
+        if (r && r.ok === false) throw (r.error || new Error('updateSettings failed'))
+        this.closeNoise()
+      } catch (e) { this.reportDispatchFail(e) }
     },
 
 
@@ -408,6 +467,36 @@ export default {
 .tomato-timer__play--rest:focus { outline: 0; box-shadow: 0 0 0 3px rgba(254,153,51,.25); }
 .tomato-timer__play--rest:hover { background-color: #f49033; }
 .tomato-timer__play--rest:active { background-color: #ea8633; }
+/* ===== W23：主界面白噪音入口（完整形态 only；chips 上弹，形态对齐浮窗 tf-noise） ===== */
+.tb-noise { position: relative; display: inline-flex; }
+.tb-noise-toggle {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 3px 8px; cursor: pointer;
+  background: none; border: 1px solid transparent; border-radius: var(--radius-sm, 6px);
+  color: inherit; font-size: var(--fs-sm, 12px); line-height: 1.4;
+  opacity: .75; transition: opacity var(--dur-fast, .15s), background var(--dur-fast, .15s);
+}
+.tb-noise-toggle:hover, .tb-noise-toggle.on { opacity: 1; background: var(--hover-bg, rgba(0,0,0,.05)); }
+.tb-noise-toggle:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
+.tb-noise-note { font-style: normal; }
+.tb-noise-cur { max-width: 72px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.tb-noise-pop {
+  position: absolute; right: 0; bottom: calc(100% + 8px); z-index: 30;
+  min-width: 132px; padding: 6px;
+  background: var(--panel, #fff); border: 1px solid var(--line, #e4e7ed); border-radius: var(--radius-md, 8px);
+  box-shadow: var(--shadow-pop);
+}
+.tb-noise__item {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  width: 100%; padding: 6px 10px; cursor: pointer; text-align: left;
+  background: none; border: 0; border-radius: var(--radius-sm, 6px);
+  color: var(--text-1, #333); font-size: var(--fs-sm, 12px); line-height: 1.4;
+}
+.tb-noise__item:hover { background: var(--hover-bg, rgba(0,0,0,.05)); }
+.tb-noise__item.on { color: var(--brand, #008d8e); font-weight: 500; }
+.tb-noise__tick { font-style: normal; }
+html[data-theme="dark"] .tb-noise-pop { background: var(--panel); border-color: var(--line); }
+
 /* 大号青色计时数字：纯展示（番茄无暂停语义，129 行注释），不响应指针 */
 .tomato-timer__time {
   color: var(--brand-dark);
@@ -540,7 +629,8 @@ html[data-theme="dark"] .tomato-timer__time--rest { color: #ffb066; }
 /* ==================== 4.5 设置中心:左侧分类导航版式 ==================== */
 .modal--settings-center { position: relative; flex-direction: row; width: min(1024px, 94vw); height: min(80vh, 680px); align-items: stretch; }
 /* header 曾是 close 的定位锚(position:relative),左导航版式下 header=148px 左列,关闭钮被钉在左列右上角悬在"通用"旁;改锚到整个弹窗,落 dialog 真右上角(主流位置) */
-.modal--settings-center .modal__header { position: static; flex-direction: column; align-items: stretch; width: 148px; flex-shrink: 0; padding: 20px 0 0; height: auto; }
+/* W23：左列顶距 20px→--space-4，与搜索条、tab 内容（各 16px）三处顶距对齐 */
+.modal--settings-center .modal__header { position: static; flex-direction: column; align-items: stretch; width: 148px; flex-shrink: 0; padding: var(--space-4) 0 0; height: auto; }
 /* 垂直居中于搜索行(行高33,close高28→top≈2.5):之前 top:12 使钮心比搜索行心低约10px,一高一低 */
 .modal--settings-center .modal__close { position: absolute; top: 3px; right: 12px; margin: 0; z-index: 5; }
 @keyframes scBlink { 50% { opacity: .4 } }

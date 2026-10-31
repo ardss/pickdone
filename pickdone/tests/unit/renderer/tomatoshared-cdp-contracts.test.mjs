@@ -141,16 +141,19 @@ test('repeatSettings store: defaults seed, updateSettings writes LS + mirrors bl
   const state = { ...REPEAT_DEFAULTS }
   const mirrored = []
   const rootStore = { commit (m, p) { mirrored.push([m, p]) } }
-  repeatSettings.mutations.updateSettings.call(rootStore, state, { workRest: 7 })
-  assert.equal(state.workRest, 7)
-  assert.deepEqual(JSON.parse(lsRef.getItem('repeatSettingsV2State')).workRest, 7)
+  // W22 P2: probe keys switched to DECLARED REPEAT_DEFAULTS keys (workRest/workFocus were never in
+  // the schema — they used to slip in via the bare assign; the key-level whitelist now drops them,
+  // see w22-repeat-settings-whitelist.test.mjs). updateSettings stays the direct user-change path.
+  repeatSettings.mutations.updateSettings.call(rootStore, state, { repeatInterval: 7 })
+  assert.equal(state.repeatInterval, 7)
+  assert.deepEqual(JSON.parse(lsRef.getItem('repeatSettingsV2State')).repeatInterval, 7)
   assert.deepEqual(mirrored, [['settings/updateSettings', { repeatDefaultSettings: { ...state } }]])
 
   // inbound blob adoption: object adopted + LS write-through, no re-commit
   mirrored.length = 0
-  repeatSettings.mutations.updateFromBlob.call(rootStore, state, { workFocus: 30 })
-  assert.equal(state.workFocus, 30)
-  assert.deepEqual(JSON.parse(lsRef.getItem('repeatSettingsV2State')).workFocus, 30)
+  repeatSettings.mutations.updateFromBlob.call(rootStore, state, { repeatMonthCount: 30 })
+  assert.equal(state.repeatMonthCount, 30)
+  assert.deepEqual(JSON.parse(lsRef.getItem('repeatSettingsV2State')).repeatMonthCount, 30)
   assert.deepEqual(mirrored, [])
 
   // invalid blobs ignored

@@ -151,7 +151,7 @@
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDeps') }}</span><div class="form-item__control"><el-switch :model-value="st.showDepsModule === true" @change="v=>set({showDepsModule:v})"/></div></div>
               </div>
-              <div class="form-item"><span class="form-item__label"></span><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.devHint') }}</span></div></div>
+              <div class="form-item form-item--bare"><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.devHint') }}</span></div></div>
             </div>
           </div>
 
@@ -257,7 +257,7 @@
                              @change="v=>set({whiteNoiseVolume:+v/100})"/>
                   <span class="tip">{{ noiseVolumePct }}%</span>
                 </div></div>
-              <div class="form-item"><span class="form-item__label"></span>
+              <div class="form-item form-item--bare">
                 <div class="form-item__control"><button class="mini" @click="$store.commit('ui/toggleTomatoPanel', true)">{{ $t('statsE.SettingsModal.openPomodoroPanelBtn') }}</button></div></div>
             </div>
           </div>
@@ -304,7 +304,7 @@
                   <button class="mini" @click="openOfficialSite">{{ $t('statsE.SettingsModal.aboutSiteBtn') }}</button>
                   <button class="mini" @click="openReleases">GitHub</button>
                 </div></div>
-              <div class="form-item"><span class="form-item__label"></span>
+              <div class="form-item form-item--bare">
                 <div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutPrivacy') }}</span></div></div>
             </div>
           </div>
@@ -606,29 +606,19 @@ export default {
 /* 设计稿设置 = 全屏弹窗：header 为 el-tabs 页签，body 内 .tab-panel>.form>.form-label+.form-item */
 .setting_tabs { height: 100%; width: 100%; }
 .setting_tabs .el-tabs__header { margin: 0 !important; }
-/* EP 的下划线 translateX 按 nav 内 offsetLeft 计算，nav 不能再加 padding（会双重偏移）；内缩改到 header 上 */
-/* 下划线已改为页签自绘 ::after，nav 内边距不再影响对齐，安全 */
-.setting_tabs .el-tabs__nav { padding-left: 20px !important; }
-/* 去掉打开设置时活动标签自带的焦点高亮（element-ui 的蓝色内发光 + 浏览器 outline），激活态由下划线表达 */
+/* W23 清理：旧 20px nav padding / nth-child(2)、last-child 20px 补偿 / 全宽下划线 ::after
+   均已被下方 40px 段（6px nav padding + 左侧竖条 ::after，!important）取代，删除死规则。
+   .el-tabs__item 的 position:relative 保留：它是下方竖条 ::after 的定位锚。 */
+/* 去掉打开设置时活动标签自带的焦点高亮（element-ui 的蓝色内发光 + 浏览器 outline），激活态由竖条表达 */
 .setting_tabs .el-tabs__item:focus,
 .setting_tabs .el-tabs__item:focus-visible,
 .setting_tabs .el-tabs__item:focus.is-active.is-focus:not(:active) { outline: none !important; box-shadow: none !important; }
-/* EP 下划线由内联 transform 自动对齐页签，无需 element-ui 时代的 left 偏移 */
-/* EP 默认会去掉第 2 个页签的左 padding（nth-child(2)）和最后 1 个页签的右 padding（last-child），
-   导致页签内边距不均匀、自绘下划线除第一个页签外全部错位——设置弹窗内恢复均匀 20px，
-   配合下方对称 ::after（left/right 各 20px），下划线宽度恒等于文字宽度 */
-.setting_tabs .el-tabs__item:nth-child(2) { padding-left: 20px !important; }
-.setting_tabs .el-tabs__item:last-child { padding-right: 20px !important; }
 .setting_tabs .el-tabs__item.is-active,
 .setting_tabs .el-tabs__item:hover { color: var(--brand-dark); }
 /* EP 的活动条 translateX 计算在本布局下恒定偏右 20px（JS 内部测量），弃用之；
-   改用活动页签自身 ::after 画下划线 */
+   改用活动页签自身 ::after 画左侧竖条（见下方 40px 段） */
 .setting_tabs .el-tabs__active-bar { display: none !important; }
 .setting_tabs .el-tabs__item { position: relative; }
-.setting_tabs .el-tabs__item.is-active::after {
-  content: ''; position: absolute; left: 20px; right: 20px; bottom: 0;
-  height: 2px; background: var(--brand-dark); border-radius: var(--radius-xs);
-}
 .form-item {
   display: flex;
   flex-wrap: wrap;
@@ -689,18 +679,23 @@ export default {
   line-height: 1.5;
   word-break: break-word;
 }
-/* —— 设置卡片标签行紧凑化（卡片弹窗形态）：行高 50→44、与内容齐平，
-      去掉 Element 默认灰底线改用发丝线分隔。需 !important 压过上方全屏版规则 —— */
+/* 空标签行（.form-item--bare）：无 label 文本的行（纯提示/入口按钮），label 不占位、
+   control 靠左——否则空 span 参与布局，控件被 margin-left:auto 推到右缘悬空 */
+.form-item--bare .form-item__label { display: none; }
+.form-item--bare .form-item__control { margin-left: 0; justify-content: flex-start; max-width: 100%; }
+/* —— 设置卡片标签行紧凑化（卡片弹窗形态）：行高 44（.modal--settings 为设置弹窗唯一形态，
+      该 !important 值即最终生效值；40px 旧档已删，不再有双值打架）。去掉 Element 默认灰底线
+      改用发丝线分隔 —— */
 .modal--settings .setting_tabs .el-tabs__nav { height: 44px !important; }
 .modal--settings .setting_tabs .el-tabs__item { height: 44px !important; line-height: 44px !important; }
 .modal--settings .setting_tabs .el-tabs__nav-wrap::after { display: none; }
 .modal--settings .setting_tabs .el-tabs__header { border-bottom: 1px solid #f3f3f3; }
-.setting_tabs .el-tabs__item { height: 40px; line-height: 40px; text-align: left; padding: 0 18px !important; }
+.setting_tabs .el-tabs__item { text-align: left; padding: 0 18px !important; }
 .setting_tabs .el-tabs__item:nth-child(2) { padding-left: 18px !important; }
 .setting_tabs .el-tabs__item:last-child { padding-right: 18px !important; }
 .setting_tabs .el-tabs__nav { padding-left: 6px !important; }
 .setting_tabs .el-tabs__nav-wrap::after { display: none !important; }
-.setting_tabs .el-tabs__item.is-active::after { left: 0 !important; right: auto !important; top: 9px; bottom: 9px; width: 2px; height: auto; }
+.setting_tabs .el-tabs__item.is-active::after { left: 0 !important; right: auto !important; content: ''; position: absolute; top: 9px; bottom: 9px; width: 2px; height: auto; background: var(--brand-dark); border-radius: var(--radius-xs); } /* W23 修正：清理旧下划线时误删 content/position/background 基础声明致竖条消失（e2e 抓到），补回完整自绘 */
 .setting_tabs .el-tabs__active-bar { display: none !important; }
 html[data-theme="dark"] .form-item__label { color: var(--text-1); }
 html[data-theme="dark"] .form-item__control input,
@@ -711,7 +706,8 @@ html[data-theme="dark"] .form-item__tip { color: var(--text-3); }
 /* 页签底部分隔线：亮色硬编码 #f3f3f3 在暗色下是刺眼亮白线 */
 html[data-theme="dark"] .modal--settings .setting_tabs .el-tabs__header { border-bottom-color: var(--line); }
 
-.tab-panel { padding: var(--space-5) var(--space-4); }
+.tab-panel { padding: var(--space-4); }
+/* W23：顶距对齐——tab 内容顶距与搜索条、左列统一到 16px（此前 20/0/24 三处各不相同） */
 /* 分组卡片:每张卡一个设置组(Notion/Linear 式),替代长列表堆叠 */
 .tab-panel .form {
   background: var(--panel, #fff);
@@ -751,6 +747,9 @@ html[data-theme="dark"] .tab-panel .form-label { color: var(--brand-bright, #35c
 .ctl-md { width: 160px; }
 .ctl-lg { width: 260px; }
 .tip { color: var(--text-3); font-size: var(--fs-sm, 12px); word-break: break-word; }
+/* W23：模板里的提示一律用 .tip，换行行为却只定义在 .form-item__tip 上——提示被当作 flex 项
+   挤在控件右侧而不是整行换行。补齐 .tip 在控件容器内的换行规则（与 .form-item__tip 同观感）。 */
+.form-item__control .tip { flex-basis: 100%; margin-top: 8px; text-align: left; }
 /* —— 控件高度档位统一（全局）：.mini/.mini-lg/.danger-btn 收敛到 24px 档。
       base.css 不便改动，此处后加载覆盖生效；全局生效属预期（统一档位正是目的） —— */
 .mini { padding: var(--space-1) var(--space-3); }
@@ -763,7 +762,8 @@ html[data-theme="dark"] .tab-panel .form-label { color: var(--brand-bright, #35c
 /* ============ 设置搜索（跨页签过滤） ============ */
 .settings-search {
   display: flex; align-items: center; gap: 8px;
-  margin: 0 0 var(--space-4); padding: 7px 12px;
+  /* W23：顶距统一到 --space-4（与左列 16px、tab 内容 16px 对齐，此前搜索条顶距为 0） */
+  margin: var(--space-4) 0; padding: 7px 12px;
   /* 右侧让出关闭钮(close 锚在弹窗右上角,竖直方向与搜索行同高):整条输入带右缩 40px,不钻到钮底下 */
   margin-right: 40px;
   background: var(--gray-bg, #f8f8f8); border-radius: var(--radius-md);

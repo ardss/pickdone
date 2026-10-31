@@ -46,11 +46,24 @@ export function buildEditSnapshot (todo) {
  * touched. */
 async function cleanupInlineCreated ({ state, rootState, dispatch }, createdId) {
   state.inlineCreatedTaskId = ''
+  // W22 P2: flushSave now settles to a boolean per slot (editSave.js) — false/rejection = the pending
+  // dispatch FAILED (already requeued + onFail banner). In that world the emptiness check below would
+  // see the still-empty title and orphan-delete a task whose (possibly just-typed) edit never landed.
+  // On a failed flush: keep the task and bail (the failure banner offers retry), observably.
+  let flushFailed = false
   try {
     const flush = (typeof window !== 'undefined' && window.__editPanelFlushSave) || null
-    if (flush) await flush()
-    else await new Promise(r => setTimeout(r, 60))
-  } catch { /* a failed flush must not block the close flow */ }
+    if (flush) {
+      const res = await flush()
+      flushFailed = Array.isArray(res) ? res.includes(false) : res === false
+    } else {
+      await new Promise(r => setTimeout(r, 60))
+    }
+  } catch { flushFailed = true /* a failed flush must not block the close flow */ }
+  if (flushFailed) {
+    console.error('[ui] inline-created orphan cleanup skipped: the pending save FAILED (task kept, retry via the panel failure banner) taskId=' + createdId)
+    return
+  }
   const t = ((rootState.todo && rootState.todo.todoList) || []).find(x => x.taskId === createdId)
   if (!t || t.delete) return
   if ((t.taskContent || '').trim()) return

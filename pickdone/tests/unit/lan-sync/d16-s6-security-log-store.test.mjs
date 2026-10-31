@@ -43,7 +43,13 @@ test('S6: loadSecurityLog seeds empty on a corrupt read and the throttled persis
     const seeded = bootstrap.__test.loadSecurityLog()
     assert.deepEqual(seeded, [], 'a corrupt read seeds the ephemeral ring empty (never an erasing write)')
     bootstrap.__test.scheduleSecurityPersist()
-    await new Promise(r => setTimeout(r, 1200)) // past the 1s write throttle
+    // [load-budget 2026-10-31] past the 1s write throttle. Absence assert (the degraded write must
+    // NEVER land), so the window must fully elapse — poll fails fast if the corrupt ring is
+    // overwritten mid-window instead of sleeping through a regression.
+    for (let t0 = Date.now(); Date.now() - t0 < 1200;) {
+      if (db.settings.get(K_SECURITY_LOG) !== CORRUPT) break // let the final assert name it
+      await new Promise(r => setTimeout(r, 100))
+    }
     assert.equal(db.settings.get(K_SECURITY_LOG), CORRUPT, 'the durable ring is byte-identical — the throttled whole-array write aborted while degraded')
   } finally {
     bootstrap.__test.setState(null)

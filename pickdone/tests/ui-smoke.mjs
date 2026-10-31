@@ -469,7 +469,10 @@ console.log('[6] axe-core accessibility checks (Day Todo view)')
 try {
   const fs = await import('fs')
   const path = await import('path')
-  const axeSrc = fs.readFileSync(path.join(process.cwd(), 'node_modules', 'axe-core', 'axe.min.js'), 'utf8')
+  // W22 fix: anchor at this file (pickdone/tests/ui-smoke.mjs → pickdone/node_modules), NOT
+  // process.cwd() — the smoke script is invoked from repo root AND pickdone/ and CI dirs;
+  // only the script's own location is stable across every caller.
+  const axeSrc = fs.readFileSync(path.join(import.meta.dirname, '..', 'node_modules', 'axe-core', 'axe.min.js'), 'utf8')
   await send('Runtime.evaluate', { expression: axeSrc })
   const axeRes = await evalJson(`axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] } }).then(r => ({
     violations: r.violations.map(v => ({ id: v.id, impact: v.impact, nodes: v.nodes.length,

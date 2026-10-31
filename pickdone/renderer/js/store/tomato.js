@@ -535,6 +535,15 @@ export default {
     },
     startFocus ({ state, commit }) {
       if (state.status !== 'default') return // triggering during focus/rest = illegal transition, prevents silently zeroing already-focused time
+      // W22 P2: 本窗副本陈旧防改 (mirror giveUp's shared-LS re-read, tomato.js giveUp 先 loadState(false)
+      // 再决定的形态): 本窗为 default 而共享 LS 已有他窗进行中的相位 (storage 事件未达/浮窗显示滞后 ≤1 拍)
+      // 时,旧写法直接整包 patch 覆盖 startedAt,静默清零他窗正在进行的番茄且零记录。重读共享瞬态,
+      // 发现进行中相位则放弃本窗启动 (他窗的 tick 会完成它),可重试 —— 用户稍后再点即可。
+      const fresh = loadState(false)
+      if (fresh.startedAt && (fresh.status === 'startTomatoTime' || fresh.status === 'startRestTime')) {
+        console.info('[tomato] startFocus aborted: the shared mirror already shows a running phase in another window (startedAt ' + fresh.startedAt + ')')
+        return
+      }
       commit('patch', { status: 'startTomatoTime', startedAt: Date.now(), remainSec: state.tomatoTime * 60 })
       reportRunningTransition('start', state) // TQ-1: durable row (main + float windows both report)
       announceCrossDevice(this, 'running')
@@ -707,9 +716,21 @@ export default {
     async finishRest ({ state, commit }) {
       const claim = await claimPhase('startRestTime', state.startedAt)
       if (!claim) return
+      // W22 P1 (G1 mirror of completeFocus): once claimed, a settle/patch failure (settleRestDuration's
+      // ledgerWrite is a LOUD throw — helpers/tomatoPendingQueue.js) used to leak the claim forever:
+      // the phase stayed 'startRestTime' and claimPhase for the SAME phase never won again → the
+      // phase wedged permanently with no retry possible. Release the owner-checked claim on any
+      // failure path so the next tick can re-finish the rest.
+      const releaseClaim = () => releasePhaseClaim(claim)
       // F2-P3: the rest is over — settle the just-booked row's restDuration to the MEASURED rest
       // (completeFocus booked the planned restTime; parity with the measured-focus caliber).
-      settleRestDuration(commit, state, state.startedAt)
+      try {
+        settleRestDuration(commit, state, state.startedAt)
+      } catch (e) {
+        releaseClaim()
+        console.error('[tomato] finishRest settle failed after claiming; claim released for retry:', e)
+        return
+      }
       if (state.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.restOverTitle'), body: tt('statsA.core.restOverBody') }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
       commit('patch', { status: 'default', startedAt: 0, remainSec: state.tomatoTime * 60 })
       reportRunningTransition('clear', state) // TQ-1: rest finished — release the durable row

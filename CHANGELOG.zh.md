@@ -3,9 +3,20 @@
 System.Object[]
 
 ## [Unreleased]
+- 番茄相位链：finishRest 落账失败不再永久卡死相位（释放相位认领、下一 tick 可重试，与 completeFocus 同款守卫）；startFocus 启动前重读共享瞬态，浮窗滞后副本不再静默覆盖他窗进行中的番茄；内联保存失败不再把刚输入标题的任务当未命名孤儿删除（flush 结果可感知，失败保留任务并记日志）。
+- 习惯可靠性：浮窗 relay 改为持久化合并后的主窗口状态（LS+DB meta），不再写入未合并的原始 blob——合并掉的打卡不再在重启时丢失；repeatSettings 在 LS 载入/同步 blob/设置净化器三个入口加键级白名单，封死 F-C2 未知键策略的嵌套对象旁路。
+- 浮窗：握手超时重建不再复活用户刚隐藏/收纳的浮窗（重建前检查用户意图标记、保留关闭标记、下次显式唤起惰性重建）；通知限流日志对缺失 sender 的事件加守卫。
+- 门禁/测试：tmp-dir-sweeper 夹具移入私有根并为 sweep 增加可选 rootDir（并行车道不再互删夹具）；commitments 到期判定改用本地日历日（UTC+8 不再白送夜里 8 小时）；e2e 快速添加导航改轮询替代裸 sleep；gate-doctor 处理 core.quotePath 八进制编码的 worktree 路径；ui-smoke 的 axe-core 读取与 cwd 解耦。
+
 
 - 运维：三机发版更新脚本（scripts/ops/update-machine.sh + README）——一个分发器覆盖本机/win64/板机，固定备份→确认门→停应用→换装→启动→健康验证流程，失败自动打印回滚指引；破坏性步骤默认需交互确认。发版不再需要逐台手工操作。
 - 重构：src/main/index.js 860→790 行——按内聚拆出 tray-lease.js / broadcast.js / critical-backup-restore.js，显式依赖注入、行为等价（含源码形状锚测试在内单测全绿，启动顺序与 ESM 图门禁通过，dev 启动冒烟干净）。退出确认簇与 quit flush 链因测试钉形与闭包网过深暂不拆，已在代码注释记录。
+
+- 附件裂图在 CSP 层修复：beta.22 收紧 CSP 时渲染端 Content-Security-Policy 丢掉了 `local:`（74cb8378），所有 `local:///` 附件 URL——包括粘贴的截图——全部渲染为裂图；img-src/media-src/connect-src/default-src 恢复 `local:`，script-src 刻意保持不含（回归测试双向钉住，并附 CDP 端到端上传/渲染探针脚本入库 scripts/）。
+- 设置页布局：顶部异常间距归一到共享 `--space-4` 刻度（原为一次性 rem 值），清理死布局规则，提示文案换行不再溢出，裸表单行改用显式变体；主界面补上缺失的白噪音/音乐入口（♪ 按钮打开噪音 chips 弹层，与浮窗已有控制同款）。
+- 附件可见性：同步在途的附件改为显示带文件名悬停提示的「已同步」占位格而非空白格；任务列表支持图片附件行内缩略图（TodoItem listThumbs）。
+- 浮窗自动弹出：auto-show 注册提升为模块级第一语句（晚到的 require 曾让浮窗永久无法出现），配置值类型清洗，重建耗尽路径改为上报而非静默失败；唤起链补诊断日志。
+- 门禁：web 视觉套件扩到 16 场景（新增 today-settings 覆盖）、check-i18n 锚定显式 pane id、win32 CI 去除固定 sleep、lan-sync e2e 改轮询、W22 新测试纳入 skip 棘轮余量、lint-staged 范围扩到 shared|scripts|server|browser-dev。
 
 ## [0.4.0-beta.22] - 2026-10-30
 - 窗口绑定（win-bind）：把任务行拖出 PickDone 窗口、释放在任意外部 Windows 窗口上即完成绑定；任务行出现窗口徽标——点徽标（或任务菜单项）一键唤回绑定窗口（还原+置前），原地可解绑，绑定关系应用重启后保留。窗口身份绝不信任过期 HWND：重定位沿「带 pid 守卫的 HWND 快路径 → 进程 → 精确标题」梯级攀升，同名歧义时拒绝猜测（返回 AMBIGUOUS 附候选清单，绝不激活错窗口）；共用 applicationframehost 宿主 pid 的 UWP 窗口仅按标题匹配；对拒绝 text/move 拖放的 OLE 目标（画图等整类）的释放，与 Esc 取消靠按键事件证据加 200ms 复查窗口区分，两种语义互不劫持。激活对 OS 前台锁逐级升级（直接 SetForegroundWindow → AttachThreadInput + ALT 伪装 → 任务栏闪烁），每种失败原因都有 fail-closed 的用户反馈。窗口探测用常驻 PowerShell 子进程内嵌 user32 P/Invoke——Windows 通用能力，不要求任何目标应用装插件，不新增依赖；持久化为主进程自有存储，渲染端 dbCall 白名单分毫未动。全程测试先行（6 份 RED 测试在实现前因契约模块不存在而失败，证据存档）；7 份测试文件落位回归池（94 用例，含常驻 PS 适配器活体套件）；由独立 QA 以真实 OS 级拖拽注入与激活链在隔离用户数据目录下实机验收——绑定、最小化/后台唤回、同名歧义、目标关闭与重启重定位、取消拖拽、重启持久化、F5 回归——并以 sha1 核验真实用户数据库全程未变。

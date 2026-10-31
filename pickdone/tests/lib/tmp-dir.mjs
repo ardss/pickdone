@@ -130,19 +130,23 @@ function pidDead (name) {
  * Delete orphaned test temp dirs from os.tmpdir(): an entry is removed only when it
  * (a) matches the suite's prefix family, (b) has an mtime older than 12h, AND
  * (c) carries no live owning pid. Fresh mtime OR live pid ⇒ never deleted.
+ * @param {string} [rootDir] W22: optional scope root (default os.tmpdir(), unchanged).
+ *   Lets the sweeper's own unit tests sweep a private fixture root so concurrent test
+ *   lanes running this same file against the shared os.tmpdir() can never delete each
+ *   other's fixtures.
  * @returns {{ scanned: number, removed: number }} best-effort counts for logging
  */
-export function sweepStaleTmpDirs () {
+export function sweepStaleTmpDirs (rootDir = os.tmpdir()) {
   let scanned = 0
   let removed = 0
   let entries = []
-  try { entries = fs.readdirSync(os.tmpdir(), { withFileTypes: true }) } catch { return { scanned, removed } }
+  try { entries = fs.readdirSync(rootDir, { withFileTypes: true }) } catch { return { scanned, removed } }
   const isFamily = familyMatcher()
   const now = Date.now()
   for (const e of entries) {
     if (!e.isDirectory() || !isFamily(e.name)) continue
     scanned++
-    const full = path.join(os.tmpdir(), e.name)
+    const full = path.join(rootDir, e.name)
     let st = null
     try { st = fs.statSync(full) } catch { continue }
     if (now - st.mtimeMs < STALE_MS) continue // guard 1: fresh — maybe an in-flight run

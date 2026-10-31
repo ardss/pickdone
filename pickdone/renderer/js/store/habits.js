@@ -253,7 +253,7 @@ function persist (state) {
       return
     }
     // 2026-09-12: silent .catch(() => {}) hid meta write failures (DB is the durable source of truth) — log them
-    commitCommand("meta", "put", [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e))
+    return commitCommand("meta", "put", [META_KEY, JSON.stringify(blob)]).catch(e => console.error('[habits] setMeta failed:', e))
   } catch (e) { /* empty environment */ }
 }
 
@@ -262,6 +262,7 @@ function persist (state) {
 // persist would overwrite the aux edit with stale state) and writes the durable DB meta row on its
 // behalf (storage events only fire in the OTHER windows, so the writer never relays itself).
 let externalApplier = null
+let liveState = null // [W22 P1] live Vuex state (state factory capture): lets the relay persist the MERGED state; null until a store exists → legacy raw-blob write
 /** Hook for main.js: register a callback receiving every external (aux-window) habits blob so it can
  *  be applied to the main window's Vuex store. U-10: the callback must RETURN whether the blob was
  *  accepted (same savedAt guard as applyExternal) — the relay only persists accepted blobs to the DB. */
@@ -287,25 +288,24 @@ function relayAuxBlob () {
     return
   }
   try {
-    // U-10 (2026-09-20): the durable DB write only happens when applyExternal ACCEPTED the blob.
-    // The applier's savedAt guard rejects stale rounds; writing the rejected (stale) blob to the DB
-    // anyway clobbered the newer DB state with older data. No applier registered (headless/test) →
-    // write directly, the blob is the freshest state known to this window.
+    // U-10 (2026-09-20): the durable DB write only happens when the applier ACCEPTED the blob (a
+    // stale round must not clobber newer DB state). No applier (headless/test) → `d` IS the
+    // freshest state known to this window: write it directly.
     let accepted = true
     if (externalApplier) {
       accepted = false
       try { accepted = externalApplier(d) === true } catch (e) { console.error('[habits] external blob apply failed:', e) }
     }
     if (!accepted) return
-    // The ping is consumed only after the durable DB write settles: consuming it up front let one
-    // failed IPC drop the aux edit from the retry channel entirely (the next main-window persist
-    // would paper over it at best, or lose it on quit at worst).
-    if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.dbCall) {
-      commitCommand("meta", "put", [META_KEY, JSON.stringify(d)]).then(
-        () => { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } },
-        err => console.error('[habits] relay setMeta failed — ping kept for retry:', err)
-      )
+    // [W22 P1 durability fix] applyExternal merged `d` into live state (union-max records, tombstones,
+    // moments) but deliberately does NOT persist (no-echo contract); the relay used to write the RAW
+    // aux blob — a restart replayed it via initFromDb → replaceAll, erasing the merged check-ins from LS+DB+memory.
+    const settlePing = p => Promise.resolve(p).then(() => { try { localStorage.removeItem(SYNC_KEY) } catch (e) { /* empty */ } }, err => console.error('[habits] relay setMeta failed — ping kept for retry:', err))
+    if (liveState) { // merged-state persist (above); no echo — no ping is written, LS events skip the writer window
+      let p = null; try { p = persist(liveState) } catch (e) { console.error('[habits] relay persist failed — ping kept for retry:', e) }
+      settlePing(p); return
     }
+    if (typeof window !== 'undefined' && window.todoAPI && window.todoAPI.dbCall) settlePing(commitCommand("meta", "put", [META_KEY, JSON.stringify(d)])) // no live state (headless): `d` is the freshest state known here (U-10)
   } catch (err) { /* empty */ }
 }
 
@@ -350,7 +350,7 @@ export function isDueOn (habit, dateKey) {
 
 export default {
   namespaced: true,
-  state: () => load(),
+  state: () => { liveState = load(); return liveState }, // [W22 P1] live-state capture for the relay
   getters: {
     streakOf: (s, g, rootState) => id => {
       const h = s.habits.find(x => x.id === id)

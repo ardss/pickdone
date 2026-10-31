@@ -15,14 +15,21 @@ const root = process.env.GATE_ROOT ? resolve(process.env.GATE_ROOT) : join(dirna
 // matched nothing while real staged source existed — the inScopeUnselected fail-closed tripwire
 // below caught it, but the gate degenerated to that path for every CJK-named file (same family
 // as the W17/W18 quotePath pins in check-i18n.js / check-boot-order.cjs / pre-commit stage 1).
+// W23 #6 (2026-10-31): scope widened to the eslint-covered source roots — shared|scripts|server|
+// browser-dev now stage real .js/.mjs/.cjs source that eslint applies to, but the old regex
+// silently skipped them (gate hole: a broken script under scripts/ committed green).
+// NOTE: check-all.js:84 keeps its own eslint argument list — THAT file's list must be widened
+// identically, but check-all.js is out of this lane's territory (another agent owns it); tracked
+// as a TODO for the main session to sync.
 const staged = execFileSync('git', [
   '-c', 'core.quotePath=false',
   'diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'
 ], { cwd: root }).toString('utf8').split('\0').filter(Boolean)
+const LINT_SCOPE = /^(?:renderer\/js|cli|src|tests|shared|scripts|server|browser-dev)\//
 const selected = staged
   .filter(name => name.startsWith('pickdone/'))
   .map(name => name.slice('pickdone/'.length))
-  .filter(name => /^(renderer\/js|cli|src|tests)\//.test(name))
+  .filter(name => LINT_SCOPE.test(name))
   .filter(name => /\.(?:js|cjs|mjs|vue)$/.test(name))
 if (selected.length === 0) {
   // [fail-closed 2026-10-26, mirrors pre-commit stage-1 guard in 021f905b]: a staged file
@@ -31,7 +38,7 @@ if (selected.length === 0) {
   // none of it — historically this path exited 0 green for the gate's whole life
   // (same shape as the check-file-size --staged zero-file no-op). Refuse loudly.
   const inScopeUnselected = staged.filter(name =>
-    /^(?:pickdone\/)?(?:renderer\/js|cli|src|tests)\//.test(name) &&
+    /^(?:pickdone\/)?(?:renderer\/js|cli|src|tests|shared|scripts|server|browser-dev)\//.test(name) &&
     /\.(?:js|cjs|mjs|vue)$/.test(name))
   if (inScopeUnselected.length > 0) {
     console.error(`✗ [pre-commit] ESLint breaker: ${inScopeUnselected.length} staged in-scope source file(s) exist but 0 survived prefix/scope normalization (path normalization failure) — refusing fake green`)
