@@ -3,6 +3,11 @@
 System.Object[]
 
 ## [Unreleased]
+- 番茄相位链：finishRest 落账失败不再永久卡死相位（释放相位认领、下一 tick 可重试，与 completeFocus 同款守卫）；startFocus 启动前重读共享瞬态，浮窗滞后副本不再静默覆盖他窗进行中的番茄；内联保存失败不再把刚输入标题的任务当未命名孤儿删除（flush 结果可感知，失败保留任务并记日志）。
+- 习惯可靠性：浮窗 relay 改为持久化合并后的主窗口状态（LS+DB meta），不再写入未合并的原始 blob——合并掉的打卡不再在重启时丢失；repeatSettings 在 LS 载入/同步 blob/设置净化器三个入口加键级白名单，封死 F-C2 未知键策略的嵌套对象旁路。
+- 浮窗：握手超时重建不再复活用户刚隐藏/收纳的浮窗（重建前检查用户意图标记、保留关闭标记、下次显式唤起惰性重建）；通知限流日志对缺失 sender 的事件加守卫。
+- 门禁/测试：tmp-dir-sweeper 夹具移入私有根并为 sweep 增加可选 rootDir（并行车道不再互删夹具）；commitments 到期判定改用本地日历日（UTC+8 不再白送夜里 8 小时）；e2e 快速添加导航改轮询替代裸 sleep；gate-doctor 处理 core.quotePath 八进制编码的 worktree 路径；ui-smoke 的 axe-core 读取与 cwd 解耦。
+
 
 - 运维：三机发版更新脚本（scripts/ops/update-machine.sh + README）——一个分发器覆盖本机/win64/板机，固定备份→确认门→停应用→换装→启动→健康验证流程，失败自动打印回滚指引；破坏性步骤默认需交互确认。发版不再需要逐台手工操作。
 - 重构：src/main/index.js 860→790 行——按内聚拆出 tray-lease.js / broadcast.js / critical-backup-restore.js，显式依赖注入、行为等价（含源码形状锚测试在内单测全绿，启动顺序与 ESM 图门禁通过，dev 启动冒烟干净）。退出确认簇与 quit flush 链因测试钉形与闭包网过深暂不拆，已在代码注释记录。
