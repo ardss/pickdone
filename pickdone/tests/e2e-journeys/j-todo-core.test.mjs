@@ -271,7 +271,7 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
     assert.notEqual(row.dayStart, TODAY0, 'the reminder/date must NOT fall on today (pre-W10 silent-today bug)')
     // USER-VISIBLE 2: the title carries no "tomorrow" residue (exact equality already asserted above;
     // double-check the DOM: select tomorrow on the day strip as a user would, the row must render there)
-    await clickEl(`[...document.querySelectorAll('.ds-day')].find(b => b.querySelector('.ds-num') && b.querySelector('.ds-num').textContent.trim().startsWith('${TOMORROW_DOM}'))`)
+    await clickEl(`(() => { const all=[...document.querySelectorAll('.ds-day')]; const ti=all.findIndex(b=>b.classList.contains('today')); return all.slice(ti+1).find(b=>b.querySelector('.ds-num') && b.querySelector('.ds-num').textContent.trim() === String(${TOMORROW_DOM})) })()`) // W24: 今天格之后+日号全等——旧 startsWith('2') 在含 20-29 号的条上先命中 26 号
     await sleep(1200)
     const onTomorrow = await until(`[...document.querySelectorAll('.td-item .td-title')].some(t => t.textContent.trim() === 'meeting')`, 8, 400)
     assert.ok(onTomorrow, 'the created task is not visible on the tomorrow day view (user cannot see what they just scheduled)')

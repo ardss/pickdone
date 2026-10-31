@@ -457,7 +457,7 @@ test('J7 multi-day habit state: checked YESTERDAY only -> page shows yesterday d
         yesterdayCellOn: !!(cells[28] && cells[28].classList.contains('on')),
         streak: ((card.querySelector('.habit-streak')||{}).textContent||'').trim(),
         todayCalChecked: !!(today && today.classList.contains('checked')),
-        yesterdayInGrid: tIdx > 0,
+        yesterdayInGrid: tIdx > 0 && !(calCells[tIdx - 1] && calCells[tIdx - 1].classList.contains('out')), // W24: 昨天渲染为上月(out)格时走 pager 分支——out 格不画打卡点
         yesterdayCalChecked: !!(yCell && yCell.classList.contains('checked')),
         yesterdayCalDot: !!(yCell && yCell.querySelector('.habit-cal-dot')),
         storeToday: !!(h && h.records && h.records[${JSON.stringify('TK')}]),
