@@ -25,7 +25,22 @@
         <button v-if="isRenderableAttachmentUrl(im.url)" type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
           <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)">
         </button>
-        <span v-else class="ep-img-btn" role="img" :aria-label="(im && im.name) ? String(im.name) : 'external image'"></span>
+        <!-- W23 (2026-10-31) dead-gray-cell fix: the placeholder used to be a featureless empty
+             span — LAN-synced metadata rows (or any non-local url) showed as an unlabeled gray
+             block. It now shows the attachment's filename on the first line plus the existing
+             attachmentMissing hint, so "列图"-looking gray cells become identifiable rows.
+             PULL CHAIN VERDICT (W23): no targeted "fetch this attachment" IPC exists for a
+             non-local url — open-file with an https url routes to isSafeExternal/openExternalSafely
+             (handlers/attachments.js:82), i.e. wiring a click here would fire an external browser
+             open (the exact beacon/IP-leak class sec-synced-remote-img-beacon exists to prevent).
+             So the cell stays inert-but-labeled. The REAL missing-file case (local:// key whose
+             bytes are not pulled yet) already renders as <img> → ep-img-broken, and its pull chain
+             exists: open-file kicks notifySyncChange('attachment-missing-open') and toasts the
+             same attachmentMissing text. -->
+        <span v-else class="ep-img-btn ep-img-remote" role="img" :aria-label="remotePlaceholderName(im)">
+          <span class="ep-img-remote__name">{{ remotePlaceholderName(im) }}</span>
+          <span class="ep-img-remote__hint">{{ $t('statsJ.EditPanel.attachmentMissing') }}</span>
+        </span>
         <b class="x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.removeImage')" @click.stop="$emit('remove', 'imgList', i)" @keydown="onRemoveKey('imgList', i, $event)"></b>
       </div>
     </div>
@@ -105,6 +120,16 @@ export default {
     onRemoveKey (list, i, e) { roleButtonActivate(function () { this.$emit('remove', list, i) }, { stop: true }).call(this, e) },
     onOpenFileKey (f, e) { roleButtonActivate(function () { this.openFileUrl(f) }, { stop: true }).call(this, e) },
     isRenderableAttachmentUrl,
+    /* W23: label for a non-renderable synced row — prefer the stored name, fall back to the
+       decoded url basename (same decode-or-raw fallback as attachmentPath in main/attachments.js) */
+    remotePlaceholderName (im) {
+      if (im && im.name) return String(im.name)
+      let u = (im && im.url) ? String(im.url) : ''
+      if (u.startsWith('local://')) u = u.slice(8)
+      while (u.startsWith('/')) u = u.slice(1)
+      try { u = decodeURIComponent(u) } catch (e) { /* malformed encoding: keep raw */ }
+      return u.split('/').pop() || u
+    },
     /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分） */
     onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },
     openFileUrl (f) {
@@ -163,6 +188,20 @@ export default {
   background: none; border: none; cursor: pointer;
 }
 .ep-img-btn img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
+/* W23: synced non-local metadata row — labeled placeholder instead of a featureless gray cell */
+.ep-img-remote {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 2px; width: 100%; height: 100%; padding: 4px; box-sizing: border-box;
+  cursor: default; background: var(--gray-bg);
+}
+.ep-img-remote__name {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-2xs); font-weight: 600; color: var(--text-2); text-align: center;
+}
+.ep-img-remote__hint {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: var(--fs-2xs); color: var(--text-3); text-align: center;
+}
 .ep-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
 @keyframes ep-img-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
 </style>
