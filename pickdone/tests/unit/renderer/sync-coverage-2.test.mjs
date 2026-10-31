@@ -212,15 +212,19 @@ test('Y4: repeatSettings/updateFromBlob adopts inbound blob state without re-com
   resetLs()
   const mod = (await importSrc('renderer/js/store/repeatSettings.js')).default
   const commits = []
-  const s = { maxRepeat: '2' }
+  const s = { repeatWeekCount: '2' }
   const ctx = { commit (m) { commits.push(m) } }
-  mod.mutations.updateFromBlob.call(ctx, s, { maxRepeat: '7', restMin: 8 })
-  assert.equal(s.maxRepeat, '7')
+  // W22 P2: key-level whitelist — the probe key switched from `maxRepeat` (a settings.js key that
+  // used to slip in via the bare assign) to a declared REPEAT_DEFAULTS key; junk keys (restMin)
+  // are now dropped at this boundary instead of adopted (see w22-repeat-settings-whitelist.test.mjs).
+  mod.mutations.updateFromBlob.call(ctx, s, { repeatWeekCount: '7', restMin: 8 })
+  assert.equal(s.repeatWeekCount, '7')
+  assert.equal('restMin' in s, false, 'W22 P2: undeclared keys are no longer adopted')
   assert.deepEqual(commits, [], 'one-way adopt: no settings re-commit (no loop)')
   // junk blobs ignored
   mod.mutations.updateFromBlob.call(ctx, s, 'junk')
   mod.mutations.updateFromBlob.call(ctx, s, null)
-  assert.equal(s.maxRepeat, '7')
+  assert.equal(s.repeatWeekCount, '7')
 })
 
 test('Y4: store/index.js fans blob changes into repeatSettings + tours LS cache', async () => {

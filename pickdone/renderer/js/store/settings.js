@@ -10,13 +10,30 @@ const LS_KEY = 'settingsState'
 // imports what it uses and re-exports everything so consumer imports stay stable.
 import {
   SETTINGS_SCHEMA_V, DEFAULT_SETTINGS, coerceNumericSettings,
-  sanitizeSettingsPatch, isLegalAppLocale, clampNumericSettings,
+  sanitizeSettingsPatch as _sanitizeSettingsPatchBase,
+  isLegalAppLocale, clampNumericSettings,
   mergeTourMap, canonicalJson, MAIN_CONSUMED_SETTINGS, mainConsumedSettingsDiff,
   tomatoLedgerPatch,
 } from './settings-schema.js'
+// [W22 P2] the nested repeatDefaultSettings whitelist lives beside its schema (store/repeatSettings.js)
+import { sanitizeRepeatDefaults } from './repeatSettings.js'
+/** [W22 P2] sanitizeSettingsPatch with the nested-object whitelist added. The base sanitizer
+ *  (settings-schema.js) treats repeatDefaultSettings as a declared OBJECT key, so any object
+ *  passed type-checking — and its keys were then adopted verbatim (bare object passthrough), the
+ *  exact bypass the F-C2 DEFAULT_SETTINGS whitelist closed at the settings TOP level. This wrapper
+ *  applies the twin key-level whitelist (repeatSettings.js sanitizeRepeatDefaults) to the nested
+ *  map, so unknown keys entering via ANY inbound trust boundary (updateExternal LAN/CLI patches,
+ *  restore backup blobs) never reach live state, LS, db.settingsState or backup exports. */
+export function sanitizeSettingsPatch (patch, current) {
+  const clean = _sanitizeSettingsPatchBase(patch, current)
+  if (clean.repeatDefaultSettings !== undefined) {
+    clean.repeatDefaultSettings = sanitizeRepeatDefaults(clean.repeatDefaultSettings)
+  }
+  return clean
+}
 export {
   SETTINGS_SCHEMA_V, DEFAULT_SETTINGS, SETTING_ENUMS, coerceNumericSettings,
-  sanitizeSettingsPatch, SETTING_RANGES, isLegalAppLocale, clampNumericSettings,
+  SETTING_RANGES, isLegalAppLocale, clampNumericSettings,
   mergeTourMap, canonicalJson, MAIN_CONSUMED_SETTINGS, mainConsumedSettingsDiff,
   TOMATO_LEDGER_KEYS, tomatoLedgerPatch,
 } from './settings-schema.js'
