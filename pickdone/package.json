@@ -130,10 +130,6 @@
         ]
       },
       {
-        "from": "assets/vendor-lib/dayjs-plugin-isoWeek.js",
-        "to": "assets/vendor-lib/dayjs-plugin-isoWeek.js"
-      },
-      {
         "from": "scripts/cli-bin",
         "to": "bin"
       }
