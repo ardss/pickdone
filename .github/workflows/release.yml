@@ -56,7 +56,7 @@ jobs:
         # and failed deterministically (C6 day-pool, calendar weekday label, lan-sync same-host).
         # Pin to the app's target timezone, same value as ci.yml's job env.
         env:
-          TZ: Asia/Shanghai
+          TZ: Etc/GMT-8 # both node-V8 and sqlite-CRT resolve to UTC+8 (IANA name split them after 16:00Z)
         run: npm run check:all
 
       - name: Clean dist (verify must never run against a stale or mixed build)

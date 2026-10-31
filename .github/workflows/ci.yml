@@ -43,7 +43,7 @@ jobs:
     env:
       CHECK_ALL_SKIP_LIVE: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
       # 2026-10-30: date/weekday unit tests assume the app's target timezone (UTC+8); runners are UTC.
-      TZ: Asia/Shanghai
+      TZ: Etc/GMT-8 # both node-V8 and sqlite-CRT resolve to UTC+8 (IANA name split them after 16:00Z)
     steps:
       - uses: actions/checkout@v7
 
