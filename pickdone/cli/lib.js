@@ -9,7 +9,7 @@ require('dayjs/locale/zh-cn')
 dayjs.locale('zh-cn')
 // Explicit isoWeek extension (hardening, 2026-09-12): applyViewConds' week window uses endOf('isoWeek') but used
 // to rely on todo-core's require side effect extending the shared instance. Extend our own instance so the CLI // keeps correct 本周 semantics even if that import chain ever changes (same degrade as cli/nl-date.cjs).
-try { dayjs.extend(require('../assets/vendor-lib/dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
+try { dayjs.extend(require('./dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
 const { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } = require('../shared/limits.mjs') // focus-duration clamp constants (single source with db.js / renderer, audit item 4); require(esm) — Node >= 22.12
 
 // The CLI runs in pure Node; silence electron-log to keep logs out of the stdout JSON output
