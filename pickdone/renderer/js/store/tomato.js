@@ -194,7 +194,7 @@ const DEF = {
   // (notify-sound.js never consulted them); they only kept dead bytes flowing through every
   // persist/sync round. loadState() strips their residue out of old blobs.
   whiteNoiseAudio: '',
-  remainSec: 1500, startedAt: 0,
+  remainSec: 1500, startedAt: 0, _pendingRestRowId: null, // [w24 P2] rides the LS blob (see completeFocus/resolvePendingRestRow)
   // Wall-clock stamp of the last STATUS transition (patch sets it when status changes). Cross-window
   // sync compares these so a throttled peer's stale blob can never resurrect a phase the local
   // window already transitioned past (2026-09-27: float-window stale write rolled the main window's
@@ -273,11 +273,11 @@ export function tomatoMirrorDegraded () { return _mirrorDegraded }
 let _lastBookedFocus = null // { tomatoId }
 function resolvePendingRestRow (s, restStartedAt) {
   const list = s.tomatoRecordList || []
-  const byId = _lastBookedFocus && list.find(r => r && r.tomatoId === _lastBookedFocus.tomatoId)
+  // [w24 P2] id first: blob-carried _pendingRestRowId (a PEER may settle; _lastBookedFocus dies with its window); ±2000ms scan stays as the old-blob fallback
+  const pendingId = (s._pendingRestRowId || (_lastBookedFocus && _lastBookedFocus.tomatoId)) || null
+  const byId = pendingId && list.find(r => r && r.tomatoId === pendingId)
   if (byId && byId.succeed) return byId
-  // The booked row's endTime IS the rest start (completeFocus flips to rest right after booking),
-  // so the succeed row whose endTime sits at restStartedAt (±2s) is the pending one.
-  return list.find(r => r && r.succeed && typeof r.endTime === 'number' && Math.abs(r.endTime - restStartedAt) <= 2000) || null
+  return list.find(r => r && r.succeed && typeof r.endTime === 'number' && Math.abs(r.endTime - restStartedAt) <= 2000) || null // endTime ≈ restStartedAt (±2s): completeFocus flips to rest right after booking
 }
 function settleRestDuration (commit, s, restStartedAt) {
   const rec = resolvePendingRestRow(s, restStartedAt)
@@ -285,7 +285,7 @@ function settleRestDuration (commit, s, restStartedAt) {
   // Sub-minute rest books 0 (no phantom rest minute) — mirrors giveUp's sub-minute focus caliber.
   const measured = Math.round((Date.now() - restStartedAt) / 60000)
   const settled = Math.max(0, Math.min(REST_MAX_MINUTES, measured))
-  _lastBookedFocus = null
+  _lastBookedFocus = null; s._pendingRestRowId = null // [w24 P2] consumed — the blob stops advertising the row
   if (rec.restDuration === settled) return
   commit('updateRecord', { tomatoId: rec.tomatoId, patch: { restDuration: settled } })
 }
@@ -697,7 +697,7 @@ export default {
         dispatch('todo/writeCriticalBackup', null, { root: true })
         try { new Audio(confirmUrl(rootState.settings.completeSound)).play().catch(() => {}) } catch (e) { /* empty */ }
         if (s.enableNotification !== false) { try { window.todoAPI.notification({ title: tt('statsA.core.tomatoDoneTitle'), body: tt('statsA.core.tomatoDoneBody', { n: focusMin }) }) } catch (e) { /* locked screen rejects the channel — fire-and-forget */ } }
-        commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date) })
+        commit('patch', { status: 'startRestTime', startedAt: Date.now(), remainSec: s.restTime * 60, _countDate: dayjs().format(FMT.date), _pendingRestRowId: focusTomatoId })
         // TQ-1: the focus phase completed; the durable row now tracks the rest phase (also a
         // running phase for the quit confirm; rest itself is never a ledger asset).
         reportRunningTransition('start', s)
