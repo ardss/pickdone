@@ -695,7 +695,7 @@ export default {
 .setting_tabs .el-tabs__item:last-child { padding-right: 18px !important; }
 .setting_tabs .el-tabs__nav { padding-left: 6px !important; }
 .setting_tabs .el-tabs__nav-wrap::after { display: none !important; }
-.setting_tabs .el-tabs__item.is-active::after { left: 0 !important; right: auto !important; top: 9px; bottom: 9px; width: 2px; height: auto; }
+.setting_tabs .el-tabs__item.is-active::after { left: 0 !important; right: auto !important; content: ''; position: absolute; top: 9px; bottom: 9px; width: 2px; height: auto; background: var(--brand-dark); border-radius: var(--radius-xs); } /* W23 修正：清理旧下划线时误删 content/position/background 基础声明致竖条消失（e2e 抓到），补回完整自绘 */
 .setting_tabs .el-tabs__active-bar { display: none !important; }
 html[data-theme="dark"] .form-item__label { color: var(--text-1); }
 html[data-theme="dark"] .form-item__control input,
