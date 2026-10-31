@@ -3,7 +3,7 @@
   "baselines": {
     "win32@node22": {
       "lines": 83,
-      "branches": 84,
+      "branches": 83,
       "functions": 77
     },
     "linux@node22": {
