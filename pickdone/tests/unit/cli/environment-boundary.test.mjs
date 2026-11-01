@@ -5,6 +5,7 @@ import { checkPrTitle, findLeaks, isScannedPath } from '../../../cli/check-envir
 test('deployment host information is not allowed in portable source', () => {
   assert.ok(findLeaks('product/AGENTS.md', 'Example C:\\Users\\dev\\AppData\\Roaming\\app').length)
   assert.ok(findLeaks('product/install.ps1', 'ssh ops@192.168.8.7 echo ok').length)
+  assert.ok(findLeaks('product/config.mjs', "const root = '/home/example-user/deploy'").length)
   assert.ok(findLeaks('product/install.ps1', 'Target DESKTOP-EXAMPLE123').length)
   assert.ok(findLeaks('product/config.mjs', 'D:\\PickDone\\PickDone.exe').length)
   assert.equal(findLeaks('product/config.mjs', 'const path = process.env.APPDATA').length, 0)
