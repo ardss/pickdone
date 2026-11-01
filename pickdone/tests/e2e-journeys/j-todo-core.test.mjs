@@ -254,9 +254,9 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
       i.dispatchEvent(new Event('input', { bubbles: true }))
       return true
     })()`)
-    await sleep(400)
-    // USER-VISIBLE promise 1: the NL date chip must show "tomorrow 15:00" before Enter is pressed
-    const chip = await evalJson(`(() => { const c = document.querySelector('.qa-date-chip'); return c ? c.textContent.trim() : null })()`)
+    // USER-VISIBLE promise 1: wait for the actual NL date chip, not a fixed
+    // 400ms budget that becomes a flaky assumption under Electron/CI CPU load.
+    const chip = await until(`(() => { const c = document.querySelector('.qa-date-chip'); const s = c?.textContent.trim(); return s && /tomorrow\\s*15:00/.test(s) ? s : null })()`, 16, 250)
     assert.ok(chip && /tomorrow\s*15:00/.test(chip), `the NL date chip did not promise "tomorrow 15:00" — got: ${JSON.stringify(chip)}`)
     // Press Enter (keyup, same as e2e.test.mjs's proven path)
     await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
@@ -271,12 +271,16 @@ test('J1 NL quick-add: "meeting tomorrow 3pm" lands TOMORROW 15:00 with a clean 
     assert.notEqual(row.dayStart, TODAY0, 'the reminder/date must NOT fall on today (pre-W10 silent-today bug)')
     // USER-VISIBLE 2: the title carries no "tomorrow" residue (exact equality already asserted above;
     // double-check the DOM: select tomorrow on the day strip as a user would, the row must render there)
-    // W24: the today-view strip is a trailing 7-day window ENDING on today — tomorrow is off-strip
-    // by construction (probed 11-01: nums 26..31,1). Slide the window one day forward first, then
-    // pick the exact day-number button after .today (equality, not startsWith: 2 vs 20-29).
-    await clickEl(`[...document.querySelectorAll('.ds-arrow')][1]`)
-    await sleep(400)
-    await clickEl(`(() => { const all=[...document.querySelectorAll('.ds-day')]; const ti=all.findIndex(b=>b.classList.contains('today')); return all.slice(ti+1).find(b=>b.querySelector('.ds-num') && b.querySelector('.ds-num').textContent.trim() === String(${TOMORROW_DOM})) })()`)
+    // The strip is a calendar WEEK, not a trailing seven-day range.
+    // Its right arrow calls shift(+7) and must be used only when tomorrow is
+    // outside the current week (e.g. on Sunday in Monday-first configuration).
+    // The old unconditional arrow jumped a full week, making J1 fail every Monday.
+    const tomorrowButton = `[...document.querySelectorAll('.ds-day')].find(b => b.querySelector('.ds-num')?.textContent.trim() === String(${TOMORROW_DOM}))`
+    if (!(await evalJson(`!!(${tomorrowButton})`))) {
+      assert.ok(await clickEl(`[...document.querySelectorAll('.ds-arrow')][1]`), 'next-week arrow missing when tomorrow is off-strip')
+      assert.ok(await until(`!!(${tomorrowButton})`, 10, 250), 'tomorrow still not on the day strip after advancing one week')
+    }
+    assert.ok(await clickEl(`(${tomorrowButton})`), 'could not select tomorrow on the date strip')
     await sleep(1200)
     const onTomorrow = await until(`[...document.querySelectorAll('.td-item .td-title')].some(t => t.textContent.trim() === 'meeting')`, 8, 400)
     assert.ok(onTomorrow, 'the created task is not visible on the tomorrow day view (user cannot see what they just scheduled)')
