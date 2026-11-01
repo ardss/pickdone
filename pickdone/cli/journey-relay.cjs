@@ -244,13 +244,18 @@ step('deploy: packaged app + CLI wrapper staged on the remote device', () => {
     `node "${B.dir}\\win-unpacked\\resources\\cli\\pickdone.js" %*`,
     '',
   ].join('\r\n')
-  const tmpEnv = path.join(os.tmpdir(), 'jrelay-env.cmd')
-  const tmpCli = path.join(os.tmpdir(), 'jrelay-cli.cmd')
+  // W27 fix (2026-11-01): these staging files used FIXED names at os.tmpdir() root — two
+  // concurrent relay runs clobbered each other's scp payloads, and a crashed run leaked the
+  // files forever. Stage inside a per-pid mkdtemp dir (unique + dir-level cleanup, and the
+  // `jrelay-` prefix joins tests/lib/tmp-dir.mjs' sweep family so a SIGKILL orphan is reclaimed).
+  const tmpStage = fs.mkdtempSync(path.join(os.tmpdir(), 'jrelay-stage-pid' + process.pid + '-'))
+  const tmpEnv = path.join(tmpStage, 'jrelay-env.cmd')
+  const tmpCli = path.join(tmpStage, 'jrelay-cli.cmd')
   fs.writeFileSync(tmpEnv, envCmd)
   fs.writeFileSync(tmpCli, cliCmd)
   run('scp', ['-o', 'BatchMode=yes', tmpEnv, `${REMOTE}:${B.dir}/jrelay-env.cmd`])
   run('scp', ['-o', 'BatchMode=yes', tmpCli, `${REMOTE}:${B.dir}/jrelay-cli.cmd`])
-  fs.rmSync(tmpEnv, { force: true }); fs.rmSync(tmpCli, { force: true })
+  fs.rmSync(tmpStage, { recursive: true, force: true })
   ok(`app mirrored to ${REMOTE}:${B.dir}\\win-unpacked; wrappers staged (ud=${B.ud})`)
 })
 
@@ -266,7 +271,9 @@ step('boot: both devices reach a live command bus', async () => {
   // B: remote boot through a PowerShell wrapper — cmd `start` keeps the ssh pipe
   // handles inherited (the session hangs until the app exits); Start-Process detaches.
 
-  const tmpBoot = path.join(os.tmpdir(), 'jrelay-boot.ps1')
+  // W27 fix (2026-11-01): pid-unique staging dir (same rationale as the env/cli wrappers above).
+  const tmpBootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jrelay-boot-pid' + process.pid + '-'))
+  const tmpBoot = path.join(tmpBootDir, 'jrelay-boot.ps1')
   fs.writeFileSync(tmpBoot, [
     `$env:TODO_USER_DATA_DIR = '${B.ud}'`,
     `$env:TODO_DB_DIR = '${B.ud}'`,
@@ -276,7 +283,7 @@ step('boot: both devices reach a live command bus', async () => {
     '',
   ].join('\r\n'))
   run('scp', ['-o', 'BatchMode=yes', tmpBoot, `${REMOTE}:${B.dir}/jrelay-boot.ps1`])
-  fs.rmSync(tmpBoot, { force: true })
+  fs.rmSync(tmpBootDir, { recursive: true, force: true })
   ssh(REMOTE, `powershell -NoProfile -ExecutionPolicy Bypass -File '${B.dir}\\jrelay-boot.ps1'`)
   // bus-up ASSERTION: a full status payload, not merely exit 0 — ok:true + data.status.deviceId
   const busUp = j => j && j.ok === true && !!(j.data && (j.data.status || j.data).deviceId)

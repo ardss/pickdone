@@ -25,9 +25,18 @@ function mediaRefs (file) {
   if (!fs.existsSync(file)) return []
   const src = fs.readFileSync(file, 'utf8')
   const refs = []
-  const md = /!\[[^\]]*\]\(([^)\s]+)\)|<img[^>]+src=["']([^"']+)["']/g
+  // W27 fix (2026-11-01): the markdown arm used to capture [^)\s]+ — any reference containing a
+  // SPACE (or wrapped in angle brackets) silently escaped BOTH the existence check and the EN
+  // marker check (fail-open): `![demo](docs/media/en/my demo.png)` was simply never seen. Widen
+  // the capture to [^)]+, trim stray whitespace and strip the optional <...> wrapper so such
+  // refs reach both checks (a title-suffixed `(...) "title"` form reds on existence — fail-closed).
+  const md = /!\[[^\]]*\]\(([^)]+)\)|<img[^>]+src=["']([^"']+)["']/g
   let m
-  while ((m = md.exec(src))) refs.push(m[1] || m[2])
+  while ((m = md.exec(src))) {
+    let ref = (m[1] || m[2]).trim()
+    if (/^<.*>$/.test(ref)) ref = ref.slice(1, -1).trim()
+    if (ref) refs.push(ref)
+  }
   return refs
 }
 

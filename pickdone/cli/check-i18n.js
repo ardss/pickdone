@@ -42,7 +42,11 @@ const IGNORE_FILES = new RegExp([
   // they are the RED INPUTS proving detection works ("who checks the checks"), never shipped UI
   // copy. Editing that file makes it dirty → incremental scan → self-inflicted red otherwise.
   'tests[/\\\\]unit[/\\\\]cli[/\\\\]gate-must-fail-golden\\.test\\.mjs$',
-].join('|'))
+  // 2026-11-01 W27: same shape — w27-gates-fixes.test.mjs carries the red i18n fixture inputs
+  // (showError('真实泄漏中文') etc.) proving the bracket-window fix works; editing the file makes
+  // it dirty → incremental scan → self-inflicted red otherwise.
+  'tests[/\\\\]unit[/\\\\]cli[/\\\\]w27-gates-fixes\\.test\\.mjs$',
+  ].join('|'))
 
 // 2026-10-30 (W19) multi-line call escape: `ElMessage.error(\n  '中文'\n)` puts the Chinese on a
 // line of its own that never matched VISIBLE_RE, so the hardcoded copy escaped the scan forever.
@@ -53,9 +57,44 @@ const IGNORE_FILES = new RegExp([
 // CN-bearing line itself (so `$t('a')` on one line of a block never launders a raw-CN line on
 // another), and the start line still short-circuits on console.*.
 const BLOCK_MAX_LINES = 5
+// W27 fix (2026-11-01): bracketDelta used to count brackets inside string literals and comments.
+// A `)` in a string ('文案 x)') truncated the block window early (a real CN continuation line
+// escaped the scan — miss), while a `(` in a comment/string over-extended it (an unrelated raw-CN
+// line below got swallowed — false red). Strip literals + comments first (quote state machine,
+// same family as check-file-size.cjs blankComments): // ... to EOL and /* ... */ blanked, with
+// an unterminated /* or quote swallowing to EOL — symmetric noise, both directions.
+function stripLiteralsAndComments (s) {
+  let out = ''
+  let i = 0
+  let state = 'code' // code | squote | dquote | tick | linec | blockc
+  while (i < s.length) {
+    const ch = s[i]
+    const two = s.slice(i, i + 2)
+    if (state === 'code') {
+      if (two === '//') { state = 'linec'; i += 2; continue }
+      if (two === '/*') { state = 'blockc'; out += '  '; i += 2; continue }
+      if (ch === "'") state = 'squote'
+      else if (ch === '"') state = 'dquote'
+      else if (ch === '`') state = 'tick'
+      out += ch; i++; continue
+    }
+    if (state === 'linec') break // rest of the line is comment — drop it
+    if (state === 'blockc') {
+      if (two === '*/') { state = 'code'; i += 2; continue }
+      out += ch === '\n' ? '\n' : ' '; i++; continue
+    }
+    // inside a literal: keep newlines (per-line filters run on the stripped line), blank the rest
+    const q = state === 'squote' ? "'" : state === 'dquote' ? '"' : '`'
+    if (ch === '\\') { out += '  '; i += 2; continue }
+    if (ch === '\n') { out += '\n'; i++; continue } // template literals may span lines
+    if (ch === q) { state = 'code'; out += q; i++; continue }
+    out += ' '; i++
+  }
+  return out
+}
 function bracketDelta (s) {
   let d = 0
-  for (const ch of s) { if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) d-- }
+  for (const ch of stripLiteralsAndComments(s)) { if ('([{'.includes(ch)) d++; else if (')]}'.includes(ch)) d-- }
   return d
 }
 const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/

@@ -67,14 +67,22 @@ const STALE_MS = 12 * 60 * 60 * 1000
 // extraction could never discover it; a coverage-gate process killed mid-run leaked the dir
 // forever. (Note `todo-cov-` already matched the `todo-` alternation below — it is spelled
 // out anyway so the family list stays self-documenting if `todo-` is ever narrowed.)
-const FAMILY_FALLBACK = /^(todo-|todo-cov-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+// W27 2026-11-01: `jrelay-` joins the family — cli/journey-relay.cjs mkdtemps `jrelay-a-` /
+// `jrelay-stage-pidN-` / `jrelay-boot-pidN-` dirs under os.tmpdir(), and cli/ is OUTSIDE the
+// tests/ source walk, so extraction could never discover them (same structural blind spot the
+// todo-cov- seeding below fixed); a relay run killed mid-flight leaked the dir forever. Note
+// neither `journey-` nor `relay-` (both already here) matches the `jrelay-` spelling.
+const FAMILY_FALLBACK = /^(todo-|todo-cov-|jrelay-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
 
 let cachedPrefixes = null
 function collectPrefixesFromSources () {
   if (cachedPrefixes) return cachedPrefixes
   // W25 2026-11-01: `todo-cov-` seeded (cli/check-coverage-ratchet.cjs mkdtemps it under
   // os.tmpdir(); cli/ is outside the tests/ walk, so extraction can never discover it).
-  const prefixes = new Set(['todo-', 'todo-cov-', 'lan-sync-', 'pickdone-']) // historic core, always in
+  // W27 2026-11-01: `jrelay-` seeded (cli/journey-relay.cjs mkdtemps `jrelay-a-`/`jrelay-stage-`/
+  // `jrelay-boot-` under os.tmpdir(); cli/ is outside the tests/ walk, so extraction can never
+  // discover it — same structural blind spot as todo-cov-).
+  const prefixes = new Set(['todo-', 'todo-cov-', 'jrelay-', 'lan-sync-', 'pickdone-']) // historic core, always in
   const testsRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
   // static part of the first string literal of a prefix argument (template literals
   // contribute their static head; the trailing '-' is what makes it a directory prefix)
