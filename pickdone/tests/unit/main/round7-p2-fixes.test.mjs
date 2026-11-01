@@ -109,7 +109,12 @@ test('P2-3: migrateV6 with a _savedAt-stamped backup blob keeps newer rows and s
   assert.ok(rows.theme.updatedAt > T0 + 30000, 'the newer live row keeps its own (recent) stamp — no local-now re-stamp needed, and none allowed')
   const before = rows.theme.updatedAt
   assert.equal(rows.language.value, '"en"', 'an absent field is stamped exactly once so it exists at all')
-  assert.ok(Math.abs(rows.language.updatedAt - Date.now()) < 10000, 'absent field carries the migration-time stamp')
+  // W26 (2026-11-01) contract update: an absent field from a STALE backup snapshot carries the
+  // snapshot stamp (T0), not the migration-time now — a fresh now-stamp gave backup-era values
+  // the newest LWW age and let them beat a peer's newer live row for the same field (the same
+  // restore-path hazard R7 P2-3 fixed for pre-existing rows; putRow now applies it to the INSERT
+  // branch too). See tests/unit/main/w26-sync-putrow-stale-insert.test.mjs.
+  assert.equal(rows.language.updatedAt, T0, 'absent field carries the snapshot stamp — backup-era LWW age, a peer newer live row wins')
   assert.equal(d.prepare('SELECT value FROM meta WHERE key = ?').get('settingsRows.src.db.settingsState').value,
     JSON.stringify({ theme: 'light', language: 'en', _savedAt: T0 }), 'the snapshot marker records the migrated blob shape')
   void before

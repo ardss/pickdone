@@ -112,9 +112,20 @@ module.exports = ({ getDb, log }) => {
     // re-stamp a live row; a FRESH mirror (same-tick, within the epsilon) is the legitimate
     // resurrection path and still passes.
     if (Number.isFinite(gateTs) && cur && curTs - gateTs > 1000) return false // stale whole-blob echo: row (or tombstone) wins
+    // W26 fix (2026-11-01): the gate above protects only EXISTING rows — a field the local DB has
+    // no row for hit the INSERT with a fresh local `now` stamp even when the whole-blob mirror was
+    // a STALE echo (snapshot authored minutes before). That freshly-stamped row minted an oplog
+    // delta with the newest LWW age, and the peer's genuinely newer edit for the same field lost
+    // the cross-device LWW merge — the exact Round-3 revert loop for a field that happened to be
+    // absent locally. When the caller carries a causal snapshot stamp (gateTs, migrateV6's 0
+    // fallback excluded: an unstamped doc's freshness is unknown, keep the now-stamp), stamp the
+    // new row with the SNAPSHOT's age instead of local now: a fresh mirror's gateTs sits within
+    // the same tick of now (behavior unchanged), while a stale echo lands with its true (old) age
+    // so the peer's real timestamp wins LWW.
+    const insertTs = (!cur && Number.isFinite(gateTs) && gateTs > 0) ? gateTs : now
     getDb().prepare(`INSERT INTO settings_rows (key, value, updatedAt, deleted, deletedAt) VALUES (?, ?, ?, 0, 0)
       ON CONFLICT(key) DO UPDATE SET value=excluded.value, updatedAt=excluded.updatedAt, deleted=0, deletedAt=0`)
-      .run(key, value, now)
+      .run(key, value, insertTs)
     return true
   }
 
