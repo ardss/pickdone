@@ -1,6 +1,6 @@
 # INSTALL-DODO — Dodo Payments OpenCode 插件安装记录
 
-安装日期：2026-10-10 · 隔离 worktree：`C:\Users\13397\.paseo\worktrees\37tvj1z6\dodo-plugin`（分支 `feat/dodo-opencode-plugin`）
+安装日期：2026-10-10 · 隔离 worktree：项目外的临时工作树（不在公开仓库记录本机绝对路径）（分支 `feat/dodo-opencode-plugin`）
 
 ## 安装内容
 
