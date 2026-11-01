@@ -1,5 +1,7 @@
 # AGENTS — 工程铁律速览
 
+**发布/交付治理（2026-11-01 P0，优先级最高）：一律遵守权威契约 `K:\AIControl\Release-Governance\DELIVERY-CONTRACT.md`。状态机 CODE_PUSHED→…→PUBLISHED；对外 Publish 必须用户单独 GO（概括授权不覆盖）；安装验证必须含应用内运行时自报版本 + 现场机器 hostname（禁按 IP/localhost 猜 A/B）；用户报「还是旧版」→ 立即 FAILED 并撤销成功声明。**
+
 完整规范见仓库根 `../docs/开发规范.md`（相对本文件，即 `<repo>/docs/开发规范.md`）；本文件是给人和 AI 的最小铁律集。与规范冲突时以该规范为准。
 
 ## 工程形态（2026-09-05 起）
