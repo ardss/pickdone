@@ -32,6 +32,13 @@ const ASSET_EXT = /\.(css|js|mjs|woff2?|ttf|svg|png|ico)$/i
 // `-c` 是每次调用生效,不会传播进子进程,故统一在 helper 处 pin(与 W16 其余门禁同一手法)。
 const git = (args) => execFileSync('git', ['-c', 'core.quotePath=false', ...args], { cwd: ROOT, encoding: 'utf8' }).trim()
 
+// Fail-closed guard — w26: the probe ran AFTER the first git calls (stagedDirty / tsOf /
+// ls-files), so on a broken .git those threw raw and the deliberate refuse-fake-green messages
+// were unreachable. Probe FIRST and refuse before any other git call.
+let gitOk = true
+try { git(['rev-parse', '--is-inside-work-tree']) } catch { gitOk = false }
+if (!gitOk) { console.error('✗ 缓存戳:git 异常,检查结果不可信,拒绝假绿'); process.exit(1) }
+
 // W25 fix(2026-11-01): dirty 豁免此前只看工作区脏(git status --porcelain)不区分暂存位——
 // css 已 staged 而 index.html 的 ?v= bump 留在工作区时,门禁绿但【将要提交的内容】里没有
 // bump(正是本门禁要防的 2026-09-05 事故形态)。改成分层判定:豁免只认「index vs HEAD」;
@@ -49,18 +56,13 @@ if (stagedDirty.length) {
 }
 
 const tsOf = (spec) => Number(git(['log', '-1', '--format=%ct', '--', spec])) || 0
-// Fail-closed guard: a git failure (broken .git, missing binary) used to read as "no commit
-// history" and skip the gate entirely. Verify git actually works before trusting that skip.
-let gitOk = true
-try { git(['rev-parse', '--is-inside-work-tree']) } catch { gitOk = false }
+// (gitOk probe moved to the top — w26: it used to run after the first git calls, too late.)
 const htmlTs = tsOf('renderer/index.html')
 const assetFiles = git(['ls-files', ...WATCHED]).split('\n').filter(f => ASSET_EXT.test(f))
 const stale = assetFiles.filter(f => tsOf(f) > htmlTs)
 if (!htmlTs) {
-  if (!gitOk) { console.error('✗ 缓存戳:git 不可用且 renderer/index.html 无提交时间——无法判定缓存戳纪律,拒绝假绿'); process.exit(1) }
   console.log('✓ 缓存戳:renderer/index.html 无提交历史,跳过'); process.exit(0)
 }
-if (!gitOk) { console.error('✗ 缓存戳:git 异常,ls-files/log 结果不可信,拒绝假绿'); process.exit(1) }
 if (stale.length) {
   console.error('✗ 缓存戳纪律:以下资源在 renderer/index.html 最后一次修改之后又被改过,但 ?v= 戳未 bump——发版后已装用户将拿到旧缓存(immutable):\n  ' + stale.join('\n  ') + '\n  修复:改 renderer/index.html 的 ?v= 时间戳并随包发布(无 ?v= 的直引资源见脚本头部豁免清单,升级需人工 bump)')
   process.exit(1)

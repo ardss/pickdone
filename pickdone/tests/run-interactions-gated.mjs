@@ -9,8 +9,12 @@ import net from 'node:net'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const appCwd = path.dirname(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')))
+// w26 fix: URL#pathname is percent-encoded — a repo path with spaces / non-ASCII chars produced
+// a decoded-nowhere cwd (spawn ENOENT) and, with no 'error' handler on the spawns, the promise
+// never settled and the gate burned its full 10min watchdog. fileURLToPath decodes properly.
+const appCwd = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const ELECTRON = process.platform === 'win32'
   ? path.join(appCwd, 'node_modules', 'electron', 'dist', 'electron.exe')
   : path.join(appCwd, 'node_modules', 'electron', 'dist', 'electron')
@@ -42,6 +46,9 @@ const run = () => new Promise(res => {
     stdio: 'inherit'
   })
   child.on('exit', code => res(code ?? 1))
+  // w26: ENOENT etc. must settle the promise — without a listener node THROWS on 'error'
+  // (unhandled) and the 10min watchdog is the only thing that ever ends the gate.
+  child.on('error', () => res(1))
 })
 
 let CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
@@ -88,6 +95,9 @@ if (ALLOW_REUSE && await cdpAlive(CDP)) {
   })
   let childExit = null
   child.once('exit', (code, signal) => { childExit = { code, signal } })
+  // w26: a spawn failure (bad ELECTRON path / ENOENT) emits 'error', not 'exit' — record it for
+  // the readiness diagnostics below instead of crashing with an unhandled 'error' event.
+  child.once('error', err => { childExit = { code: null, signal: null, error: err.message } })
   // Wait for the instance to be ready (up to 60s:CI runner 冷启动 Electron 可超 25s,2026-09-06 公开 CI 实锤)
   let up = false
   for (let i = 0; i < 60; i++) { if (await cdpAlive(CDP)) { up = true; break } await new Promise(r => setTimeout(r, 1000)) }

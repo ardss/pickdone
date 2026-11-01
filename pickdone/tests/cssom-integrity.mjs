@@ -13,6 +13,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnApp, stopApp, connectCdp, evalJson, sleep } from './lib/runtime.mjs'
+// comment/string-aware top-level { counter — extracted (w26) for unit anchoring; the inline copy
+// carried a dead escape branch ('\\\\' is the 2-char "\\" string at runtime, never equal to the
+// 1-char css[i]), so \" / \' escapes inside CSS strings closed the quote scan early and miscounted
+import { countTopLevel } from './lib/css-top-level-rules.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const BASELINE = path.join(HERE, 'cssom-baseline.json')
@@ -68,17 +72,6 @@ try {
   // base.css/theme-dark.css 的 live 规则数必须逐条等于磁盘派生数(注释/字符串感知的顶层 { 计数,
   // 已验证与浏览器 CSSOM 计数完全一致:608/145)。历史两次吞规则事故正是手写文件。
   // index-built(vite 压缩产物)的浏览器规范化文本与磁盘无法稳定文本对账,且源侧有构建器+结构门禁兜底,维持基线 95%。
-  const countTopLevel = css => {
-    let depth = 0, n = 0
-    for (let i = 0; i < css.length; i++) {
-      const c = css[i]
-      if (c === '/' && css[i + 1] === '*') { i = css.indexOf('*/', i + 2); if (i < 0) break; i++ ; continue }
-      if (c === '"' || c === "'") { const q = c; for (i++; i < css.length; i++) { if (css[i] === '\\\\') i++; else if (css[i] === q) break } continue }
-      if (c === '{') { if (depth === 0) n++; depth++ }
-      else if (c === '}') depth--
-    }
-    return n
-  }
   const diskExact = {}
   diskExact['base.css'] = countTopLevel(fs.readFileSync(path.join(HERE, '..', 'assets', 'css', 'base.css'), 'utf8'))
   diskExact['theme-dark.css'] = countTopLevel(fs.readFileSync(path.join(HERE, '..', 'assets', 'css', 'theme-dark.css'), 'utf8'))
