@@ -62,12 +62,19 @@ const STALE_MS = 12 * 60 * 60 * 1000
 // sources themselves (mkdtempSync/isolatedTmpDir/withTmpDir/newTmpLib literals) — a new
 // prefix joins the sweep automatically. Fail-safe: if extraction finds suspiciously few
 // prefixes, fall back to the 2026-10-09 hard-coded family (never WIDEN the sweep face).
-const FAMILY_FALLBACK = /^(todo-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+// W25 2026-11-01: `todo-cov-` joins the family — cli/check-coverage-ratchet.cjs:130 mkdtemps
+// `todo-cov-` dirs under os.tmpdir(), and cli/ is OUTSIDE the tests/ source walk below, so
+// extraction could never discover it; a coverage-gate process killed mid-run leaked the dir
+// forever. (Note `todo-cov-` already matched the `todo-` alternation below — it is spelled
+// out anyway so the family list stays self-documenting if `todo-` is ever narrowed.)
+const FAMILY_FALLBACK = /^(todo-|todo-cov-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
 
 let cachedPrefixes = null
 function collectPrefixesFromSources () {
   if (cachedPrefixes) return cachedPrefixes
-  const prefixes = new Set(['todo-', 'lan-sync-', 'pickdone-']) // historic core, always in
+  // W25 2026-11-01: `todo-cov-` seeded (cli/check-coverage-ratchet.cjs mkdtemps it under
+  // os.tmpdir(); cli/ is outside the tests/ walk, so extraction can never discover it).
+  const prefixes = new Set(['todo-', 'todo-cov-', 'lan-sync-', 'pickdone-']) // historic core, always in
   const testsRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), '..')
   // static part of the first string literal of a prefix argument (template literals
   // contribute their static head; the trailing '-' is what makes it a directory prefix)

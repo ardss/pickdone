@@ -612,6 +612,15 @@ if (r.status !== 0 && !r.error && r.stdout) {
           // ok/not-ok line across the composed corpus; pass = points - skips - not-ok points.
           const points = all.reduce((n, b) => n + b.filter(l => /^\s*(?:not )?ok\b/.test(l)).length, 0)
           const notOkPoints = all.reduce((n, b) => n + b.filter(l => /^\s*not ok\b/.test(l)).length, 0)
+          // W25 2026-11-01: the composed plan must be in the SAME unit as the summary lines
+          // below it (TAP plan semantics = number of test points, not file blocks). The old
+          // `1..${all.length}` counted BLOCKS while # pass/# fail/# skip counted TEST POINTS —
+          // no consumer could detect the misalignment because parseSummary never cross-checked
+          // plan vs summary. plan is now pass+fail+skip summed from the very same numbers the
+          // summary emits (notOkPoints covers every indented not-ok line; keptNotOk/notOkInRetry
+          // are the summary's own fail unit), so cli/check-test-summary.cjs's plan-consistency
+          // assertion holds for every composed stream by construction.
+          const passPoints = points - skips - notOkPoints
           const composed = [
             // W12 2026-10-26 (Fix 4): pass1 streams live, so the gate's tap file already holds
             // its raw bytes when this composed stream is appended. The separator marks the
@@ -619,11 +628,12 @@ if (r.status !== 0 && !r.error && r.stdout) {
             '# COMPOSED-TAP-FOLLOWS: consumers anchor the LAST plan (raw pass1 above is evidence)',
             ...p1.head,
             ...all.map(b => b.join('\n')),
-            `1..${all.length}`,
-            `# pass ${points - skips - notOkPoints}`,
+            `1..${passPoints + keptNotOk + notOkInRetry + skips}`,
+            `# pass ${passPoints}`,
             // fail line is MANDATORY (2026-10-26): the composed summary previously omitted it
             // entirely — parseSummary returns fail=undefined without it and the gate fail-closed
             // on "摘要解析失败". Here both counts are provably 0 (the branch guard above).
+            // (The `keptNotOk + notOkInRetry` literal is a W12 CONTRACT source pin — keep it.)
             `# fail ${keptNotOk + notOkInRetry}`,
             `# skip ${skips}`,
             // REAL counts (2026-10-26): the hardcoded `# cancelled 0` masked kept cancel
@@ -671,18 +681,39 @@ if (r.status !== 0 && !r.error && r.stdout) {
           emitSync(retry.stdout || '')
           // r stays pass1 (status !== 0) → red exit via the final emission + status
         } else {
-          console.error(`[run-all] ⚑FLAKY absorbed but TAP composition skipped (parse confidence low: plan=${planOk} keptNotOk=${keptNotOk} retryNotOk=${notOkInRetry} cancelled=${cancelled1}/${cancelled2}) — raw pass1+retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
-          console.error('[run-all] ⚑FLAKY ledger still records this absorption')
-          await recordFlake([{
-            at: new Date().toISOString(), absorbed: true, deepPool: false, composed: false,
-            files: failedFiles.map(f => path.relative(appRoot, f)),
-            note: 'absorbed; ratchet saw partial corpus (composition guard failed)'
-          }])
-          // W12 2026-10-26 (Fix 4): pass1's raw bytes are ALREADY on stdout (live pass1) —
-          // emitting Buffer.concat([r.stdout, retry.stdout]) again would double-plan. Only the
-          // retry tail is appended after a separator, so the LAST plan (the retry's) stays
-          // what parseSummary anchors.
-          r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + (retry.stdout || ''), stderr: r.stderr, streamed: false }
+          console.error(`[run-all] ⚑FLAKY TAP composition skipped (parse confidence low: plan=${planOk} keptNotOk=${keptNotOk} retryNotOk=${notOkInRetry} cancelled=${cancelled1}/${cancelled2}) — raw pass1+retry TAP on stdout, SKIP RATCHET SAW PARTIAL CORPUS`)
+          // W25 2026-11-01: the old code flipped pass1's nonzero exit to 0 UNCONDITIONALLY in
+          // this branch — our OWN parser failing to compose was rewarded with a green, i.e. a
+          // parse failure masqueraded as a pass. Fail-closed with an evidence escape hatch:
+          // exit 0 is allowed ONLY when independent corroboration exists — the retry child
+          // itself exited 0 AND its raw TAP carries a plan line and ZERO not-ok lines (raw
+          // line scan, not the block parser that just failed us). No corroboration = pass1's
+          // red stands (final emission + status below).
+          const retryTapClean = /^1\.\.\d+/m.test(retryTap) && !/^\s*not ok\b/m.test(retryTap)
+          if (retry.status === 0 && retryTapClean) {
+            console.error(`[run-all] ⚑FLAKY ledger still records this absorption (green granted on EVIDENCE: retry exit 0 + plan line + zero not-ok lines in raw retry TAP)`)
+            await recordFlake([{
+              at: new Date().toISOString(), absorbed: true, deepPool: false, composed: false,
+              files: failedFiles.map(f => path.relative(appRoot, f)),
+              note: 'absorbed; composition skipped (parse low-confidence) but green on evidence: retry exit 0 + zero raw not-ok'
+            }])
+            // W12 2026-10-26 (Fix 4): pass1's raw bytes are ALREADY on stdout (live pass1) —
+            // emitting Buffer.concat([r.stdout, retry.stdout]) again would double-plan. Only the
+            // retry tail is appended after a separator, so the LAST plan (the retry's) stays
+            // what parseSummary anchors.
+            r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + (retry.stdout || ''), stderr: r.stderr, streamed: false }
+          } else {
+            console.error(`[run-all] ⚑FLAKY absorption REFUSED: parse low-confidence AND no clean-retry corroboration (retry exit=${retry.status}, plan-line=${/^1\.\.\d+/m.test(retryTap)}, not-ok-in-retry=${!/^\s*not ok\b/m.test(retryTap) ? 0 : 'present'}) — pass1's RED stands, retry TAP below is evidence only`)
+            await recordFlake([{
+              at: new Date().toISOString(), absorbed: false, deepPool: false, composed: false,
+              files: failedFiles.map(f => path.relative(appRoot, f)),
+              retryExit: retry.status,
+              note: 'parse low-confidence without clean-retry evidence — absorption refused, pass1 red stands'
+            }])
+            console.error('[run-all] retry TAP below is EVIDENCE ONLY (suite verdict = pass1):')
+            emitSync(retry.stdout || '')
+            // r stays pass1 (status !== 0) → red exit via the final emission + status
+          }
         }
       }
     } else {

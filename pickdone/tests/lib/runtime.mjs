@@ -74,9 +74,16 @@ export async function spawnApp (opts = {}) {
   const port = opts.port || await pickFreePort()
   const autoDir = !opts.userDataDir
   const userDataDir = opts.userDataDir || fs.mkdtempSync(path.join(os.tmpdir(), 'todo-test-'))
-  // 预置空 todos.db：新库直接走当前 SCHEMA，跳过 legacy 迁移分支（与 integration-ui 的 seed 语义一致）
-  try { fs.writeFileSync(path.join(userDataDir, 'todos.db'), '') } catch {}
-  if (autoDir) _tempUserDataDirs.add(userDataDir) // 自建临时目录登记,测试进程退出时统一清(复用外部目录的不动,重启持久化类测试还要读)
+  // W25 2026-11-01: seed an empty todos.db ONLY into the auto-created mkdtemp dir — the point
+  // of the seed is "fresh dir skips legacy migration". An EXTERNALLY supplied userDataDir is
+  // reused as-is (the reuse scenario the registration comment below already promises): its
+  // todos.db, if present, used to be silently truncated to zero bytes on every spawnApp,
+  // destroying exactly the persisted state the reuse callers spawn the instance to read.
+  if (autoDir) {
+    // 预置空 todos.db：新库直接走当前 SCHEMA，跳过 legacy 迁移分支（与 integration-ui 的 seed 语义一致）
+    try { fs.writeFileSync(path.join(userDataDir, 'todos.db'), '') } catch {}
+    _tempUserDataDirs.add(userDataDir) // 自建临时目录登记,测试进程退出时统一清(复用外部目录的不动,重启持久化类测试还要读)
+  }
   // Isolation assertion (log-isolation fix): every app spawned through this helper MUST be
   // data-isolated — TODO_USER_DATA_DIR points into a temp dir, never at %APPDATA%/pickdone.
   // Failing loudly here keeps future tests from regressing to attaching the real user data
