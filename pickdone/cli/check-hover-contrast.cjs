@@ -91,6 +91,13 @@ const normColor = c => {
   if (c === '#fff' || c === '#ffffff' || c === 'white' || c === 'rgb(255, 255, 255)') return 'WHITE';
   return c.toLowerCase();
 };
+// var(--brand…) spellings (with/without fallback) all resolve to the same brand literal at
+// runtime — the "same-color invisible" decision must compare the RESOLVED forms, not the raw
+// declaration strings. w26 fix: the main loop previously compared bare strings, so
+// `var(--brand)` text on `var(--brand, #0f9d8f)` background dodged the equality (the negative
+// self-test normalized and thus masked the gap); now both go through this one predicate.
+const brandVarNorm = c => c && c.replace(/var\(--brand[^)]*\)/g, 'BRAND');
+const sameColorAfterVarNorm = (hc, bc) => brandVarNorm(hc) === brandVarNorm(bc);
 const isTransparent = c => !c || c === 'none' || c === 'transparent';
 
 function cascade(clsList, hover, dark) {
@@ -113,7 +120,7 @@ for (const combo of targets) {
     const solid = !isTransparent(base.bg);
     const hc = normColor(hov.color), bc = normColor(hov.bg || base.bg);
     const theme = dark ? 'dark' : 'light';
-    if (solid && hc && hc === bc) {
+    if (solid && hc && sameColorAfterVarNorm(hc, bc)) {
       console.error(`✗ [${theme}] .${combo}：悬浮文字色与背景色相同(${hov.color} on ${hov.bg || base.bg})，文字隐形`);
       fail++;
     } else if (solid && normColor(base.color) === 'WHITE' && hov.color && normColor(hov.color) !== 'WHITE') {
@@ -134,9 +141,11 @@ if (process.env.HOVER_CONTRAST_SELFTEST === '1') {
   const saved = rules.slice()
   rules.length = 0
   rules.push(
+    // Mixed var() spellings (w26): bg carries the fallback form, hover color the bare form —
+    // the main-loop decision must resolve both to the same brand color and flag the pair.
     { dark: false, hover: false, classes: ['primary'], decls: { color: '#ffffff', background: 'var(--brand, #0f9d8f)' }, spec: 1, order: 0 },
     { dark: false, hover: false, classes: ['mini'], decls: { color: 'var(--text-2)' }, spec: 1, order: 1 },
-    { dark: false, hover: true, classes: ['mini'], decls: { color: 'var(--brand, #0f9d8f)' }, spec: 11, order: 2 }
+    { dark: false, hover: true, classes: ['mini'], decls: { color: 'var(--brand)' }, spec: 11, order: 2 }
   )
   const combo = ['mini', 'primary']
   let caught = 0
@@ -145,8 +154,8 @@ if (process.env.HOVER_CONTRAST_SELFTEST === '1') {
     const hov = cascade(combo, true, dark)
     const solid = !isTransparent(base.bg)
     const hc = normColor(hov.color), bc = normColor(hov.bg || base.bg)
-    // Simulate the main-loop decision: after resolving the brand-blue var() to the same literal, the "same-color invisible" rule should hit
-    if (solid && hc && hc.replace(/var\(--brand[^)]*\)/, 'BRAND') === bc.replace(/var\(--brand[^)]*\)/, 'BRAND')) caught++
+    // The SAME predicate the main loop judges with (w26): var() spellings resolved before compare
+    if (solid && hc && sameColorAfterVarNorm(hc, bc)) caught++
     else if (solid && normColor(base.color) === 'WHITE' && hov.color && normColor(hov.color) !== 'WHITE') caught++
   }
   rules.length = 0

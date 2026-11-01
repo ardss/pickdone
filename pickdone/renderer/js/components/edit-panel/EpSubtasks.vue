@@ -2,23 +2,23 @@
   <div class="ep-subs" ref="subList">
     <!-- Stable per-row key (`_key` minted by the parent on hydrate/add): the index key desynced
          rows after Sortable moved DOM nodes / concurrent removals -->
-    <div v-for="(s,i) in subs" :key="s._key != null ? s._key : s.text + '_' + i" class="ep-sub">
+    <div v-for="s in subs" :key="s._key" class="ep-sub">
       <span class="ep-sub-check" :class="{on:s.checked}" role="checkbox" :aria-checked="s.checked ? 'true' : 'false'"
             tabindex="0" @click.stop="toggleSub(s)" @keydown="onCheckKey(s, $event)">{{ s.checked ? '✓' : '' }}</span>
-      <span v-if="renameIndex !== i" class="ep-sub-text" :class="{strike:s.checked}" role="button" tabindex="0"
+      <span v-if="renameKey !== s._key" class="ep-sub-text" :class="{strike:s.checked}" role="button" tabindex="0"
             :aria-label="s.text" :title="$t('statsJ.EditPanel.dblclickRenameTip')"
-            @click="toggleSub(s)" @dblclick="startRename(i)"
-            @keydown="onTextKey(i, $event)">{{s.text}}</span>
+            @click="toggleSub(s)" @dblclick="startRename(s)"
+            @keydown="onTextKey(s, $event)">{{s.text}}</span>
       <!-- [R2] Inline rename: double-click (or Enter/Space on the focused text) opens the editor; Enter/blur
            commits via the 'rename' emit, Esc cancels. commitRename is re-entrant-safe (blur after the
-           Enter commit is a no-op because renameIndex was already reset). -->
+           Enter commit is a no-op because renameKey was already reset). -->
       <input v-else v-model="renameText" class="ep-sub-rename-input" :aria-label="$t('statsJ.EditPanel.addSubtask')"
-             @keydown.enter.prevent.stop="onRenameEnter(i, $event)" @keydown.esc.prevent.stop="cancelRename" @blur="commitRename(i)"/>
+             @keydown.enter.prevent.stop="onRenameEnter(s, $event)" @keydown.esc.prevent.stop="cancelRename" @blur="commitRename(s)"/>
       <b class="ep-sub-x close-x close-x--sm" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.deleteSubtask')"
-         @click.stop="delSub(i)" @keydown="onDelKey(i, $event)"></b>
+         @click.stop="delSub(s)" @keydown="onDelKey(s, $event)"></b>
       <b class="ep-sub-drag">≡</b>
       <span class="ep-sub-move">
-        <i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskUp')" @click.stop="moveSub(i,-1)" @keydown="onMoveKey(i, -1, $event)">↑</i><i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskDown')" @click.stop="moveSub(i,1)" @keydown="onMoveKey(i, 1, $event)">↓</i>
+        <i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskUp')" @click.stop="moveSub(s,-1)" @keydown="onMoveKey(s, -1, $event)">↑</i><i role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.moveSubtaskDown')" @click.stop="moveSub(s,1)" @keydown="onMoveKey(s, 1, $event)">↓</i>
       </span>
     </div>
     <div class="ep-row ep-addsub">
@@ -46,8 +46,12 @@ export default {
   data () {
     return {
       newSub: '',
-      // [R2] inline rename state: index of the row being renamed ('' = none) + the edit buffer
-      renameIndex: -1,
+      // [R2] inline rename state: `_key` of the row being renamed (-1 = none) + the edit buffer.
+      // [W26] rename/delete/move identify rows by the stable `_key` (minted by EditPanel on
+      // hydrate/add), never by a captured index — the index goes stale while the rename editor
+      // is open if an earlier row is deleted / drag-moved (Sortable onEnd splice) or the list
+      // is re-hydrated (LAN echo rebuild), and the text would land on the WRONG row.
+      renameKey: -1,
       renameText: ''
     }
   },
@@ -63,16 +67,16 @@ export default {
       roleCheckboxActivate(() => { this.toggleSub(s) }).call(this, e)
     },
     /* [D17-DOM4] ARIA button pattern on the row text: Enter/Space opens the inline rename (was Enter-only) */
-    onTextKey (i, e) {
-      roleButtonActivate(() => { this.startRename(i) }, { stop: true }).call(this, e)
+    onTextKey (s, e) {
+      roleButtonActivate(() => { this.startRename(s) }, { stop: true }).call(this, e)
     },
     /* [D17-DOM4] ARIA button pattern on the subtask delete: Enter/Space (was Enter-only) */
-    onDelKey (i, e) {
-      roleButtonActivate(() => { this.delSub(i) }, { stop: true }).call(this, e)
+    onDelKey (s, e) {
+      roleButtonActivate(() => { this.delSub(s) }, { stop: true }).call(this, e)
     },
     /* [D17-DOM4] ARIA button pattern on the up/down move fallbacks: Enter/Space (was Enter-only) */
-    onMoveKey (i, dir, e) {
-      roleButtonActivate(() => { this.moveSub(i, dir) }, { stop: true }).call(this, e)
+    onMoveKey (s, dir, e) {
+      roleButtonActivate(() => { this.moveSub(s, dir) }, { stop: true }).call(this, e)
     },
     // IME guard: keyup.enter can't see the 229 composition flag, so listen on keydown and
     // skip the Enter that commits an IME composition
@@ -83,9 +87,9 @@ export default {
     // IME guard for the inline rename editor: the Enter that ends a pinyin composition arrives as
     // keydown (isComposing / keyCode 229) and must not commit the half-converted pinyin —
     // same rule as onSubEnter above (fix for the D4-ime finding: commitRename had no guard)
-    onRenameEnter (i, e) {
+    onRenameEnter (s, e) {
       if (e.isComposing || e.keyCode === 229) return
-      this.commitRename(i)
+      this.commitRename(s)
     },
     addSub () {
       const text = this.newSub.trim()
@@ -94,30 +98,32 @@ export default {
       this.newSub = ''
     },
     toggleSub (s) { this.$emit('toggle', s) },
-    delSub (i) { this.$emit('remove', i) },
-    moveSub (i, dir) { this.$emit('move', i, dir) },
+    // [W26] remove/move/rename carry the row object; the parent resolves it by its stable `_key`
+    // at event time (a captured index desyncs after a drag splice / re-hydrate mid-edit).
+    delSub (s) { this.$emit('remove', s) },
+    moveSub (s, dir) { this.$emit('move', s, dir) },
     // [R2] inline rename: open the editor, commit via 'rename' (parent owns subList + save pipeline), cancel on Esc
-    startRename (i) {
-      const s = this.subs[i]
-      if (!s) return
-      this.renameIndex = i
+    startRename (s) {
+      if (!s || s._key == null) return
+      this.renameKey = s._key
       this.renameText = s.text
       this.$nextTick(() => {
         const el = this.$el && this.$el.querySelector('.ep-sub-rename-input')
         if (el) el.focus()
       })
     },
-    commitRename (i) {
-      // blur fires after an Enter commit removed the editor — re-entrancy guard
-      if (this.renameIndex !== i) return
+    commitRename (s) {
+      // blur fires after an Enter commit removed the editor — re-entrancy guard (key comparison:
+      // the editor is only "this row's" while its `_key` matches)
+      if (!s || this.renameKey !== s._key) return
       const text = (this.renameText || '').trim()
-      this.renameIndex = -1
+      this.renameKey = -1
       this.renameText = ''
-      if (!text || !this.subs[i] || text === this.subs[i].text) return
-      this.$emit('rename', i, text)
+      if (!text || !s || text === s.text) return
+      this.$emit('rename', s, text)
     },
     cancelRename () {
-      this.renameIndex = -1
+      this.renameKey = -1
       this.renameText = ''
     }
   }

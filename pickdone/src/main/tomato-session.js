@@ -24,7 +24,7 @@
  * in production); no Electron imports here (same extraction reason as quit-guards.js).
  */
 
-const { FOCUS_MAX_MINUTES } = require('../../shared/limits.mjs') // require(esm) — Node >= 22.12
+const { FOCUS_MAX_MINUTES, REST_MAX_MINUTES } = require('../../shared/limits.mjs') // require(esm) — Node >= 22.12
 const { localDayKey } = require('../../shared/date-key.mjs')
 // W15 fix (2026-10-25): the running-session future window was a hand-copied 60s — a machine
 // with a clock a few minutes fast had EVERY FSM start rejected, so the durable row never
@@ -52,7 +52,10 @@ function sessionRowFromTransition (payload) {
       startedAt,
       attachTaskId: (payload.attachTaskId != null && payload.attachTaskId !== '') ? payload.attachTaskId : null,
       tomatoTime: Math.min(FOCUS_MAX_MINUTES, Math.max(1, Number(payload.tomatoTime) || 25)),
-      restTime: Math.max(1, Number(payload.restTime) || 5),
+      // W26 fix (2026-11-01, b): the rest clamp had only the lower bound (1) — a garbage/huge
+      // payload persisted an unbounded restTime while tomatoTime is symmetric-clamped to
+      // FOCUS_MAX_MINUTES. Align on the shared REST_MAX_MINUTES storage cap.
+      restTime: Math.min(REST_MAX_MINUTES, Math.max(1, Number(payload.restTime) || 5)),
       at: Date.now()
     }
   }
@@ -72,6 +75,13 @@ function sessionRowFromTransition (payload) {
 function reconcileDecision (row, now) {
   if (!row || !RUNNING_STATUSES.has(row.status) || !(Number(row.startedAt) > 0)) return { action: 'none' }
   if (row.status === 'startRestTime') return { action: 'void', startedAt: row.startedAt }
+  // W26 fix (2026-11-01, a): clock rollback past STAMP_CLAMP_MS left now BEHIND row.startedAt, so
+  // (now - startedAt) went negative and the expiry compare below kept the row 'pending' FOREVER —
+  // the durable row was never cleared, hasRunningSession stayed true and every quit re-prompted
+  // the focus-active confirm. A row stamped in our future past the session window is unrecoverable
+  // display skew, not a live phase: void it (rest is disposable by contract; a focus stranded
+  // behind a rolled-back clock cannot be honestly accounted anyway).
+  if (now < row.startedAt) return { action: 'void', startedAt: row.startedAt }
   const limitMs = (Number(row.tomatoTime) > 0 ? Number(row.tomatoTime) : 25) * 60_000
   if (now - row.startedAt < limitMs) return { action: 'pending', startedAt: row.startedAt }
   const focusedMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((now - row.startedAt) / 60_000)))

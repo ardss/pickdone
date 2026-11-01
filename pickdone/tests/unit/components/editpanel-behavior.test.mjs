@@ -263,10 +263,12 @@ test('P2 drop: non-image files land in the file list instead of being silently s
   assert.equal(ctx.fileList[0].name, 'notes.txt')
 })
 
-test('P2 undo placement: delSub/removeFile undo relocates by item reference (indexOf), not a captured index', () => {
+test('P2 undo placement: delSub/removeFile undo relocates by stable _key/reference, not a captured index', () => {
   const src = read('renderer/js/components/EditPanel.vue')
-  const delSub = src.slice(src.indexOf('delSub (i)'), src.indexOf('moveSub (i, dir)'))
-  assert.match(delSub, /this\.subList\.indexOf\(sub\)/, 'undo must locate the row by reference')
+  // [W26] delSub now receives the row object from EpSubtasks and locates it by the stable `_key`
+  // (stronger than object-reference indexOf: survives a LAN re-hydrate that rebuilds every row)
+  const delSub = src.slice(src.indexOf('delSub (sub)'), src.indexOf('moveSub (sub, dir)'))
+  assert.match(delSub, /_subIndexByKey\(sub\)/, 'undo must locate the row by stable _key')
   assert.ok(!/splice\(i,/.test(delSub), 'captured index splices misplace out-of-order undos')
   const rm = src.slice(src.indexOf('removeFile (arrName, idx)'), src.indexOf('delTask ()'))
   assert.match(rm, /this\[arrName\]\.indexOf\(item\)/, 'attachment undo must locate by reference too')

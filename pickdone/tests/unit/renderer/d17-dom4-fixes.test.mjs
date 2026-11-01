@@ -121,10 +121,10 @@ for (const [file, re, what] of spaceSites) {
 
 const epSites = [
   ['renderer/js/components/edit-panel/EpSubtasks.vue', /@click\.stop="toggleSub\(s\)" @keydown="onCheckKey\(s, \$event\)"/, 'subtask check'],
-  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@keydown="onTextKey\(i, \$event\)"/, 'subtask text (rename)'],
-  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@click\.stop="delSub\(i\)" @keydown="onDelKey\(i, \$event\)"/, 'subtask delete'],
-  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@keydown="onMoveKey\(i, -1, \$event\)"/, 'subtask move up'],
-  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@keydown="onMoveKey\(i, 1, \$event\)"/, 'subtask move down'],
+  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@keydown="onTextKey\(s, \$event\)"/, 'subtask text (rename)'], // [W26] row-object args
+  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@click\.stop="delSub\(s\)" @keydown="onDelKey\(s, \$event\)"/, 'subtask delete'],
+  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@keydown="onMoveKey\(s, -1, \$event\)"/, 'subtask move up'],
+  ['renderer/js/components/edit-panel/EpSubtasks.vue', /@keydown="onMoveKey\(s, 1, \$event\)"/, 'subtask move down'],
   ['renderer/js/components/edit-panel/EpTags.vue', /@click\.stop="\$emit\('remove', t\)" @keydown="onRemoveKey\(t, \$event\)"/, 'tag remove'],
   ['renderer/js/components/edit-panel/EpTomato.vue', /@click\.stop="\$emit\('open'\)" @keydown="onSegKey"/, 'tomato actual segment'],
   ['renderer/js/components/EditPanel.vue', /@click\.stop="fieldPatch\('deadlineTs',0\)" @keydown="onDeadlineClearKey"/, 'deadline clear (had NO keydown)']

@@ -246,10 +246,21 @@ function createExternalDbWatch (deps) {
             lastSettingsDoc = doc
           } else {
             const prev = lastSettingsDoc
-            lastSettingsSavedAt = at
-            lastSettingsDoc = doc
-          const win = getMainWindow()
-          if (prev && win) {
+            const prevAt = lastSettingsSavedAt
+            const win = getMainWindow()
+            // W26 fix (2026-11-01): the watermark used to advance unconditionally — with the main
+            // window absent (quit-mode tray keeps the app alive after the window is destroyed),
+            // the CLI settings change was consumed but never pushed, and the window rebuilt later
+            // kept the pre-CLI settings forever. When no window can receive the push, roll the
+            // watermark AND the baseline doc back: the next poll tick after the window recovers
+            // re-detects the change (at > prevAt) and hot-applies it then.
+            if (!win) {
+              lastSettingsSavedAt = prevAt
+              lastSettingsDoc = prev
+            } else {
+              lastSettingsSavedAt = at
+              lastSettingsDoc = doc
+            if (prev) {
             // Diff moved to settings-hot-sync.js (testable): machine-local stamps (_lsAt included —
             // echo-loop root fix, see module comment) and secret fields never travel in the patch.
             const patch = require('./settings-hot-sync').computeSettingsPatch(doc, prev)
@@ -269,7 +280,8 @@ function createExternalDbWatch (deps) {
               }
               log.info('[CLI] 设置变更热同步:', Object.keys(patch).join(','))
             }
-          }
+            }
+            }
           }
         }
       } catch (e) { log.warn('[CLI] 设置热同步失败', e) }

@@ -14,7 +14,11 @@
   </div>
   <transition name="collapse">
     <div v-show="remindOpen" class="ep-remind-pop" @click.stop>
-      <div v-for="(r, i) in remindRows" :key="i" class="ep-remind-line">
+      <!-- [W26] Stable per-row key (auto-increment `_id` minted where the row is created, the
+           EpSubtasks `_key` pattern): the index key reused picker component instances across
+           shifted rows after a mid-list removal — el-date/el-time pickers showed the WRONG
+           row's value until re-rendered. -->
+      <div v-for="(r, i) in remindRows" :key="r._id" class="ep-remind-line">
         <el-date-picker size="small" value-format="x" type="date" :placeholder="$t('statsJ.EditPanel.dateLabel')"
                         v-model="r.date" @update:model-value="commitReminders" style="width:118px"/>
         <el-time-picker size="small" value-format="HH:mm" format="HH:mm" :placeholder="$t('statsJ.EditPanel.timeLabel')"
@@ -75,7 +79,10 @@ export default {
   data () {
     return {
       remindOpen: false,
-      remindRows: [] // Multiple reminder row model [{date: ts|null, time: 'HH:mm'}]; row 0 = main reminder
+      // Multiple reminder row model [{_id, date: ts|null, time: 'HH:mm'}]; row 0 = main reminder.
+      // `_id` is a render-only stable v-for key ([W26], EpSubtasks `_key` precedent) — never persisted.
+      remindRows: [],
+      remindRowSeq: 0
     }
   },
   computed: {
@@ -94,12 +101,12 @@ export default {
       const day0 = this.task.dateTs || this.today0
       const toRow = ts => {
         const d = dayjs(ts)
-        return { date: d.startOf('day').valueOf(), time: d.format(FMT.time) }
+        return { _id: ++this.remindRowSeq, date: d.startOf('day').valueOf(), time: d.format(FMT.time) }
       }
       const rows = []
       if (this.task.remindTs) rows.push(toRow(this.task.remindTs))
       for (const ts of (Array.isArray(this.task.reminderExtra) ? this.task.reminderExtra : [])) rows.push(toRow(ts))
-      if (!rows.length) rows.push({ date: day0 || null, time: this.defaultRemindTime(day0) })
+      if (!rows.length) rows.push({ _id: ++this.remindRowSeq, date: day0 || null, time: this.defaultRemindTime(day0) })
       this.remindRows = rows
       this.remindOpen = true
     },
@@ -109,7 +116,7 @@ export default {
       const [h, m] = String((last && last.time) || this.defaultRemindTime((last && last.date) || this.task.dateTs)).split(':').map(Number)
       const nm = (h * 60 + m + 30) % 1440
       // nm is already in 0..1439, so mmToHHmm's clamping is a no-op here (behavior-equivalent)
-      this.remindRows.push({ date: (last && last.date) || (this.task.dateTs || null), time: mmToHHmm(nm) })
+      this.remindRows.push({ _id: ++this.remindRowSeq, date: (last && last.date) || (this.task.dateTs || null), time: mmToHHmm(nm) })
     },
     removeRemindRow (i) {
       const row = this.remindRows[i]

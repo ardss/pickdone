@@ -150,8 +150,20 @@ export default {
       this.$store.dispatch('ui/collapseEditCleanup')
     }
     this.$watch('editVisible', (v) => {
-      if (v) this._attachTimer = setTimeout(() => { this._attachTimer = null; document.addEventListener('mousedown', this._onDocClick) }, 0)
-      else document.removeEventListener('mousedown', this._onDocClick)
+      if (v) {
+        this._attachTimer = setTimeout(() => {
+          this._attachTimer = null
+          // [W26] closed within the 0ms window: the close branch already cleared this timer,
+          // but if it somehow fired anyway, do not mount the orphan outside-click listener
+          if (!this.editVisible) return
+          document.addEventListener('mousedown', this._onDocClick)
+        }, 0)
+      } else {
+        // [W26] close during the 0ms open-timer window: clear the timer, or it fires AFTER this
+        // branch's removeEventListener (a no-op at that point) and the listener leaks forever
+        if (this._attachTimer) { clearTimeout(this._attachTimer); this._attachTimer = null }
+        document.removeEventListener('mousedown', this._onDocClick)
+      }
     }, { immediate: true })
   },
   beforeUnmount () {

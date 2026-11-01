@@ -154,6 +154,25 @@ function mergeConfig (base, patch) {
   if (patch && typeof patch === 'object') {
     for (const k of Object.keys(patch)) {
       if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue // own-key filter
+      // W26 fix (2026-11-01): readConfig() back-fills DEFAULT_SHORTCUTS into shortcutKeySettings
+      // key-by-key (line ~113), so the post-read base always carries the FULL shortcut table —
+      // a partial writeConfig({shortcutKeySettings:{oneKey}}) then wholesale-replaced that object
+      // here, silently resetting every omitted custom shortcut to its factory default on the next
+      // read (and re-registering it via applyShortcuts). shortcutKeySettings is the ONLY nested key
+      // readConfig back-fills (winBounds/locale/lock are flat), so merge ONE level deep for it:
+      // a plain-object patch over a plain-object base merges per key; anything else keeps the
+      // replace semantics. The same own-key filter applies inside the nested merge.
+      if (k === 'shortcutKeySettings' &&
+          c[k] && typeof c[k] === 'object' && !Array.isArray(c[k]) &&
+          patch[k] && typeof patch[k] === 'object' && !Array.isArray(patch[k])) {
+        const merged = { ...c[k] }
+        for (const sk of Object.keys(patch[k])) {
+          if (sk === '__proto__' || sk === 'constructor' || sk === 'prototype') continue
+          merged[sk] = patch[k][sk]
+        }
+        c[k] = merged
+        continue
+      }
       c[k] = patch[k]
     }
   }

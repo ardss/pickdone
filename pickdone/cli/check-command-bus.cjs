@@ -61,6 +61,12 @@ function stripComments (src) {
     .replace(/(^|[^:])\/\/[^\n]*/g, (m, p1) => p1 + blank(m.slice(p1.length)))
 }
 
+/** Op identifier class — same caliber as cli/check-ipc-op-coverage.cjs OP_ID and db.js's own
+ *  OPS-key extraction ([A-Za-z_][A-Za-z0-9_]*). The write-site scanner previously captured
+ *  [A-Za-z]+ only, so an op containing an underscore or digit (e.g. export_v2) was invisible
+ *  here while the IPC gate saw it — a whole write surface could dodge the single-door proof. */
+const OP_ID = '([A-Za-z_][A-Za-z0-9_]*)'
+
 /** Literal write-op call sites: 'op' | "op" | `op`, via .call / dbCall / commitOp.
  *  Returns { op, line } objects (line = the physical source line, for exact-site anchors). */
 function scanWriteSites (src, universe) {
@@ -68,8 +74,8 @@ function scanWriteSites (src, universe) {
   const clean = stripComments(src)
   const lines = src.split('\n')
   const patterns = [
-    /\.call(?:\?\.)?\(\s*(['"`])([A-Za-z]+)\1/g,
-    /(?:dbCall|commitOp)(?:\?\.)?\(\s*(['"`])([A-Za-z]+)\1/g
+    new RegExp(`\\.call(?:\\?\\.)?\\(\\s*(['\`"])${OP_ID}\\1`, 'g'),
+    new RegExp(`(?:dbCall|commitOp)(?:\\?\\.)?\\(\\s*(['\`"])${OP_ID}\\1`, 'g')
   ]
   for (const reDef of patterns) {
     const re = new RegExp(reDef.source, reDef.flags) // fresh lastIndex per call (stateful /g)
@@ -489,6 +495,11 @@ if (require.main === module) {
     const p2 = scanWriteCallSites("db.call('upsert', t); dbm.call?.('setMeta', kv); state.db.call('purgeRecycleBin'); x.settingsRowPut && db.call('settingsRowPut', r); db.call('getMeta', k); db.call('queryTodos', q); db.call(\"deleteMeta\", k);", universe)
     if (!(p2.includes('upsert') && p2.includes('setMeta') && p2.includes('purgeRecycleBin') && p2.includes('settingsRowPut') && p2.includes('deleteMeta'))) { console.error('  ✗ selftest: P2 planted writes not caught: ' + p2.join(',')); stFailed++ }
     if (p2.length !== 5) { console.error('  ✗ selftest: P2 scanner flagged non-writes: ' + p2.join(',')); stFailed++ }
+    // w26: op identifier caliber — underscore/digit ops (e.g. export_v2) must be captured whole,
+    // not truncated to the alpha prefix (which would dodge the writeUniverse membership check).
+    const undiverse = new Set(['export_v2', 'sync_pull'])
+    const uOps = scanWriteCallSites("db.call('export_v2', r); dbCall('sync_pull', q); db.call('getMeta', k);", undiverse)
+    if (!(uOps.includes('export_v2') && uOps.includes('sync_pull')) || uOps.length !== 2) { console.error('  ✗ selftest: underscore/digit op writes not caught whole: ' + uOps.join(',')); stFailed++ }
     // Comments are stripped: a doc example must not flag.
     const commented = scanWriteCallSites("// db.call('upsert', t) example\n/* db.call('setMeta', k) */", universe)
     if (commented.length) { console.error('  ✗ selftest: comment examples falsely flagged: ' + commented.join(',')); stFailed++ }

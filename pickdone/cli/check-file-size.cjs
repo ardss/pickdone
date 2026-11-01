@@ -185,7 +185,19 @@ function main () {
         console.log(`  (ratchet) ${rel}: 登记棘轮起点 ${m.lines}（net ${m.net}）`)
       }
     }
-    fs.writeFileSync(BASELINE, JSON.stringify({ files, commitments: baseline.commitments }, null, 2) + '\n')
+    // w26: atomic persist (same pattern as check-coverage-ratchet.cjs writeBaseline) — a bare
+    // writeFileSync can tear under crash/power-cut, corrupting the ratchet baseline JSON and
+    // reding every later run of the gate (the gate is fail-closed on a corrupt baseline).
+    const data = JSON.stringify({ files, commitments: baseline.commitments }, null, 2) + '\n'
+    const tmp = `${BASELINE}.tmp-${process.pid}`
+    const fd = fs.openSync(tmp, 'w')
+    try {
+      fs.writeSync(fd, data)
+      fs.fsyncSync(fd)
+    } finally {
+      fs.closeSync(fd)
+    }
+    fs.renameSync(tmp, BASELINE)
     console.log('[file-size] baseline 已按棘轮规则更新（只降不升，条目迁移为 {lines,net}）')
     return
   }

@@ -151,10 +151,17 @@ test('f3-6b: settingsSet writes the single field via the setting.put row path AN
 test('f3-6c: settingsSet still survives a concurrent App write inside the race window (no clobber)', () => {
   const readBlob = () => { try { return JSON.parse(db.call('getMeta', 'db.settingsState') || 'null') || {} } catch { return {} } }
   db.call('setMeta', ['db.settingsState', JSON.stringify({ themeExisting: 'app', _savedAt: 1700000000000, schemaV: 1 })])
+  // W26 doctrine (db-sync-schema insertTs): a mirror-born row for a locally-absent field carries the
+  // blob's own _savedAt, not local wall-clock. The tombstone-absent watermark (Sync-10) keeps rows
+  // whose stamp is at/after the mirroring snapshot's gateTs — so a CONCURRENT writer must stamp its
+  // blob at write time (every real writer does: renderer whole-doc mirrors and settingsSet both write
+  // _savedAt = Date.now() at write). The pre-W26 hook's artificially ancient _savedAt made the
+  // concurrent row read as "authored before the snapshot" and Sync-10 legitimately cleaned it.
+  const raceStamp = Date.now() + 1
   lib.setSettingsRaceHookForTests(() => {
     const concurrent = readBlob()
     concurrent.appConcurrencyKey = 'written-by-app'
-    concurrent._savedAt = 1700000000001
+    concurrent._savedAt = raceStamp
     db.call('setMeta', ['db.settingsState', JSON.stringify(concurrent)])
   })
   const r = lib.settingsSet('maxRepeat', '7')
@@ -163,6 +170,14 @@ test('f3-6c: settingsSet still survives a concurrent App write inside the race w
   const final = lib.settingsDoc()
   assert.equal(final.maxRepeat, '7', 'CLI key landed')
   assert.equal(final.appConcurrencyKey, 'written-by-app', 'concurrent App change must NOT be clobbered')
+
+  // And the inverse, pinned by W26: a mirror carrying an ANCIENT _savedAt is a stale whole-blob echo;
+  // its locally-absent field is born with that old stamp (never fresh local now), so a peer's
+  // genuinely newer edit wins the cross-device LWW merge.
+  db.call('setMeta', ['db.settingsState', JSON.stringify({ themeExisting: 'app', staleEchoKey: 'old', _savedAt: 1700000000002, schemaV: 1 })])
+  const echoRow = db.call('settingsRowsAll').find(x => x.key === 'staleEchoKey')
+  assert.ok(!echoRow || Number(echoRow.updatedAt) <= 1700000000002 + 1000,
+    'stale-echo-born row carries the snapshot stamp (old LWW age), not local wall-clock now')
 })
 
 test('f3-6d: a newer peer row survives settingsSet (the stale-blob restamp regression)', () => {
