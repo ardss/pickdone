@@ -136,7 +136,7 @@ summarize() {
 # ============================================================
 case "$MACHINE" in
 local)
-  LOCAL_INSTALL_POSIX="$(cygpath -u "$LOCAL_INSTALL")"
+  LOCAL_INSTALL_POSIX="$(cygpath -m "$LOCAL_INSTALL")"
   APPDATA_POSIX="${APPDATA:-$(cygpath -u "${LOCALAPPDATA}\\..")}"; APPDATA_POSIX="$(cygpath -u "$APPDATA")"
   [ -d "$LOCAL_INSTALL_POSIX" ] || { echo "[FAIL] 本机未安装: $LOCAL_INSTALL" >&2; print_rollback; exit 1; }
   [ -f "$LOCAL_INSTALL_POSIX/resources/package.json" ] || { echo "[FAIL] $LOCAL_INSTALL\\resources\\package.json 不存在" >&2; print_rollback; exit 1; }
@@ -146,7 +146,7 @@ local)
   # 备份: 用户数据 + asar（NSIS /S 禁用，不跑安装器）
   mkdir -p "$BACKUP_ROOT"
   log "备份用户数据 %APPDATA%\\PickDone ..."
-  tar -czf "$BACKUP_ROOT/appdata-PickDone.tgz" -C "$(dirname "$APPDATA_POSIX")" "$(basename "$APPDATA_POSIX")" \
+  tar -czf "$BACKUP_ROOT/appdata-PickDone.tgz" -C "$APPDATA_POSIX" PickDone \
     || { echo "[FAIL] 用户数据备份失败" >&2; print_rollback; exit 1; }
   log "备份 asar ..."
   cp -a "$LOCAL_INSTALL_POSIX/resources/app.asar" "$BACKUP_ROOT/app.asar" \
