@@ -117,7 +117,7 @@ function create () {
 function toggle () {
   try {
     if (typeof lockProbe === 'function' && lockProbe()) return
-    if (win && !win.isDestroyed() && win.isVisible()) { hide(); return }
+    if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) { hide(); return } // W24: the contract is "visible AND focused" — an unfocused-but-visible window (e.g. the user is working in another app while a reminder popup left it visible) must be summoned/focused, not hidden
     if (!win || win.isDestroyed()) create()
     win.setBounds(defaultBounds())
     ignoreBlur = true // prevent the first press's in-flight show/focus blur from self-hiding when the shortcut is pressed twice quickly

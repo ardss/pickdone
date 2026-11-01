@@ -8,7 +8,8 @@
  * kill left exactly such a tree behind.
  *
  * Contract: every long-lived child a gate spawns is REGISTERED HERE at spawn time
- * (tests/.artifacts/runner-children/<pid>.json, one file per child) and pruned when its 'close' event
+ * (tests/.artifacts/runner-children/<pid>.json, one file per child — override the dir with
+ * PICKDONE_CHILD_REGISTRY_DIR for private/sandbox lanes) and removed when its 'close' event
  * fires. A runner that dies hard simply leaves its entries behind; `node tests/run-all.mjs
  * --cleanup` (or reapAllRegisteredSync from an exit handler) then reaps the survivors.
  *
@@ -22,10 +23,17 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
-const REGISTRY_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.artifacts', 'runner-children')
+// [2026-10-31 P0] PICKDONE_CHILD_REGISTRY_DIR: lets a lane (the gate-mechanics meta-suite in
+// particular) point the registry at a PRIVATE dir so a concurrent real gate's registrations can
+// never pollute its before/after leak assertions. Default stays anchored at the real location.
+const REGISTRY_DIR = process.env.PICKDONE_CHILD_REGISTRY_DIR
+  ? path.resolve(process.env.PICKDONE_CHILD_REGISTRY_DIR)
+  : path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '.artifacts', 'runner-children')
 
 function entryFile (pid) { return path.join(REGISTRY_DIR, `${pid}.json`) }
 
+// [2026-10-31] tolerant of legacy residue in the dir: array-shaped files from the pre-10-24
+// shared-JSON era and corrupt/partial writes are skipped, never fatal.
 function readAll () {
   let names = []
   try { names = fs.readdirSync(REGISTRY_DIR) } catch { return [] }
@@ -34,29 +42,25 @@ function readAll () {
     if (!name.endsWith('.json')) continue
     try {
       const e = JSON.parse(fs.readFileSync(path.join(REGISTRY_DIR, name), 'utf8'))
-      if (e && e.pid) list.push(e)
+      // legacy tolerance: an old shared-JSON file may be an ARRAY of entries — flatten the
+      // valid ones instead of dropping the whole file
+      for (const entry of (Array.isArray(e) ? e : [e])) {
+        if (entry && entry.pid) list.push(entry)
+      }
     } catch { /* corrupt/partial entry from a concurrent writer — skip */ }
   }
   return list
 }
 
-function writeAll (list) {
-  fs.mkdirSync(REGISTRY_DIR, { recursive: true })
-  // 2026-10-24 (final18 orphan post-mortem): the registry used to be ONE shared JSON with a
-  // read-modify-write cycle per register — concurrent gate pools (unit + live lanes spawn
-  // electrons at the same time) lost updates to each other, and the losing lane's children
-  // became unreapable orphans. One file PER registered pid now: no RMW, no lock, no loss.
-  const keep = new Set(list.map(e => String(e.pid)))
-  let names = []
-  try { names = fs.readdirSync(REGISTRY_DIR) } catch { /* first use */ }
-  for (const name of names) {
-    if (!name.endsWith('.json')) continue
-    if (!keep.has(name.slice(0, -5))) { try { fs.rmSync(path.join(REGISTRY_DIR, name), { force: true }) } catch { /* raced */ } }
-  }
-  for (const e of list) {
-    try { fs.writeFileSync(entryFile(e.pid), JSON.stringify(e, null, 2) + '\n') } catch { /* best-effort */ }
-  }
-}
+// [2026-10-31 P0] writeAll (read-dir -> prune -> rewrite) is GONE. History note kept for the
+// record: the 2026-10-24 per-pid file split removed the shared-JSON RMW, but writeAll kept a
+// directory-wide PRUNE (delete every file not in the passed list) on every register/unregister.
+// Two concurrent lanes interleaving register/unregister each serialized their own snapshot and
+// the prune deleted the OTHER lane's entries registered in between — those children became
+// unreapable orphans (2026-10-31 release-gate 5x red, drifting failure lineups: the meta#2
+// half of that root cause is fixed in gate-mechanics.test.mjs). Now every process writes and
+// removes ONLY its own per-pid files; nothing sweeps the directory except the deliberate
+// --cleanup path, which removes exactly the entries it processed.
 
 export function registryPath () { return REGISTRY_DIR }
 
@@ -67,19 +71,20 @@ export function registryPath () { return REGISTRY_DIR }
  */
 export function registerChild (pid, meta = {}) {
   if (!pid) return
-  const list = readAll().filter(e => e.pid !== pid)
   // owner = the registering process: a NESTED run-all (check-test-scope-golden spawns one)
   // must never reap its parent's children at its own exit — each process reaps only what
   // it registered; --cleanup remains the deliberate sweep-everything path (2026-10-24).
-  list.push({ pid, match: meta.match || [], purpose: meta.purpose || '', owner: process.pid, bornAt: new Date().toISOString() })
-  writeAll(list)
+  const entry = { pid, match: meta.match || [], purpose: meta.purpose || '', owner: process.pid, bornAt: new Date().toISOString() }
+  try {
+    fs.mkdirSync(REGISTRY_DIR, { recursive: true })
+    fs.writeFileSync(entryFile(pid), JSON.stringify(entry, null, 2) + '\n')
+  } catch { /* best-effort by contract */ }
 }
 
-/** Prune one child (normal 'close' path — nothing left to reap). */
+/** Prune one child (normal 'close' path — nothing left to reap). Removes ONLY that pid's file. */
 export function unregisterChild (pid) {
   if (!pid) return
-  const list = readAll().filter(e => e.pid !== pid)
-  writeAll(list)
+  try { fs.rmSync(entryFile(pid), { force: true }) } catch { /* raced */ }
 }
 
 const norm = s => String(s || '').replace(/^"|"$/g, '').replace(/\\/g, '/').toLowerCase()
@@ -147,8 +152,10 @@ export function cleanupRegisteredChildren () {
     else if (v === 'gone') res.gone.push(e)
     else if (v === 'foreign') res.foreign.push(e)
     else res.survivors.push(e)
+    // [2026-10-31 P0] every processed entry's file is removed INDIVIDUALLY — no directory-wide
+    // prune, so entries registered by a concurrent lane during the sweep are never deleted.
+    try { fs.rmSync(entryFile(e.pid), { force: true }) } catch { /* raced */ }
   }
-  writeAll([]) // processed: pruned (killed/gone); foreign pids are no longer ours to track
   return res
 }
 

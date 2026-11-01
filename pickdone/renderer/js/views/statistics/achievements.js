@@ -89,9 +89,12 @@ export function buildAchievements ({ todos, records }) {
   let earlyCount = 0
   records.forEach(r => {
     if (r.succeed === false) return
-    focusMins += r.focusDuration || 0
     const end = Number(r.endTime) || 0
     if (!end) return
+    // [w24] dirty rows without an endTime are excluded here, same caliber as metrics.js windowCounts
+    // (which skips !endTs rows before summing focusMins) — previously the accumulation ran before the
+    // guard, so the achievement wall counted focus the metrics/heatmap dropped.
+    focusMins += r.focusDuration || 0
     // [w14 P2] "清晨专注" classifies by SESSION START, not end hour: a 23:00->00:30 night-owl
     // session ends at hour 0 and was counted as an early-morning focus. The startedAt is embedded
     // in the minted tomatoId ('tmt_f_<startedAt>[_<salt>]', see store/tomato-pure focusStartedAtOf);
