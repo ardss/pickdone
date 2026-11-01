@@ -7,7 +7,7 @@
  *   Device A  this machine, real packaged exe (dist/win-unpacked), temp user-data dir
  *   Device B  --remote <ssh-alias> (explicit SSH alias required), same packaged exe deployed to a
  *             scratch dir, temp user-data dir — driven over SSH
- *   Relay     --relay <base-url> — a remote sync-relay (lubancat), enrollment-gated
+ *   Relay     --relay <base-url> — a self-hosted sync-relay, enrollment-gated
  *
  *   boot A+B -> relay enable on both (shared root key = manual account pairing, the same
  *   stand-in the e2e tests use; enrollment proves the closed-registration door) -> A adds 3
@@ -17,7 +17,7 @@
  *
  * Usage:
  *   node cli/journey-relay.cjs --relay http://<relay-host>:58490 --enrollment <secret> \
- *        --remote <ssh-alias> [--remote-dir ROOTDIR] [--relay-restart-ssh lubancat] [--keep]
+ *        --remote <ssh-alias> [--remote-dir ROOTDIR] [--relay-restart-ssh <relay-ssh-alias>] [--keep]
  * Requires the app to be built (npm run pack) and `ssh <remote>` / `ssh <relay-restart-ssh>`
  * to be key-authenticated. Exit 0 = the whole journey passes; exit 1 = first failed step.
  */
