@@ -30,7 +30,10 @@ import { findRenewedNextInstance as _findRenewedNextInstance } from '../../../sh
 export async function removeRenewedInstance ({ todo, state, commit, dispatch, safeUpsert, snapshotForDelete }) {
   try {
     const rid = todo && todo.repeatId
-    if (!rid || !(todo.dayStart > 0)) return
+    // [w27 P3 fix 2026-11-01] defense in depth: the legacy repeatId==='null' string sentinel is
+    // NOT a live repeat group (same predicate as utils/confirm.js isRepeatTask) — a plain task
+    // carrying the sentinel must never enter the renewed-instance removal path.
+    if (!rid || rid === 'null' || !(todo.dayStart > 0)) return
     const group = state.todoList
       .filter(x => x.repeatId === rid && !x.delete && x.taskId !== todo.taskId && x.dayStart > 0)
       .sort((a, b) => a.dayStart - b.dayStart)

@@ -23,7 +23,7 @@
               <div class="tfr-timeline__grid" aria-hidden="true">
                 <i v-for="h in 23" :key="h" :style="{left:(h/24*100)+'%'}"></i>
               </div>
-              <div v-for="(seg,i) in timeline.segs" :key="i" class="tfr-timeline__seg"
+              <div v-for="seg in timeline.segs" :key="seg.tomatoId" class="tfr-timeline__seg"
                    :class="{'tfr-timeline__seg--hot': highlightId===seg.tomatoId}"
                    :style="seg.style" :title="seg.title"
                    role="button" tabindex="0" :aria-label="$t('statsD.TomatoFocusRecord.locate', { t: seg.title })"
@@ -216,12 +216,16 @@ export default {
         segs.push({
           style: uStyle,
           tomatoId: r.tomatoId,
+          // [w27 P3 fix 2026-11-01] numeric carry: the sort used to read seg.left, which never
+          // existed (the percentage lives inside style.left strings) — undefined-undefined=NaN
+          // made the comparator vacuous and the bar rendered in reverse data-source order.
+          uLeft,
           title: r.restDuration > 0
             ? this.$t('statsD.TomatoFocusRecord.segFocus', { a: this.dfmt(s, 'HH:mm'), b: this.dfmt(e, 'HH:mm'), x: this.intervalText(r) }) + (r.focus ? ` · ${r.focus}` : '') + ' · ' + this.$t('statsD.TomatoFocusRecord.restBadge', { n: r.restDuration })
             : this.$t('statsD.TomatoFocusRecord.segFocus', { a: this.dfmt(s, 'HH:mm'), b: this.dfmt(e, 'HH:mm'), x: this.intervalText(r) }) + (r.focus ? ` · ${r.focus}` : '')
         })
       }
-      segs.sort((a, b) => a.left - b.left)
+      segs.sort((a, b) => a.uLeft - b.uLeft)
       // At-a-glance summary: pomodoro count (one per 25 minutes, rounded up) + duration
       const pomos = Math.ceil(totalMin / 25)
       const hours = Math.floor(totalMin / 60)
