@@ -70,10 +70,14 @@ test('④ run-interactions-gated: appCwd via fileURLToPath (decoded) + spawn err
   assert.match(src, /fileURLToPath\(import\.meta\.url\)/)
   assert.doesNotMatch(src, /\.pathname\.replace\(/) // the percent-encoded form must be gone
   assert.match(src, /child\.on\('error'[\s\S]{0,40}res\(1\)/) // run() spawn settles on error
-  // Decoding sanity: a repo path with a space must round-trip through fileURLToPath
+  // Decoding sanity: a path with a space + non-ASCII must round-trip through fileURLToPath
+  // (percent-encoding fully consumed). Exact backslash form is a win32 drive-letter translation.
   const p = 'K:\\dir with space\\子目录\\tests'
   const url = 'file:///' + encodeURI(p.replace(/\\/g, '/'))
-  assert.equal(fileURLToPath(url), p)
+  const decoded = fileURLToPath(url)
+  assert.ok(!/%/.test(decoded) && decoded.includes('dir with space') && decoded.includes('子目录'),
+    'percent-encoding must be consumed: ' + decoded)
+  if (process.platform === 'win32') assert.equal(decoded, p)
 })
 
 test('⑤ cache-stamp gate is fail-closed on broken git (probe now precedes all other git calls)', () => {
