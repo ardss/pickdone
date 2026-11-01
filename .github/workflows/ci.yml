@@ -82,6 +82,10 @@ jobs:
           cache: npm
           cache-dependency-path: pickdone/package-lock.json
 
+      # Fail fast on public/private boundary or malformed PR title, before npm ci/build.
+      - name: Check repository boundary
+        run: node pickdone/cli/check-environment-boundary.mjs
+
       - name: Cache Electron binaries
         uses: actions/cache@v6
         with:
