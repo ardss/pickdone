@@ -96,6 +96,11 @@ function flushOnceOnReady (deps = {}) {
 }
 
 let _inited = false
+// W27 (P3): true while ANY download (manual or auto) is in flight — set at every entry into
+// 'downloading', cleared on the terminal 'ready' and on every error path. A concurrent check()
+// firing update-not-available/checking mid-download used to flip the status to 'uptodate'/
+// 'checking' because the existing guards only covered _manualDownload and the settled 'ready'.
+let _downloading = false
 // D2 (2026-10-21): set by init — the stall-watchdog arming point, so the manual downloadUpdate
 // entry into 'downloading' arms it too (module-level because downloadUpdate lives outside init).
 let _armStallWatchdog = null
@@ -134,7 +139,7 @@ function init (mainWin) {
     // saw 'ready' again; 'update-available' then reset to 'available'/'downloading' and
     // quitAndInstall() (requires status==='ready') returned false for the rest of the session —
     // the "restart to install" button died (with autoDownloadUpdates:false it never recovered).
-    if (_manualDownload || state.status === 'ready') return
+    if (_manualDownload || _downloading || state.status === 'ready') return
     state.status = 'checking'; broadcast()
   })
   autoUpdater.on('update-available', i => {
@@ -146,8 +151,9 @@ function init (mainWin) {
     // reset status off 'ready', breaking the "restart and install" path (quitAndInstall requires
     // status==='ready'). A downloaded update is already on disk — later availability events are
     // stale; keep 'ready' and the stored info.
-    if (_manualDownload || state.status === 'ready') return
+    if (_manualDownload || _downloading || state.status === 'ready') return
     state.status = autoUpdater.autoDownload ? 'downloading' : 'available'; state.info = i; broadcast()
+    if (state.status === 'downloading') _downloading = true // W27: auto-download owns the state from here
     // D2 fix (2026-10-21): the auto-download entry into 'downloading' arms the stall watchdog
     // too — the hang-before-first-progress case is reachable from here just as much.
     if (state.status === 'downloading' && _armStallWatchdog) { try { _armStallWatchdog() } catch { /* arming is best-effort */ } }
@@ -156,7 +162,7 @@ function init (mainWin) {
     // M2b (P2 2026-10-23): same guards as 'update-available' above — a later check() firing
     // update-not-available must not downgrade a settled 'ready' (a downloaded update is already
     // on disk; quitAndInstall requires status==='ready') nor clobber an in-flight manual download.
-    if (_manualDownload || state.status === 'ready') return
+    if (_manualDownload || _downloading || state.status === 'ready') return
     state.status = 'uptodate'; state.info = i; broadcast()
   })
   // F4 (2026-10-21): download stall watchdog. A hung transfer (proxy drop, dead mirror, firewall)
@@ -191,10 +197,11 @@ function init (mainWin) {
   // must not flip the settled 'ready' state back to 'downloading'.
   autoUpdater.on('download-progress', p => {
     if (state.status === 'ready') return
-    state.status = 'downloading'; state.info = { percent: Math.round(p.percent || 0) }; broadcast()
+    state.status = 'downloading'; _downloading = true // W27: progress confirms a live download
+    state.info = { percent: Math.round(p.percent || 0) }; broadcast()
     armStallWatchdog()
   })
-  autoUpdater.on('update-downloaded', i => { clearStallWatchdog(); state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
+  autoUpdater.on('update-downloaded', i => { clearStallWatchdog(); _downloading = false; state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
   // Error handling: besides broadcasting, schedule a single backoff retry (checkForUpdates after 30s).
   // Only one retry: transient network/proxy jitter self-heals; persistent failures (e.g. 404, certificate issues) are not retried, avoiding a request storm every 30s. During the retry window, a new error overwrites the state directly without queuing.
   let _retryTimer = null
@@ -203,6 +210,7 @@ function init (mainWin) {
   // retry path instead of hanging in 'downloading' forever.
   function markUpdateError (e) {
     clearStallWatchdog()
+    _downloading = false // W27: an error is terminal for the in-flight download
     // M2b (P2 2026-10-23): 'ready' is terminal for this process run (same guard style as the
     // 'update-available' handler above) — a stray/late 'error' event (or watchdog fire) after
     // update-downloaded must not downgrade the "restart and install" state; the watchdog is
@@ -238,7 +246,9 @@ async function check () {
     try { await autoUpdater.checkForUpdates(); return { active: true, ...state } } catch (e) {
       // M2b (P2 2026-10-23): same 'ready' guard as markUpdateError — a check() racing the tail of
       // a completed download must not flip the settled 'ready' into 'error'.
-      if (state.status !== 'ready') {
+      // W27 (P3): nor may it flip an in-flight download into 'error' — the download's own
+      // error/watchdog paths own that transition; respect _downloading like the event handlers.
+      if (state.status !== 'ready' && !_downloading) {
         state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }
         broadcast() // 手动检查失败也要推给设置页状态条(error 事件路径之外的 catch 不经过 autoUpdater 事件)(三轮扫荡 P2)
       }
@@ -270,7 +280,7 @@ function downloadUpdate () {
     // the idempotent-reentry path all leave the consent flag exactly as they found it.
     const priorAutoDownload = autoUpdater.autoDownload !== false
     autoUpdater.autoDownload = true
-    state.status = 'downloading'; broadcast()
+    state.status = 'downloading'; _downloading = true; broadcast() // W27: manual path arms the guard too
     try { if (_armStallWatchdog) _armStallWatchdog() } catch { /* arming is best-effort */ }
     // The raw promise gets a noop catch so a LATE rejection after an abort cannot surface as an
     // unhandled rejection; the derived `settled` maps both outcomes to a tag.
@@ -288,6 +298,7 @@ function downloadUpdate () {
     } finally {
       _manualDownload = null
       _manualAbort = null
+      _downloading = false // W27: settled (done/failed/aborted) — release the state ownership
       autoUpdater.autoDownload = priorAutoDownload
     }
   })()
