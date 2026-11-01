@@ -48,7 +48,11 @@ function requiredPathFor (spec, fileDir, cliRoot, resourcesRoot) {
     const relFromCli = path.relative(cliRoot, abs)
     if (relFromCli.startsWith('..')) {
       // escapes the CLI tree (e.g. ../src/main/db.js): the packaged copy lives under resources/
-      return { scope: 'resources', rel: path.relative(resourcesRoot, abs).split(path.sep).join('/') }
+      // Repo-root-relative (NOT resourcesRoot-relative): when the packaged dir sits on another
+      // drive than the repo (K: repo vs F:/C: install), path.relative across drives returns an
+      // ABSOLUTE path and every target falsely reads as missing (2026-11-01 beta.24 acceptance).
+      // The packaged resources layout mirrors the REPO root, so relativize against cliRoot/.. .
+      return { scope: 'resources', rel: path.relative(path.join(cliRoot, '..'), abs).split(path.sep).join('/') }
     }
     return { scope: 'cli', rel: relFromCli.split(path.sep).join('/') }
   }
