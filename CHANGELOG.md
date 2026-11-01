@@ -4,7 +4,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/). The 0.x series is the initial-development band: from 0.4.0 on, any user-visible new feature bumps MINOR; PATCH is fixes/internal hardening only. 1.0.0 marks stable data format + sync. Historical versions (≤0.3.7) are not retro-renumbered.
 
-## [Unreleased]
+## [0.4.0-beta.24] - 2026-11-01
 
 - Gate-infrastructure races (P0x2, the real cause of the 10-31 release-gate 5x red — not runner flakiness): the child-registry was still read-modify-write with a whole-directory prune in writeAll, so parallel lanes deleted each other's registrations (children became unreapable orphans); meta#2 diffed the SHARED real runner-children directory (any concurrent registration = fake leftover), and meta#5 rewrote the real coverage-summary.json (10/10/10) that parallel coverage-ratchet lanes read. child-registry rewritten per-pid (own file write/delete only, legacy formats tolerated), new PICKDONE_CHILD_REGISTRY_DIR override sandboxes meta#2/meta#5 (leak-still-red semantics kept), meta#9 rewritten to exercise the real live-pool port allocator. Interleaving repro test pins 12/12 survival (0/12 before).
 - Encrypted-migration data loss (P1): the clone branch's DDL rewrite produced `CREATE TABLE IF NOT EXISTS enc.IF NOT EXISTS "x"` for every legacy table (all app DDL carries IF NOT EXISTS), silently skipping exactly the legacy tables the branch exists to save — while the migration reported success. Regex absorbs the optional IF NOT EXISTS; regression test on the real vendor sqlite (red before).
