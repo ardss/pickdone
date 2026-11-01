@@ -47,6 +47,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Node TZ alone does not change native Windows CRT/system-local date behavior.
+      # Use the same UTC+8 calendar for JS and native SQLite paths in Windows CI.
+      - name: Align Windows system timezone for date-contract tests
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          tzutil /s "China Standard Time"
+          if ((tzutil /g).Trim() -ne "China Standard Time") { throw 'Windows UTC+8 timezone setup failed' }
+
       # Dedup (2026-09-25 cost pass): push(main) + pull_request both fired full matrices for the same
       # content (e.g. run 36123046333 push + 36121107255 PR, ~11 billed min each). When a push lands on
       # main with a tree identical to an open PR's head (rebase/ff merge), the PR run already covered
