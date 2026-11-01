@@ -26,6 +26,8 @@ export const isScannedPath = name => {
 export const findLeaks = (name, source) => {
   const found = []
   for (const [label, re] of rules) {
+    // Locale placeholders intentionally show a generic LAN IP to guide the user.
+    if (label === 'private LAN address' && /\/renderer\/js\/i18n\//.test(name)) continue
     const match = re.exec(source)
     if (match) {
       const line = source.slice(0, match.index).split('\n').length
@@ -40,10 +42,13 @@ export const checkPrTitle = title =>
 export function auditRepository (repoRoot = root) {
   const names = execFileSync('git', ['ls-files', '-z'], { cwd: repoRoot, encoding: 'utf8' })
     .split('\0').filter(Boolean).filter(isScannedPath)
+  if (names.length === 0) throw new Error('No tracked source files found; refusing a false-green check')
+  const staged = new Set(execFileSync('git', ['diff', '--cached', '--name-only', '-z', '--diff-filter=ACMR'], { cwd: repoRoot, encoding: 'utf8' }).split('\0').filter(Boolean))
   const violations = []
   for (const name of names) {
     try {
-      violations.push(...findLeaks(name, readFileSync(path.join(repoRoot, name), 'utf8')))
+      const source = staged.has(name) ? execFileSync('git', ['show', ':' + name], { cwd: repoRoot, encoding: 'utf8' }) : readFileSync(path.join(repoRoot, name), 'utf8')
+      violations.push(...findLeaks(name, source))
     } catch (err) {
       if (err && err.code === 'ENOENT') continue // staged deletion, checked in CI after commit
       throw err
