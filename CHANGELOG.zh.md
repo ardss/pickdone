@@ -17,6 +17,12 @@ System.Object[]
 - 渲染层（W25）：任务菜单快速番茄入口补上 tomatoId 加盐（对齐另两个入口，消除同秒碰撞）；sortMode 的 difficulty 排序改为真实比较任务预估时长（读 ./tomatoEstimate.js），不再静默退化为插入序；SearchView 跨午夜守望日历日翻转（30s tick、非响应式实例字段），过夜会话不再残留过期的「今天」结果。
 - 附件（W25）：第三种崩溃残渣形状——writeFileDurable 复合名 `<名>.<pid>.<ms>.<seq>.dtmp` 在上传中途崩溃后既不匹配 D19 残渣正则也不属 W16 零字节幻影类：永不清扫、永久占配额。分类器吸收该形状（无铸造碰撞风险——dtmp 不在 ALLOWED_EXT）；年龄门不变。
 
+- 同步 LWW（P1，W26）：putRow 的陈旧回声门只保护已存在行——本地没有行的字段在整包 blob 回声是陈旧快照时仍以本地 now 盖章 INSERT，铸造最新 LWW 的 oplog delta，跨设备压过 peer 真正较新的编辑（Round-3 回退环的「缺失字段」变体）。镜像-born INSERT 改盖因果快照章（gateTs）；并发写者安全——真实写入方都在写入时刻盖 `_savedAt`，天然高于 Sync-10 墓碑水位线（测试口径同步更新 + 反向钉补齐）。
+- 设置/配置（P2，W26）：config-store 的 mergeConfig 是浅合并——局部 writeConfig `shortcutKeySettings` 会整体替换对象，把被省略的自定义快捷键静默重置回出厂默认（还会按默认重注册）；现在对该键做一层递归合并（过滤原型键）。CLI 设置热同步水位线在主窗不存在时不再前移（tray 常驻 quit-mode）：变更曾被静默消费、重建的主窗永远显示 CLI 改动前的设置；水位线回滚，窗口恢复后下一 tick 补推。
+- 渲染层（P2/P3，W26）：编辑面板子任务的重命名/删除/移动改按稳定 `_key` 定位而非数组索引——重命名输入框横跨拖拽 splice 或 LAN re-hydrate 打开时会把文本写进错误的子任务；提醒行 v-for 改每行铸造 id（带内部状态的日期/时间选择器在索引位移时被复用串值）；layout 秒开秒关竞态不再泄漏孤儿 document mousedown 监听；「今日已询问昨日遗留」标记只在搬移循环成功后写入（中途失败不再静默到明天）。
+- 番茄会话（P3，W26）：时钟回拨超过时间戳钳制宽度曾让 durable 会话行永远 'pending'（每次退出都弹进行中确认、行永不清除）——未来戳行现在按 'void' 处理；restTime 补上共享 REST_MAX_MINUTES 上限钳制，与 tomatoTime 对称。
+- 门禁（W26）：cssom-integrity 的转义扫描分支是死代码（`'\\\\'` 运行时是 2 字符串永不等单字符——CSS 字符串内的转义引号让精确规则比对失真；抽取器共享至 tests/lib/css-top-level-rules.mjs + 锚测试）；hover-contrast 主判定归一 `var(--brand)` 与 `var(--brand, fallback)` 拼写（混合拼写的隐形文字曾漏检、只有归一化的自测样本绿）；command-bus op 扫描接受下划线/数字 op（`export_v2` 类），与 ipc-coverage 口径一致；run-interactions-gated 解码 appCwd（空格/中文路径曾挂到 10min watchdog）并在 spawn error 时拒绝；cache-stamp 的 fail-closed 探测提前到一切 git 调用之前（git 损坏走设计好的红路径而非裸栈）；file-size baseline 改原子写（tmp+fsync+rename，与覆盖率棘轮同款）。
+
 ## [0.4.0-beta.23] - 2026-10-31
 - 番茄相位链：finishRest 落账失败不再永久卡死相位（释放相位认领、下一 tick 可重试，与 completeFocus 同款守卫）；startFocus 启动前重读共享瞬态，浮窗滞后副本不再静默覆盖他窗进行中的番茄；内联保存失败不再把刚输入标题的任务当未命名孤儿删除（flush 结果可感知，失败保留任务并记日志）。
 - 习惯可靠性：浮窗 relay 改为持久化合并后的主窗口状态（LS+DB meta），不再写入未合并的原始 blob——合并掉的打卡不再在重启时丢失；repeatSettings 在 LS 载入/同步 blob/设置净化器三个入口加键级白名单，封死 F-C2 未知键策略的嵌套对象旁路。
