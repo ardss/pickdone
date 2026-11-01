@@ -29,7 +29,13 @@ module.exports = function encCopyTable (db, table) {
       return
     }
     try {
-      db.exec(ddlRow.sql.replace(/^CREATE TABLE /i, 'CREATE TABLE IF NOT EXISTS enc.'))
+      // W24 fix (2026-10-31): the pattern only matched bare `CREATE TABLE`, but every table this
+      // app creates (including legacy leftovers) carries `CREATE TABLE IF NOT EXISTS x (...)` in
+      // sqlite_master.sql — the old rewrite produced `CREATE TABLE IF NOT EXISTS enc.IF NOT
+      // EXISTS "x"`, a parse error that was swallowed by the catch below, so legacy tables were
+      // silently NEVER cloned into the enc DB while the migration still reported success.
+      // The optional group absorbs the existing IF NOT EXISTS; the rewrite always emits exactly one.
+      db.exec(ddlRow.sql.replace(/^CREATE TABLE (IF NOT EXISTS )?/i, 'CREATE TABLE IF NOT EXISTS enc.'))
     } catch (ddlErr) {
       console.warn('[db-enc-copy] migration: could not create enc-side table "' + table + '" — copied from scratch skipped:', ddlErr && ddlErr.message)
       return

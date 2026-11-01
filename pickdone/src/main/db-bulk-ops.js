@@ -82,6 +82,16 @@ function pruneFiredReminderKeysFor (getDb, ids) {
   try {
     const list = (Array.isArray(ids) ? ids : [ids]).map(String)
     if (!list.length) return
+    // W24 fix (2026-10-31): the meta-blob prune alone left the scheduler's in-memory LRU holding
+    // the deleted task's entries — the next flushFiredNow() re-packed the WHOLE LRU (deleted
+    // entries included) into meta, resurrecting exactly what this prune had removed. The LRU is
+    // scheduler.js's private state, so the scheduler exposes pruneFired(taskIds) and the delete
+    // path calls it here (lazy require: db.js → this module loads before scheduler; scheduler's
+    // own db.js require stays lazy, so no cycle materializes). Best-effort like the blob prune.
+    try {
+      const sched = require('./scheduler')
+      if (typeof sched.pruneFired === 'function') sched.pruneFired(list)
+    } catch { /* the watermark is advisory */ }
     const row = getDb().prepare("SELECT value FROM meta WHERE key = 'firedReminders:'").get()
     const raw = row && row.value
     if (typeof raw !== 'string' || !raw.startsWith('[')) return

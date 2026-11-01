@@ -18,13 +18,24 @@ const LS = 'repeatSettingsV2State'
 export const REPEAT_DEFAULT_SETTINGS = Object.freeze({ ...REPEAT_DEFAULTS })
 
 /** [W22 P2] key-level whitelist filter (pure): keep only declared keys, drop undefined values
- *  (an explicit undefined is junk, not "reset" — the module state is defaults-backed). */
+ *  (an explicit undefined is junk, not "reset" — the module state is defaults-backed).
+ *  [w24 P3] an explicit null is NOT junk here: it is the deletion tombstone the top-level
+ *  settings sanitizer (settings-schema.js sanitizeSettingsPatch, B3) already honors — a peer
+ *  removed the key from the synced blob, so it must reset to the declared default. The old
+ *  passthrough seated `null` in live state, where it permanently bypassed the defaults backstop
+ *  (consumers read null instead of e.g. repeatWeekDays [1,2,3,4,5]). Object/array defaults are
+ *  cloned so mutating live state can never corrupt the module default — same convention as B3. */
 export function sanitizeRepeatDefaults (v) {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return {}
   const out = {}
   for (const k of Object.keys(v)) {
     if (!(k in REPEAT_DEFAULT_SETTINGS)) continue
     if (v[k] === undefined) continue
+    if (v[k] === null) {
+      const def = REPEAT_DEFAULT_SETTINGS[k]
+      out[k] = def && typeof def === 'object' ? (Array.isArray(def) ? [...def] : { ...def }) : def
+      continue
+    }
     out[k] = v[k]
   }
   return out

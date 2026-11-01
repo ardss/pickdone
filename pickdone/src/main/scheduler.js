@@ -148,6 +148,21 @@ function loadFiredFromMeta (db) {
   } catch (e) { log.warn('[Scheduler] fired-reminder watermark load failed (catch-up will re-fire as needed):', e && e.message) }
 }
 
+/** W24 (P2, 2026-10-31): ownership sync for the fired-reminder watermark. db-bulk-ops'
+ *  hardDelete/hardDeleteMany prune the deleted task's entries from the meta BLOB, but this
+ *  module's in-memory LRU kept its own copy — the next flushFiredNow() re-packed the WHOLE
+ *  LRU (deleted entries included) back into meta, resurrecting the tombstoned watermark.
+ *  The LRU is this module's private state, so the prune must be offered FROM here: db-bulk-ops
+ *  calls pruneFired(taskIds) at delete time. A deleted taskId's entries can never re-fire, so
+ *  dropping them from the LRU is purely corrective. */
+function pruneFired (taskIds) {
+  const list = (Array.isArray(taskIds) ? taskIds : [taskIds]).map(String)
+  if (!list.length) return
+  for (const k of Array.from(firedReminders.keys())) {
+    if (list.some(id => k === id || k.startsWith(id + ':'))) firedReminders.delete(k)
+  }
+}
+
 let dingFile = null
 
 function setSoundFile (f) { dingFile = f }
@@ -478,6 +493,7 @@ module.exports = {
   rebuildFingerprint, // D22 2026-10-02 test surface: a complete flip must change the fingerprint
   setFireForTest,
   loadFiredFromMeta, // r3 2026-09-28 test surface: corrupt watermark entries are dropped, not faked fresh
+  pruneFired, // W24 2026-10-31: db-bulk-ops delete-time ownership sync for the in-memory watermark LRU
   packFiredEntries, parseFiredEntries, // D18 2026-10-02 test surface: separator-safe watermark wire format
   _jobs: jobs,
   _fired: firedReminders,

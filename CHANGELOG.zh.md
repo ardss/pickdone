@@ -4,6 +4,15 @@ System.Object[]
 
 ## [Unreleased]
 
+- 门禁基础设施竞态（P0×2，10-31 release 门禁 5 连红的真凶——不是 runner 抖动）：child-registry 仍是读改写且 writeAll 会 prune 整个目录，并行车道互删注册（子进程变不可收割孤儿）；meta#2 对共享的真实 runner-children 目录做前后 diff（任何并发注册=假 leftover）；meta#5 直接改写真实 coverage-summary.json（10/10/10 假摘要）被并行覆盖率棘轮车道读到。child-registry 重写为每 pid 只写/删自己的文件（兼容旧格式残留）；新增 PICKDONE_CHILD_REGISTRY_DIR 覆盖让 meta#2/meta#5 全部 sandbox 化（泄漏仍红语义保留）；meta#9 重写为真实行使 live 池端口分配器。交错复现测试钉 12/12 存活（修前 0/12）。
+- 加密迁移丢数据（P1）：克隆分支的 DDL 重写对本应用全量 `CREATE TABLE IF NOT EXISTS` 形态产出非法 SQL，恰好把该分支要救的遗留表静默跳过——而迁移报告成功。正则吸收可选 IF NOT EXISTS；真实 vendor sqlite 回归测试（修前红）。
+- local:// 临时文件守卫是死的（P2）：bookkeeping 正则 `^\.att-tmp-` 与真实临时命名（`<名>.att-tmp-<ts>-<rand>`、`<名>.<pid>.<ms>.<seq>.dtmp`）永不匹配，崩溃残骸可经 local:// 读走。正则改后缀形态；aliases.json 与正常附件 key 不受影响（测试钉）。
+- firedReminders 墓碑修剪被下一次 flush 整体复活（P2）：hardDelete 修剪 meta blob 而 scheduler 内存 LRU 在下个 flush/quit 整包写回（含已删任务）。所有权合并：scheduler 暴露 pruneFired(taskIds)，db-bulk-ops 修剪前调用；测试钉「删→flush→不复活」。
+- 统计（P2+P3）：趋势图天数用 round((end-start)/DAY_MS)——end=now 时「今天」列正午前消失正午后出现（近7天一天内 6/8 柱翻转）；改日历口径并显式排他性午夜端规则（unit-review 口径同步）。成就墙专注分钟把无 endTime 的脏行计入而 KPI/热力图跳过——累加挪到判空之后。
+- 编辑面板（P2）：撤销「删除最后一行提醒」永久丢 reminderOffsets chips（clear 路径落库 [] 而 undo patch 不带）；删空前快照、经既有 offsets 通道恢复。番茄跨窗休息结算：±2s 兜底漏掉慢 IPC 间隙、按计划值记满额休息；确定性行 id 随相位 LS blob 跨窗携带（id 优先、时间窗兜底）。repeatSettings 净化器放行 null 永久越过默认值——对齐 B3 null-tombstone 契约（null 回落克隆默认）。
+- 旅程测试（跨月边界，11-01 双红）：J7 把渲染为上月 `out` 格的昨天改走既有上月 pager 分支；J1 先把「截至今天」的 7 日条带前滑一天再选明天（明天构造上不在条上；`.today` 之后日号全等替代 startsWith）。
+- 门禁仪表（P2）：run-all 的 flake 重试 30s 静默只对有 flake 台账历史的文件支付；合成 TAP `# pass` 单位修正（测试点−skip/非通过，旧公式可为负），check-test-summary 的 `# pass` 锚定到最后一个 plan 之后。
+
 ## [0.4.0-beta.23] - 2026-10-31
 - 番茄相位链：finishRest 落账失败不再永久卡死相位（释放相位认领、下一 tick 可重试，与 completeFocus 同款守卫）；startFocus 启动前重读共享瞬态，浮窗滞后副本不再静默覆盖他窗进行中的番茄；内联保存失败不再把刚输入标题的任务当未命名孤儿删除（flush 结果可感知，失败保留任务并记日志）。
 - 习惯可靠性：浮窗 relay 改为持久化合并后的主窗口状态（LS+DB meta），不再写入未合并的原始 blob——合并掉的打卡不再在重启时丢失；repeatSettings 在 LS 载入/同步 blob/设置净化器三个入口加键级白名单，封死 F-C2 未知键策略的嵌套对象旁路。

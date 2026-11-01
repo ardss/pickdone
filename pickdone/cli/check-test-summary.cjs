@@ -57,15 +57,20 @@ function parseSummary (tap) {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (/^1\.\.\d+\s*$/.test(lines[i])) { planIdx = i; break }
   }
-  if (planIdx === -1) return { fail: undefined, skip: undefined, cancelled: undefined }
-  let fail, skip, cancelled
+  if (planIdx === -1) return { pass: undefined, fail: undefined, skip: undefined, cancelled: undefined }
+  let pass, fail, skip, cancelled
   for (const line of lines.slice(planIdx + 1)) {
     let m
-    if ((m = /^# fail(?:ed)?\s+(\d+)\s*$/.exec(line))) fail = Number(m[1])
+    // [2026-10-31] `# pass` anchored after the last plan too — the raw grep at the success log
+    // used to take the LAST `# pass` anywhere in the stream, so a composed flake-retry run
+    // (raw pass1 plan above + authoritative composed plan below) could report the WRONG pass
+    // count; fail/skip/cancelled were already plan-anchored, now pass matches that contract.
+    if ((m = /^# pass(?:ed)?\s+(\d+)\s*$/.exec(line))) pass = Number(m[1])
+    else if ((m = /^# fail(?:ed)?\s+(\d+)\s*$/.exec(line))) fail = Number(m[1])
     else if ((m = /^# skip(?:ped)?\s+(\d+)\s*$/.exec(line))) skip = Number(m[1])
     else if ((m = /^# cancel(?:l)?ed\s+(\d+)\s*$/.exec(line))) cancelled = Number(m[1])
   }
-  return { fail, skip, cancelled }
+  return { pass, fail, skip, cancelled }
 }
 
 function red (msg, tapFile) {
@@ -174,7 +179,7 @@ if (exitCode !== 0) red(`单测进程 exit code = ${exitCode}(非 0 即红,不�
 
 // 校验二: TAP 摘要 fail=0, cancelled=0, skip ≤ 基线
 const tap = fs.readFileSync(tapFile, 'utf8')
-const { fail, skip, cancelled } = parseSummary(tap)
+const { pass, fail, skip, cancelled } = parseSummary(tap)
 if (fail == null || skip == null || cancelled == null) {
   red(`TAP 摘要解析失败(fail=${fail} skip=${skip} cancelled=${cancelled})——未见 plan 行(1..N)或摘要不全,reporter 可能不是 TAP 或输出被截断,不得假绿放行`, tapFile)
 }
@@ -187,6 +192,6 @@ if (skip > SKIP_BASELINE) {
   red(`# skipped = ${skip} > 棘轮基线 ${SKIP_BASELINE}——新增 skip 需要说明+降基线(改 cli/check-test-summary.cjs 的 SKIP_BASELINE)`, tapFile)
 }
 
-console.log(`✓ [check-test-summary] # pass ${/# pass\s+(\d+)/.exec(tap)?.[1] ?? '?'} / # fail ${fail} / # cancelled ${cancelled} / # skipped ${skip} ≤ 基线 ${SKIP_BASELINE}`)
+console.log(`✓ [check-test-summary] # pass ${pass ?? '?'} / # fail ${fail} / # cancelled ${cancelled} / # skipped ${skip} ≤ 基线 ${SKIP_BASELINE}`)
 // 临时 TAP:成功即清;失败路径经 red() exit 保留在 tmpdir 供人工回放(有意为之)
 if (!arg) { try { fs.unlinkSync(tapFile) } catch { /* already gone */ } }

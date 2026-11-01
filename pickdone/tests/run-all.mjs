@@ -9,7 +9,7 @@
  *   Suite membership is directory-level: tests/unit/**, tests/integration/**, tests/visual/**;
  *   files kept at the tests/ root (npm-script / check-all entrypoints) count as integration.
  */
-import { existsSync, readdirSync, writeSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, writeSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -518,7 +518,25 @@ if (r.status !== 0 && !r.error && r.stdout) {
     // 30s settle before the retry: the full pass leaves the host hot (concurrent-pool
     // debris, fs flushing); retrying into the same heat re-loses the same races
     // (check-test-scope-golden flunked the immediate retry twice before this delay).
-    await new Promise(r2 => setTimeout(r2, 30000))
+    // [2026-10-31 P2] the settle is now CONDITIONAL on flake suspicion: only when a failed
+    // file already has flake-ledger history (it was absorbed / re-ran green before — the
+    // load-band class the settle was calibrated for) do we pay the 30s. A first-time,
+    // never-seen failure is treated as deterministic and retried immediately — a genuinely
+    // broken suite no longer burns a fixed 30s per gate run on its way to a red it will
+    // reach anyway (the retry itself still runs in both cases, unchanged).
+    const flakeSuspects = (() => {
+      try {
+        const ledger = JSON.parse(readFileSync(FLAKE_LEDGER, 'utf8'))
+        if (!Array.isArray(ledger)) return []
+        const names = new Set(failedFiles.map(f => path.basename(f)))
+        return ledger.some(e => Array.isArray(e?.files) &&
+          e.files.some(x => names.has(path.basename(String(x)))))
+      } catch { return false } // no ledger yet -> no history -> no settle
+    })()
+    if (flakeSuspects) {
+      console.error('[run-all] failed file(s) have flake-ledger history (load-band class) — 30s settle before retry')
+      await new Promise(r2 => setTimeout(r2, 30000))
+    }
     // The retry pass is buffered too (live:false): its bytes may be folded into the composed
     // full-corpus stream, and every terminal branch below emits its buffers exactly once.
     const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)), { live: false })
@@ -588,6 +606,12 @@ if (r.status !== 0 && !r.error && r.stdout) {
           // match (the `ok`/`not ok` anchor cannot match a diagnostic text line), indentation now
           // allowed.
           const skips = all.reduce((n, b) => n + b.filter(l => /^\s*(?:not )?ok\b.*#\s*(?:SKIP|skip)\b/.test(l)).length, 0)
+          // [2026-10-31 P2] `# pass` must be in the same unit as `# skip` (test points), not
+          // blocks-minus-skips — the old `all.length - skips` mixed FILE blocks with TEST-POINT
+          // skips and could even go negative (multi-test-point files). Count test points: every
+          // ok/not-ok line across the composed corpus; pass = points - skips - not-ok points.
+          const points = all.reduce((n, b) => n + b.filter(l => /^\s*(?:not )?ok\b/.test(l)).length, 0)
+          const notOkPoints = all.reduce((n, b) => n + b.filter(l => /^\s*not ok\b/.test(l)).length, 0)
           const composed = [
             // W12 2026-10-26 (Fix 4): pass1 streams live, so the gate's tap file already holds
             // its raw bytes when this composed stream is appended. The separator marks the
@@ -596,7 +620,7 @@ if (r.status !== 0 && !r.error && r.stdout) {
             ...p1.head,
             ...all.map(b => b.join('\n')),
             `1..${all.length}`,
-            `# pass ${all.length - skips}`,
+            `# pass ${points - skips - notOkPoints}`,
             // fail line is MANDATORY (2026-10-26): the composed summary previously omitted it
             // entirely — parseSummary returns fail=undefined without it and the gate fail-closed
             // on "摘要解析失败". Here both counts are provably 0 (the branch guard above).
