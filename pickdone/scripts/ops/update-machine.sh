@@ -167,6 +167,10 @@ local)
   log "改注册表 DisplayVersion=$DIST_VERSION ..."
   reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$REG_KEY" //v DisplayVersion //t REG_SZ //d "$DIST_VERSION" //f >/dev/null \
     || { echo "[FAIL] 注册表写入失败" >&2; print_rollback; exit 1; }
+  # 显示名也带版本号（Windows「应用和功能」列表渲染的是 DisplayName 而非 DisplayVersion——
+  # beta.24 实锤：程序本体已是新版本，应用列表却一直显示旧版本名，用户据此判断换装失败）
+  reg add "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\$REG_KEY" //v DisplayName //t REG_SZ //d "PickDone $DIST_VERSION" //f >/dev/null \
+    || warn "注册表 DisplayName 更新失败（应用列表会显示旧版本名，不影响程序本体）"
 
   log "启动 PickDone ..."
   cmd //c start "" "F:\\PickDone\\PickDone.exe"
