@@ -2,6 +2,7 @@
 // Shell-free Git and Node calls work when this repository is opened via UNC.
 // Full-tree lint remains part of check:all; pre-commit checks only this commit.
 import { execFileSync, spawnSync } from 'node:child_process'
+import fs from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
@@ -47,10 +48,39 @@ if (selected.length === 0) {
   }
   console.log('[pre-commit] ESLint: no staged source changes in lint scope')
 } else {
-  const cli = join(root, 'node_modules/eslint/bin/eslint.js')
-  const result = spawnSync(process.execPath, [cli, ...selected, '--quiet', '--cache'], {
-    cwd: root, stdio: 'inherit', shell: false
+  // W25 fix (2026-11-01): eslint used to lint the WORKTREE file — with `git add -p` partial
+  // staging the committed index blob was never linted (bad hunk staged + worktree cleaned up
+  // afterwards = broken code lands green). When the staged blob differs from the worktree
+  // (probe = bare `git diff`, index vs worktree — NOT --cached, which diffs index vs HEAD and
+  // reads "differs" for every staged file),
+  // extract `git show :<path>` into a temp dir INSIDE the tree (keeps config resolution
+  // walking up to the project root; basename + extension preserved) and lint THAT. Identical
+  // content — the overwhelming majority of commits — keeps the zero-overhead original path.
+  // Temp dir lives under root and is removed after the run; per-file prefix avoids basename
+  // collisions across sibling dirs. Git failures fail closed: a diff probe error is treated as
+  // "differs" and the subsequent blob extraction throws (red), never silently lints worktree.
+  // eol note: with core.autocrlf=true a same-content LF file can probe as "differs" (eol
+  // roundtrip) — harmless, linting the index blob then is still exactly the committed truth.
+  const tmpDir = join(root, '.tmp-staged-lint-' + process.pid)
+  let tmpMade = false
+  const lintTargets = selected.map((name, i) => {
+    const rel = 'pickdone/' + name
+    const probe = spawnSync('git', ['diff', '--quiet', '--', ':/' + rel], { cwd: root })
+    if (!probe.error && probe.status === 0) return join(root, ...name.split('/'))
+    if (!tmpMade) { fs.mkdirSync(tmpDir, { recursive: true }); tmpMade = true }
+    const blob = execFileSync('git', ['-c', 'core.quotePath=false', 'show', ':0:' + rel], { cwd: root, maxBuffer: 64 * 1024 * 1024 })
+    const dest = join(tmpDir, i + '-' + name.split('/').pop())
+    fs.writeFileSync(dest, blob)
+    return dest
   })
-  if (result.error) throw result.error
-  if (result.status !== 0) process.exitCode = result.status || 1
+  const cli = join(root, 'node_modules/eslint/bin/eslint.js')
+  try {
+    const result = spawnSync(process.execPath, [cli, ...lintTargets, '--quiet', '--cache'], {
+      cwd: root, stdio: 'inherit', shell: false
+    })
+    if (result.error) throw result.error
+    if (result.status !== 0) process.exitCode = result.status || 1
+  } finally {
+    if (tmpMade) { try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* next run overwrites */ } }
+  }
 }

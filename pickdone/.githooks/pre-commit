@@ -18,7 +18,7 @@ jslist=/tmp/hook-staged-js.$$
 errfile=/tmp/hook-check.err.$$  # 带 $$ 后缀:并发钩子实例互相覆盖对方的错误文件(与上行 jslist 同款)
 # W15 2026-10-27: /tmp 卫生——errfile 在任何路径都不删、jslist 在 `break→exit 1` 熔断路径也不删,
 # 每次运行留一对垃圾。EXIT trap 兜底清理(正常路径原有的 rm 保持不变,幂等);熔断语义不受影响。
-trap 'rm -f "$jslist" "$errfile" 2>/dev/null' EXIT
+trap 'rm -f "$jslist" "$errfile" /tmp/hook-blob.$$.* 2>/dev/null' EXIT
 # W16 fix(#2/#3): ACMR 补 Rename(git mv 后新路径不进静态门禁,与 lint-staged.mjs 对齐);
 # -c core.quotePath=false 防非 ASCII 文件名被打成八进制串致 [ -f ] 漏检(假红/漏检)。
 git -c core.quotePath=false diff --cached --name-only --diff-filter=ACMR | tr -d '\r' | grep -E '\.[cm]?js$' > "$jslist" || true
@@ -40,7 +40,23 @@ while IFS= read -r f; do
     missing=$((missing + 1))
     continue
   fi
-  if ! node --check "$rel" 2>"$errfile"; then
+  # W25 fix(2026-11-01): 旧逻辑 node --check 跑的是【工作区文件】——`git add -p` 部分暂存时,
+  # 真正要提交的 index blob 从未被任何门禁见过(坏 hunk 暂存+工作区改好 = 坏内容直接落库)。
+  # staged 内容 ≠ 工作区内容时,把 `git show :<path>` 的 blob 写到保留扩展名的临时文件上检查
+  # (内容一致——绝大多数提交——维持零开销原路径)。注意探针是裸 `git diff`(index vs 工作区);
+  # `--cached` 比的是 index vs HEAD,所有已暂存文件都会恒真"differs",零开销腿就死了。
+  # 路径用 ":/$f"(仓库根相对)而非裸 "$f":钩子已 cd 进 pickdone/,裸路径会被按 cwd
+  # 解析成 pickdone/pickdone/... 而比对落空。
+  target="$rel"
+  if ! git diff --quiet -- ":/$f" 2>/dev/null; then
+    target="/tmp/hook-blob.$$.${f##*/}"
+    if ! git show ":0:$f" > "$target" 2>/dev/null; then
+      echo "  ✗ 无法读取 staged blob: $f —— 拒绝放行"
+      fail=1
+      break
+    fi
+  fi
+  if ! node --check "$target" 2>"$errfile"; then
     echo "  ✗ 语法错误: $f"
     cat "$errfile"
     fail=1
