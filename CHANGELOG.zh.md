@@ -13,6 +13,10 @@ System.Object[]
 - 旅程测试（跨月边界，11-01 双红）：J7 把渲染为上月 `out` 格的昨天改走既有上月 pager 分支；J1 先把「截至今天」的 7 日条带前滑一天再选明天（明天构造上不在条上；`.today` 之后日号全等替代 startsWith）。
 - 门禁仪表（P2）：run-all 的 flake 重试 30s 静默只对有 flake 台账历史的文件支付；合成 TAP `# pass` 单位修正（测试点−skip/非通过，旧公式可为负），check-test-summary 的 `# pass` 锚定到最后一个 plan 之后。
 
+- 门禁（W25）：composed TAP 计划改测试点口径，check-test-summary 对 composed 流 plan≠pass+fail+skip+cancelled 即红（fail-closed；裸 node:test 顶层 plan 不匹配保持响亮警告）；flake 吸收低置信分支不再无条件把红翻成 exit 0——翻绿需原始证据（retry exit 0 + plan 行 + 零 not-ok 行）；skip 棘轮回放正则匹配缩进嵌套 ok#SKIP 行；spawnApp 只向自建临时目录播种空 todos.db（外部 userDataDir 复用不再被清零）；tmp 清扫家族覆盖 todo-cov-。pre-commit 语法/eslint 钩改检 STAGED blob（git show :0:$file）而非工作区——被并行编辑中的暂存文件不再毒害邻居的提交；check-cache-stamp 改读 diff --cached，css 已暂存而版本号未暂存能抓到红。
+- 渲染层（W25）：任务菜单快速番茄入口补上 tomatoId 加盐（对齐另两个入口，消除同秒碰撞）；sortMode 的 difficulty 排序改为真实比较任务预估时长（读 ./tomatoEstimate.js），不再静默退化为插入序；SearchView 跨午夜守望日历日翻转（30s tick、非响应式实例字段），过夜会话不再残留过期的「今天」结果。
+- 附件（W25）：第三种崩溃残渣形状——writeFileDurable 复合名 `<名>.<pid>.<ms>.<seq>.dtmp` 在上传中途崩溃后既不匹配 D19 残渣正则也不属 W16 零字节幻影类：永不清扫、永久占配额。分类器吸收该形状（无铸造碰撞风险——dtmp 不在 ALLOWED_EXT）；年龄门不变。
+
 ## [0.4.0-beta.23] - 2026-10-31
 - 番茄相位链：finishRest 落账失败不再永久卡死相位（释放相位认领、下一 tick 可重试，与 completeFocus 同款守卫）；startFocus 启动前重读共享瞬态，浮窗滞后副本不再静默覆盖他窗进行中的番茄；内联保存失败不再把刚输入标题的任务当未命名孤儿删除（flush 结果可感知，失败保留任务并记日志）。
 - 习惯可靠性：浮窗 relay 改为持久化合并后的主窗口状态（LS+DB meta），不再写入未合并的原始 blob——合并掉的打卡不再在重启时丢失；repeatSettings 在 LS 载入/同步 blob/设置净化器三个入口加键级白名单，封死 F-C2 未知键策略的嵌套对象旁路。
