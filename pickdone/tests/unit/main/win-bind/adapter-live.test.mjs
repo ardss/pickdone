@@ -10,8 +10,15 @@ const require = createRequire(import.meta.url)
 const { createWinAdapter } = require('../../../../src/main/win-bind/adapter.js')
 
 const isWin32 = process.platform === 'win32'
+// Hosted Windows Actions executes Node in a service (non-interactive) session.
+// A service session cannot prove Progman/foreground cursor behavior. Keep these
+// REAL Win32 probes enabled in interactive Windows acceptance (including
+// ordinary local check:all), not in the headless CI worker. Mocked adapter
+// lifecycle/protocol tests remain mandatory on both CI platforms.
+const hostedServiceSession = process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_OS === 'Windows'
+const liveSkip = !isWin32 ? 'requires Windows' : (hostedServiceSession ? 'requires interactive Windows desktop; CI service session has no user desktop' : false)
 
-test('live enumerate: resident PS returns real visible windows with well-formed rows', { skip: !isWin32 }, async () => {
+test('live enumerate: resident PS returns real visible windows with well-formed rows', { skip: liveSkip }, async () => {
   const a = createWinAdapter({ timeoutMs: 8000 })
   try {
     await a.prewarm()
@@ -31,7 +38,7 @@ test('live enumerate: resident PS returns real visible windows with well-formed 
   } finally { a.dispose() }
 })
 
-test('live probeUnderCursor: never throws; shape {raw: WindowInfo|null, buttonDown: boolean|null}', { skip: !isWin32 }, async () => {
+test('live probeUnderCursor: never throws; shape {raw: WindowInfo|null, buttonDown: boolean|null}', { skip: liveSkip }, async () => {
   const a = createWinAdapter({ timeoutMs: 8000 })
   try {
     await a.prewarm()
