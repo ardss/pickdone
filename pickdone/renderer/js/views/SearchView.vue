@@ -106,7 +106,11 @@ export default {
   data () {
     // F-C6: local input buffer — the input binds to this; the debounced watcher lands it in the
     // store. (Binding straight to the store getter made every keystroke a full-table re-match.)
-    return { qText: '' }
+    // w19-family (P3): wall-clock reactivity — matchTasks cuts its date windows with an inline
+    // start-of-day constant that has no reactive dependency, so a page left mounted across
+    // midnight kept serving yesterday's frozen last7/last30 slices. `tick` bumps when the day
+    // flips and matchTasks reads it (same pattern as TodayXView.settledTotal's `void this.tick`).
+    return { qText: '', tick: 0, _dayCheckTimer: null, _lastSeenDay: 0 }
   },
   created () {
     this.qText = this.$store.state.todo.search || ''
@@ -157,13 +161,26 @@ export default {
     // Render list is capped at 200 for DOM cost, but the count reflects the real total
     results () { return this.matched.slice(0, 200) }
   },
-  mounted () { this.$refs.inp && this.$refs.inp.focus() },
+  mounted () {
+    this.$refs.inp && this.$refs.inp.focus()
+    // Midnight watch: cheap day-flip check instead of a 1s tick (SearchView has no clock display;
+    // only the day cut needs to invalidate, and only when the day actually changes).
+    // Day-key STRING compare (not another inline start-of-day site): the day-caliber ratchet
+    // counts those and this watcher is a pure flip detector, not a window cut.
+    this._lastSeenDay = dayjs().format('YYYY-MM-DD')
+    this._dayCheckTimer = setInterval(() => {
+      const d = dayjs().format('YYYY-MM-DD')
+      if (d !== this._lastSeenDay) { this._lastSeenDay = d; this.tick++ }
+    }, 30000)
+  },
+  beforeUnmount () { if (this._dayCheckTimer) { clearInterval(this._dayCheckTimer); this._dayCheckTimer = null } },
   methods: {
     /* [A9] clear chip: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
     onClearKey: roleButtonActivate(function () { this.clearQ() }),
     // Shared match pipeline for matched/undatedHidden so the exclusion count and the result list
     // can never disagree (computed twice per render at most; the pool is small and matchTodo is cheap)
     matchTasks () {
+      void this.tick // wall-clock reactivity: re-cut the date windows when the day flips
       const pool = [...this.$store.state.todo.todoList]
       const st = this.settings
       const range = st.searchDateRange
