@@ -59,6 +59,7 @@ const GROUPS = [
     // 静态门禁红=确定性红(纯文件分析/类型/单测,无时序因素),重试没有意义只会翻倍耗时——不设 retry
     name: '② 静态门禁+类型+单元（并行 3 道,与③池同时起跑）', parallel: 3, retry: 0,
     stages: [
+      ['Public/private environment boundary and PR conventions', 'node', ['cli/check-environment-boundary.mjs']],
       ['指纹脱敏', 'node', ['cli/check-fingerprint.js']],
       ['依赖许可证', 'node', ['cli/check-licenses.js']],
       ['token 纪律', 'node', ['cli/check-tokens.js']],
