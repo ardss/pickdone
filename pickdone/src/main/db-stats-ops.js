@@ -72,10 +72,13 @@ exports.statsByDay = (db, { from, to }) => {
   const tKey = t == null ? 99991231 : Number(dayjs(t).format('YYYYMMDD'))
   // P3 2026-09-23 完成日口径对齐(与渲染端 metrics.js doneTsOf 一致): completedAt=0 的历史/异常完成行
   // 按 updateTime 兜底落日 — 旧 SQL `completedAt > 0` 把这类行从所有完成日统计里永久剔除,App 侧却计入
-  const doneByCompletionDay = db.prepare(`SELECT CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', 'localtime') AS INTEGER) ds, COUNT(*) n
+  // 2026-11-01: 'localtime' -> 显式 '+8 hours'。应用目标时区固定 UTC+8,而 sqlite CRT 对 TZ 环境变量
+  // 只认 POSIX 串、对 IANA 名(Asia/Shanghai)静默回退系统时区——CI 钉 IANA 时 V8(+8) 与 sqlite(UTC)
+  // 脑裂,每天 16:00Z 后完成日统计整体错一天(release 门禁 4 连红实锤)。显式偏移对两边恒等。
+  const doneByCompletionDay = db.prepare(`SELECT CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', '+8 hours') AS INTEGER) ds, COUNT(*) n
     FROM todos
     WHERE deleted=0 AND complete=1 AND COALESCE(NULLIF(completedAt,0), updatedAt) > 0
-      AND CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', 'localtime') AS INTEGER) BETWEEN ? AND ?
+      AND CAST(strftime('%Y%m%d', COALESCE(NULLIF(completedAt,0), updatedAt)/1000, 'unixepoch', '+8 hours') AS INTEGER) BETWEEN ? AND ?
     GROUP BY ds`).all(fKey, tKey)
   return { rows, doneByCompletionDay }
 }

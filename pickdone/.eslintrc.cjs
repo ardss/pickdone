@@ -60,5 +60,5 @@ module.exports = {
       env: { node: true }
     }
   ],
-  ignorePatterns: ['node_modules/', 'vendor/', 'assets/vendor-lib/', 'browser-dev/', 'dist/', 'renderer-dist/', '**/README.md']
+  ignorePatterns: ['node_modules/', 'vendor/', 'assets/vendor-lib/', 'cli/dayjs-plugin-isoWeek.js', 'browser-dev/', 'dist/', 'renderer-dist/', '**/README.md']
 }

@@ -9,7 +9,7 @@
  * this shell owns the dayjs default base and its isoWeek plugin extension.
  */
 const dayjs = require('dayjs')
-try { dayjs.extend(require('../assets/vendor-lib/dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
+try { dayjs.extend(require('./dayjs-plugin-isoWeek.js')) } catch (e) { /* degrade to default week start when the plugin is missing */ }
 
 const { parseChineseNaturalDate } = require('../shared/nl-date-core.mjs')
 
