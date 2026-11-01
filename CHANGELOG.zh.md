@@ -2,7 +2,7 @@
 
 System.Object[]
 
-## [Unreleased]
+## [0.4.0-beta.24] - 2026-11-01
 
 - 门禁基础设施竞态（P0×2，10-31 release 门禁 5 连红的真凶——不是 runner 抖动）：child-registry 仍是读改写且 writeAll 会 prune 整个目录，并行车道互删注册（子进程变不可收割孤儿）；meta#2 对共享的真实 runner-children 目录做前后 diff（任何并发注册=假 leftover）；meta#5 直接改写真实 coverage-summary.json（10/10/10 假摘要）被并行覆盖率棘轮车道读到。child-registry 重写为每 pid 只写/删自己的文件（兼容旧格式残留）；新增 PICKDONE_CHILD_REGISTRY_DIR 覆盖让 meta#2/meta#5 全部 sandbox 化（泄漏仍红语义保留）；meta#9 重写为真实行使 live 池端口分配器。交错复现测试钉 12/12 存活（修前 0/12）。
 - 加密迁移丢数据（P1）：克隆分支的 DDL 重写对本应用全量 `CREATE TABLE IF NOT EXISTS` 形态产出非法 SQL，恰好把该分支要救的遗留表静默跳过——而迁移报告成功。正则吸收可选 IF NOT EXISTS；真实 vendor sqlite 回归测试（修前红）。
