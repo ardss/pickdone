@@ -105,7 +105,7 @@ jobs:
           key: electron-${{ runner.os }}-${{ hashFiles('pickdone/package-lock.json') }}
           restore-keys: electron-${{ runner.os }}-
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: better_sqlite3-linux-arm64-electron
           path: artifact
