@@ -1,3 +1,15 @@
+> **2026-11-01 Windows A/B 正式安装流程已切换到 [install-windows.ps1](./install-windows.ps1)。** 下文 update-machine.sh 是 beta.22 旧版记录，其中 Windows A/B 身份、SSH 登录和测试目录已过期；**禁止用它更新 Windows A/B 的正式安装**，其 board 分支仍属历史用途。
+>
+> 在目标机器已登录用户会话中使用：
+> ```powershell
+> # 默认只读检查现有安装和运行进程，机器身份不匹配则立即失败
+> powershell -NoProfile -File .\install-windows.ps1 -Target A -Version 0.4.0-beta.24
+> powershell -NoProfile -File .\install-windows.ps1 -Target B -Version 0.4.0-beta.24
+> # 需要升级时，显式给官方 Setup 路径与 SHA256，并传 -Apply
+> powershell -NoProfile -File .\install-windows.ps1 -Target A -Version <版本> -Installer <Setup.exe> -Sha256 <64位哈希> -Apply
+> ```
+> 已安装相同版本时 `-Apply` 不重复安装；缺少用户桌面会话、不正确主机、缺包或哈希不符时拒绝执行。脚本仅证明安装文件版本、注册表版本与真实运行进程路径一致，**用户界面和功能仍须独立 QA，且不执行公开 Publish**。
+
 # pickdone/scripts/ops — 发版后三台机器更新
 
 一个脚本分发三台机器：`update-machine.sh <local|win64|board>`。在开发机 Git Bash 里跑。
