@@ -80,8 +80,10 @@ test('h7: EpReminders.removeRemindRow splices via indexOf on the row object (rap
 
 /* ---------------- 4. [P2] EpSubtasks stable row keys ---------------- */
 
-test('h7: EpSubtasks rows key off the stable _key (index only as legacy fallback), not bare :key="i"', () => {
-  assert.match(SUBTASKS, /:key="s\._key != null \? s\._key : s\.text \+ '_' \+ i"/)
+test('h7: EpSubtasks rows key off the stable _key (pure, no index fallback [W26]), not bare :key="i"', () => {
+  // [W26] the text+index fallback key is gone — every row is guaranteed a minted `_key`
+  assert.match(SUBTASKS, /:key="s\._key"/)
+  assert.doesNotMatch(SUBTASKS, /s\.text \+ '_' \+ i/)
   assert.doesNotMatch(SUBTASKS, /:key="i"/)
 })
 

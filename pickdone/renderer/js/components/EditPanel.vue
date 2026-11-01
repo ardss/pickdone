@@ -579,35 +579,35 @@ export default {
     },
     // W21 split: toggle + parent-complete linkage moved to editpanel/subtaskOps.toggleSub (verbatim)
     toggleSub (s) { return subtaskOps.toggleSub(this, s) },
-    delSub (i) {
-      const sub = this.subList[i]
+    // [W26] EpSubtasks passes the row object; resolve by stable `_key` — a captured index desyncs after a mid-edit drag splice / LAN re-hydrate.
+    _subIndexByKey (sub) { return sub && sub._key != null ? this.subList.findIndex(x => x && x._key === sub._key) : -1 },
+    delSub (sub) {
       removeWithUndo(this,
         () => {
-          // P2: locate by item reference — the captured index goes stale when another subtask is removed first (out-of-order undos)
-          const at = this.subList.indexOf(sub)
+          const at = this._subIndexByKey(sub)
           this.subList.splice(at < 0 ? this.subList.length : at, 1)
           this.markDirty('subtasks'); this.queueSave({})
         },
         () => {
-          const at = this.subList.indexOf(sub)
+          const at = this._subIndexByKey(sub)
           this.subList.splice(at < 0 ? this.subList.length : at, 0, sub)
           this.markDirty('subtasks'); this.queueSave({})
         })
     },
-    moveSub (i, dir) {
-      const j = i + dir
-      if (j < 0 || j >= this.subList.length) return
+    moveSub (sub, dir) {
+      const i = this._subIndexByKey(sub), j = i + dir
+      if (i < 0 || j < 0 || j >= this.subList.length) return
       const tmp = this.subList[i]; this.subList[i] = this.subList[j]; this.subList[j] = tmp
       this.markDirty('subtasks'); this.queueSave({})
       // [maint-0925 A8] screen-reader feedback, same sentence as the row-level reorder (TodoItem.keyboardMove)
       this.$announce && this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: (this.subList[j] && this.subList[j].text) || '' }))
     },
     // [R2] subtask inline rename (EpSubtasks 'rename' emit): rewrite the row text and run it through the same unified save pipeline as add/toggle/move
-    renameSub (i, text) {
-      const sub = this.subList[i]
+    renameSub (sub, text) {
+      const sub2 = this.subList.find(x => x && sub && x._key === sub._key)
       const t = (text || '').trim()
-      if (!sub || !t || sub.text === t) return
-      sub.text = t
+      if (!sub2 || !t || sub2.text === t) return
+      sub2.text = t
       this.markDirty('subtasks'); this.queueSave({})
     },
     /* Actual = total of this task's focus records; click = open the ledger detail (add/remove/modify entries, totals reconcile automatically) */

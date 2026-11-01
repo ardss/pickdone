@@ -47,23 +47,25 @@ function extractPure (src, file, names) {
 
 test('R2: EpSubtasks declares the rename emit and renders an inline rename editor', () => {
   assert.match(SUBTASKS, /emits: \['add', 'toggle', 'remove', 'move', 'rename'\]/)
-  assert.match(SUBTASKS, /@dblclick="startRename\(i\)"/)
+  // [W26] row ops are identified by the row object / its stable `_key`, no longer an index
+  assert.match(SUBTASKS, /@dblclick="startRename\(s\)"/)
   // D4 (17bddc2b) added the IME guard: Enter commits via onRenameEnter (composition-aware),
   // commitRename remains the blur/normal path
-  assert.match(SUBTASKS, /@keydown\.enter\.prevent\.stop="onRenameEnter\(i, \$event\)"/)
-  assert.match(SUBTASKS, /@blur="commitRename\(i\)"/)
+  assert.match(SUBTASKS, /@keydown\.enter\.prevent\.stop="onRenameEnter\(s, \$event\)"/)
+  assert.match(SUBTASKS, /@blur="commitRename\(s\)"/)
 })
 
-test('R2: commitRename emits rename with (index, trimmed text) and is re-entrancy safe', () => {
-  const commit = SUBTASKS.slice(SUBTASKS.indexOf('commitRename (i)'))
-  assert.match(commit, /if \(this\.renameIndex !== i\) return/, 'blur after Enter commit is a no-op')
-  assert.match(commit, /this\.\$emit\('rename', i, text\)/)
+test('R2: commitRename emits rename with (row, trimmed text) keyed by _key and is re-entrancy safe', () => {
+  const commit = SUBTASKS.slice(SUBTASKS.indexOf('commitRename (s)'))
+  assert.match(commit, /if \(!s \|\| this\.renameKey !== s\._key\) return/, 'blur after Enter commit is a no-op')
+  assert.match(commit, /this\.\$emit\('rename', s, text\)/)
 })
 
 test('R2: EditPanel binds @rename and routes it through the unified save pipeline', () => {
   assert.match(PARENT, /@rename="renameSub"/)
-  const fn = PARENT.slice(PARENT.indexOf('renameSub (i, text)'))
-  assert.match(fn, /sub\.text = t/)
+  const fn = PARENT.slice(PARENT.indexOf('renameSub (sub, text)'))
+  assert.match(fn, /_key === sub\._key/, 'the row is resolved by its stable _key')
+  assert.match(fn, /sub2\.text = t/)
   assert.match(fn, /markDirty\('subtasks'\); this\.queueSave\(\{\}\)/)
 })
 

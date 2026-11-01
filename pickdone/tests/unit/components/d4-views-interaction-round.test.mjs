@@ -145,29 +145,32 @@ function mountEpSubs (emitted) {
 test('subtask rename: IME composition Enter (229 / isComposing) does NOT commit the rename', () => {
   const emitted = []
   const vm = mountEpSubs(emitted)
-  vm.renameIndex = 0
+  // [W26] the editor is keyed by the row's stable `_key`, not an index
+  const row = { _key: 'k1', text: 'old text', checked: false }
+  vm.renameKey = row._key
   vm.renameText = 'half-typed pin'
-  vm.onRenameEnter(0, keyEvt({ isComposing: true, keyCode: 229 }))
-  vm.onRenameEnter(0, keyEvt({ isComposing: false, keyCode: 229 }))
-  vm.onRenameEnter(0, keyEvt({ isComposing: true, keyCode: 13 }))
+  vm.onRenameEnter(row, keyEvt({ isComposing: true, keyCode: 229 }))
+  vm.onRenameEnter(row, keyEvt({ isComposing: false, keyCode: 229 }))
+  vm.onRenameEnter(row, keyEvt({ isComposing: true, keyCode: 13 }))
   assert.equal(emitted.length, 0,
     'the Enter ending a pinyin composition must not emit rename with half-converted pinyin')
-  assert.equal(vm.renameIndex, 0, 'editor stays open during composition')
+  assert.equal(vm.renameKey, row._key, 'editor stays open during composition')
 })
 
 test('subtask rename: a plain (non-IME) Enter still commits the rename', () => {
   const emitted = []
   const vm = mountEpSubs(emitted)
-  vm.renameIndex = 0
+  const row = { _key: 'k1', text: 'old text', checked: false }
+  vm.renameKey = row._key
   vm.renameText = 'renamed text'
-  vm.onRenameEnter(0, keyEvt({ isComposing: false, keyCode: 13 }))
+  vm.onRenameEnter(row, keyEvt({ isComposing: false, keyCode: 13 }))
   assert.equal(emitted.length, 1, 'plain Enter emits rename exactly once')
-  assert.deepEqual(emitted[0], [0, 'renamed text'])
+  assert.deepEqual(emitted[0], [row, 'renamed text'], 'the emit carries the row object ([W26])')
 })
 
 test('subtask rename: template binds the guarded handler (wiring check)', () => {
   const src = read(EP_SFC)
-  assert.match(src, /@keydown\.enter\.prevent\.stop="onRenameEnter\(i, \$event\)"/,
+  assert.match(src, /@keydown\.enter\.prevent\.stop="onRenameEnter\(s, \$event\)"/,
     'rename input must bind onRenameEnter (the guarded handler), not commitRename directly')
 })
 

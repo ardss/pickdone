@@ -58,8 +58,11 @@ export async function maybeAskLeftovers (store) {
       markAsked(todayStr)
       return
     }
-    // Only write the flag when the user explicitly chose "move to today" — avoids being skipped after hesitation
-    markAsked(todayStr)
+    // Only write the flag when the user explicitly chose "move to today" — avoids being skipped after hesitation.
+    // [W26] the flag is written AFTER the move loop succeeds (was BEFORE it): a dispatch throwing
+    // mid-loop used to leave the batch unmoved AND already-marked — the outer catch swallowed the
+    // error, so yesterday's tasks were neither moved nor asked about again until the next day.
+    // Now a failure leaves the flag unset → the user is asked again on the next open.
     const todayStart = +dayjs().startOf('day')
     const startOfDay = ts => +dayjs(ts).startOf('day')
     const snap = list.map(t => {
@@ -74,6 +77,7 @@ export async function maybeAskLeftovers (store) {
       const patch = { ...s.patch, _deferViews: true }
       await store.dispatch('todo/updateTodoFields', { taskId: s.id, patch })
     }
+    markAsked(todayStr)
     store.dispatch('todo/computeViews')
     // Batch move = reversible op: success toast carries group undo (plain success before; consolidated 2026-09-01)
     batchMoveWithUndo(vm, {
