@@ -259,7 +259,9 @@ test('#8 backfill id shape matches the CLI contract; at-cap 600 accepted', async
   const rec = commits.find(c => c[0] === 'tomato/addRecord')[1]
   assert.equal(rec.focusDuration, 600, 'the cap itself is accepted')
   // D27: full taskId (the slice(-8) twin-mint collision is fixed in taskMenu.js, matching the CLI)
-  assert.match(rec.tomatoId, /^tmt_m_\d+_600_task-12345678$/, 'id = tmt_m_<startTs>_<minutes>_<full taskId>')
+  // W25: taskMenu mints carry the same random salt tail as DayRail/TaskAccountModal (same-minute
+  // same-length double backfill is a legal scenario and must not be deduped away)
+  assert.match(rec.tomatoId, /^tmt_m_\d+_600_task-12345678[a-z0-9]{0,6}$/, 'id = tmt_m_<startTs>_<minutes>_<full taskId><optional salt>')
 })
 
 test('#8b backfill input above FOCUS_MAX_MINUTES is rejected with a hint, no record minted', async () => {
@@ -300,6 +302,6 @@ test('#8 backfill without a task uses the free-slot id suffix', async () => {
   const item = menu.find(i => i.icon === 'plus')
   await item.fn()
   const rec = commits.find(c => c[0] === 'tomato/addRecord')[1]
-  assert.match(rec.tomatoId, /^tmt_m_\d+_25_free$/)
+  assert.match(rec.tomatoId, /^tmt_m_\d+_25_free[a-z0-9]{0,6}$/, 'free-slot id + optional W25 salt tail')
   assert.equal(rec.focusTaskId, '')
 })

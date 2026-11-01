@@ -1,5 +1,7 @@
 /** Today-page sort mode — pure logic extracted from the store (unit-testable).
  *  Modes are stored as stable keys custom|created|difficulty; legacy persisted data may be Chinese and is normalized for compatibility. */
+import { getEstimate } from './tomatoEstimate.js'
+
 const LEGACY = { '自定义': 'custom', '按创建日期': 'created', '按难度': 'difficulty' }
 
 export function normalizeSortMode (mode) {
@@ -23,7 +25,11 @@ export function sortByMode (arr, mode) {
   } else if (m === 'created') {
     out.sort((a, b) => numOr(b.createTime, 0) - numOr(a.createTime, 0))
   } else if (m === 'difficulty') {
-    out.sort((a, b) => (b.difficulty || 0) - (a.difficulty || 0))
+    // [w25 P2] difficulty column is retired (new tasks are all 0, so this mode was a full no-op);
+    // migrated to the same estimated-workload caliber as todoComputeViews.js — by estimated
+    // tomatoes, higher first. getEstimate reads the shared estimate cache, so the estimate modal
+    // and this comparator can never drift apart.
+    out.sort((a, b) => getEstimate(b.taskId) - getEstimate(a.taskId))
   }
   return out
 }

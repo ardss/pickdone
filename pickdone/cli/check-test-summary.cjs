@@ -57,7 +57,7 @@ function parseSummary (tap) {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (/^1\.\.\d+\s*$/.test(lines[i])) { planIdx = i; break }
   }
-  if (planIdx === -1) return { pass: undefined, fail: undefined, skip: undefined, cancelled: undefined }
+  if (planIdx === -1) return { pass: undefined, fail: undefined, skip: undefined, cancelled: undefined, plan: undefined }
   let pass, fail, skip, cancelled
   for (const line of lines.slice(planIdx + 1)) {
     let m
@@ -70,7 +70,13 @@ function parseSummary (tap) {
     else if ((m = /^# skip(?:ped)?\s+(\d+)\s*$/.exec(line))) skip = Number(m[1])
     else if ((m = /^# cancel(?:l)?ed\s+(\d+)\s*$/.exec(line))) cancelled = Number(m[1])
   }
-  return { pass, fail, skip, cancelled }
+  // W25 2026-11-01: expose the anchored plan's N so the caller can cross-check plan vs
+  // summary (TAP plan semantics = test-point count). Raw node:test TAP legitimately has
+  // plan = TOP-LEVEL tests while the summary counts ALL test points (nested subtests) —
+  // that mismatch is expected and must NOT red; only a COMPOSED stream (run-all's own
+  // synthesis, which promises summary-unit plans since W25) is held to the contract.
+  const planM = /^1\.\.(\d+)\s*$/.exec(lines[planIdx])
+  return { pass, fail, skip, cancelled, plan: planM ? Number(planM[1]) : undefined }
 }
 
 function red (msg, tapFile) {
@@ -179,15 +185,36 @@ if (exitCode !== 0) red(`单测进程 exit code = ${exitCode}(非 0 即红,不�
 
 // 校验二: TAP 摘要 fail=0, cancelled=0, skip ≤ 基线
 const tap = fs.readFileSync(tapFile, 'utf8')
-const { pass, fail, skip, cancelled } = parseSummary(tap)
+const { pass, fail, skip, cancelled, plan } = parseSummary(tap)
 if (fail == null || skip == null || cancelled == null) {
   red(`TAP 摘要解析失败(fail=${fail} skip=${skip} cancelled=${cancelled})——未见 plan 行(1..N)或摘要不全,reporter 可能不是 TAP 或输出被截断,不得假绿放行`, tapFile)
 }
 if (fail > 0) red(`# fail = ${fail}(要求 0)`, tapFile)
 if (cancelled > 0) red(`# cancelled = ${cancelled}(要求 0——被取消的用例既非 pass 也非 fail,不得静默)`, tapFile)
+// W25 2026-11-01: plan vs summary consistency (low-confidence detector).
+//  - COMPOSED stream (run-all's own synthesis, marked `# COMPOSED-TAP-FOLLOWS`): the composer
+//    promises plan = pass+fail+skip+cancelled (all in test-point units). A mismatch means the
+//    composer's accounting broke — that is exactly the "no consumer could detect the drift"
+//    hole this closes, and low confidence here must NOT read green → red (fail-closed).
+//  - Raw node:test TAP: plan counts TOP-LEVEL tests only while the summary counts all test
+//    points (nested subtests), so a mismatch is node's own legitimate semantics — warn loud,
+//    never red (a hard red here would fail every raw run).
+if (plan != null && pass != null && fail != null && skip != null && cancelled != null) {
+  const summaryPoints = pass + fail + skip + cancelled
+  if (plan !== summaryPoints) {
+    if (/^# COMPOSED-TAP-FOLLOWS/m.test(tap)) {
+      red(`TAP plan(1..${plan}) 与摘要行口径不一致(pass ${pass} + fail ${fail} + skip ${skip} + cancelled ${cancelled} = ${summaryPoints})——composed 流承诺 plan 与摘要同单位,错位即低置信,不得放行`, tapFile)
+    } else {
+      console.error(`⚠ [check-test-summary] plan(1..${plan}) ≠ 摘要点数(${summaryPoints})——node:test 原生口径(plan=顶层用例数,摘要=全部测试点),仅告警不拦截`)
+    }
+  }
+}
 if (skip > SKIP_BASELINE) {
   // 打出 skip 用例名,定位是哪条测试在跳
-  const skipNames = tap.split(/\r?\n/).filter(l => /# SKIP|# skipped/i.test(l) && /^ok\b/.test(l)).slice(0, 10)
+  // W25 2026-11-01: `^\s*ok` — node:test nests each file's test points as INDENTED
+  // `ok N ... # SKIP` lines inside the file's top-level block (same shape run-all's
+  // W15 per-test-point counter matches); the old `^ok\b` replay missed them all.
+  const skipNames = tap.split(/\r?\n/).filter(l => /# SKIP|# skipped/i.test(l) && /^\s*ok\b/.test(l)).slice(0, 10)
   if (skipNames.length) console.error('  [skip cases]\n' + skipNames.map(l => `    ${l.trim().slice(0, 150)}`).join('\n'))
   red(`# skipped = ${skip} > 棘轮基线 ${SKIP_BASELINE}——新增 skip 需要说明+降基线(改 cli/check-test-summary.cjs 的 SKIP_BASELINE)`, tapFile)
 }

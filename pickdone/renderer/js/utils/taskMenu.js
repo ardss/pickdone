@@ -86,12 +86,13 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       const min2 = Math.max(1, Math.min(FOCUS_MAX_MINUTES, min))
       const startTs = Math.max(+dayjs().startOf('day'), Date.now() - min2 * 60000)
       const endTime = startTs + min2 * 60000
-      // Idempotent id shape unified with the CLI twin (lib-focus.cjs backfillRecord): the FULL
-      // taskId is mixed into the id — the old last-8 tail minted IDENTICAL tomatoIds for two
-      // same-suffix tasks backfilled in the same minute, and tomatoAppendMany's ON CONFLICT
-      // silently overwrote one ledger row.
+      // [w25 P2] random tail: two backfills of the SAME duration for the SAME task in the same
+      // minute are legitimate (the startTs clamp pulls both to today's 00:00 after midnight, so
+      // startTs+min2+taskId all coincide) — the idempotent id shape let tomatoAppendMany's
+      // ON CONFLICT DO UPDATE silently overwrite the first ledger row. Salted the same way as
+      // DayRail.vue saveEntry / TaskAccountModal (same-mint collision family, third entry point).
       vm.$store.commit('tomato/addRecord', {
-        tomatoId: 'tmt_m_' + startTs + '_' + min2 + '_' + String(cur.taskId || 'free'),
+        tomatoId: 'tmt_m_' + startTs + '_' + min2 + '_' + String(cur.taskId || 'free') + Math.random().toString(36).slice(2, 7),
         endTime,
         // dateKey derives from endTime: the DB layer unconditionally re-derives it from endTime (tomatoAppendMany /
         // tomatoUpdateById), so deriving from startTs here split the two across midnight backfills

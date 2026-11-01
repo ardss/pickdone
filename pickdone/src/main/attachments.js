@@ -41,9 +41,15 @@ function isAppOwnedBookkeeping (f) { return isUnownedNoiseFile(f) || String(f) =
 // to the sync protocol and nothing reads them — counting them punished the crash victim with a
 // permanently shrunken 64MB/200-file budget. Excluded from quota accounting here AND age-swept
 // on startup (sweepTmpResidue below) so they cannot accumulate either.
+// W25: durable-fs composites too — writeFileDurable spools as `<name>.<pid>.<ms>.<seq>.dtmp`, so a
+// crash mid-attachment-upload leaves `x.att-tmp-<ts>-<rand>.<pid>.<ms>.<seq>.dtmp`, which matched
+// neither ATT_TMP_RE (ends in .dtmp) nor the 0-byte phantom class: never swept, permanently
+// quota-counted (third residue shape, same W16/D19 budget-shrink class). `dtmp` is not in
+// ALLOWED_EXT so no minted attachment can collide with this shape.
 const ATT_TMP_RE = /\.att-tmp-\d+-\d+$/
+const DURABLE_DTMP_RE = /\.\d+\.\d+\.\d+\.dtmp$/
 const TMP_SWEEP_MAX_AGE_MS = 24 * 60 * 60 * 1000
-function isCrashTmpResidue (f) { return ATT_TMP_RE.test(String(f)) }
+function isCrashTmpResidue (f) { const s = String(f); return ATT_TMP_RE.test(s) || DURABLE_DTMP_RE.test(s) }
 // W16 (2026-10-28 P2): crash-claim phantoms. claimSlot reserves the final name with an exclusive
 // 0-byte placeholder; a process crash between the claim and the publish rename left that 0-byte
 // FINAL-named file behind forever — invisible to the D19 `.att-tmp-*` sweep and counted by both

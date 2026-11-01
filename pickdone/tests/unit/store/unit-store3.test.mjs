@@ -210,6 +210,7 @@ test('todo getters: todayTodoList reads views directly', () => {
 
 /* ---------- the today page's three sort modes (pure logic extracted into utils/sortMode) ---------- */
 import { normalizeSortMode, sortByMode } from '../../../renderer/js/utils/sortMode.js'
+import { _testInternals as estState } from '../../../renderer/js/utils/tomatoEstimate.js'
 
 const ST = (id, taskSort, createTime, difficulty = 0) => ({ taskId: id, taskSort, createTime, difficulty })
 
@@ -226,9 +227,12 @@ test('sortMode: custom sorts by taskSort descending with createTime ascending as
   assert.deepEqual(out.map(t => t.taskId), ['b', 'd', 'a', 'c'])
 })
 
-test('sortMode: created newest first / difficulty highest first (missing counts as 0)', () => {
+test('sortMode: created newest first / difficulty by estimated workload (W25 caliber, unset falls last)', () => {
   const arr = [ST('old', 9, 100), ST('new', 1, 900)]
   assert.deepEqual(sortByMode(arr, 'created').map(t => t.taskId), ['new', 'old'])
+  // W25: 'difficulty' now orders by the shared estimated-workload source (retired column read is gone)
+  estState.state['hard'] = 5
+  estState.state['easy'] = 2
   const diff = [ST('easy', 1, 1, 0), ST('hard', 1, 2, 3), ST('none', 1, 3)]
   assert.deepEqual(sortByMode(diff, 'difficulty').map(t => t.taskId), ['hard', 'easy', 'none'])
 })

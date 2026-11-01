@@ -3,7 +3,7 @@
  * Cache-stamp discipline gate — renderer/index.html 的 ?v= 戳是 app:// 静态资源(immutable 缓存)的唯一失效手段。
  * 事故形态(2026-09-05 实锤):改了 assets/css/*.css 却没 bump 戳,连续 3 笔提交漏 bump,发版后已装用户改动永不生效。
  * 规则:任何 assets/css/** 或 assets/vendor-lib/** 的提交时间晚于 renderer/index.html 最后一次提交 = FAIL;
- *       工作区有未提交的改动同样 FAIL(要求与 bump 同笔提交)。
+ *       工作区/暂存区有未提交的资源改动同样 FAIL(要求与 bump 同笔提交;W25 起豁免只认暂存位——见下方 W25 注)。
  * 注:SFC/renderer/js 改动走 vite 哈希产物,不需要 bump——本门禁只管 index.html 直引的静态资源(css/vendor-lib)。
  *
  * 豁免清单(2026-09-15 登记):index.html 直引但【无 ?v= 戳】的资源,本门禁对其 stale 报警视为人工豁免,
@@ -32,13 +32,18 @@ const ASSET_EXT = /\.(css|js|mjs|woff2?|ttf|svg|png|ico)$/i
 // `-c` 是每次调用生效,不会传播进子进程,故统一在 helper 处 pin(与 W16 其余门禁同一手法)。
 const git = (args) => execFileSync('git', ['-c', 'core.quotePath=false', ...args], { cwd: ROOT, encoding: 'utf8' }).trim()
 
-const dirty = git(['status', '--porcelain', '--', ...WATCHED]).split('\n').filter(Boolean)
-if (dirty.length) {
-  // 资源与 index.html 同处改动/暂存态 = bump 与改动同笔在途,放行(门禁语义「同笔提交」的前置形态);
-  // 只有资源改了而 index.html 没动才是真违规
-  const htmlDirty = git(['status', '--porcelain', '--', 'renderer/index.html']).trim().length > 0
-  if (!htmlDirty) {
-    console.error('✗ 缓存戳纪律:assets/css 或 assets/vendor-lib 有改动但 renderer/index.html 未同步 bump——改直引资源必须同笔提交 ?v= 戳:\n  ' + dirty.join('\n  '))
+// W25 fix(2026-11-01): dirty 豁免此前只看工作区脏(git status --porcelain)不区分暂存位——
+// css 已 staged 而 index.html 的 ?v= bump 留在工作区时,门禁绿但【将要提交的内容】里没有
+// bump(正是本门禁要防的 2026-09-05 事故形态)。改成分层判定:豁免只认「index vs HEAD」;
+// 工作区-only 的脏与本笔提交无关,既不构成豁免也不触发门禁(正常单次提交路径——两者同时
+// staged——行为不变)。
+const stagedDirty = git(['diff', '--cached', '--name-only', '--', ...WATCHED]).split('\n').filter(Boolean)
+if (stagedDirty.length) {
+  // 资源与 index.html 同处【暂存】改动 = bump 与改动同笔在途,放行(门禁语义「同笔提交」的前置形态);
+  // 只有资源的 index blob 变了而 index.html 的 index blob 没变才是真违规
+  const htmlStaged = git(['diff', '--cached', '--name-only', '--', 'renderer/index.html']).trim().length > 0
+  if (!htmlStaged) {
+    console.error('✗ 缓存戳纪律:assets/css 或 assets/vendor-lib 有已暂存改动但 renderer/index.html 未同步 bump(本笔提交不含 ?v= 戳)——改直引资源必须同笔提交 ?v= 戳:\n  ' + stagedDirty.join('\n  '))
     process.exit(1)
   }
 }
