@@ -26,9 +26,12 @@ export const isScannedPath = name => {
 export const findLeaks = (name, source) => {
   const found = []
   for (const [label, re] of rules) {
-    // Locale placeholders intentionally show a generic LAN IP to guide the user.
-    if (label === 'private LAN address' && /\/renderer\/js\/i18n\//.test(name)) continue
-    const match = re.exec(source)
+    // Locale files may display the well-known example 192.168.1.64, but no
+    // other operator's LAN address gets a blanket exception.
+    const inspected = label === 'private LAN address' && /\/renderer\/js\/i18n\//.test(name)
+      ? source.replace(/\b192\.168\.1\.64\b/g, 'EXAMPLE_IP')
+      : source
+    const match = re.exec(inspected)
     if (match) {
       const line = source.slice(0, match.index).split('\n').length
       found.push(name + ':' + line + ': ' + label)
