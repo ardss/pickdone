@@ -5,6 +5,9 @@
 # CWD 归一：git 从仓库根调用钩子，而门禁命令（eslint/单测）的路径都按 pickdone 写
 cd "$(git rev-parse --show-toplevel)/pickdone" || { echo "  ✗ 找不到 pickdone 目录"; exit 1; }
 
+# The same checked-in rule runs before commit and as part of check:all in CI.
+node cli/check-environment-boundary.mjs || exit 1
+
 echo "[pre-commit] 1/4 语法校验（node --check 变更的 .js/.mjs/.cjs）"
 fail=0
 # while-read 逐行处理而非 for 循环分词:for 会按空白切分,路径带空格的变更文件被静默跳过。
