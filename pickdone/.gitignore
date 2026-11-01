@@ -30,6 +30,7 @@ tests/shot-*.png
 
 pickdone-backups/
 scripts/ops/backups/
+dist-b24/
 
 # 测试运行产物(每次运行重新生成,勿追踪)
 tests/.artifacts/
