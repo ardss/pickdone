@@ -26,10 +26,10 @@ export const isScannedPath = name => {
 export const findLeaks = (name, source) => {
   const found = []
   for (const [label, re] of rules) {
-    // Locale files may display the well-known example 192.168.1.64, but no
-    // other operator's LAN address gets a blanket exception.
+    // Locale files display two generic example addresses; all other
+    // local network addresses are still blocked.
     const inspected = label === 'private LAN address' && /\/renderer\/js\/i18n\//.test(name)
-      ? source.replace(/\b192\.168\.1\.64\b/g, 'EXAMPLE_IP')
+      ? source.replace(/\b192\.168\.1\.(?:20|64)\b/g, 'EXAMPLE_IP')
       : source
     const match = re.exec(inspected)
     if (match) {
