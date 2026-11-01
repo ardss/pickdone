@@ -310,7 +310,10 @@ test('D2#9b: watchdog arms on the manual download entry too', async () => {
     assert.equal(updater.getStatus().status, 'available')
     const p = updater.downloadUpdate()
     assert.equal(updater.getStatus().status, 'downloading')
-    await sleep(150)
+    // Match the auto-download regression above: under heavy CI load, a fixed
+    // 150ms sleep can expire before the 40ms watchdog timer gets CPU time.
+    const deadline = Date.now() + 5000
+    while (updater.getStatus().status !== 'error' && Date.now() < deadline) await sleep(20)
     assert.equal(updater.getStatus().status, 'error', 'manual download entry must arm the stall watchdog')
     assert.equal(await p, false, 'the hung manual download settles when the watchdog errors')
   } finally {
