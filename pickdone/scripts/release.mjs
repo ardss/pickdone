@@ -8,8 +8,8 @@
  *      若目标版本段落已存在=红(防重复发版);package.json version 自动写入 X.Y.Z
  *   3. npm run bump(缓存戳)
  *   4. npm run check:all 本机全绿(数量随池内条目演进,以脚本输出汇总为准;含本机视觉第④组——CI 跑不了的那道护航就在这一步)
- *   5. commit "chore(release): vX.Y.Z" → push main → tag vX.Y.Z → push tag
- *   6. 提示:盯 Actions;成功后跑 `npm run release:finalize X.Y.Z` 填正文+核产物
+ *   5. create release/vX.Y.Z branch → commit → push branch → create PR (NO direct main push/tag)
+ *   6. after reviewed PR merges into main: npm run release:tag X.Y.Z → Draft workflow; then finalize
  * 配套: scripts/release-finalize.mjs(构建成功后的人工三查也代码化)
  */
 import fs from 'node:fs'
@@ -35,9 +35,25 @@ const version = process.argv[2]
 if (!isReleaseVersion(version)) die('用法: npm run release X.Y.Z[-prerelease]')
 const TAG = 'v' + version
 
+const RELEASE_BRANCH = 'release/' + TAG
+const currentBranch = sh(['git', 'branch', '--show-current'])
+if (currentBranch !== 'main' && currentBranch !== RELEASE_BRANCH) {
+  die('发版准备只能从 main 或对应 release/vX.Y.Z 分支运行；当前分支 ' + currentBranch)
+}
+
+
 // 1. 工作区干净
 if (sh(['git', 'status', '--porcelain'])) die('工作区有未提交变更——先提交或清理')
 say('工作区干净')
+if (currentBranch === 'main') {
+  // Fail before writing changelogs if the release is not based on the reviewed main.
+  const localHead = sh(['git', 'rev-parse', 'HEAD'])
+  const remoteHead = sh(['git', 'rev-parse', 'origin/main'])
+  if (localHead !== remoteHead) die('main 与 origin/main 不一致；先同步远端并重试')
+  sh(['git', 'switch', '-c', RELEASE_BRANCH])
+  say('已创建发布准备分支 ' + RELEASE_BRANCH)
+}
+
 
 // 2. CHANGELOG:Unreleased 非空、目标段落不存在
 const clPath = path.join(ROOT, '..', 'CHANGELOG.md')
@@ -108,55 +124,29 @@ try {
   die('check:all 未全绿——修完再跑 npm run release(不会推任何东西)')
 }
 
-// 5. 提交 → push main → tag → push tag
-// Explicit file list instead of `add -A`: these are the only files this script (and npm run bump) may
-// have touched; a blanket add would sweep unrelated local debris (stray test artifacts, editor
-// droppings) into the release commit. Paths are relative to ROOT (sh() cwd = pickdone/); the changelogs
-// live one level above it, inside the same repo.
+// 5. 提交到隔离的 release 分支，以现有 PR/CI/分支保护完成评审。禁止直推 main/tag。
+// A release candidate is NOT a published release. GitHub Publish is separately user-approved.
 sh(['git', 'add', 'package.json', 'package-lock.json', 'renderer/index.html', '../CHANGELOG.md', '../CHANGELOG.zh.md'])
-// browser-dev/ is gitignore-listed (the tracked index.html was force-added historically) — plain add refuses it
 sh(['git', 'add', '-f', 'browser-dev/index.html'])
-// Anchor the pre-commit HEAD (2026-09-11 review P2): if the commit step took its "nothing to commit"
-// catch branch, a blind HEAD~1 rewind would pull back the PREVIOUS unrelated commit and scatter its
-// changes into the working tree. Reset to the anchor instead — a no-op unless our commit actually landed.
-const preCommitHead = sh(['git', 'rev-parse', 'HEAD']).trim()
 try {
-  sh(['git', 'commit', '-m', `chore(release): ${TAG}`])
-} catch { /* 无变更可提交也允许(stamps 可能已同笔) */ }
-say('commit chore(release) 完成')
-// Step-5 git-chain rollback (2026-09-11 P2): a push failure used to strand the release — the commit sat
-// on local main and every re-run died on the "CHANGELOG 已存在 [X.Y.Z] 段" gate from step 2. Rewind the
-// LOCAL commit (mixed: working tree keeps the renamed changelogs so nothing is re-edited) and print the
-// exact recovery path. Once `push main` has succeeded, no rewind — only the tag leg may be retried.
-try {
-  sh(['git', 'push', 'origin', 'main'])
+  sh(['git', 'commit', '-m', 'chore(release): ' + TAG])
 } catch (e) {
-  const rewound = sh(['git', 'rev-parse', 'HEAD']).trim() !== preCommitHead
-  if (rewound) {
-    try { sh(['git', 'reset', '--mixed', preCommitHead]) } catch (e2) { console.error('自动回退 commit 失败,请手动: git reset --mixed ' + preCommitHead + ' —', e2 && e2.message) }
-  }
-  die(`git push main 失败(${(e && e.message) || e})。${rewound ? '已回退本地 release commit(工作区保留 CHANGELOG 归版)。' : '无 release commit 需要回退。'}
-  ⚠ push 报 TLS/RPC 错误但可能已实际落远端(响应侧断连)——先核实再补救: git ls-remote origin main
-  补救: ⓪若远端已有 release commit: git pull --rebase origin main 对齐,然后只重跑 git tag ${TAG} && git push origin ${TAG}
-  ①否则修复网络/权限后重新 npm run release ${version}(CHANGELOG 段已归版,先手动把两份 CHANGELOG 的 [${version}] 段改回 [Unreleased],或直接恢复 [Unreleased] 标题)
-  ②或仅重跑第 5 步: git push origin main && git tag ${TAG} && git push origin ${TAG}`)
+  die('提交发布候选失败，未推送分支/标签：' + ((e && e.message) || e))
 }
-say('main 已推送')
 try {
-  sh(['git', 'tag', TAG])
-  sh(['git', 'push', 'origin', TAG])
+  sh(['git', 'push', '--set-upstream', 'origin', RELEASE_BRANCH])
 } catch (e) {
-  die(`tag 阶段失败(${(e && e.message) || e})。main 已推送、本地 commit 保留,勿重跑 npm run release(会撞 CHANGELOG 闸)。
-  补救: ①tag 已存在: git tag -d ${TAG} && git push origin :refs/tags/${TAG} 后重试
-       ②仅推送失败: git push origin ${TAG}`)
+  die('推送隔离发布分支失败，未推送 main/tag：' + ((e && e.message) || e))
 }
-say(`${TAG} 已推送,Release 工作流已触发`)
+try {
+  const url = sh(['gh', 'pr', 'create', '--base', 'main', '--head', RELEASE_BRANCH,
+    '--title', 'chore(release): ' + TAG, '--body',
+    'Prepare ' + TAG + ' from the isolated release branch. Merge only after the required CI, review and acceptance checks. Public Release Publish requires separate explicit user approval.'])
+  say('发布准备 PR：' + url)
+} catch (e) {
+  die('已推送发布分支但创建 PR 失败；未推送 main/tag。请重试 gh pr create，分支：' + RELEASE_BRANCH +
+    '，错误：' + ((e && e.message) || e))
+}
 
-// 6. 收尾指引
-console.log(`
-✓ 发版准备完成。接下来:
-  1. 盯 Actions 的 Release 工作流(约 10 分钟;CI 自动跳过视觉第④组)
-  2. 构建成功后执行: npm run release:finalize ${version}
-     (自动: 从 CHANGELOG 提正文填入 draft + 核四产物 + 查空正文/重名/缺件)
-  3. GitHub Releases 页面人工过目 → 点 Publish
-`)
+// 6. 合并门禁后才能单独打 tag (只触发 Draft 流水线，无公开 Publish)
+console.log('\n发布候选 PR 已创建。等待 CI + 审核 + 合并进受保护 main 后，运行：\n  npm run release:tag ${version}\n然后查看 Draft，独立验收，取得用户明确 GO 后才可 Publish。\n')

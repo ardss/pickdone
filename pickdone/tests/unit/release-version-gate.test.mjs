@@ -38,3 +38,17 @@ test('release version gate: both release scripts route argv through the shared v
     assert.match(src, /isReleaseVersion\(version\)/, `${f} validates argv with isReleaseVersion`)
   }
 })
+
+test('release branch governance: candidate cannot push main/tag; tagging requires reviewed main', () => {
+  const prepare = fs.readFileSync(path.join(ROOT, 'scripts/release.mjs'), 'utf8')
+  const tagger = fs.readFileSync(path.join(ROOT, 'scripts/release-tag.mjs'), 'utf8')
+  assert.match(prepare, /RELEASE_BRANCH\s*=\s*'release\/'/, 'candidate is isolated to a release branch')
+  assert.match(prepare, /'gh', 'pr', 'create'/, 'candidate uses GitHub PR flow')
+  assert.doesNotMatch(prepare, /\['git', 'push', 'origin', 'main'\]/, 'no protected-main push')
+  assert.doesNotMatch(prepare, /\['git', 'push', 'origin', TAG\]/, 'candidate does not tag')
+  assert.match(tagger, /'branch', '--show-current'/, 'tag must run from main')
+  assert.match(tagger, /'rev-parse', 'origin\/main'/, 'tag points to the merged reviewed HEAD')
+  assert.match(tagger, /package-lock\.json/, 'tag verifies lock version')
+  assert.match(tagger, /'git', 'push', 'origin', tag/, 'tag push is isolated to the tagger')
+  assert.doesNotMatch(tagger, /gh.*release.*publish/, 'draft tagging does not Publish')
+})

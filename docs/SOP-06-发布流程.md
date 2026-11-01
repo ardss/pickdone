@@ -21,15 +21,18 @@
 5. **实验功能口径**:新增/变更的实验功能在 CHANGELOG 标注 `(experimental, off by default)`,默认值必须为关。
 6. **工作区干净**:`git status --short` 无未提交变更。
 
-## 2. 发布执行(顺序固定)
+## 2. 发布执行(由项目代码控制，禁止直推受保护 main)
 
 ```bash
-git push origin main                     # ① 先 main 后 tag,顺序不可反
-git tag vX.Y.Z && git push origin vX.Y.Z # ② tag 触发 release.yml(windows runner)
+npm run release X.Y.Z       # 在干净 main 创建 release/vX.Y.Z 分支、校验、提交并创建 PR
+# 通过 PR 的完整 CI / 代码审查，合并回受保护 main 后：
+npm run release:tag X.Y.Z   # 只允许从与 origin/main 一致的 main 打 tag，触发 Draft 构建
 ```
 
+不得在发布脚本中 `git push origin main` 或在未合并的分支打 tag。发布候选 PR 不代表已交付，Draft 不是公开 Publish；公开发布必须用户单独 GO。
+
 3. 盯 Actions:**Release** 工作流链 = 版本校验 → `check:all`(CI 自适应降道;视觉第④组 CI 自动跳过) → electron-builder 打包 → 打包产物活体验证(verify:packaged) → 上传 **Draft** Release。全程约 10 分钟。
-4. 失败处理:**不删 tag 重跑旧代码**——在 main 上修复 → push → `git tag -d vX.Y.Z && git push origin :refs/tags/vX.Y.Z` → 重新打 tag 指向新 HEAD。
+4. 失败处理：**不得删除或重指已有 tag 作为默认重试方法**。在隔离分支修复、通过 PR 门禁再合并；检查 tag 与 Draft 的当前状态后，依据故障证据恢复，不执行未授权 Publish。
 5. 构建成功后 **Draft Release 已自动挂产物**——Windows 五件(Setup/Portable/latest.yml/blockmap/SHA256SUMS.txt)+ Linux 六件(AppImage x64/arm64 + deb + latest-linux.yml/latest-linux-arm64.yml + SHA256SUMS-linux.txt,详见 SOP-11 §5)。发布前人工三查:
    - 正文不为空(空正文=丑闻,从 CHANGELOG 对应段落填入 `gh release edit vX.Y.Z --notes-file ...`);
    - 标题统一 `PickDone x.y.z`;

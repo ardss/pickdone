@@ -29,7 +29,7 @@
     "check:coverage-ratchet": "node cli/check-coverage-ratchet.cjs",
     "lint": "eslint renderer/js cli src tests --ext .js,.vue,.cjs,.mjs",
     "lint:fix": "eslint renderer/js cli src tests --ext .js,.vue,.cjs,.mjs --fix",
-    "check": "npm run lint -- --quiet && npm test && npm run smoke:cli",
+    "check": "npm run check:boundary && npm run lint -- --quiet && npm test && npm run smoke:cli",
     "setup:hooks": "git config core.hooksPath pickdone/.githooks",
     "prepare": "git config core.hooksPath pickdone/.githooks",
     "pack": "npm run build:renderer && electron-builder --dir",
@@ -39,7 +39,9 @@
     "build:renderer": "node scripts/clean-renderer-dist.mjs && vite build",
     "build:web-demo": "node scripts/build-web-demo.mjs",
     "typecheck": "vue-tsc --noEmit --incremental",
-    "test:pilot": "node tests/run-pilot.mjs"
+    "test:pilot": "node tests/run-pilot.mjs",
+    "check:boundary": "node cli/check-environment-boundary.mjs",
+    "release:tag": "node scripts/release-tag.mjs"
   },
   "engines": {
     "node": ">=22.12"

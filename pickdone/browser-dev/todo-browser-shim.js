@@ -520,8 +520,8 @@
         try { peers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || 'null') } catch {}
         if (!Array.isArray(peers)) {
           peers = paired ? [
-            { deviceId: 'dev-desk-mock', deviceName: '书房台式机', host: '192.168.31.20', port: 58471, online: true, lastRoundAt: Date.now() - 120_000, pendingCount: 3, lastError: null, lastErrorAt: 0, alias: '' },
-            { deviceId: 'dev-lap-mock', deviceName: 'MacBook', host: '192.168.31.35', port: 58471, online: false, lastRoundAt: Date.now() - 86_400_000, pendingCount: 0, lastError: null, lastErrorAt: 0, alias: '出门用的' },
+            { deviceId: 'dev-desk-mock', deviceName: '书房台式机', host: '192.0.2.20', port: 58471, online: true, lastRoundAt: Date.now() - 120_000, pendingCount: 3, lastError: null, lastErrorAt: 0, alias: '' },
+            { deviceId: 'dev-lap-mock', deviceName: 'MacBook', host: '192.0.2.35', port: 58471, online: false, lastRoundAt: Date.now() - 86_400_000, pendingCount: 0, lastError: null, lastErrorAt: 0, alias: '出门用的' },
           ] : []
         }
         // 附近设备(自动发现):开启且尚未配对时给两台"正在广播"的模拟设备,展示一键配对入口;
@@ -529,8 +529,8 @@
         let manualPeers = null
         try { manualPeers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || 'null') } catch {}
         const discovered = (on && !paired && !Array.isArray(manualPeers)) ? [
-          { deviceId: 'dev-near-a-mock', deviceName: '客厅笔记本', host: '192.168.31.42', port: 58471, lastSeen: Date.now() - 5_000 },
-          { deviceId: 'dev-near-b-mock', deviceName: 'NAS 工作机', host: '192.168.31.50', port: 58471, lastSeen: Date.now() - 12_000 },
+          { deviceId: 'dev-near-a-mock', deviceName: '客厅笔记本', host: '192.0.2.42', port: 58471, lastSeen: Date.now() - 5_000 },
+          { deviceId: 'dev-near-b-mock', deviceName: 'NAS 工作机', host: '192.0.2.50', port: 58471, lastSeen: Date.now() - 12_000 },
         ] : []
         return { enabled: on, deviceId: 'browser-shim', deviceName: '浏览器调试设备', listening: on, port: on ? 58471 : 0, peers, discovered, lastRoundAt: on ? Date.now() - 65_000 : 0, lastError: null }
       }
@@ -560,8 +560,8 @@
         try { peers = JSON.parse(localStorage.getItem('appBrowserShim.syncPeers') || 'null') } catch {}
         if (!Array.isArray(peers)) {
           peers = [
-            { deviceId: 'dev-desk-mock', deviceName: '书房台式机', host: '192.168.31.20', port: 58471, online: true, lastRoundAt: Date.now() - 120_000, pendingCount: 3, lastError: null, lastErrorAt: 0, alias: '' },
-            { deviceId: 'dev-lap-mock', deviceName: 'MacBook', host: '192.168.31.35', port: 58471, online: false, lastRoundAt: Date.now() - 86_400_000, pendingCount: 0, lastError: null, lastErrorAt: 0, alias: '出门用的' },
+            { deviceId: 'dev-desk-mock', deviceName: '书房台式机', host: '192.0.2.20', port: 58471, online: true, lastRoundAt: Date.now() - 120_000, pendingCount: 3, lastError: null, lastErrorAt: 0, alias: '' },
+            { deviceId: 'dev-lap-mock', deviceName: 'MacBook', host: '192.0.2.35', port: 58471, online: false, lastRoundAt: Date.now() - 86_400_000, pendingCount: 0, lastError: null, lastErrorAt: 0, alias: '出门用的' },
           ]
         }
         peers = peers.filter(p => p.deviceId !== String((params && params.deviceId) || ''))

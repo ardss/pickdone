@@ -29,7 +29,13 @@ const path = require('node:path')
 //   darwin:1 = 推断值(WIN 条件在 darwin 同为 false 必跳这条),无 darwin CI 实证——门禁只在 ubuntu+windows 跑
 //   win32:0 = windows 实测 0 skip
 // 新增 skip 会被棘轮拦下并打印用例名;确属平台性合理 skip 时,在此处带注释给对应平台加基线。
-const PLATFORM_SKIP_BASELINE = { win32: 0, linux: 7, darwin: 1 }
+// Two native window probes require a *user desktop* (Progman and physical cursor).
+// GitHub-hosted Windows jobs run as a service, not an interactive desktop. They
+// are still exercised on a real interactive Windows workstation before release.
+// Scope the extra allowance to that exact CI service environment: local Windows
+// stays at zero skipped tests; arbitrary exported skip baseline cannot bypass it.
+const hostedWinService = process.platform === 'win32' && process.env.GITHUB_ACTIONS === 'true' && process.env.RUNNER_OS === 'Windows'
+const PLATFORM_SKIP_BASELINE = { win32: hostedWinService ? 2 : 0, linux: 7, darwin: 1 }
 // [fail-closed 2026-10-26] the raw env override voided the skip ratchet from ANY stray
 // exported env var (CI job env, a dev shell rc file) — a silent ratchet bypass. It is now
 // gated: honored only alongside CHECK_TEST_SUMMARY_SELFTEST=1 (the script's own self-test);

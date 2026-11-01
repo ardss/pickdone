@@ -5,9 +5,9 @@
  * counterpart to cli/journey-sync.cjs (LAN). Topology, all with ISOLATED throw-away data:
  *
  *   Device A  this machine, real packaged exe (dist/win-unpacked), temp user-data dir
- *   Device B  --remote <ssh-alias> (default: ardss), same packaged exe deployed to a
+ *   Device B  --remote <ssh-alias> (explicit SSH alias required), same packaged exe deployed to a
  *             scratch dir, temp user-data dir — driven over SSH
- *   Relay     --relay <base-url> — a remote sync-relay (lubancat), enrollment-gated
+ *   Relay     --relay <base-url> — a self-hosted sync-relay, enrollment-gated
  *
  *   boot A+B -> relay enable on both (shared root key = manual account pairing, the same
  *   stand-in the e2e tests use; enrollment proves the closed-registration door) -> A adds 3
@@ -16,8 +16,8 @@
  *   converges -> cleanup (forget identity, kill instances, delete temp dirs unless --keep).
  *
  * Usage:
- *   node cli/journey-relay.cjs --relay http://192.168.31.68:58490 --enrollment <secret> \
- *        [--remote ardss] [--remote-dir ROOTDIR] [--relay-restart-ssh lubancat] [--keep]
+ *   node cli/journey-relay.cjs --relay http://<relay-host>:58490 --enrollment <secret> \
+ *        --remote <ssh-alias> [--remote-dir ROOTDIR] [--relay-restart-ssh <relay-ssh-alias>] [--keep]
  * Requires the app to be built (npm run pack) and `ssh <remote>` / `ssh <relay-restart-ssh>`
  * to be key-authenticated. Exit 0 = the whole journey passes; exit 1 = first failed step.
  */
@@ -38,7 +38,7 @@ function arg (name, dflt) {
 }
 const RELAY_URL = arg('--relay', null)
 const ENROLLMENT = arg('--enrollment', null)
-const REMOTE = arg('--remote', 'ardss')
+const REMOTE = arg('--remote', null)
 const REMOTE_DIR = arg('--remote-dir', path.join(process.env.SYSTEMDRIVE || 'C:', String.fromCharCode(92), 'Users', 'Public', 'jrelay'))
 const RESTART_SSH = arg('--relay-restart-ssh', null)
 const KEEP = process.argv.includes('--keep')
@@ -49,8 +49,8 @@ const ACCOUNT = arg('--account', null) || ('journey-relay-' + Date.now().toStrin
 
 const APP_DIR = path.resolve(arg('--app', path.join(ROOT, 'dist', 'win-unpacked')))
 const EXE = path.join(APP_DIR, 'PickDone.exe')
-if (!RELAY_URL || !ENROLLMENT) {
-  console.error('[jrelay] --relay <base-url> and --enrollment <secret> are required')
+if (!RELAY_URL || !ENROLLMENT || !REMOTE) {
+  console.error('[jrelay] --relay <base-url>, --enrollment <secret> and --remote <ssh-alias> are required')
   process.exit(1)
 }
 if (!fs.existsSync(EXE)) {
@@ -116,7 +116,7 @@ function cliLocalEnv (args, timeoutMs = 120000) {
 const B = { ud: null, dir: REMOTE_DIR }
 const B_ENV_FILE = path.join(B.dir, 'jrelay-env.cmd')
 const B_CLI_CMD = path.join(B.dir, 'jrelay-cli.cmd')
-/** bash path for REMOTE invocation (C:\Users\... -> /c/Users/...). */
+/** Convert a Windows drive path to the remote bash drive-mount form. */
 const bPosix = p => '/' + p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, m => m[0].toLowerCase())
 const B_UD_POSIX = () => bPosix(B.ud)
 const B_CLI_POSIX = () => bPosix(B_CLI_CMD)
