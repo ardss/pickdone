@@ -110,7 +110,7 @@ export default {
     // start-of-day constant that has no reactive dependency, so a page left mounted across
     // midnight kept serving yesterday's frozen last7/last30 slices. `tick` bumps when the day
     // flips and matchTasks reads it (same pattern as TodayXView.settledTotal's `void this.tick`).
-    return { qText: '', tick: 0, _dayCheckTimer: null, _lastSeenDay: 0 }
+    return { qText: '', tick: 0 } // day-flip watcher fields (_dayCheckTimer/_lastSeenDay) are non-reactive instance fields, like _qTimer
   },
   created () {
     this.qText = this.$store.state.todo.search || ''
@@ -126,6 +126,8 @@ export default {
     // Fire the pending keystroke on teardown so the store never keeps a stale half-typed keyword
     if (this._qTimer) { clearTimeout(this._qTimer); this._qTimer = null }
     if (this.qText !== (this.$store.state.todo.search || '')) this.$store.commit('todo/setSearch', this.qText)
+    // W25 day-flip watcher teardown (merged with the duplicate hook vue-tsc flagged)
+    if (this._dayCheckTimer) { clearInterval(this._dayCheckTimer); this._dayCheckTimer = null }
   },
   watch: {
     // F-C6 review: the store is written by other windows/CLI too — an EXTERNAL search change must
@@ -167,13 +169,13 @@ export default {
     // only the day cut needs to invalidate, and only when the day actually changes).
     // Day-key STRING compare (not another inline start-of-day site): the day-caliber ratchet
     // counts those and this watcher is a pure flip detector, not a window cut.
+    this._dayCheckTimer = null
     this._lastSeenDay = dayjs().format('YYYY-MM-DD')
     this._dayCheckTimer = setInterval(() => {
       const d = dayjs().format('YYYY-MM-DD')
       if (d !== this._lastSeenDay) { this._lastSeenDay = d; this.tick++ }
     }, 30000)
   },
-  beforeUnmount () { if (this._dayCheckTimer) { clearInterval(this._dayCheckTimer); this._dayCheckTimer = null } },
   methods: {
     /* [A9] clear chip: Space joins Enter as activation keys (same .prevent, no .stop, as before) */
     onClearKey: roleButtonActivate(function () { this.clearQ() }),
