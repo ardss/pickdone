@@ -114,13 +114,22 @@ export default {
     removeRemindRow (i) {
       const row = this.remindRows[i]
       const tid = this.task && this.task.taskId
+      // [w24 P2] deleting the LAST row routes the removal through clearRemind, which (onRemindersClear)
+      // wipes reminderOffsets from the snapshot AND persists them as []. The undo path goes through
+      // commitReminders → onRemindersCommit, whose patch carries no reminderOffsets — so the reminders
+      // came back but the offset chips stayed lost forever. Snapshot the pre-clear offsets here and
+      // re-emit them (the 'offsets' channel) after the undo's commit restores the reminders.
+      let clearedOffsets = null
       removeWithUndo(this,
         () => {
           // [A7 fix] locate by row reference — the captured v-for index goes stale on rapid
           // clicks (an earlier row already spliced shifts every later index; delSub precedent)
           const at = this.remindRows.indexOf(row)
           this.remindRows.splice(at < 0 ? this.remindRows.length : at, 1)
-          if (!this.remindRows.length) { this.clearRemind(); return }
+          if (!this.remindRows.length) {
+            clearedOffsets = Array.isArray(this.task.reminderOffsets) ? this.task.reminderOffsets.slice() : []
+            this.clearRemind(); return
+          }
           this.commitReminders()
         },
         () => {
@@ -131,6 +140,9 @@ export default {
           const at = this.remindRows.indexOf(row)
           this.remindRows.splice(at < 0 ? this.remindRows.length : at, 0, row)
           this.commitReminders()
+          // [w24 P2] clear-path undo: restore the offsets the clear persist had wiped (commit's
+          // patch alone would leave them at []). Only when this undo IS the clear-path one.
+          if (clearedOffsets) this.$emit('offsets', clearedOffsets.slice())
         })
     },
     /** Task switch: collapse the popover and drop uncommitted local rows. */

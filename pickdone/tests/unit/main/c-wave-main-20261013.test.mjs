@@ -140,6 +140,7 @@ test('c-wave 4: a fast second summon keeps its full ignoreBlur latch (the stale 
       this.webContents = new FakeWebContents()
       this._destroyed = false
       this._visible = false
+      this._focused = false
     }
     setAlwaysOnTop () {}
     setMenu () {}
@@ -147,8 +148,9 @@ test('c-wave 4: a fast second summon keeps its full ignoreBlur latch (the stale 
     loadURL () { return Promise.resolve() }
     isDestroyed () { return this._destroyed }
     isVisible () { return this._visible }
-    show () { this._visible = true }
-    focus () {}
+    isFocused () { return this._focused } // W24: toggle now collapses only when visible AND focused
+    show () { this._visible = true; this._focused = true }
+    focus () { this._focused = true }
     hide () { this._visible = false }
     destroy () { this._destroyed = true; this.emit('closed') }
   }

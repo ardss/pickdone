@@ -198,10 +198,17 @@ const EXT_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif:
  *  bookkeeping and must 404 on local:// — the alias map and atomic-write temp files. Keys minted
  *  by saveAttachment (`<taskId>_<ts>_<name>`) and conflict renames never start with '.' and never
  *  equal aliases.json, so this cannot block real user content. noise-custom.* stays served (the
- *  white-noise feature plays it through local://). */
+ *  white-noise feature plays it through local://).
+ *  W24 fix (2026-10-31): the tmp guard used to be `^\.att-tmp-` (PREFIX-shaped), but the real
+ *  temp files are SUFFIX-shaped — att-transfer/attachments.js write `<name>.att-tmp-<ts>-<rand>`
+ *  and durable-fs writes `<name>.<pid>.<ms>.<seq>.dtmp` (always ENDING in .dtmp, same anchor
+ *  autoBackup.selectStaleTmp's /\.dtmp$/ sweep uses) — so the guard never matched anything and
+ *  the "never served" contract was dead. Match the suffix forms instead; durable-fs residue is
+ *  anchored at end-of-name so a user file like "a.dtmp.bak.png" is never misclassified.
+ *  Legitimate attachment keys (timestamp+random-key minted names) contain neither marker. */
 function isLocalBookkeepingFile (base) {
   const b = String(base)
-  return b === 'aliases.json' || /^\.att-tmp-/.test(b)
+  return b === 'aliases.json' || /\.att-tmp-/.test(b) || /\.dtmp$/i.test(b)
 }
 
 /** MIME for an attachment filename/extension (single source; pure). */
