@@ -12,6 +12,12 @@ test('deployment host information is not allowed in portable source', () => {
   assert.equal(findLeaks('product/config.mjs', 'const url = "http://127.0.0.1:3000"').length, 0)
 })
 
+test('translation sample IP exception does not hide actual local machine addresses', () => {
+  const locale = 'pickdone/renderer/js/i18n/en-US.js'
+  assert.equal(findLeaks(locale, 'e.g. 192.168.1.64:58471').length, 0)
+  assert.ok(findLeaks(locale, 'my internal relay 192.168.31.68:58471').length)
+})
+
 test('source guard covers agent rules, workflows and ops, but not test fixtures', () => {
   assert.equal(isScannedPath('pickdone/AGENTS.md'), true)
   assert.equal(isScannedPath('.github/workflows/ci.yml'), true)
