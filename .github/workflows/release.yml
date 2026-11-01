@@ -22,6 +22,13 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # Keep native Windows date calculations aligned with the UTC+8 release test contract.
+      - name: Align Windows system timezone for release tests
+        shell: pwsh
+        run: |
+          tzutil /s "China Standard Time"
+          if ((tzutil /g).Trim() -ne "China Standard Time") { throw 'Windows UTC+8 timezone setup failed' }
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
