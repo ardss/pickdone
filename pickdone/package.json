@@ -40,7 +40,8 @@
     "build:web-demo": "node scripts/build-web-demo.mjs",
     "typecheck": "vue-tsc --noEmit --incremental",
     "test:pilot": "node tests/run-pilot.mjs",
-    "check:boundary": "node cli/check-environment-boundary.mjs"
+    "check:boundary": "node cli/check-environment-boundary.mjs",
+    "release:tag": "node scripts/release-tag.mjs"
   },
   "engines": {
     "node": ">=22.12"
