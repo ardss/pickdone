@@ -2,6 +2,13 @@
 
 System.Object[]
 
+## [Unreleased]
+
+- 保存完整性（P2，W27）：多任务防抖保存批次在某条失败时把**已成功落库**的兄弟补丁整批重放——过期快照以 LWW 覆盖他窗新编辑；现在只重排未发出的条目、drained keys 条件恢复。Relay 同步 round 进行中到达的 kick 只能等下个 5 分钟 tick（与契约注释不符）——现在从 round 的 finally 补排一轮。
+- UI 正确性（W27）：番茄时间轴弹层的色块排序比较器对不存在的属性做减法（NaN→色块与时间轴反向）；遗留 `repeatId === 'null'` 哨兵普通任务可能被撤销/回收路径误当续期幽灵实例软删（两个入口加 isRepeatTask/哨兵守卫）；DepView 逾期/今天徽标与统计成就墙用裸墙钟无响应式依赖——跨午夜冻结（todayTimestamp / nowTick）。
+- 主进程（W27）：data:relocate 迁移进度 IPC 永远到不了渲染端（webContents 被二次包裹，TypeError 被吞）；updater 终态守卫放任并发 check 把进行中的自动下载标成已是最新；quit-ack 的 onDone 回调在退出拆除 tick 里裸奔；审计日志轮转的 existsSync→rename 探测可被双进程竞态（POSIX 静默覆盖）——改 ms+pid+seq 唯一目标。
+- 门禁/测试（W27）：check-file-size 的 ls-files 钉 core.quotePath=false（非 ASCII 跟踪文件曾被误判新文件）；lint-staged 的 W25 staged-blob 抽取按原目录镜像（摊平临时路径丢 .eslintrc 目录 overrides——错 env linting）；journey-relay 暂存文件 pid 唯一化、jrelay- 家族进 tmp 清扫器；check-media-lang 可见含空格/尖括号的 markdown 引用（fail-open 封堵）；check-fingerprint 抓正斜杠与 file-URL 形态本机路径；check-i18n 的 bracketDelta 跳过字符串/注释字面量；j-todo-core 的 J1 日期条导航对 ±7 天箭头步进稳健（0.1.0 起的行为）。
+
 ## [0.4.0-beta.24] - 2026-11-01
 
 - 门禁基础设施竞态（P0×2，10-31 release 门禁 5 连红的真凶——不是 runner 抖动）：child-registry 仍是读改写且 writeAll 会 prune 整个目录，并行车道互删注册（子进程变不可收割孤儿）；meta#2 对共享的真实 runner-children 目录做前后 diff（任何并发注册=假 leftover）；meta#5 直接改写真实 coverage-summary.json（10/10/10 假摘要）被并行覆盖率棘轮车道读到。child-registry 重写为每 pid 只写/删自己的文件（兼容旧格式残留）；新增 PICKDONE_CHILD_REGISTRY_DIR 覆盖让 meta#2/meta#5 全部 sandbox 化（泄漏仍红语义保留）；meta#9 重写为真实行使 live 池端口分配器。交错复现测试钉 12/12 存活（修前 0/12）。
