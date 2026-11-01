@@ -42,6 +42,8 @@ function pruneArchives (file, keep = ARCHIVES_TO_KEEP) {
  *  and on final failure (truncate-to-empty as the last resort to respect the size threshold). */
 const ROTATE_RETRIES = 3
 const ROTATE_BACKOFF_MS = 50
+// W27 (P3): process-local sequence for rename-target uniqueness (see rotateArchive).
+let rotateSeq = 0
 // Adversarial-review fix: `.corrupt-<ts>` fallback siblings are not matched by pruneArchives' /^\d+$/
 // filter, so a long-lived EPERM environment could accumulate unbounded oversized copies. On every
 // SUCCESSFUL normal rotation, best-effort delete corrupt siblings older than a bounded window.
@@ -66,9 +68,13 @@ function rotateArchive (file, warn = console.warn) {
   const notify = typeof warn === 'function' ? warn : () => {}
   for (let attempt = 0; attempt < ROTATE_RETRIES; attempt++) {
     if (attempt > 0) sleepSync(ROTATE_BACKOFF_MS * attempt) // backoff: give the other writer's handle a beat to close
-    let stamp = Date.now() + attempt
-    let rolled = file + '.' + stamp
-    while (fs.existsSync(rolled)) rolled = file + '.' + (++stamp)
+    // W27 (P3) TOCTOU fix: the old existsSync→renameSync probe is not atomic ACROSS processes —
+    // two writers (App + CLI, SOP-08) can both probe the same `<ms>` name as free before either
+    // renames, and POSIX rename silently overwrites, destroying one writer's 5MB archive. The
+    // target is now unique BY CONSTRUCTION: `<ms><pid><seq>`, all digits, so pruneArchives'
+    // /^\d+$/ filter still matches (same trick as durable-fs's unique tmp names).
+    const stamp = Date.now() + attempt
+    const rolled = file + '.' + stamp + String(process.pid) + String(++rotateSeq)
     try {
       fs.renameSync(file, rolled)
       pruneArchives(file)
