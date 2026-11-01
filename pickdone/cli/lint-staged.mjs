@@ -69,7 +69,16 @@ if (selected.length === 0) {
     if (!probe.error && probe.status === 0) return join(root, ...name.split('/'))
     if (!tmpMade) { fs.mkdirSync(tmpDir, { recursive: true }); tmpMade = true }
     const blob = execFileSync('git', ['-c', 'core.quotePath=false', 'show', ':0:' + rel], { cwd: root, maxBuffer: 64 * 1024 * 1024 })
-    const dest = join(tmpDir, i + '-' + name.split('/').pop())
+    // W27 fix (2026-11-01): mirror the file's ORIGINAL relative directory under tmpDir instead
+    // of flattening to `i-<basename>` at the root. Flat paths broke two things:
+    //   (a) eslint resolved .eslintrc.cjs directory-level overrides from tmpDir's ancestor
+    //       chain only — tests/|cli/|src/main files were linted under the browser-env root rule
+    //       (fake reds on node/console globals, fake greens the other way);
+    //   (b) --cache keyed entries by the flat `i-<basename>` paths, which never repeat across
+    //       runs (the `i-` index depends on the staged set) — the cache never hit.
+    // Mirrored `tests/unit/foo.test.mjs` keeps both config resolution and the cache key stable.
+    const dest = join(tmpDir, ...name.split('/'))
+    fs.mkdirSync(dirname(dest), { recursive: true })
     fs.writeFileSync(dest, blob)
     return dest
   })
