@@ -10,7 +10,7 @@
  *           before any round: exactly one conflict copy per device, still convergent
  * Exits 0 only if: converged + stage2 conflicts==0 + stage3 conflicts==expected.
  *
- * Usage: node v2-drill-agent.mjs --node devA --relay 192.168.31.67:58480 [--role first|middle|last]
+ * Usage: node v2-drill-agent.mjs --node devA --relay <relay-host>:58480 [--role first|middle|last]
  */
 
 import { createHash } from 'node:crypto'
