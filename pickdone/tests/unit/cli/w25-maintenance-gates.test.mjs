@@ -67,6 +67,10 @@ afterEach(() => {
 // —— Fix 1 leg A: pre-commit stage 1 checks the STAGED blob, not the worktree file ——
 
 function runHook (root) {
+  // The full hook now invokes the source-boundary gate. Reproduce that entrypoint
+  // inside the disposable Git fixture rather than disabling its fail-closed rule.
+  const gate = path.join(root, 'pickdone/cli/check-environment-boundary.mjs')
+  fs.copyFileSync(path.join(CLI, 'check-environment-boundary.mjs'), gate)
   const r = spawnSync('sh', [HOOK], { cwd: root, env: GIT_SAFE_ENV, encoding: 'utf8', timeout: 180000 })
   return { code: r.status, out: (r.stdout || '') + (r.stderr || '') }
 }
