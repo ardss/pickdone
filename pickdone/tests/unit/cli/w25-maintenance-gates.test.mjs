@@ -141,7 +141,7 @@ test('W25 lint-staged: the STAGED blob is linted when it differs from the worktr
   assert.equal(r.code, 0, 'a lint-clean staged blob must pass even with a divergent worktree: ' + r.out)
   const marker = fs.readFileSync(path.join(pd, 'node_modules/lint-marker.txt'), 'utf8')
   assert.match(marker, /STAGEDGOOD/, 'the staged blob content must have reached the eslint runner: ' + marker)
-  assert.ok(!marker.includes('worktree'), 'the worktree file must NOT be linted when staged ≠ worktree: ' + marker)
+  assert.ok(!marker.includes('/* worktree */'), 'the worktree file content must NOT be linted when staged ≠ worktree: ' + marker)
   const entry = JSON.parse(marker.trim().split('\n').find(l => l.includes('STAGEDGOOD')))
   assert.match(entry[0], /w25|tmp-w25|lint-staged-blob/, 'staged blob must be linted via the preserved-extension temp chain: ' + entry[0])
   assert.match(entry[0], /\.js$/, 'temp path must keep the extension: ' + entry[0])
