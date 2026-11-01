@@ -348,8 +348,7 @@ export default {
     },
     review () { return composeReview(this.metrics) },
     achievements () {
-      void this.nowTick // [w27] register the reactive midnight dependency — bare dayjs() inside buildAchievements stayed frozen past midnight, splitting from the KPI (nowTick) caliber
-      return buildAchievements({ todos: this.todoList, records: this.tomatoRecordList })
+      void this.nowTick; return buildAchievements({ todos: this.todoList, records: this.tomatoRecordList }) // [w27] midnight dep — bare dayjs() froze past midnight, splitting from the KPI (nowTick) caliber
     },
     shareDate () { return dayjs().format(FMT.cnFull) },
     /** Compact data shared by share cards */

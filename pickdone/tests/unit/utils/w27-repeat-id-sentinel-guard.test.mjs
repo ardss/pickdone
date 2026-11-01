@@ -81,7 +81,7 @@ const messageStub = () => {
 }
 
 test('w27: undo of a repeatId==="null" plain task must NOT removeRenewedInstance (completeAction entry)', async () => {
-  const { undone, sibling, store, calls, noopHelpers } = makeStore()
+  const { undone, sibling, store, calls } = makeStore()
   const p = toggleCompleteWithUndo({ store, message: messageStub(), todo: undone })
   await p
   // The completion itself must not touch the sentinel-carrying sibling.
