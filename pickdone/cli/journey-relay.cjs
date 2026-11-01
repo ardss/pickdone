@@ -116,7 +116,7 @@ function cliLocalEnv (args, timeoutMs = 120000) {
 const B = { ud: null, dir: REMOTE_DIR }
 const B_ENV_FILE = path.join(B.dir, 'jrelay-env.cmd')
 const B_CLI_CMD = path.join(B.dir, 'jrelay-cli.cmd')
-/** bash path for REMOTE invocation (C:\Users\... -> /c/Users/...). */
+/** Convert a Windows drive path to the remote bash drive-mount form. */
 const bPosix = p => '/' + p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, m => m[0].toLowerCase())
 const B_UD_POSIX = () => bPosix(B.ud)
 const B_CLI_POSIX = () => bPosix(B_CLI_CMD)
