@@ -143,6 +143,10 @@ function createRelayAdapter ({
   // fire-time self-removal keeps the registry equal to the LIVE pending timers only.
   const timers = new Set() // live pending timers only (fire-time self-removal; M2 2026-10-09)
   let inFlight = null // coalesce: timer tick + write-kick + manual op share one round
+  // W27 (P2): a kick() that arrived while a round was in flight used to be silently dropped —
+  // the local write it signals then waited up to roundIntervalMs (5min) for the next poll tick.
+  // This flag queues it: round()'s finally schedules a 250ms catch-up round.
+  let kickPending = false
   let mods = null // cached { createRelayClient, deriveDataKey }
 
   const get = k => settingsGet(K[k])
@@ -321,6 +325,14 @@ function createRelayAdapter ({
         return { ok: false, error: metrics.lastError }
       } finally {
         inFlight = null
+        // W27 (P2): honor a kick() that arrived while this round was in flight — schedule one
+        // catch-up round after the settle, instead of dropping it and stalling the local write
+        // for up to roundIntervalMs. Re-checks `polling` twice: a stop() between the finally and
+        // the timer firing must not resurrect rounds.
+        if (kickPending) {
+          kickPending = false
+          if (polling) schedule(() => { if (polling) round() }, 250)
+        }
       }
     })()
     return inFlight
@@ -357,9 +369,12 @@ function createRelayAdapter ({
   }
 
   /** Write-kick: debounced by the inFlight coalescing — a burst of local writes collapses
-   *  into at most one queued round plus the running one. */
+   *  into at most one queued round plus the running one. W27 (P2): a kick arriving while a
+   *  round is in flight is QUEUED (kickPending) and honored by that round's finally, not
+   *  dropped — otherwise the write it signals waits up to roundIntervalMs for the next tick. */
   function kick () {
-    if (!polling || inFlight) return
+    if (!polling) return
+    if (inFlight) { kickPending = true; return }
     schedule(() => { if (polling) round() }, 250)
   }
 
