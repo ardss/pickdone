@@ -123,9 +123,20 @@ export default {
     if (Object.keys(patch).length) this.$store.commit('settings/updateSettings', patch)
   },
   beforeUnmount () {
-    // Fire the pending keystroke on teardown so the store never keeps a stale half-typed keyword
-    if (this._qTimer) { clearTimeout(this._qTimer); this._qTimer = null }
-    if (this.qText !== (this.$store.state.todo.search || '')) this.$store.commit('todo/setSearch', this.qText)
+    // [w29 P3] unmount race: the pending debounce timer holds a HALF-TYPED keyword the user never
+    // confirmed. Flushing it here (the old behavior) baked the fragment into the global search state —
+    // every other view inherited a stale filter on arrival. Teardown now only cancels the pending
+    // keystroke and drops the un-executed tail: the store keeps whatever the debounced watcher
+    // already confirmed during this visit (that IS an executed search), and an external/entering
+    // value is restored when the pending input was never committed. (No commit on this path —
+    // `todo/store/todo.js` itself is untouched.)
+    if (this._qTimer) {
+      clearTimeout(this._qTimer)
+      this._qTimer = null
+      // the timer was pending → the latest keystrokes never reached the store: revert the input
+      // buffer to the last CONFIRMED store value instead of flushing the fragment
+      this.qText = this.$store.state.todo.search || ''
+    }
     // W25 day-flip watcher teardown (merged with the duplicate hook vue-tsc flagged)
     if (this._dayCheckTimer) { clearInterval(this._dayCheckTimer); this._dayCheckTimer = null }
   },

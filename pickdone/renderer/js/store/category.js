@@ -432,6 +432,41 @@ function deletedFromLs () {
 /** W16 ghost-row gate: rows with no id / blank name (LS cache loaded verbatim) rendered as empty 32px dropdown options. Pure + exported for tests. */
 function isValidCatRow (c) { return !!(c && c.categoryId != null && c.categoryId !== '' && c.categoryName && String(c.categoryName).trim()) }
 export { isValidCatRow, mergeableLsTombstones }
+/** [w29 P2] updateCategory mutation body, hoisted to module level: the mutation itself stays the
+ *  fire-and-forget entry (Onboarding.vue, sideNavHandlers.js commit it), while the awaited ACTION
+ *  of the same name calls this function DIRECTLY — Vuex swallows a mutation's return value through
+ *  both store.commit() and context.commit(), so the persist boolean only survives via this hop.
+ *  Contract: returns persist()'s Promise<boolean> (true = SQLite write confirmed); throws coded
+ *  CATEGORY_EXISTS / CATEGORY_* on invalid patches. Day-caliber/persistence behavior untouched. */
+function doUpdateCategory (state, patch) {
+  // Same normKey uniqueness contract as addCategory: a rename to a name normalizing to an
+  // existing live row's key is rejected (updateCategory previously had no name check, so the
+  // rename channel re-introduced the CLI AMBIGUOUS_MATCH lockout addCategory guards against).
+  if ('categoryName' in patch) {
+    const newKey = normKey(patch.categoryName)
+    const clash = state.list.some(c => !c.delete && c.categoryId !== patch.categoryId && normKey(c.categoryName) === newKey)
+    if (clash) {
+      const e = new Error('category "' + patch.categoryName + '" already exists (names must stay unique so the CLI can address them)')
+      e.code = 'CATEGORY_EXISTS'
+      throw e
+    }
+  }
+  const i = state.list.findIndex(c => c.categoryId === patch.categoryId)
+  // F4: structure parity with the DB write bottleneck (db-category-ops upsertCategory) — a
+  // folderId/folderIs patch is validated against the resulting row BEFORE anything mutates or
+  // persists: non-folder/deleted parents (CATEGORY_NOT_FOLDER / CATEGORY_NOT_FOUND), nested
+  // folders (CATEGORY_NESTED_FOLDER) and cycles (CATEGORY_CYCLE) throw a coded error and leave
+  // the list untouched (same coded-error pattern as CATEGORY_EXISTS above).
+  if (i >= 0 && ('folderId' in patch || 'folderIs' in patch)) {
+    const target = { ...state.list[i], ...patch }
+    const guard = validateCategoryStructure(
+      { id: target.categoryId, isFolder: !!target.folderIs, parentId: target.folderId },
+      stateRowView(state.list))
+    if (guard) { const e = new Error(guard.message); e.code = guard.code; throw e }
+  }
+  if (i >= 0) { state.list[i] = { ...state.list[i], ...patch }; return persist(state.list) }
+  return Promise.resolve(true)
+}
 export default {
   namespaced: true,
   state: () => ({ list: loadList(), projectIds: [], projectMeta: {} }),
@@ -496,36 +531,10 @@ export default {
       persist(state.list)
     },
     // [A4 fix] returns persist()'s Promise<boolean>: true = the SQLite write confirmed, false =
-    // the durable write failed (fire-and-forget callers just ignore the return value)
-    updateCategory (state, patch) {
-      // Same normKey uniqueness contract as addCategory: a rename to a name normalizing to an
-      // existing live row's key is rejected (updateCategory previously had no name check, so the
-      // rename channel re-introduced the CLI AMBIGUOUS_MATCH lockout addCategory guards against).
-      if ('categoryName' in patch) {
-        const newKey = normKey(patch.categoryName)
-        const clash = state.list.some(c => !c.delete && c.categoryId !== patch.categoryId && normKey(c.categoryName) === newKey)
-        if (clash) {
-          const e = new Error('category "' + patch.categoryName + '" already exists (names must stay unique so the CLI can address them)')
-          e.code = 'CATEGORY_EXISTS'
-          throw e
-        }
-      }
-      const i = state.list.findIndex(c => c.categoryId === patch.categoryId)
-      // F4: structure parity with the DB write bottleneck (db-category-ops upsertCategory) — a
-      // folderId/folderIs patch is validated against the resulting row BEFORE anything mutates or
-      // persists: non-folder/deleted parents (CATEGORY_NOT_FOLDER / CATEGORY_NOT_FOUND), nested
-      // folders (CATEGORY_NESTED_FOLDER) and cycles (CATEGORY_CYCLE) throw a coded error and leave
-      // the list untouched (same coded-error pattern as CATEGORY_EXISTS above).
-      if (i >= 0 && ('folderId' in patch || 'folderIs' in patch)) {
-        const target = { ...state.list[i], ...patch }
-        const guard = validateCategoryStructure(
-          { id: target.categoryId, isFolder: !!target.folderIs, parentId: target.folderId },
-          stateRowView(state.list))
-        if (guard) { const e = new Error(guard.message); e.code = guard.code; throw e }
-      }
-      if (i >= 0) { state.list[i] = { ...state.list[i], ...patch }; return persist(state.list) }
-      return Promise.resolve(true)
-    },
+    // the durable write failed (fire-and-forget callers just ignore the return value).
+    // [w29 P2] the body lives in the module-level doUpdateCategory so the awaited ACTION of the
+    // same name below can return the boolean — context.commit() swallows it just like store.commit().
+    updateCategory: doUpdateCategory,
     /** [A3 fix] hard-remove a just-created placeholder row whose follow-up steps failed
      *  (ProjectOverviewView.createProject) — unlike softDelete there is nothing to cascade: the
      *  row never became a real category/project. */
@@ -667,6 +676,14 @@ export default {
   },
   actions: {
     async add ({ commit }, payload) { commit('addCategory', payload); return true }, // reserved: api.addCategoryList
+    /** [w29 P2] Vuex store.commit() discards a mutation's return value, so ProjectView
+     *  (rename/color) and SnManageCategoriesModal read `undefined` for updateCategory's
+     *  persist boolean and a FAILED SQLite write was toasted as success. This action calls the
+     *  hoisted mutation body DIRECTLY (context.commit would swallow the boolean too) and returns
+     *  its Promise<boolean> verbatim: true = SQLite write confirmed, false = persist failed;
+     *  CATEGORY_EXISTS and the other coded errors reject unchanged. Fire-and-forget commit()
+     *  callers are untouched. */
+    async updateCategory ({ state }, patch) { return doUpdateCategory(state, patch) },
     /** [D13 A3] awaited status write (mirrors ProjectView.setDeadline's R3 pattern): optimistic
      *  memory commit, then the meta put is AWAITED — on failure the in-memory status is rolled
      *  back to the previous value and the rejection propagates so the caller toasts an error

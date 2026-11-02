@@ -24,7 +24,7 @@
       <span class="sn-dot" :style="{borderColor:c.categoryColor, background:c.categoryColor}"></span>
       <input v-if="mgrEditing===c.categoryId" v-model="mgrName" class="sn-cat-edit"
              @keydown.enter.prevent="e => { if (e.isComposing || e.keyCode === 229) return; saveMgrEdit(c) }"
-             @keydown.esc.prevent="cancelMgrEdit(c)" @blur="saveMgrEdit(c)"/>
+             @keydown.esc.prevent="e => { if (e.isComposing || e.keyCode === 229) return; cancelMgrEdit(c) }" @blur="saveMgrEdit(c)"/>
       <span v-else class="cat-mgr-name" role="button" tabindex="0" :title="$t('statsG.SideNav.clickRenameTitle')"
             @click="startMgrEdit(c)" @keydown.enter.prevent="startMgrEdit(c)">{{c.categoryName}}</span>
       <em class="cat-mgr-count" role="button" tabindex="0" :title="$t('statsG.SideNav.previewTitle')"
@@ -136,7 +136,9 @@ export default defineComponent({
         // to be ignored (the toast-less inline rename just closed on a silently-dropped write).
         // On a failed persist: error toast, keep the editor open on the OLD name (same refocus
         // convention as the duplicate-name branch below) so the user can retry or Esc-cancel.
-        const ok = await this.$store.commit('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
+        // [w29 P2] dispatch: store.commit() discards the mutation's persist boolean, so a
+        // failed SQLite write read as ok === undefined and closed the editor as if saved.
+        const ok = await this.$store.dispatch('category/updateCategory', { categoryId: c.categoryId, categoryName: this.mgrName.trim() })
         if (ok === false) {
           this.$message.error(this.$t('statsH.main.actionFailedMsg'))
           this.mgrName = c.categoryName

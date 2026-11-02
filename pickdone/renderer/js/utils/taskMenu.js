@@ -85,7 +85,11 @@ export function buildTaskMenu (vm, t, caps = {}, extra = []) {
       // silently drop the tail of any focus longer than 4h on next reload
       const min2 = Math.max(1, Math.min(FOCUS_MAX_MINUTES, min))
       const startTs = Math.max(+dayjs().startOf('day'), Date.now() - min2 * 60000)
-      const endTime = startTs + min2 * 60000
+      // [w29 P3] when the 00:00 clamp fired (backfilling more minutes than have elapsed since
+      // midnight), the raw startTs+min2 landed in the FUTURE: dateKey (derived from endTime) and
+      // the timeline slot both sat ahead of now. Clamp the end to now too — the record always
+      // reads as already-elapsed time; the DB keeps the user's requested focusDuration either way.
+      const endTime = Math.min(startTs + min2 * 60000, Date.now())
       // [w25 P2] random tail: two backfills of the SAME duration for the SAME task in the same
       // minute are legitimate (the startTs clamp pulls both to today's 00:00 after midnight, so
       // startTs+min2+taskId all coincide) — the idempotent id shape let tomatoAppendMany's

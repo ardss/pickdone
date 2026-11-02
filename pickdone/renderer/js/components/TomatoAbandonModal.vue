@@ -1,6 +1,6 @@
 <template>
 
-  <div class="modal modal--abandon" role="dialog" aria-modal="true" :aria-label="$t('statsP.TomatoAbandonModal.dialogAria')" @keydown.esc="cancelAbandon">
+  <div class="modal modal--abandon" role="dialog" aria-modal="true" :aria-label="$t('statsP.TomatoAbandonModal.dialogAria')" @keydown.esc="onEsc">
     <div class="abandon-card">
       <button type="button" class="abandon-x" :aria-label="$t('statsK.TomatoAbandonModal.close')" @click="cancelAbandon">
         <svg viewBox="0 0 14 14" width="12" height="12"><path d="M2 2l10 10M12 2L2 12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
@@ -42,6 +42,16 @@ export default {
     onReasonEnter (e) {
       if (e.isComposing || e.keyCode === 229) return
       this.confirmAbandon()
+    },
+    // [w29 P2] guarded Esc (mirror of onReasonEnter's IME contract): the Esc that cancels an IME
+    // composition (isComposing / keyCode 229) must not silently cancel the whole abandon. When
+    // the reason input holds typed text, Esc clears the reason instead of closing the modal —
+    // the user keeps the session and can retype; an EMPTY input Esc still cancels (second-Esc exit).
+    onEsc (e) {
+      if (e && (e.isComposing || e.keyCode === 229)) return
+      const inInput = e && e.target && e.target.classList && e.target.classList.contains('abandon-reason-input')
+      if (inInput && this.reason) { this.reason = ''; return }
+      this.cancelAbandon()
     },
     // [D22 P2] giveUp is now AWAITED: the modal used to announce success before the dispatch
     // resolved, and a failed abandon was silent (user believes it landed). The optimistic close

@@ -129,6 +129,7 @@ export default {
       weekdayTitle: '星期分布',
       weekdaySubtitle: '按星期统计 · 柱=完成事件数，线=专注分钟（右轴）',
       weekdaySummary: '专注分钟最多的日子是{d}。',
+      weekdaySummaryEmpty: '还没有专注记录，开始一次专注后这里会显示最专注的一天',
       trendTitle: '完成趋势',
       trendSummaryEmpty: '数据还不多，先积累一段时间再来对比',
       trendSummaryBase: '虚线是你平时每天的水平（约 {n} 个/天），柱子高于它就是比平时做得更多。',
