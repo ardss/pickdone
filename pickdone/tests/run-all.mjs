@@ -113,7 +113,12 @@ const DEEP_FILES = new Set([
 // passed to the SIBLING_DIR discover() call — they ran on manual discipline alone (2026-09-28).
 // The root-level discover() now takes both extensions too, so *.test.js anywhere under tests/
 // is discovered; suite classification is unchanged (tests/ root = integration).
-const TEST_EXTS = ['.test.mjs', '.test.js']
+// W31 fix (2026-11-01): '.test.cjs' joins the family — three real suites
+// (tests/unit/cli/relay-round-evidence-maintenance-20261015.test.cjs,
+// tests/unit/main/multi-instance-lock.test.cjs, tests/unit/main/multi-instance-port.test.cjs)
+// were silently dropped by the exts filter; node --test runs plain-CJS specs fine, so the
+// extension list — not the runner — was the gap.
+const TEST_EXTS = ['.test.mjs', '.test.js', '.test.cjs']
 const SIBLING_DIR = path.join(dir, '..', 'test')
 const isSiblingSpec = file => file.startsWith(SIBLING_DIR + path.sep)
 
