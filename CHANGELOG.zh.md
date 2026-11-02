@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+- 粘贴图裂图根修（P0，用户报告 3 次）：活体 journey 复现揪出真凶——W16 的"path 形态 URL"修复对非 ASCII 文件名从未生效：`local` 是 standard scheme，Chromium canonicalization 把 `local:///名字.png` 折叠进 host 并 punycode 转码，中文名在协议 handler 永远 404。本次：serve 边界 punycode 还原（含 handler 先 decode 把 punycode label 里 %20 变空格的坑）；启动迁移 v10 从磁盘反查改写 legacy host 形态 URL（救不回的显式"附件缺失"占位，不再是裸裂图）；活体 journey 断言 img.complete && naturalWidth>0（中文名钉死，进 check:all 活体池）；同步"先裂后好"竞态改为 img error 自动拉取一次重试。
+- 渲染层（W29）：Vuex commit() 吞掉 updateCategory 的 persist 布尔（ProjectView 改名/换色与 SnManageCategoriesModal 在 SQLite 写失败时弹成功 toast）——mutation 体提升、同名 action 直返布尔、调用点改 dispatch；番茄放弃弹窗 Esc 静默取消整个放弃（含 IME Esc）、类别改名 Esc 无 IME 守卫；零数据统计谎报"最专注日是周一"；跨零点回填番茄 endTime 落在未来；英文 NL 显式年份被顺延；SearchView 卸载把半输入词固化进全局搜索态。
+- 主进程（W29）：relay pull 响应缺 items 时每轮 TypeError 被归类 RETRYABLE（同步永久空转）——按空页容忍+malformedPull 诊断；data:relocate close-failed 分支不重启外部库监视；安全锁窗口重建后不武装（锁开启却以解锁态展示数据）；local:// handler 对畸形编码 404 而 attachmentPath 有 raw-key 兜底（引用计数视为存在却删不掉的死文件）；todos.db ENOENT 走 15s 退避不改立即失败；app 版本首读失败永久缓存空串（hello 广播版本恒空）。
+- 门禁（W29）：env-clean 的 d/r 编号前缀族会圈走用户 TEMP 下同名形态目录（共享面上的 rm -rf）且 EPERM 被当进程已死——收窄为实测枚举、仅 ESRCH 判死；check-file-size 目录豁免裸 startsWith（tests-utils.js 整条逃逸）；env-clean 清单再次漂移；check-i18n 反引号 t( 箭头参数洗白通道；check-tokens 8 行回溯豁免改同行锚；pre-commit 退役冗余 --retry-once。
+
 - 渲染层（W28）：EditPanel spellcheck 守卫条件写反成死代码——动态新建输入框从未被关拼写检查；批量上传中途切换任务把后续文件挂到新任务（批次归属快照+不匹配中止）；日历年月面板/周锚与项目页 deadline class 用裸墙钟无响应式依赖（跨月/跨周日冻结，统一 todayTimestamp 口径）；番茄记录弹层窗口左端排他——恰在次日零点整结束的记录两天都不可见（改 [start, end)，与 metrics.js 同口径）。
 - 主进程（W28）：data:relocate 拷贝中途失败留下孤儿半拷贝树不在回滚清单（written.push 前移）；nextSort 把全 0 sort 列表当空表（sort=0 是合法存储值，新任务反而拿到 1024 落顶）；统计完成日键 dayjs 本地时区 vs SQL 固定 +8 口径分裂（非 +8 时区机器 0-8 点完成事件被剔）；snowDedup 每次 focus 记账做全 meta 表 LIKE 扫描（改 B-tree 有序界）；external-db-watch 退出窗口 gate 关闭分支不回滚基线——窗口内到达的外部写被静默消费。
 - 门禁（W28）：check-commit-identity 个人邮箱正则只匹配首标签域名（vip.qq.com/mail.163.com 逃逸）；四个门禁 git 子进程未剥离 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE（新增 cli/lib-git-env.cjs 统一）；env-clean 清理前缀族与实际 mkdtemp 前缀全不匹配（同步 tmp-dir 清单+活 pid 跳过+新鲜度守卫）；check-esm-graph 动态导入白名单子串包含匹配逃逸（且该分支因只遍历顶层语句是死代码——已下探激活）；check-ipc-op-coverage 换共享 walker 封 TOCTOU；check-hover-contrast 暗色选择器只认一种拼写；check-licenses 解析失败的 package.json 静默退出审计面；lint-staged blob 临时路径内嵌 pid 使 --cache 永不命中。
