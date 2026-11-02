@@ -19,7 +19,14 @@ let realRoot = null
  * carries only its LENGTH and a djb2 fingerprint, enough to correlate with the renderer's
  * ep-img-broken console.warn without leaking names into the log. Once per key: a LAN
  * thumbnail grid fires many requests for the same dead key; one line is the signal.
+ * recently, which is the case the log exists for (w31 P2 capacity cap).
  * Read-only relative to parsing: every branch's resolution semantics are untouched. */
+// w31 P2: keys embed a per-key fingerprint, so a LAN thumbnail grid serving
+// thousands of distinct dead keys would grow this Set without bound. Capped
+// with FIFO eviction (Set insertion order): the oldest tag is dropped first,
+// so an evicted key may warn again later — the once-per-key dedupe signal is
+// preserved for any key seen recently.
+const _NF_REASON_LOG_CAP = 512
 const _nfReasonLogged = new Set()
 function nfKeyTag (key) {
   const s = String(key || '')
@@ -30,6 +37,10 @@ function nfKeyTag (key) {
 function logNf (reason, key) {
   const tag = reason + '|' + nfKeyTag(key)
   if (_nfReasonLogged.has(tag)) return
+  if (_nfReasonLogged.size >= _NF_REASON_LOG_CAP) {
+    const oldest = _nfReasonLogged.values().next().value
+    if (oldest !== undefined) _nfReasonLogged.delete(oldest)
+  }
   _nfReasonLogged.add(tag)
   const line = '[local://app://] 404 reason=' + reason + ' ' + nfKeyTag(key)
   try { require('electron-log').warn(line) } catch { try { console.warn(line) } catch { /* headless */ } }
@@ -265,4 +276,4 @@ function localAttachmentHeaders (file) {
   return { mime: EXT_MIME[ext] || 'application/octet-stream', extraHeaders: {} }
 }
 
-module.exports = { handleAppProtocol, fileResponse, attachmentMimeFor, localAttachmentHeaders, isLocalBookkeepingFile } // fileResponse exported for unit tests (Content-Length invariant)
+module.exports = { handleAppProtocol, fileResponse, attachmentMimeFor, localAttachmentHeaders, isLocalBookkeepingFile, logNf, _nfReasonLoggedForTest: () => _nfReasonLogged } // fileResponse exported for unit tests (Content-Length invariant)
