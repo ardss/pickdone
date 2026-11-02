@@ -26,7 +26,7 @@ const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../.
 const { dayShift } = await import(pathToFileURL(path.join(ROOT, 'renderer/js/utils/todayBounds.js')).href)
 
 const src = readFileSync(path.join(ROOT, 'renderer/js/components/TomatoFocusRecordModal.vue'), 'utf8')
-const m = src.match(/    dayRecords \(\) \{[\s\S]*?\n    \},/)
+const m = src.match(/^ {4}dayRecords \(\) \{[\s\S]*?\n {4}\},/m)
 assert.ok(m, 'dayRecords computed found')
 const dayRecords = new Function('dayShift', 'return {\n' + m[0] + '\n}')(dayShift).dayRecords
 
