@@ -94,6 +94,20 @@ async function _uploadOne (ctx, kind, f, ownerTaskId) {
   // this file belongs to the OLD task's batch — drop it rather than mis-attribute it.
   if (currentTaskId(ctx) !== taskId) return false
   const res = await window.todoAPI.uploadAttachment({ taskId, name: f.name, dataBase64: btoa(binary), type: f.type })
+  // A task can switch WHILE the main process writes the file. The earlier check
+  // before IPC is not sufficient: the old code appended task A's newly-minted file
+  // to task B's panel and queued it to B's SQLite row.
+  if (currentTaskId(ctx) !== taskId) {
+    // The response was never added to any task's metadata; remove only this
+    // unique, unreferenced upload. delete-file checks DB references before unlink.
+    try {
+      const removed = await window.todoAPI.deleteFile(res.url)
+      if (!removed) reportError('upload-abort-cleanup:' + f.name, new Error('unreferenced upload cleanup refused'))
+    } catch (err) {
+      reportError('upload-abort-cleanup:' + f.name, err)
+    }
+    return false
+  }
   const item = { url: res.url, name: f.name, size: res.size }
   if (kind === 'img') { ctx.imgList.push(item); ctx.markDirty('imgs') } else { ctx.fileList.push(item); ctx.markDirty('files') }
   ctx.queueSave({})
