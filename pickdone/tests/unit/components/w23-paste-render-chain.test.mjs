@@ -189,3 +189,17 @@ test('chain/renderer CSP: local attachments permitted in image and media sources
   }
   assert.ok(!directives.get('img-src').includes('https:'), 'do not weaken the remote-image beacon guard')
 })
+
+
+test('image load state: a successful retry clears the stale broken-image marker', async () => {
+  const component = await loadEpComponent()
+  const template = readFileSync(path.join(ROOT, 'renderer/js/components/edit-panel/EpAttachments.vue'), 'utf8')
+  assert.match(template, /@error="onImgErr\(\$event\)"/, 'image errors must report a failed load')
+  assert.match(template, /@load="onImgLoad\(\$event\)"/, 'image success must clear a prior failed state')
+  const classes = new Set()
+  const element = { classList: { add: key => classes.add(key), remove: key => classes.delete(key), contains: key => classes.has(key) } }
+  component.methods.onImgErr({ target: element })
+  assert.equal(classes.has('ep-img-broken'), true, 'a real initial 404 shows an honest broken-image state')
+  component.methods.onImgLoad({ target: element })
+  assert.equal(classes.has('ep-img-broken'), false, 'successful image reload must recover without restarting the application')
+})
