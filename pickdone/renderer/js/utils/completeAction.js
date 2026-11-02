@@ -2,6 +2,7 @@ import { tt } from './core.js'
 import { flyPaperPlane } from './paperPlane.js'
 import { showUndoToast } from './undoToast.js'
 import { removeRenewedInstance } from './repeatUndo.js'
+import { isRepeatTask } from './confirm.js'
 import { safeUpsert } from '../store/helpers/todoPendingUpserts.js'
 import { snapshotForDelete } from '../store/helpers/planChips.js'
 /**
@@ -78,7 +79,11 @@ export function toggleCompleteWithUndo ({ store, message, todo, announce, fromEl
         // branch that recycles the renewal via removeRenewedInstance — so a phantom next
         // instance stayed on the calendar forever. Mirror the store's cleanup here (best-effort:
         // the helper swallows its own errors, and the undo itself already landed).
-        if (cur.repeatId) {
+        // [w27 P3 fix 2026-11-01] the bare truthy check treated the legacy repeatId==='null'
+        // string SENTINEL (plain tasks upgraded from an old build) as a live repeat group —
+        // undoing such a plain task could soft-delete a phantom "renewed instance" and cascade
+        // its plan chips away. Use the shared isRepeatTask predicate (confirm.js single source).
+        if (isRepeatTask(cur)) {
           await removeRenewedInstance({ todo: cur, state: store.state.todo, commit: store.commit, dispatch: store.dispatch, safeUpsert, snapshotForDelete })
         }
         if (announce) announce(tt('statsA.core.' + (wasComplete ? 'doneAnnounce' : 'undoneAnnounce'), { c: content }))

@@ -259,6 +259,7 @@ export default {
     }
   },
   mounted () {
+    this._dead = false // [w27] re-mounted instance (keep-alive reuse) must clear the unmount tombstone
     if (this.enabled) this.fetchWeather()
     // Auto-refresh every 30 minutes (skipped while the tab is hidden, reducing needless network traffic)
     this._autoTimer = setInterval(() => {
@@ -266,6 +267,10 @@ export default {
     }, AUTO_REFRESH_MS)
   },
   beforeUnmount () {
+    // [w27 P3 fix 2026-11-01] unmount tombstone: an in-flight fetch used to re-enter
+    // fetchWeather via its finally block (pendingFetch re-run / retry chain) after the timers
+    // were cleared, keeping the dead widget fetching forever. Every re-entry path checks this.
+    this._dead = true
     clearInterval(this._autoTimer)
     clearTimeout(this._retryTimer)
   },
@@ -317,7 +322,7 @@ export default {
       return { temp: Math.round(wj.current_weather.temperature), code: wj.current_weather.weathercode, city }
     },
     async fetchWeather () {
-      if (!this.enabled || this.loading) return // re-entry guard: triggers during a fetch are ignored
+      if (this._dead || !this.enabled || this.loading) return // re-entry guard: triggers during a fetch are ignored; _dead stops post-unmount re-entry [w27]
       // [D19] a fresh fetch starts from a clean slate: neither a leftover cityNotFound error nor a
       // stale Beijing-fallback label may survive next to the new result
       this.locUnavailable = false
@@ -415,13 +420,14 @@ export default {
           clearTimeout(this._retryTimer)
           // Increment only, never decrement: only a monotonically growing counter can truly stop after two failures
           this._retryTimer = setTimeout(() => {
-            if (this.enabled) this.fetchWeather()
+            if (!this._dead && this.enabled) this.fetchWeather()
           }, this._retryCount === 1 ? 15000 : 30000)
         }
       } finally {
         this.loading = false
         // [D19] run the queued city-change fetch once, now that the loading lock is released
-        if (this._pendingFetch) {
+        // ([w27] not after unmount — the tombstone stops the in-flight fetch from re-entering)
+        if (this._pendingFetch && !this._dead) {
           this._pendingFetch = false
           this.fetchWeather()
         }

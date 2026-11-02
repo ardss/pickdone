@@ -120,7 +120,17 @@ function awaitFlushAcks ({ tracker, capMs = FLUSH_ACK_CAP_MS, pollMs = POLL_MS, 
       } catch (e) {
         try { console.warn('[quit-ack] flushMain threw during quit teardown:', (e && e.stack) || e) } catch { /* noop */ }
       }
-      if (onDone) onDone(tracker)
+      // W27 (P3): onDone gets the same containment as flushMain — it runs mid-teardown inside
+      // this timer callback, and a throwing implementation (updater's round-tracker swap,
+      // index.js's flush-once bookkeeping) would surface as an uncaughtException that could
+      // abort teardown and trigger crashRelaunch. Same per-callback try/catch convention.
+      if (onDone) {
+        try {
+          onDone(tracker)
+        } catch (e) {
+          try { console.warn('[quit-ack] onDone threw during quit teardown:', (e && e.stack) || e) } catch { /* noop */ }
+        }
+      }
     }
   }, pollMs)
   if (poll.unref) poll.unref()

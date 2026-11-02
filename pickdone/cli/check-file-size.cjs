@@ -159,7 +159,11 @@ function makeGit (root) {
       } catch { failed = true; return null }
     },
     trackedSet () {
-      try { return new Set(git(['ls-files']).split('\n').filter(Boolean)) } catch { failed = true; return null }
+      // W27 fix (2026-11-01): quotePath=false pin — without it git emits non-ASCII tracked
+      // paths as quoted octal escapes, so tracked.has(rel) missed every CJK-named file and the
+      // full-scan mode classified existing tracked files as NEW (strict 600 tier) → false reds.
+      // Same pin as the --staged calls above (line ~219) and lint-staged.mjs.
+      try { return new Set(git(['-c', 'core.quotePath=false', 'ls-files']).split('\n').filter(Boolean)) } catch { failed = true; return null }
     }
   }
 }

@@ -101,6 +101,13 @@ export function createSaveQueue (store, opts) {
       if (opts.onSaving) opts.onSaving(true)
       let drainedKeys = []
       const failedEntries = []
+      // [w27 P2 fix 2026-11-01] success bookkeeping for the multi-task branch: the outer catch used
+      // to restore(drainedKeys)+requeue(entries) wholesale, so entries that HAD landed were replayed
+      // later as a stale-value LWW write over another window's newer edit. Track which entries
+      // actually persisted and whether the drained dirty batch itself landed; only the unsuccessful
+      // remainder is restored/requeued on failure.
+      const succeededEntries = new Set()
+      let drainedPersisted = false
       try {
         const { keys: drained, patch: dirtyPatch } = drain()
         drainedKeys = drained
@@ -120,10 +127,12 @@ export function createSaveQueue (store, opts) {
             if (!ent.taskId || !Object.keys(ent.patch).length) continue
             try {
               await store.dispatch('todo/updateTodoFields', { taskId: ent.taskId, patch: ent.patch })
+              succeededEntries.add(ent)
             } catch (e) { failedEntries.push(ent) }
           }
           if (taskId && Object.keys(dirtyPatch).length) {
             await store.dispatch('todo/updateTodoFields', { taskId, patch: dirtyPatch })
+            drainedPersisted = true
           }
           if (failedEntries.length) {
             restore(drainedKeys)
@@ -143,8 +152,12 @@ export function createSaveQueue (store, opts) {
         // gone for good -- onFail surfaced the banner but the edits were silently never persisted.
         // P2-5: the queued IMMEDIATE patches are re-queued too — they never had dirty flags, so
         // restoring flags alone discarded them forever (retrySave spun on an empty pending).
-        restore(drainedKeys)
-        requeue(entries)
+        // [w27 P2 fix 2026-11-01] but ONLY the unsuccessful remainder: already-persisted entries
+        // must never be replayed (their stale patch would LWW-overwrite newer edits made in
+        // another window since), and the drained keys are only re-flagged when the dirty-field
+        // dispatch itself never landed.
+        if (!drainedPersisted) restore(drainedKeys)
+        requeue(entries.filter(ent => !succeededEntries.has(ent)))
         if (opts.onFail) opts.onFail()
       } finally {
         if (opts.onSaving) opts.onSaving(false)

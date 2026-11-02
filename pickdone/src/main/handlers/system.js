@@ -287,8 +287,16 @@ module.exports = function systemHandlers (ctx) {
         // onMigrateProgress; copy yields the event loop every few files so these actually fire).
         onProgress: p => {
           try {
+            // W27 (P2): `e.sender` IS a webContents — it has `.send` but NO `.webContents`
+            // property, so the old unconditional `win.webContents.send` threw
+            // TypeError (undefined.send) on the primary branch and the outer catch swallowed
+            // it; the migration modal never received a single progress event. Send through
+            // whichever surface the fallback actually produced.
             const win = e.sender && !e.sender.isDestroyed() ? e.sender : getMainWindow()
-            if (win && !win.isDestroyed()) win.webContents.send('data-migrate-progress', p)
+            if (win && !win.isDestroyed()) {
+              if (win.webContents) win.webContents.send('data-migrate-progress', p)
+              else win.send('data-migrate-progress', p)
+            }
           } catch (err) { /* progress is best-effort */ }
         },
       })

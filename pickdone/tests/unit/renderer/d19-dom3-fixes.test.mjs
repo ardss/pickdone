@@ -171,7 +171,9 @@ test('[F11] cityNotFound clears the stale temp/code beside the error', () => {
 test('[F11] a city change during an in-flight fetch queues exactly one re-run', () => {
   const src = read('renderer/js/components/WeatherWidget.vue')
   assert.match(src, /if \(this\.loading\) \{ this\._pendingFetch = true; return \}/)
-  assert.match(src, /finally \{[\s\S]{0,200}?if \(this\._pendingFetch\) \{[\s\S]{0,120}?this\._pendingFetch = false[\s\S]{0,80}?this\.fetchWeather\(\)/)
+  // [w27] the queued re-run now honors the unmount tombstone (_dead) — same one-re-run behavior,
+  // new declared caliber: the finally re-entry is gated on !_dead
+  assert.match(src, /finally \{[\s\S]{0,400}?if \(this\._pendingFetch && !this\._dead\) \{[\s\S]{0,120}?this\._pendingFetch = false[\s\S]{0,80}?this\.fetchWeather\(\)/)
 })
 
 test('[F11] the Beijing fallback is labeled "location unavailable", not presented as located', () => {

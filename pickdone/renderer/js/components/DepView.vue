@@ -202,7 +202,7 @@ export default {
       const list = this.inScope
       const done = list.filter(t => t.complete).length
       const total = list.length
-      const today0 = +dayjs().startOf('day')
+      const today0 = this.$store.state.todo.todayTimestamp || +dayjs().startOf('day') // [w27] reactive (store todayTimestamp, 60s flip) — a bare dayjs() had no dep and froze overdue/today past midnight
       const future = this.msList.filter(m => m.date >= today0)
       const next = future[0] || null
       const idx = next ? this.msList.indexOf(next) : this.msList.length - 1
