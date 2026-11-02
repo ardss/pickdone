@@ -236,8 +236,15 @@ async function saveAttachment ({ taskId, name, dataBase64 }) {
   // name and the request 404'd (user-visible "pasted image shows broken"). The path component is
   // preserved verbatim (percent-decoding only), so the handler decodes back to the exact on-disk
   // name. attachmentKeyOfUrl strips the leading '/' so legacy rows keep resolving.
+  // W29 P3 (2026-11-01): the trailing statSync used to be unguarded — a LAN conflict rename
+  // (att-transfer writeAtomic) or any concurrent mover taking `dest` between the rename above
+  // and the stat threw ENOENT out of the IPC, so the caller saw a rejected upload while the
+  // bytes were already on disk (a "ghost" attachment). The in-memory byte count is the truth
+  // we wrote — fall back to it instead of failing a successful publish.
+  let size
+  try { size = fs.statSync(dest).size } catch { size = raw.length }
   const url = `local:///${encodeURIComponent(finalName)}`
-  return { url, key: finalName, name, size: fs.statSync(dest).size, ext }
+  return { url, key: finalName, name, size, ext }
 }
 /** F2 (2026-10-15): resolve the on-disk key a `local://` url refers to — percent-decode + basename,
  *  with attachmentPath's same malformed-encoding fallback (raw key). Non-local:// urls → null.
@@ -291,21 +298,66 @@ function findKeyRefs (key, rows, { excludeTaskId = null } = {}) {
  *  insensitive match" silently served the WRONG twin's bytes. Now: exactly one match → use it;
  *  several → only the character-exact match of the requested base, otherwise unresolved (caller
  *  404s) + a warn. */
+/** W29 (2026-11-01): punycode recovery for a Chromium-canonicalized local:// key. `local` is
+ *  registered as a STANDARD scheme (protocol-privileges.js), so the URL Standard's host rules
+ *  apply and Chromium canonicalizes `local:///name.png` by moving the path segment into the
+ *  HOST and running it through domain-to-ASCII — percent-decode + IDNA/punycode. The W16
+ *  assumption "the path component is preserved verbatim" is therefore FALSE at request time:
+ *  EVERY local:// attachment request (modern path-form mints included) arrives at this process
+ *  with a punycode'd host for any non-ASCII filename — the exact 3x-user-reported broken
+ *  paste-image incident. The host punycode IS reversible (verified live: the request for
+ *  '中文probe.png' arrives as host 'xn--probe_..._probe-kc63bv169a.png' and node's punycode
+ *  decodes it back to the exact on-disk name), so recovery is a pure string transform here.
+ *  Returns null when the base carries no punycode label or the decode is not exact. Pure. */
+function punycodeRecoverBase (base) {
+  if (!/xn--/i.test(String(base))) return null
+  try {
+    const punycode = require('node:punycode')
+    const labels = String(base).split('.')
+    if (!labels.some(l => /^xn--/i.test(l))) return null
+    const restored = labels.map(l => {
+      if (!/^xn--/i.test(l)) return l
+      // A raw host can never contain a literal space (the host canonicalizer escapes it to
+      // %20) — a space here means an upstream percent-decoder (protocol.js's
+      // decodeURIComponent) already ran over the label. Punycode transcripts are
+      // position-sensitive: decoding a label whose '%20' became a space yields garbage
+      // (verified live). Restore the canonical host shape before decoding.
+      return punycode.toUnicode(l.replace(/ /g, '%20'))
+    }).join('.')
+    return restored && restored !== base ? restored : null
+  } catch { return null }
+}
+
 function resolveAttachmentCase (resolvedPath, fsMod = fs) {
   try { if (fsMod.statSync(resolvedPath).isFile()) return resolvedPath } catch { /* fall through to scan */ }
   let base
   try { base = path.basename(resolvedPath) } catch { return resolvedPath }
-  try {
-    const dir = path.dirname(resolvedPath)
-    const lower = base.toLowerCase()
-    const hits = fsMod.readdirSync(dir).filter(f => f.toLowerCase() === lower)
-    if (hits.length === 1) return path.join(dir, hits[0])
-    if (hits.length > 1) {
-      const exact = hits.find(f => f === base)
-      if (exact) return path.join(dir, exact)
-      console.warn('[attachments] ambiguous case-insensitive key "' + base + '" (' + hits.length + ' on-disk twins) — refusing to guess, 404')
-    }
-  } catch { /* unreadable dir: keep the raw path */ }
+  const dir = path.dirname(resolvedPath)
+  // W29: candidate order is [literal base, punycode recovery, punycode recovery + one more
+  // percent-decode]. The literal form stays FIRST so a file genuinely named 'xn--*.png' keeps
+  // winning over the speculative decode; the recovery only runs when the literal form matches
+  // nothing. The third candidate: canonicalization percent-encodes disallowed host chars, so
+  // the recovered name can still carry literal escapes ('%20' for a space) — one more decode
+  // restores them (URIError → skip, same malformed-encoding fallback as attachmentPath).
+  let recoveredExtra = null
+  const recovered = punycodeRecoverBase(base)
+  if (recovered) {
+    try { recoveredExtra = decodeURIComponent(recovered) } catch { recoveredExtra = null }
+    if (recoveredExtra === recovered) recoveredExtra = null
+  }
+  for (const cand of [base, recovered, recoveredExtra]) {
+    if (!cand) continue
+    try {
+      const lower = cand.toLowerCase()
+      const hits = fsMod.readdirSync(dir).filter(f => f.toLowerCase() === lower)
+      if (hits.length === 1) return path.join(dir, hits[0])
+      if (hits.length > 1) {
+        const exact = hits.find(f => f === cand)
+        if (exact) return path.join(dir, exact)
+        console.warn('[attachments] ambiguous case-insensitive key "' + cand + '" (' + hits.length + ' on-disk twins) — refusing to guess, 404')
+      }
+    } catch { /* unreadable dir: keep the raw path */ }
+  }
   return resolvedPath
 }
 
@@ -383,6 +435,8 @@ module.exports = { attachDir, saveAttachment, attachmentPath, withinStorageQuota
   attachmentKeyOfUrl, findKeyRefs,
   // W16: serve-side case-insensitive key resolve fallback (local:// host lowercasing).
   resolveAttachmentCase,
+  // W29: punycode recovery for Chromium-canonicalized local:// hosts (broken-paste-image root fix).
+  punycodeRecoverBase,
   // C5/C14 (2026-09-25): MAX_BYTES/MAX_FILES and the noise-slot classifier are exported so
   // attachments-guards.js is the shared gate for every write entry without duplicating caps.
   MAX_BYTES, MAX_FILES, isUnownedNoiseFile, dirUsage,
