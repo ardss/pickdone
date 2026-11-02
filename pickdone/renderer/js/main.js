@@ -433,7 +433,7 @@ async function bootstrap () {
           // and report success for a focus that had not started (CLI status showed idle after
           // `tomato start`). Awaiting serializes the receipt's read after the phase flip.
           await store.dispatch('tomato/startFocus')
-          if (cmd.taskId) await store.dispatch('tomato/attach', cmd.taskId)
+          if (store.state.tomato.status === 'startTomatoTime') { if (cmd.taskId) await store.dispatch('tomato/attach', cmd.taskId) } else if (window.__cliTomatoPrevMinutes > 0) { store.commit('tomato/patch', { tomatoTime: window.__cliTomatoPrevMinutes }); window.__cliTomatoPrevMinutes = 0 } // [w30 P3] startFocus can silently abort on the cross-window phase guard (store/tomato.js just returns): no CLI stop will ever arrive for a session that never started, so restore the one-shot minutes NOW instead of pinning the user's focus length, and skip the attach (nothing to attach to)
         } else if (cmd.action === 'stop') {
           const stopP = t.status !== 'default'
             ? store.dispatch('tomato/giveUp', { record: cmd.record !== false, reason: cmd.reason || 'cli' }) /* Stable marker, translated at the display layer */

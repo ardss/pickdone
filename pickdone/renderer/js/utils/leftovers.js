@@ -78,7 +78,11 @@ export async function maybeAskLeftovers (store) {
       await store.dispatch('todo/updateTodoFields', { taskId: s.id, patch })
     }
     markAsked(todayStr)
-    store.dispatch('todo/computeViews')
+    // [w30 P3] .catch on the bare dispatch (same convention as main.js's periodic computeViews):
+    // an async action rejection here surfaced as an unhandled promise rejection and could reject
+    // past batchMoveWithUndo — the move itself has already landed, so a view-rebuild failure must
+    // not break the undo toast chain.
+    store.dispatch('todo/computeViews').catch(e => console.warn('[leftovers] computeViews after batch move failed (non-blocking):', e))
     // Batch move = reversible op: success toast carries group undo (plain success before; consolidated 2026-09-01)
     batchMoveWithUndo(vm, {
       label: tt('statsA.core.movedNToToday', { n: list.length }),

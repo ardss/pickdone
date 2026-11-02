@@ -234,8 +234,17 @@ export function parseNaturalDate (text, base = dayjs()) {
     if (peeled.h > 23 || peeled.min > 59) return parseChineseNaturalDate(raw, base, FMT.cnFull)
     const cnResult = parseChineseNaturalDate(peeled.text, base, FMT.cnFull)
     const d = cnResult.date || base.startOf('day')
+    // [w30 P2] explicit-year gate — same semantics as the English branch's `!explicitYear`
+    // roll guard above: a PINNED full date ("2025年1月1日 3pm" / "2025-1-1 3pm") is the user's
+    // literal date; when its explicit time already passed the old unconditional +1 day moved
+    // the date AND silently changed its year. Detect the core's full-date shapes (the whole
+    // trimmed string must be a full date for the core to consume them, so anchoring here is
+    // faithful) and skip the corrective roll for them.
+    const trimmedCn = peeled.text.trim()
+    const explicitYear = /(?:^|\s)\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:$|\s)/.test(trimmedCn) ||
+      /^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]$/.test(trimmedCn)
     let withTime = d.hour(peeled.h).minute(peeled.min).second(0)
-    if (withTime.isBefore(base)) withTime = withTime.add(1, 'day')
+    if (!explicitYear && withTime.isBefore(base)) withTime = withTime.add(1, 'day')
     return {
       date: withTime,
       label: (cnResult.label ? cnResult.label + ' ' : '') + mmToHHmm(peeled.h * 60 + peeled.min),

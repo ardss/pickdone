@@ -47,7 +47,15 @@ export function windowCounts (todos, records, catNameOf, start, end, taskById) {
 
   for (const t of todos) {
     if (t.delete) continue
-    const ds = t.dayStart || (t.todoTime ? +dayjs(t.todoTime).startOf('day') : 0)
+    // [w30 P3] NaN dayStart (corrupted date parse) normalization — same rule as
+    // store/helpers/todoComputeViews.js: NaN is falsy yet `NaN >= start` is always false while
+    // the todoTime fallback was skipped by the truthy-|| short-circuit; normalize once so a
+    // corrupted dayStart degrades to the todoTime-derived (or 0) bucket instead of a silently
+    // uncounted task.
+    const rawDs = t.dayStart
+    const ds = (typeof rawDs === 'number' && Number.isFinite(rawDs))
+      ? rawDs
+      : (t.todoTime ? +dayjs(t.todoTime).startOf('day') : 0)
     if (ds >= start && ds < end) {
       planned++
       if (t.complete) plannedDone++
@@ -116,7 +124,7 @@ export function topEntries (map, n = 6) {
  * Baseline = the "daily average" over the 4 adjacent equal-length windows before the current period (daily-average semantics naturally tolerate incomplete periods,
  * e.g. "this week" only being at Wednesday won't be compared against a full week's total).
  */
-export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
+export function buildReviewMetrics ({ todos, records, catNameOf }, period, nowTick = Date.now()) {
   const { start, end, label } = period
   // days is a calendar-day count (inclusive of both endpoint days): periodBounds end = +now (today's
   // current time), so a millisecond round trip under-counted before noon (chart drawn only to
@@ -163,8 +171,11 @@ export function buildReviewMetrics ({ todos, records, catNameOf }, period) {
   let streak = 0
   // Streak walks back day by day using calendar math: on DST spring-forward days Date.now()-i*DAY yields a previous-day 23:xx key, breaking the streak early
   // Cap 3650 unified with the achievements-wall caliber (achievements.js) — one metric, one bound.
-  for (let i = doneDays.has(dayKey(Date.now())) ? 0 : 1; i < 3650; i++) {
-    if (doneDays.has(dayKey(+dayjs().subtract(i, 'day').startOf('day')))) streak++
+  // [w30 P3] the wall clock is INJECTED (nowTick, same precedent as chartModels.periodBounds /
+  // buildHeatmap): the caller's computed nowTick refreshes across midnight, so the streak caliber
+  // moves with the KPI window instead of freezing on a bare Date.now() read.
+  for (let i = doneDays.has(dayKey(nowTick)) ? 0 : 1; i < 3650; i++) {
+    if (doneDays.has(dayKey(+dayjs(nowTick).subtract(i, 'day').startOf('day')))) streak++
     else break
   }
 

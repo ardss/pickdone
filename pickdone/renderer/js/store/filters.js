@@ -44,7 +44,10 @@ export default {
         commit('setList', await window.todoAPI.dbCall('filterList'))
       } catch (e) {
         console.error('[filters] post-remove refetch failed (delete stands, keeping local removal):', e)
-        commit('setList', (state.list || []).filter(f => f && f.id !== id))
+        // [w30 P3] loose id comparison (String()) — number ids vs string route params must still
+        // match, same convention as the W8 filters work; strict !== dropped the entry only when
+        // the types happened to agree, leaving a stale (still-containing) sidebar list.
+        commit('setList', (state.list || []).filter(f => f && String(f.id) !== String(id)))
       }
     }
   }

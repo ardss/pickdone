@@ -344,7 +344,7 @@ export default {
           const c = this.$store.getters['category/byId'](id)
           return c ? c.categoryName : this.$t(T + 'uncategorized')
         }
-      }, this.periodBounds)
+      }, this.periodBounds, this.nowTick) // [w30 P3] inject the reactive clock — streak caliber follows the KPI window across midnight
     },
     review () { return composeReview(this.metrics) },
     achievements () {
