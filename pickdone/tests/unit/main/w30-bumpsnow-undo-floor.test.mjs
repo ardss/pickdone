@@ -66,7 +66,7 @@ test('per-dedupKey idempotency survives the floor (same key replays dedupe, dist
   const t = seed({})
   db.call('upsert', t)
   db.call('bumpSnow', { taskId: t.taskId, minutes: 50 })
-  const a1 = db.call('bumpSnow', { taskId: t.taskId, minutes: -80, dedupKey: 'undo:k1' })
+  db.call('bumpSnow', { taskId: t.taskId, minutes: -80, dedupKey: 'undo:k1' })
   const a2 = db.call('bumpSnow', { taskId: t.taskId, minutes: -80, dedupKey: 'undo:k1' })
   assert.deepEqual(a2, { ok: true, minutes: 0, deduped: true }, 'same undo key must dedupe')
   assert.equal(focusOf(t.taskId), 0)

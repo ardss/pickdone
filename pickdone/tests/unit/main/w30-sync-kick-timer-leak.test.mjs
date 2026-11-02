@@ -25,8 +25,7 @@ function harness () {
 
 test('kick re-entry while a retry timer is pending clears the old timer (no leak)', () => {
   const h = harness()
-  let calls = 0
-  const { kick } = makeSyncKick(() => { calls++; throw new Error('down') }, { timerMs: 1000, setTimeout: h.st, clearTimeout: h.ct })
+  const { kick } = makeSyncKick(() => { throw new Error('down') }, { timerMs: 1000, setTimeout: h.st, clearTimeout: h.ct })
   kick({ op: 1 }) // fails -> requeue -> T1 pending
   assert.equal(h.activeCount(), 1)
   const t1 = [...h.pending.keys()][0]

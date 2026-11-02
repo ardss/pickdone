@@ -260,8 +260,20 @@ function __reset () {
   zeroRowPolls = 0
 }
 
+/** [w30 size split] the lan-sync-bootstrap wiring block (init + remote-relay subscription)
+ *  moved here so bootstrap stops growing: caller passes its seams. Warn-shaped failure:
+ *  returns false so the caller logs with its own logger. */
+function bootstrapWiring ({ dbCall, getIdentity, kickRound, onRemoteRelay } = {}) {
+  try {
+    init({ dbCall, getIdentity, kickRound })
+    onRemoteAnnounce(onRemoteRelay)
+    return true
+  } catch { return false }
+}
+
 module.exports = {
   KEY_PREFIX,
+  bootstrapWiring,
   STALE_AGE_FACTOR,
   init,
   keyFor,

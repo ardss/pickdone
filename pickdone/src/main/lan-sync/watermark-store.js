@@ -29,6 +29,18 @@
  */
 const REVOKED = '__revoked'
 
+/** [w30 size split] v1 watermark cleanup (round-3 review): the pre-v2 'sync.peerWatermarks'
+ *  row is dead data in the RECEIVER's seq space (v2 lives under key + '.v2'); delete it once.
+ *  Caller supplies the settings seams; failures are warn-only. */
+function deleteV1WatermarkRow ({ settingGet, settingsRowDelete, log }) {
+  try {
+    if (settingGet('sync.peerWatermarks') != null) {
+      settingsRowDelete('sync.peerWatermarks')
+      log.warn('[LanSync] v1 watermark cleanup: legacy row removed')
+    }
+  } catch (e) { try { log.warn('[LanSync] v1 watermark cleanup failed:', e.message) } catch { /* noop */ } }
+}
+
 module.exports = function createPeerWatermarkStore ({ settingGet, settingPut, log, key, store }) {
   /** Read + decode. THROWS on a read failure (S6). Returns { map, revoked }. */
   function load () {
@@ -89,3 +101,16 @@ module.exports = function createPeerWatermarkStore ({ settingGet, settingPut, lo
 
   return { load, createTracked, persist, invalidate, REVOKED }
 }
+
+module.exports.deleteV1WatermarkRow = deleteV1WatermarkRow
+
+/** [w30 size split] test surface moved here from lan-sync-bootstrap: the same store wiring over
+ *  an INJECTED db handle, so regression tests can drive corrupt-read/degraded-persist scenarios
+ *  against a fresh settings table without swapping the module-level state singleton. */
+function makeWatermarkStoresForDb (db, deps = {}) {
+  const get = key => { const row = db.call('settingsRowsAll', {}).find(r => r.key === key && !r.deleted); return row ? row.value : null }
+  const put = (key, value) => db.call('settingsRowPut', { key, value })
+  const store = deps.createJsonSettingStore({ settingGet: get, settingPut: put, log: deps.log, key: deps.key, name: 'peer watermarks', defaultValue: '{}' })
+  return { store, wm: module.exports({ settingGet: get, settingPut: put, log: deps.log, key: deps.key, store }) }
+}
+module.exports.makeWatermarkStoresForDb = makeWatermarkStoresForDb

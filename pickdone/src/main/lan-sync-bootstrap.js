@@ -233,16 +233,6 @@ const { normalizeHost, loadPairedPeers, persistPairedPeer, removePairedPeer } =
  *  store (S3/S6: read-throw on a failed read, revocation filtering on every writer). */
 function createTrackedWatermarks () { return watermarkStore.createTracked() }
 
-/** S3/S6 test surface: the same store wiring over an INJECTED db handle, so regression tests
- *  can drive corrupt-read/degraded-persist scenarios against a fresh settings table without
- *  swapping the module-level state singleton. */
-function makeWatermarkStoresForDb (db) {
-  const get = key => { const row = db.call('settingsRowsAll', {}).find(r => r.key === key && !r.deleted); return row ? row.value : null }
-  const put = (key, value) => db.call('settingsRowPut', { key, value })
-  const store = createJsonSettingStore({ settingGet: get, settingPut: put, log, key: K_PEER_WATERMARKS, name: 'peer watermarks', defaultValue: '{}' })
-  return { store, wm: createPeerWatermarkStore({ settingGet: get, settingPut: put, log, key: K_PEER_WATERMARKS, store }) }
-}
-
 async function startSync () {
   if (state.node) return
   const { deviceId, deviceName } = ensureIdentity()
@@ -441,20 +431,13 @@ async function restartSync ({ preserveEnabled = true } = {}) {
 }
 
 async function stopSync () {
-  // W30 (P3 2026-11-01): the throttled security-persist handling moved ABOVE the node early-return.
-  // The old `if (!state.node) return` skipped the flush AND the timer clear — after any path that
-  // tears the node down without stopSync (or a stop racing an in-flight throttle window), the
-  // pending securityPersistTimer stayed armed and its callback later hit the `!state.node` guard
-  // and silently dropped the ring entries it was holding (lost security ring writes on quit).
-  // Now every stopSync entry: clear the timer, then attempt the same guarded flush (the flush
-  // itself still requires a live node + non-degraded store, so a node-less stop just drains the
-  // timer — the honest outcome when there is no ring left to persist).
+  // W30 (P3 2026-11-01): throttled security-persist moved above the node early-return — the old
+  // `if (!state.node) return` skipped the flush AND the timer clear (lost ring writes on quit).
+  // A node-less stop just drains the timer; the guarded flush still needs a live node.
   try {
     if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
     const n = state.node
-    // Round-1 P0: guard getStatus — a stale/mocked node reference threw
-    // `n.getStatus is not a function` and masked the flush with a warning.
-    // S6: the flush also aborts while degraded — a corrupt read must never shrink the ring.
+    // Round-1 P0 guard getStatus (stale/mocked ref threw and masked the flush); S6: degraded aborts.
     if (n && typeof n.getStatus === 'function' && securitySettingStore.canPersist()) settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
   } catch (e) { log.warn('[LanSync] security log flush on stop failed:', e.message) }
   const node = state.node
@@ -763,36 +746,18 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   const peerWatermarks = null
   state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null, applied: null, resyncExternalWatch: typeof resyncExternalWatch === 'function' ? resyncExternalWatch : null }
   state.peerWatermarks = createTrackedWatermarks()
+  // v1 watermark cleanup (round-3 review) — moved into watermark-store (W30 size split)
+  watermarkStore.deleteV1WatermarkRow({ settingGet, settingsRowDelete: k => busWrite('settingsRowDelete', { key: k }), log })
   registerOps()
   // Running-tomato announcements (feature): wire the announce module to the db + identity,
   // and relay remotely-applied announces to the renderer as 'tomato-announce' syncEvents.
   // The announce key itself travels as a regular meta entity row (see sync-apply.js).
-  try {
-    const tomatoAnnounce = require('./tomato-announce')
-    tomatoAnnounce.init({
-      dbCall: (op, p) => state.db.call(op, p),
-      getIdentity: () => { const s = getSettingsPayload(); return { deviceId: s.deviceId, deviceName: s.deviceName } },
-      kickRound: kickSyncRound,
-    })
-    tomatoAnnounce.onRemoteAnnounce(v => emitSyncEvent('tomato-announce', v))
-  } catch (e) { log.warn('[LanSync] tomato-announce wiring failed:', e.message) }
-  // v1 watermark cleanup (round-3 review): the pre-v2 'sync.peerWatermarks' row is dead data in
-  // the RECEIVER's seq space (v2 lives under 'sync.peerWatermarks.v2'); delete it once.
-  try {
-    if (settingGet('sync.peerWatermarks') != null) busWrite('settingsRowDelete', { key: 'sync.peerWatermarks' })
-  } catch (e) { log.warn('[LanSync] v1 watermark cleanup failed:', e.message) }
-  try {
-    if (settingGet(K_ENABLED) === true) {
-      // D2-c: startSync is async and fail-closed now — a bind failure at boot must be logged,
-      // not become an unhandled rejection. K_ENABLED stays true so the toggle reflects the
-      // user's intent, but getStatus().listening=false shows the device card the truth.
-      // [H1 2026-10-25] the retry ladder + visible degradation live in lan-sync/boot-enable.js
-      // (structure ratchet: this module splits instead of growing): fast arm 3x5s for the
-      // crash-storm window, one late arm at 60s, then ONE visible notice (Notification +
-      // sync-degraded syncEvent) if sync is still down.
-      require('./lan-sync/boot-enable').bootEnableWithRetry({ startSync, log, emitSyncEvent })
-    }
-  } catch (e) { log.warn('[LanSync] startup enable failed:', e.message) }
+  // W30 size split: the wiring block lives in tomato-announce.bootstrapWiring (this file is at
+  // its size ratchet); warn-only failure preserved.
+  const ident = () => { const s = getSettingsPayload(); return { deviceId: s.deviceId, deviceName: s.deviceName } }
+  if (!require('./tomato-announce').bootstrapWiring({ dbCall: (op, p) => state.db.call(op, p), getIdentity: ident, kickRound: kickSyncRound, onRemoteRelay: v => emitSyncEvent('tomato-announce', v) })) log.warn('[LanSync] tomato-announce wiring failed')
+  // W30 size split: the conditional enable + retry ladder live in lan-sync/boot-enable.
+  require('./lan-sync/boot-enable').bootEnableIfConfigured({ settingGet, enabledKey: K_ENABLED, startSync, log, emitSyncEvent })
 }
 
 module.exports = { initLanSync, stopSyncForQuit, kickSyncRound, shipQuitRound, invalidateSyncWatermarks, emitOplogAppendFailure,
@@ -819,7 +784,7 @@ module.exports.__test = {
   createTrackedWatermarks,
   loadPeerWatermarks,
   // S3/S6 test surface: db-injectable store wiring (corrupt-read / degraded-persist scenarios).
-  makeWatermarkStoresForDb,
+  makeWatermarkStoresForDb: (db) => require("./lan-sync/watermark-store").makeWatermarkStoresForDb(db, { createJsonSettingStore, log, key: K_PEER_WATERMARKS }),
   // S6 test surface: security-ring store contract (read-throw seeds empty + degrades writes).
   loadSecurityLog,
   scheduleSecurityPersist,

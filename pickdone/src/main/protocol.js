@@ -213,7 +213,7 @@ function handleAppProtocol () {
       const data = await fs.promises.readFile(resolved)
       return new Response(data, { headers: { 'Content-Type': mime, ...secureHeaders } })
     } catch {
-      logNf('nf-internal-error', typeof keyRaw !== 'undefined' ? keyRaw : req.url) // [w30 P1]
+      logNf('nf-internal-error', 'handler-throw') // [w30 P1] key may be undefined here; url itself can carry content, so log the bucket only
       return new Response('nf', { status: 404 })
     }
   })
