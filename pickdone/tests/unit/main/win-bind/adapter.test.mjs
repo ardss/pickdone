@@ -139,6 +139,41 @@ test('per-query timeout rejects, kills the wedged child, and the next call respa
   a.dispose()
 })
 
+test('respawnUsed resets on a successful round trip: transient deaths must not permanently cap the adapter (P2-1)', async () => {
+  // Two wedged children burn the budget (timeout→kill, respawnUsed 1,2); child #3 then answers
+  // real queries (healthy round trips); an EXTERNAL kill of #3 would land at 3 = maxRespawn —
+  // pre-fix every later query was refused forever ('respawn cap exceeded'). Post-fix the healthy
+  // round trips reset the budget, so the next query spawns child #4 and answers.
+  const h = harness({
+    reply: (req, c, n) => n >= 3 && req.op === 'enum'
+      ? JSON.stringify({ id: req.id, ok: true, result: [] })
+      : null
+  })
+  const a = createWinAdapter({ spawn: h.spawnFn, timeoutMs: 40, maxRespawn: 3, log: quietLog })
+  await assert.rejects(() => a.enumerate(), /timeout/i) // wedge #1 (child #1 never answers)
+  await assert.rejects(() => a.enumerate(), /timeout/i) // wedge #2 (child #2 never answers)
+  assert.deepEqual(await a.enumerate(), []) // child #3 answers: healthy round trip (resets budget)
+  assert.deepEqual(await a.enumerate(), []) // second success proves the child is stably healthy
+  h.spawned[2].emit('exit', 1) // external kill (AV/OOM-class) of the healthy child
+  const out = await a.enumerate() // MUST respawn (child #4) and answer — not 'cap exceeded'
+  assert.deepEqual(out, [])
+  assert.equal(h.spawned.length, 4)
+  a.dispose()
+})
+
+test('a child that answers only the boot ping still exhausts the respawn cap (reset excludes ping)', async () => {
+  // The reset must NOT count the boot handshake: a spawn→ping-ok→wedge-every-query cycle is
+  // exactly the crash/respawn loop maxRespawn exists to bound (keeps the legacy case below).
+  const h = harness() // auto-answers ping, never answers anything else
+  const a = createWinAdapter({ spawn: h.spawnFn, timeoutMs: 40, maxRespawn: 2, log: quietLog })
+  await assert.rejects(() => a.enumerate(), /timeout/i)
+  await assert.rejects(() => a.enumerate(), /timeout/i)
+  const third = await a.enumerate().then(() => 'resolved', e => 'rejected:' + e.message)
+  assert.match(third, /rejected:.*(cap|respawn).*/i)
+  assert.equal(h.spawned.length, 2)
+  a.dispose()
+})
+
 test('unexpected child exit rejects in-flight queries; next use respawns and answers', async () => {
   const h = harness()
   const a = createWinAdapter({ spawn: h.spawnFn, timeoutMs: 5000, maxRespawn: 5, log: quietLog })
