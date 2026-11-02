@@ -475,6 +475,12 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     scheduler.setShowMainEntry(showMainOrLock) // D10: reminder notification clicks honor the security lock
     registerIpc()
     extWatch.watchDbForExternalWrites()
+    // T7 win-bind P1-1: pay the PS cold start (~2.5s spawn + Add-Type) ONCE here at boot so the
+    // first drag-release identify probes a hot adapter — the only binding entry point used to
+    // spawn PS on the first release itself, and GetCursorPos then sampled ~1-1.7s AFTER the hand
+    // let go (wrong-window binds / silent OWN_WINDOW-DESKTOP misses). prewarm never rejects and
+    // is deliberately NOT called per-IPC.
+    try { require('./win-bind').prewarm() } catch { /* best-effort boot prewarm */ }
     // Perf (2026-10-02): reloadAll + Meta GC moved AFTER registerIpc/extWatch — they used to run
     // before the IPC/bus wiring, blocking the window-ready path on synchronous GC work. No
     // behavior change: registerIpc is synchronous wiring, reloadAll's fingerprint gate

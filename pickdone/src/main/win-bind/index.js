@@ -20,9 +20,10 @@ const { decideIdentify, resolveBinding, makeRef } = require('./pure/match')
 /** The one adapter instance shared by all channels (created lazily). Module-level so the
  *  quit chain can dispose it without reaching into a handler closure. */
 let liveAdapter = null
+let adapterFactory = createWinAdapter
 
 function ensureAdapter () {
-  if (!liveAdapter) liveAdapter = createWinAdapter()
+  if (!liveAdapter) liveAdapter = adapterFactory()
   return liveAdapter
 }
 
@@ -152,5 +153,26 @@ module.exports = function winBindHandlers (ctx) {
  *  src/main/index.js (try/catch there). Safe to call any number of times. */
 module.exports.disposeForQuit = function disposeForQuit () {
   try { if (liveAdapter) liveAdapter.dispose() } catch { /* best-effort */ }
+  liveAdapter = null
+}
+
+/** Boot-side prewarm entry (P1-1): pay the PS cold start (~2.5s spawn + Add-Type compile) once
+ *  at app boot so the FIRST drag-release identify probes a hot adapter. Without this the only
+ *  binding entry point spawned PS on the user's first release, and GetCursorPos ran ~1-1.7s
+ *  AFTER the hand let go — sampling the wrong window (or the desktop) and missing the bind.
+ *  Failures stay silent (adapter.prewarm already swallows rejects; this wrapper also guards
+ *  sync throws) — never rejects, never surfaces UI. Called ONCE per app boot, never per-IPC. */
+module.exports.prewarm = function prewarm () {
+  try {
+    return Promise.resolve(ensureAdapter().prewarm()).catch(() => undefined)
+  } catch {
+    return Promise.resolve(undefined)
+  }
+}
+
+/** Test-only seam for the module-level prewarm entry (it has no ctx injection): swap the
+ *  adapter factory and drop any live adapter; null/falsy restores production behavior. */
+module.exports.__setAdapterFactoryForTests = function __setAdapterFactoryForTests (fn) {
+  adapterFactory = fn || createWinAdapter
   liveAdapter = null
 }

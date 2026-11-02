@@ -4,8 +4,13 @@
 import { test } from '../../../pilot/runner-shim.mjs'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 const require = createRequire(import.meta.url)
 const winBindHandlers = require('../../../../src/main/win-bind/index.js')
+
+const MAIN_SRC = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../../../src/main/index.js')
 
 const MAIN_WC = { id: 1, tag: 'main-wc' }
 const OTHER_WC = { id: 2, tag: 'other-wc' }
@@ -203,4 +208,36 @@ test('disposeForQuit exists and is a safe no-throw even with nothing live', () =
   const fn = winBindHandlers.disposeForQuit
   assert.equal(typeof fn, 'function')
   assert.doesNotThrow(() => fn())
+})
+
+test('module prewarm (boot entry): ensures the adapter via the factory exactly once and never rejects on failure', async () => {
+  const events = { factory: 0, prewarms: 0 }
+  let rejectNext = false
+  const fake = {
+    prewarm () { events.prewarms++; return rejectNext ? Promise.reject(new Error('ps boot died')) : Promise.resolve() },
+    async probeUnderCursor () { return { raw: null, buttonDown: null } },
+    async enumerate () { return [] },
+    async activateHwnd () { return {} },
+    dispose () {}
+  }
+  winBindHandlers.__setAdapterFactoryForTests(() => { events.factory++; return fake })
+  try {
+    await assert.doesNotReject(winBindHandlers.prewarm())
+    await winBindHandlers.prewarm() // second call reuses the live adapter
+    assert.equal(events.factory, 1, 'adapter ensured exactly once (the spawn path runs once)')
+    assert.equal(events.prewarms, 2)
+    rejectNext = true
+    await assert.doesNotReject(winBindHandlers.prewarm(), 'prewarm failure stays silent — never reaches the boot chain')
+  } finally {
+    winBindHandlers.__setAdapterFactoryForTests(null) // restore the production factory + drop the fake live adapter
+  }
+})
+
+test('wiring anchor: src/main/index.js calls win-bind prewarm exactly once in the whenReady chain, after registerIpc and before the quit dispose', () => {
+  const src = readFileSync(MAIN_SRC, 'utf8')
+  const call = "require('./win-bind').prewarm()"
+  assert.equal(src.split(call).length - 1, 1, 'exactly one production prewarm call (not per-IPC)')
+  const iPrewarm = src.indexOf(call)
+  assert.ok(iPrewarm > src.indexOf('registerIpc()'), 'prewarm wired after registerIpc() (boot chain)')
+  assert.ok(iPrewarm < src.indexOf("require('./win-bind').disposeForQuit()"), 'prewarm call sits before the quit-side dispose')
 })
