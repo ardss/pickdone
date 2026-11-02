@@ -22,9 +22,18 @@
              gets an inert placeholder cell — no :src binding (no beacon on paint), no 'preview'
              emit. The entry STAYS in imgList (EditPanel persists the list verbatim; stripping it
              would delete the peer's attachment record on next save). -->
-        <button v-if="isRenderableAttachmentUrl(im.url)" type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
-          <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)" @load="onImgLoad($event)">
+        <button v-if="!im.missing && isRenderableAttachmentUrl(im.url)" type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
+          <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event, im)" @load="onImgLoad($event)">
         </button>
+        <!-- W29 (2026-11-01) explicit-missing state: the startup migration (main/attachment-migrate.js)
+             marks entries whose legacy host-form url could NOT be reverse-resolved to a real on-disk
+             file with `missing: true`. Those render as a labeled placeholder (filename + the existing
+             attachmentMissing i18n text) instead of a silently broken <img> — the fourth
+             "裂图" report must be impossible to miss. -->
+        <span v-else-if="im.missing" class="ep-img-btn ep-img-remote ep-img-missing" role="img" :aria-label="remotePlaceholderName(im)">
+          <span class="ep-img-remote__name">{{ remotePlaceholderName(im) }}</span>
+          <span class="ep-img-remote__hint">{{ $t('statsJ.EditPanel.attachmentMissing') }}</span>
+        </span>
         <!-- W23 (2026-10-31) dead-gray-cell fix: the placeholder used to be a featureless empty
              span — LAN-synced metadata rows (or any non-local url) showed as an unlabeled gray
              block. It now shows the attachment's filename on the first line plus the existing
@@ -130,9 +139,29 @@ export default {
       try { u = decodeURIComponent(u) } catch (e) { /* malformed encoding: keep raw */ }
       return u.split('/').pop() || u
     },
-    /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分） */
-    onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },
-    // A previous transient 404 must not leave a permanent broken-image marker after pixels load.
+    /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分）
+       W29 (2026-11-01) sync race repair: in the LAN-sync scenario the metadata row can arrive
+       BEFORE the file's bytes are pulled — the <img> errors immediately ("先裂后好"). On the
+       FIRST error for an entry we now kick the existing missing-file pull chain (open-file →
+       main notifies 'attachment-missing-open' → the pull lands → 'attachments-arrived' fires →
+       the arriveTick re-key above remounts this grid with fresh <img> elements = one automatic
+       retry). Only if the retry ALSO fails does the ep-img-broken placeholder stay. The guard
+       flag lives on the entry object (parent-owned list state), so each url pulls at most once
+       per panel mount — no retry storm against a genuinely dead key. */
+    onImgErr (e, im) {
+      const img = (e && e.target) as HTMLElement
+      if (img) img.classList.add('ep-img-broken')
+      if (!im || im.__pullTried) return
+      const url = String(im.url || '')
+      if (!url.startsWith('local://')) return // non-local urls have no pull chain (see W23 verdict above)
+      im.__pullTried = true
+      try {
+        // fire-and-forget: the result only matters via the attachments-arrived re-key; open-file's
+        // own missing-toast already tells the user why the image is gray.
+        Promise.resolve(window.todoAPI.openFile(url)).catch(() => { /* pull kick is best-effort */ })
+      } catch (err) { logger.warn('attachment pull-kick failed: ' + ((err && err.message) || err)) }
+    },
+    // PR #221: a previous transient 404 must not leave a permanent broken-image marker after pixels load.
     onImgLoad (e) { (e.target as HTMLElement).classList.remove('ep-img-broken') },
     openFileUrl (f) {
       // Missing-file guard (LAN-synced attachments): the metadata row can arrive before the
@@ -204,6 +233,9 @@ export default {
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: var(--fs-2xs); color: var(--text-3); text-align: center;
 }
+/* W29: migration-marked missing entry — same labeled cell, plus a warning tint so an
+   unrecoverable attachment is visibly distinct from a merely not-yet-synced one */
+.ep-img-remote.ep-img-missing { outline: 1px dashed var(--text-3); outline-offset: -4px; }
 .ep-imgs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin: 8px 0; }
 @keyframes ep-img-in { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: scale(1); } }
 </style>

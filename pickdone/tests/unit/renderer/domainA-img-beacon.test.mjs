@@ -43,12 +43,15 @@ test('isRenderableAttachmentUrl: local:// only', () => {
 test('render path: EpAttachments binds :src only inside the isRenderableAttachmentUrl-gated branch and preview cannot fire for non-local urls', () => {
   const src = read('renderer/js/components/edit-panel/EpAttachments.vue')
   // the imgList v-for cell must gate the real thumbnail on the pure guard
-  assert.ok(src.includes('v-if="isRenderableAttachmentUrl(im.url)"'),
+  // W29 (2026-11-01): the guard may carry the explicit-missing prefix (`!im.missing && ...`) —
+  // migration-marked entries render the labeled placeholder instead of a doomed <img>; the
+  // security contract (src binding only behind the renderable gate) is unchanged.
+  assert.ok(/v-if="(!im\.missing && )?isRenderableAttachmentUrl\(im\.url\)"/.test(src),
     'thumbnail branch must be guarded by isRenderableAttachmentUrl(im.url)')
   // exactly one :src binding for im.url, and it must live on the guarded button
   const srcBindings = src.match(/:src="im\.url"/g) || []
   assert.equal(srcBindings.length, 1, 'exactly one :src="im.url" binding')
-  const guardedButton = src.match(/<button v-if="isRenderableAttachmentUrl\(im\.url\)"[\s\S]*?:src="im\.url"/)
+  const guardedButton = src.match(/<button v-if="(!im\.missing && )?isRenderableAttachmentUrl\(im\.url\)"[\s\S]*?:src="im\.url"/)
   assert.ok(guardedButton, ':src="im.url" must sit on the guarded button')
   // the non-local branch must be an inert placeholder: no src binding, no preview emit
   const elseSpan = src.match(/<span v-else[\s\S]*?>/)
