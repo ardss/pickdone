@@ -280,6 +280,21 @@ module.exports = function systemHandlers (ctx) {
       } catch (err) {
         const msg = String((err && err.message) || err)
         try { if (ctx.dbm && ctx.dbm.init) ctx.dbm.init(ud) } catch { /* re-init is best-effort; close() already swallowed real errors */ }
+        // W29 (P2): the watch was stopped BEFORE close() (same as the migration path below) —
+        // when the best-effort re-init here actually produced a live handle, the poll must be
+        // re-armed too, or external (CLI) write detection stays blind for the whole session.
+        // Probe with a getMeta round-trip first: restarting the poll over a dead handle would
+        // just warn-loop on every tick (same rule as the migration-failed branch below).
+        let closeFailWatchRestarted = false
+        try {
+          let probeOk = false
+          try { probeOk = !!ctx.dbm && ctx.dbm.call('getMeta', 'schemaVersion') != null } catch { /* dead handle: no restart */ }
+          if (probeOk) {
+            require('../external-db-watch').restartLatestDbWatch()
+            closeFailWatchRestarted = true
+          }
+        } catch (e3) { log.warn('[IPC] data:relocate restart external db watch after close failure failed', e3) }
+        log.warn('[IPC] data:relocate close failed:', msg, closeFailWatchRestarted ? '(external db watch re-armed)' : '(external db watch NOT re-armed — re-init failed)')
         return { ok: false, error: i18n.mt('dataLocCloseFailed', { msg }) }
       }
       const r = await dl.migrateData(ud, targetDir, {
