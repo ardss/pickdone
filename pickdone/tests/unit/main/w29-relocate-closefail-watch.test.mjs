@@ -35,10 +35,10 @@ const ELECTRON_STUB = {
     showMessageBoxSync: () => 0,
     showErrorBox: () => {},
   },
-  Notification: function () { return { show: () => {} } },
+  Notification () { return { show: () => {} } },
   shell: { openExternal: async () => {} },
   protocol: { handle: (scheme, cb) => { captured[scheme] = cb } },
-  BrowserWindow: function () { return {} },
+  BrowserWindow () { return {} },
 }
 const LOG_STUB = { info: () => {}, warn: () => {}, error: () => {}, hooks: [], transports: { file: {}, console: {} } }
 const origLoad = Module._load

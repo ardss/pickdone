@@ -71,7 +71,7 @@ test('[F3] calMonth derives from the reactive store todayTimestamp, not the wall
 
 test('[F4] rename input binds Esc to a cancel that does not commit via blur', () => {
   const src = read('renderer/js/components/side-nav/SnManageCategoriesModal.vue')
-  assert.match(src, /@keydown\.esc\.prevent="cancelMgrEdit\(c\)"/)
+  assert.match(src, /@keydown\.esc\.prevent="e => \{ if \(e\.isComposing \|\| e\.keyCode === 229\) return; cancelMgrEdit\(c\) \}"/, 'Esc cancel with IME guard (W29)')
   assert.match(src, /cancelMgrEdit \(c\) \{[\s\S]{0,200}?this\.mgrEditing = null/, 'cancel method exists')
   // same idiom as the siblings
   assert.match(read('renderer/js/components/side-nav/SnManageTagsModal.vue'), /@keydown\.esc\.prevent/)

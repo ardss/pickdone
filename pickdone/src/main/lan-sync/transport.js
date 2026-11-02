@@ -59,22 +59,8 @@ const PROTO_VER = 2
 const MIN_PROTO_VER = 2
 // W16: our own app version, advertised in `hello` so a peer can record which build it is
 // talking to (stored on the server's state.peer, delivered to the app via onPeer). Resolved
-// lazily from package.json (present in dev and inside app.asar) — this module stays pure Node,
-// no Electron import.
-let _cachedAppVersion = null
-function ownAppVersion (load = () => require('../../../package.json').version) {
-  if (_cachedAppVersion !== null) return _cachedAppVersion
-  // W29 (P3): a failed first read used to cache '' permanently — every subsequent hello
-  // broadcast advertised an empty version. A failed read is not a VALUE: leave the cache
-  // untouched (null) so the next call retries instead of pinning the empty string.
-  try {
-    const v = String(load() || '')
-    if (v) _cachedAppVersion = v
-    return v
-  } catch { return '' }
-}
-// Test seam: clear the version cache between cases (never used in production paths).
-function __resetOwnAppVersionForTests () { _cachedAppVersion = null }
+// lazily from package.json (see lan-sync/app-version.js — [w29 size split])
+const { ownAppVersion, __resetOwnAppVersionForTests } = require('./app-version.js')
 // W16: structured code for a version-gate rejection.
 function protoVerRejectCode (peerProto) {
   return peerProto > PROTO_VER ? 'peer-too-new' : 'peer-too-old'

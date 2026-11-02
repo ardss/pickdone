@@ -96,7 +96,6 @@ test('w29: every created main window arms the lock; a rebuilt window locks even 
   lockCalls = 0; locked = false
   // window A created, destroyed BEFORE its load completed (the regression shape)
   wm.createMainWindow()
-  const wcA = lastWin.webContents
   // rebuild: close-then-tray path creates a fresh window
   wm.createMainWindow()
   const wcB = lastWin.webContents
