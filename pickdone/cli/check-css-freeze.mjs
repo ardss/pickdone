@@ -15,6 +15,10 @@ import { execFileSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+// W28 fix(2026-11-01): git 子进程剥离 hook 注入的 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+//（共享 lib-git-env.cjs，同 check-file-size/check-boot-order 的 W18 修复）——否则在
+// GATE_ROOT fixture 树下 git 仍解析到真实仓库。
+import { gitEnv } from './lib-git-env.cjs'
 
 if (process.argv.slice(2).includes('--off')) { console.log('  (css-freeze) --off 显式豁免跳过本次（责任在调用方命令行，台账须注明理由）'); process.exit(0) }
 if (process.env.CSS_FREEZE_OFF) {
@@ -30,12 +34,12 @@ const ruleCount = css => (css.replace(/\/\*[\s\S]*?\*\//g, '').match(/\{/g) || [
 let failed = false
 let compared = 0
 const existsInHead = f => {
-  try { execFileSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore' }); return true } catch { return false }
+  try { execFileSync('git', ['cat-file', '-e', `HEAD:${f}`], { cwd: ROOT, stdio: 'ignore', env: gitEnv() }); return true } catch { return false }
 }
 for (const f of FILES) {
   let head = null, work = null
   try {
-    head = execFileSync('git', ['show', `HEAD:${f}`], { cwd: ROOT, encoding: 'utf8' })
+    head = execFileSync('git', ['show', `HEAD:${f}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() })
   } catch (e) {
     // Fail closed: a registered file missing from HEAD is a red, and any other git error is a red too —
     // never let the scan surface collapse to zero and still print green (same policy as cli/check-tokens.js).
@@ -45,7 +49,7 @@ for (const f of FILES) {
     continue
   }
   try {
-    work = execFileSync('git', ['show', `:${f}`], { cwd: ROOT, encoding: 'utf8' })
+    work = execFileSync('git', ['show', `:${f}`], { cwd: ROOT, encoding: 'utf8', env: gitEnv() })
   } catch { /* not in the index: fall through to worktree */ }
   // W15 2026-10-27: `git show :f` succeeds for ANY file present in the index — including an
   // UNMODIFIED one — so a worktree-only (unstaged) edit was never compared and the gate

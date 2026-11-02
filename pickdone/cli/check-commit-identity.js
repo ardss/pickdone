@@ -7,12 +7,32 @@
  *   1) 分隔符 `|` → ASCII 单元分隔符 %x1f（user.name 里带 `|` 可把字段打穿/错位出假绿）。
  *   2) 只查 HEAD 单提交 → 本地兜底逐提交扫最近 10 个（`git log -10`），单次误配置的
  *      脏提交藏进历史也能点名。
+ * W28 (2026-11-01) 两处加固:
+ *   1) 个人邮箱正则锚在域名末段，只匹配裸顶级域——`user@vip.qq.com` / `user@mail.163.com`
+ *      子域形态整体逃逸（同构事故：文本脱敏绿、元数据漏）。改为允许任意深的子域链，
+ *      域后缀仍须命中个人邮箱域白名单。
+ *   2) git 子进程剥离 hook 注入的 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE（共享
+ *      lib-git-env.cjs，同 check-file-size/check-boot-order 的 W18 修复）。
  */
 const { execFileSync } = require('child_process')
 const ROOT = require('path').join(__dirname, '..')
-const git = a => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' })
-const PERSONAL = /@(qq|foxmail|163|126|sina|gmail|outlook|hotmail|yahoo)\.(com|net|cn)$/i
+// W28 fix(#2): git 子进程剥离 hook 注入的 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE（同
+// check-file-size/check-boot-order 的 W18 修复与 cli/lib-git-env.cjs 共享实现）。此处内联而非
+// require 共享文件：本门禁是单文件自包含契约——tests/unit/cli/w21-gate-fixes.test.mjs 把它
+// 单文件拷进 fixture 仓运行（无 GATE_ROOT,ROOT 由 __dirname 推导），多文件依赖会 MODULE_NOT_FOUND。
+const gitEnv = () => {
+  const e = { ...process.env }
+  delete e.GIT_DIR; delete e.GIT_WORK_TREE; delete e.GIT_INDEX_FILE
+  return e
+}
+const git = a => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8', env: gitEnv() })
+const PERSONAL = /@(?:[a-z0-9-]+\.)*(?:qq|foxmail|163|126|sina|gmail|outlook|hotmail|yahoo)\.(?:com|net|cn)$/i
 const SEP = '\x1f' // %x1f: user.name/user.email cannot legally contain a unit separator
+
+module.exports = { PERSONAL }
+
+if (require.main !== module) return
+
 const out = git(['log', '-10', '--format=%an' + SEP + '%ae' + SEP + '%cn' + SEP + '%ce'])
 const bad = []
 for (const line of out.split('\n')) {

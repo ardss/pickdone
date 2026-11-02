@@ -74,8 +74,13 @@ for (const { css } of CSS_SOURCES) {
     // Parse comma-separated selector groups segment by segment (guard rules commonly use .a, .a:hover form)
     for (const part of m[1].split(',')) {
       const sel = part.trim().replace(/\s+/g, ' ');
-      const dark = sel.startsWith('html[data-theme="dark"]');
-      const body = dark ? sel.replace(/^html\[data-theme="dark"\]\s*/, '') : sel;
+      // W28 fix(2026-11-01): dark-theme recognition previously only accepted ONE spelling
+      // (html[data-theme="dark"]) — `html[data-theme='dark']` (single quotes) and
+      // `:root[data-theme="dark"]` fell through as LIGHT rules, so a dark-mode invisible-text
+      // hazard (dark selector rewriting white text to brand blue) escaped the check.
+      const DARK_SEL = /^(?:html|:root)\[data-theme=['"]dark['"]\]\s*/;
+      const dark = DARK_SEL.test(sel);
+      const body = dark ? sel.replace(DARK_SEL, '') : sel;
       if (!body || body.includes('[') || body.includes(' ') || body.includes('>')) continue; // keep pure class combinations only
       const hover = body.includes(':hover');
       const classes = body.replace(':hover', '').split('.').filter(Boolean);

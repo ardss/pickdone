@@ -6,6 +6,10 @@ import fs from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import process from 'node:process'
+// W28 fix(2026-11-01): git subprocesses strip the hook-injected GIT_DIR/GIT_WORK_TREE/
+// GIT_INDEX_FILE (shared lib-git-env.cjs — same W18 fix as check-file-size/check-boot-order),
+// otherwise the gate reads the wrong repository under nested/fixture cwd.
+import { gitEnv } from './lib-git-env.cjs'
 
 // GATE_ROOT override (gate-must-fail-golden fixture convention): fixture trees exercise the
 // gate against a temp checkout; real pre-commit usage never sets it and keeps the script-dir
@@ -25,7 +29,7 @@ const root = process.env.GATE_ROOT ? resolve(process.env.GATE_ROOT) : join(dirna
 const staged = execFileSync('git', [
   '-c', 'core.quotePath=false',
   'diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'
-], { cwd: root }).toString('utf8').split('\0').filter(Boolean)
+], { cwd: root, env: gitEnv() }).toString('utf8').split('\0').filter(Boolean)
 const LINT_SCOPE = /^(?:renderer\/js|cli|src|tests|shared|scripts|server|browser-dev)\//
 const selected = staged
   .filter(name => name.startsWith('pickdone/'))
@@ -61,21 +65,28 @@ if (selected.length === 0) {
   // "differs" and the subsequent blob extraction throws (red), never silently lints worktree.
   // eol note: with core.autocrlf=true a same-content LF file can probe as "differs" (eol
   // roundtrip) — harmless, linting the index blob then is still exactly the committed truth.
-  const tmpDir = join(root, '.tmp-staged-lint-' + process.pid)
+  // W28 fix (2026-11-01): the tmp dir used to be pid-suffixed (`.tmp-staged-lint-<pid>`),
+  // which made the W27 comment's claim about --cache hits FALSE — the mirrored blob paths
+  // embedded the pid, so eslint's cache keys never repeated across runs and the cache never
+  // hit. Fixed directory name `.tmp-staged-lint` (gitignored via pickdone/.tmp-*) keeps the
+  // cache keys stable; the dir is cleared BEFORE the run so a crashed previous run cannot
+  // feed stale blobs (concurrent pre-commit runs are accepted-serial: git's index.lock
+  // already serializes hooks).
+  const tmpDir = join(root, '.tmp-staged-lint')
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }) } catch { /* first run */ }
   let tmpMade = false
   const lintTargets = selected.map((name, i) => {
     const rel = 'pickdone/' + name
-    const probe = spawnSync('git', ['diff', '--quiet', '--', ':/' + rel], { cwd: root })
+    const probe = spawnSync('git', ['diff', '--quiet', '--', ':/' + rel], { cwd: root, env: gitEnv() })
     if (!probe.error && probe.status === 0) return join(root, ...name.split('/'))
     if (!tmpMade) { fs.mkdirSync(tmpDir, { recursive: true }); tmpMade = true }
-    const blob = execFileSync('git', ['-c', 'core.quotePath=false', 'show', ':0:' + rel], { cwd: root, maxBuffer: 64 * 1024 * 1024 })
+    const blob = execFileSync('git', ['-c', 'core.quotePath=false', 'show', ':0:' + rel], { cwd: root, maxBuffer: 64 * 1024 * 1024, env: gitEnv() })
     // W27 fix (2026-11-01): mirror the file's ORIGINAL relative directory under tmpDir instead
     // of flattening to `i-<basename>` at the root. Flat paths broke two things:
     //   (a) eslint resolved .eslintrc.cjs directory-level overrides from tmpDir's ancestor
     //       chain only — tests/|cli/|src/main files were linted under the browser-env root rule
     //       (fake reds on node/console globals, fake greens the other way);
-    //   (b) --cache keyed entries by the flat `i-<basename>` paths, which never repeat across
-    //       runs (the `i-` index depends on the staged set) — the cache never hit.
+    //   (b) --cache keys need the blob path stable across runs (W28: fixed dir name, see above).
     // Mirrored `tests/unit/foo.test.mjs` keeps both config resolution and the cache key stable.
     const dest = join(tmpDir, ...name.split('/'))
     fs.mkdirSync(dirname(dest), { recursive: true })

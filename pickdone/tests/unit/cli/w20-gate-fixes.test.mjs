@@ -107,6 +107,10 @@ const runIpcCoverage = (handlersBody) => {
   fs.mkdirSync(path.join(tmp, 'src/main/handlers'), { recursive: true })
   fs.mkdirSync(path.join(tmp, 'renderer/js'), { recursive: true })
   fs.copyFileSync(path.join(REPO, 'cli/check-ipc-op-coverage.cjs'), path.join(tmp, 'cli/check-ipc-op-coverage.cjs'))
+  // W28: the gate now delegates its renderer walker to the shared lib-filescan.cjs (TOCTOU fix)
+  // — the fixture copy needs the dependency alongside or the gate dies with MODULE_NOT_FOUND
+  // (same convention as the copyOpFeedbackGate W21 note above)
+  fs.copyFileSync(path.join(REPO, 'cli/lib-filescan.cjs'), path.join(tmp, 'cli/lib-filescan.cjs'))
   fs.writeFileSync(path.join(tmp, 'src/main/handlers/todo.js'), `
 const ALLOWED_RENDERER_OPS = new Set([
   'getTodoList',

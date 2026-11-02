@@ -17,11 +17,20 @@ const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: u
 const BANNED = /GPL|AGPL|\bUNLICENSED\b|SEE LICENSE IN|Unlicense MISSING|UNKNOWN/i
 const ALLOW_UNKNOWN = new Set(['buffers']) // substack/node-buffers is upstream MIT; the old package lacks a license field (manually verified)
 
+// W28 fix(2026-11-01): a package.json that exists but FAILS to read/parse used to return null
+// and the package silently dropped out of the audit face (a corrupt manifest = un-audited
+// dependency = the exact thing this gate exists to catch). Such failures are now collected
+// into a named list and turn the gate red. A MISSING manifest (node_modules/.bin, .vite —
+// tooling dirs, not packages) is not an audit hole; those are named in the green output.
+const unreadable = []
+const noManifest = []
 function licenseOf (pkgPath) {
+  const manifest = path.join(pkgPath, 'package.json')
+  if (!fs.existsSync(manifest)) { noManifest.push(pkgPath); return null }
   try {
-    const j = JSON.parse(fs.readFileSync(path.join(pkgPath, 'package.json'), 'utf8'))
+    const j = JSON.parse(fs.readFileSync(manifest, 'utf8'))
     return { license: j.license || (j.licenses && j.licenses.join(',')) || 'UNKNOWN', name: j.name, version: j.version }
-  } catch (e) { return null }
+  } catch (e) { unreadable.push(pkgPath + ' (' + String(e.message).split('\n')[0] + ')'); return null }
 }
 
 const rows = []
@@ -54,6 +63,15 @@ const bad = rows.filter(r => {
 })
 
 console.log(`扫描 ${rows.length} 个顶层包`)
+// W28: corrupt/unreadable manifests first — a red here must not be masked by the license verdict
+if (unreadable.length) {
+  console.error('✗ 存在 package.json 读取/解析失败的依赖包（审计面缺口，不可静默跳过）：')
+  unreadable.forEach(u => console.error('  - ' + u))
+  process.exit(1)
+}
+if (noManifest.length) {
+  console.log(`  (无 package.json 的非包目录,已跳过: ${noManifest.join(', ')})`)
+}
 if (bad.length) {
   console.error('✗ 存在禁止/未知许可证（GPL 类会传染 MIT 声明，发布阻塞）：')
   bad.forEach(b => console.error(`  - ${b.name}@${b.version}: ${b.license}`))

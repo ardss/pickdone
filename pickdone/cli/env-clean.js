@@ -10,13 +10,27 @@ const path = require('path')
  *  (auto snapshots the old parent-of-userData derivation wrote next to the source tree) is
  *  OPT-IN via --all: unlike the other targets it is not pure residue — a user may have moved
  *  real backups there, so bulk-deleting it must never happen on a bare clean. */
+// W28 fix(2026-11-01): the old hard-coded pair (todo-test- / pd-it-) had DRIFTED from the real
+// mkdtemp prefix family (todo-cli-smoke- / todo-shared- / todo-smoke- / pd-upd- / journey- /
+// pickdone-* / jrelay- ... — none of them matched, so the clean tool silently left most test
+// residue in %TEMP%). This is a SYNCED MANIFEST of tests/lib/tmp-dir.mjs's FAMILY_FALLBACK
+// (that registry is ESM and extracts prefixes from the tests/ sources; cli/env-clean.js is CJS
+// and cannot require it — keep the two in step when a new prefix family lands there).
+const TEST_TMP_FAMILY = /^(?:todo-|todo-cov-|jrelay-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+// Same safety doctrine as the tmp-dir.mjs preflight sweeper: a FRESH directory may belong to a
+// suite running RIGHT NOW (deleting it mid-run cascades MODULE_NOT_FOUND into unrelated tests),
+// and a live `pid<N>` marker means an owning process still exists — never touch either.
+const STALE_MS = 12 * 60 * 60 * 1000
+
 function collectTargets ({ all = false, appRoot }) {
   const targets = []
   const tmp = os.tmpdir()
   for (const entry of fs.readdirSync(tmp)) {
-    if (entry.startsWith('todo-test-') || entry.startsWith('pd-it-')) {
-      targets.push({ p: path.join(tmp, entry), label: '测试临时 userData' })
-    }
+    if (!TEST_TMP_FAMILY.test(entry)) continue
+    const pidM = entry.match(/pid(\d+)/)
+    if (pidM) { try { process.kill(Number(pidM[1]), 0); continue } catch { /* not running → orphaned */ } }
+    try { if (Date.now() - fs.statSync(path.join(tmp, entry)).mtimeMs < STALE_MS) continue } catch { continue }
+    targets.push({ p: path.join(tmp, entry), label: '测试临时 userData' })
   }
   targets.push({ p: path.join(appRoot, 'tests', '.artifacts'), label: '测试日志产物' })
   targets.push({ p: path.join(appRoot, '.dev-data'), label: '开发数据目录(.dev-data)' })
@@ -47,25 +61,29 @@ function fmt (n) {
   return n + 'B'
 }
 
-/** Run the cleanup. Returns {list:[{label,p,size,cleaned}], total, failedCount} */
+/** Run the cleanup. Returns {list:[{label,p,size,cleaned}], total, failedCount}
+ *  W28: `list` is capped at MAX_LIST entries (totalCount carries the real size) — a %TEMP%
+ *  with tens of thousands of stale family dirs used to blow up consumers' stdio buffers
+ *  (the CLI --json path failed with ERR_CHILD_PROCESS_STDIO_MAXBUFFER on this exact shape). */
+const MAX_LIST = 500
 function cleanEnv ({ all = false, dry = false, appRoot }) {
-  const targets = collectTargets({ all, appRoot })
+  const collected = collectTargets({ all, appRoot })
   const list = []
   let failedCount = 0
   let total = 0
-  for (const t of targets) {
+  for (const t of collected) {
     const size = dirSize(t.p)
     let cleaned = false
     if (!dry) {
       try { fs.rmSync(t.p, { recursive: true, force: true }); cleaned = true } catch { failedCount++ }
     } else cleaned = true
-    list.push({ label: t.label, path: t.p, size, sizeText: fmt(size), cleaned })
+    if (list.length < MAX_LIST) list.push({ label: t.label, path: t.p, size, sizeText: fmt(size), cleaned })
     total += size
   }
-  return { list, total, totalText: fmt(total), failedCount }
+  return { list, totalCount: collected.length, total, totalText: fmt(total), failedCount }
 }
 
-module.exports = { cleanEnv, collectTargets, fmt }
+module.exports = { cleanEnv, collectTargets, fmt, TEST_TMP_FAMILY }
 
 if (require.main === module) {
   const args = new Set(process.argv.slice(2))
