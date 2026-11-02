@@ -74,12 +74,30 @@ function resolveAgainstDisk (decodedName, diskNames) {
   return hits === 1 ? hit : null
 }
 
+/** W31 P2 (2026-11-03): unique per-entry attachment identity. When a Chinese filename and
+ *  its case-twin both sit on disk, Chromium's host lowercasing makes BOTH legacy urls
+ *  decode to the SAME basename — after the (ambiguous → `missing: true`) migration the two
+ *  entries are indistinguishable by name, and attachments.findKeyRefs by basename counts
+ *  one entry as a reference to the OTHER twin's bytes (the delete-guard/orphan audit hits
+ *  two rows where only one is true). The migration therefore stamps every entry it touches
+ *  (resolved OR missing) with a unique `attachmentId`; findKeyRefs matches id-carrying
+ *  entries by id (a missing-marked one no longer by basename), so twins stop bleeding into
+ *  each other's ref counts. Inject `idFactory` for deterministic tests; the default mints
+ *  collision-safe ids without any dependency. Stable across boots: entries already carrying
+ *  an id (previous pass) are left verbatim. */
+function makeAttachmentIdFactory () {
+  let n = 0
+  return () => 'att-' + Date.now().toString(36) + '-' + (++n).toString(36) + '-' + Math.random().toString(36).slice(2, 8)
+}
+
 /** Rewrite ONE row's image/files attachment lists. Returns
  *  { image, files, rewritten, missing, changed } — rewritten = host-form urls resolved to
  *  path form; missing = entries marked `missing: true` (unrecoverable file); changed =
  *  whether either list differs and the row must be persisted. Never throws on per-item
- *  poison: an unparsable JSON list is left verbatim. */
-function migrateRowAttachments (row, { diskNames } = {}) {
+ *  poison: an unparsable JSON list is left verbatim. Every rewritten entry receives a
+ *  unique `attachmentId` (W31 P2). */
+function migrateRowAttachments (row, { diskNames, idFactory } = {}) {
+  const nextId = idFactory || makeAttachmentIdFactory()
   const out = { image: row && row.image, files: row && row.files, rewritten: 0, missing: 0, changed: false }
   for (const field of ['image', 'files']) {
     let list
@@ -89,16 +107,16 @@ function migrateRowAttachments (row, { diskNames } = {}) {
       if (!item || typeof item !== 'object') return item
       const url = item.url
       if (!isLegacyHostFormUrl(url)) return item
-      if (item.missing === true) return item // already marked on a previous pass: idempotent no-op
+      if (item.missing === true) return item // already marked on a previous pass: idempotent no-op (keeps its attachmentId)
       const decoded = decodeLegacyHostKey(url.slice('local://'.length))
       const resolved = resolveAgainstDisk(decoded, diskNames)
       touched = true
       if (resolved) {
         out.rewritten++
-        return { ...item, url: 'local:///' + encodeURIComponent(resolved), key: resolved }
+        return { ...item, url: 'local:///' + encodeURIComponent(resolved), key: resolved, attachmentId: nextId() }
       }
       out.missing++
-      return { ...item, missing: true }
+      return { ...item, missing: true, attachmentId: nextId() }
     })
     if (touched) {
       out[field] = JSON.stringify(next)
@@ -123,10 +141,11 @@ function migrateLegacyAttachmentUrlsOnBoot (d, deps = {}) {
       : fs.readdirSync(require('./attachments').attachDir())
     const rows = d.prepare('SELECT id, image, files FROM todos').all()
     const upd = d.prepare('UPDATE todos SET image = ?, files = ? WHERE id = ?')
+    const idFactory = deps.idFactory || makeAttachmentIdFactory() // one factory per boot: ids stay unique across rows
     for (const row of rows) {
       result.scanned++
       try {
-        const r = migrateRowAttachments(row, { diskNames })
+        const r = migrateRowAttachments(row, { diskNames, idFactory })
         result.rewritten += r.rewritten
         result.missing += r.missing
         if (r.changed) { upd.run(r.image, r.files, row.id); result.changedRows++ }
