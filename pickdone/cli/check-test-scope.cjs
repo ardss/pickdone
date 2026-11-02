@@ -43,6 +43,10 @@
  */
 const { execFileSync } = require('node:child_process')
 const path = require('node:path')
+// W28 fix(2026-11-01): git 子进程剥离 hook 注入的 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
+//（共享 lib-git-env.cjs，同 check-file-size/check-boot-order 的 W18 修复）——否则本门禁
+// 在 fixture 树/嵌套 cwd 下读错仓库。
+const { gitEnv } = require('./lib-git-env.cjs')
 
 const ROOT = path.join(__dirname, '..')
 
@@ -92,7 +96,7 @@ function stagedFilesFromGit () {
     // `docs/界面指南.md` 变成 `"\347\225\214..."`,DOCS_ONLY 白名单匹配不上 → 文档提交被误判
     // code/unmapped → 整级 full。与 W16 其余门禁同一 pin(`-c` 每次调用生效,不会传播,故此处也要)。
     const out = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], {
-      cwd: ROOT, encoding: 'utf8',
+      cwd: ROOT, encoding: 'utf8', env: gitEnv(),
     })
     return out.split(/\r?\n/).filter(Boolean).map(f => f.split(path.sep).join('/'))
   } catch {

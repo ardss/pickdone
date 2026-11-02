@@ -551,7 +551,11 @@ const OPS = {
       const out = tr()
       // Prune outside the bump transaction (COUNT per dedup bump, DELETE past the cap); legacy '1' stamps cast to epoch 0 and age out.
       try {
-        const n = db.prepare("SELECT COUNT(*) n FROM meta WHERE key LIKE 'snowDedup:%'").get().n
+        // Ordered-bounds range instead of LIKE: 'snowDedup;' is ':' + 1, and every
+        // 'snowDedup:...' key has ':' (0x3A) at that position — always < ';' — so the range
+        // covers exactly the same rows while letting the key index do a B-tree range scan
+        // instead of a full-table LIKE scan on every focus bump (linear-in-DB-size).
+        const n = db.prepare("SELECT COUNT(*) n FROM meta WHERE key >= 'snowDedup:' AND key < 'snowDedup;'").get().n
         if (n > SNOW_DEDUP_CAP) {
           db.prepare("DELETE FROM meta WHERE key LIKE 'snowDedup:%' AND CAST(value AS INTEGER) < ?")
             .run(Date.now() - SNOW_DEDUP_MAX_AGE_MS)

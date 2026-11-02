@@ -185,7 +185,10 @@ export default {
     /** Records of the selected day (sorted by end time, descending) */
     dayRecords () {
       const start = this.selDayStart; const end = dayShift(start, 1)
-      return this.records.filter(r => { const e = r.endTime || 0; return e > start && e < end })
+      // [w28 P3 fix 2026-11-01] left endpoint is inclusive (e >= start): a record ending exactly
+      // at next-day 00:00 used to satisfy neither day (this one excluded it via e > start, the
+      // previous day dropped it via e < end). Same [start, end) caliber as metrics.js.
+      return this.records.filter(r => { const e = r.endTime || 0; return e >= start && e < end })
         .sort((a, b) => (b.endTime || 0) - (a.endTime || 0))
     },
     /** Timeline: lays the selected day's focus/rest segments onto a 0-24h bar (clipped to the day when crossing midnight) */

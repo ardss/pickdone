@@ -183,7 +183,10 @@ export default {
       return d <= 3 ? this.$t('statsB.ProjectsView.dueInDays3', { n: d }) : this.$t('statsB.ProjectsView.dueInDays', { n: d })
     },
     deadlineClass (ts) {
-      const s = dueStateOf(ts)
+      // [w28 P3 fix 2026-11-01] deadlineText was moved to the store's todayTimestamp caliber but
+      // the class channel was missed: pass the same anchor so the overdue/soon styling flips with
+      // the text at midnight, not on a wall-clock-of-render schedule.
+      const s = dueStateOf(ts, this.$store.state.todo.todayTimestamp)
       return s === 'overdue' ? 'proj-card__dl--over' : (s === 'soon' ? 'proj-card__dl--soon' : '')
     },
     open (id) { this.$router.push({ name: 'todo-list-project', params: { id: String(id) } }).catch(() => {}) },

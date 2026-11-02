@@ -1,8 +1,10 @@
 # Changelog（中文版）
 
-System.Object[]
-
 ## [Unreleased]
+
+- 渲染层（W28）：EditPanel spellcheck 守卫条件写反成死代码——动态新建输入框从未被关拼写检查；批量上传中途切换任务把后续文件挂到新任务（批次归属快照+不匹配中止）；日历年月面板/周锚与项目页 deadline class 用裸墙钟无响应式依赖（跨月/跨周日冻结，统一 todayTimestamp 口径）；番茄记录弹层窗口左端排他——恰在次日零点整结束的记录两天都不可见（改 [start, end)，与 metrics.js 同口径）。
+- 主进程（W28）：data:relocate 拷贝中途失败留下孤儿半拷贝树不在回滚清单（written.push 前移）；nextSort 把全 0 sort 列表当空表（sort=0 是合法存储值，新任务反而拿到 1024 落顶）；统计完成日键 dayjs 本地时区 vs SQL 固定 +8 口径分裂（非 +8 时区机器 0-8 点完成事件被剔）；snowDedup 每次 focus 记账做全 meta 表 LIKE 扫描（改 B-tree 有序界）；external-db-watch 退出窗口 gate 关闭分支不回滚基线——窗口内到达的外部写被静默消费。
+- 门禁（W28）：check-commit-identity 个人邮箱正则只匹配首标签域名（vip.qq.com/mail.163.com 逃逸）；四个门禁 git 子进程未剥离 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE（新增 cli/lib-git-env.cjs 统一）；env-clean 清理前缀族与实际 mkdtemp 前缀全不匹配（同步 tmp-dir 清单+活 pid 跳过+新鲜度守卫）；check-esm-graph 动态导入白名单子串包含匹配逃逸（且该分支因只遍历顶层语句是死代码——已下探激活）；check-ipc-op-coverage 换共享 walker 封 TOCTOU；check-hover-contrast 暗色选择器只认一种拼写；check-licenses 解析失败的 package.json 静默退出审计面；lint-staged blob 临时路径内嵌 pid 使 --cache 永不命中。
 
 - 保存完整性（P2，W27）：多任务防抖保存批次在某条失败时把**已成功落库**的兄弟补丁整批重放——过期快照以 LWW 覆盖他窗新编辑；现在只重排未发出的条目、drained keys 条件恢复。Relay 同步 round 进行中到达的 kick 只能等下个 5 分钟 tick（与契约注释不符）——现在从 round 的 finally 补排一轮。
 - UI 正确性（W27）：番茄时间轴弹层的色块排序比较器对不存在的属性做减法（NaN→色块与时间轴反向）；遗留 `repeatId === 'null'` 哨兵普通任务可能被撤销/回收路径误当续期幽灵实例软删（两个入口加 isRepeatTask/哨兵守卫）；DepView 逾期/今天徽标与统计成就墙用裸墙钟无响应式依赖——跨午夜冻结（todayTimestamp / nowTick）。

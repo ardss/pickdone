@@ -29,14 +29,11 @@ let failed = 0
 const bad = m => { console.error('  ✗ ' + m); failed++ }
 const ok = m => console.log('  ✓ ' + m)
 
-function walk (dir, acc) {
-  for (const f of fs.readdirSync(dir)) {
-    const p = path.join(dir, f)
-    if (fs.statSync(p).isDirectory()) walk(p, acc)
-    else if (p.endsWith('.js') || p.endsWith('.vue')) acc.push(p)
-  }
-  return acc
-}
+// W28 fix(2026-11-01): bare statSync walker was TOCTOU-unsafe (a file/dir vanishing between
+// readdir and stat crashed the whole gate). Use the shared walker (lib-filescan.cjs) like
+// check-esm-graph/check-boot-order — it skips vanished entries via withFileTypes and prunes
+// node_modules/dist/dot dirs.
+const { listFiles: walk } = require('./lib-filescan.cjs')
 
 // R4 refactor: ALLOWED_RENDERER_OPS lives in handlers/todo.js (split out of index.js)
 const idxSrc = fs.existsSync(path.join(root, 'src/main/handlers/todo.js'))
@@ -59,7 +56,7 @@ const allowed = new Set([...wlMatch[1].matchAll(PATTERNS.whitelist)].map(x => x[
 // descriptors, never IPC ops — scanning those would false-red on ops that are intentionally
 // not whitelisted).
 const used = new Map() // op -> first file it appears in
-for (const f of walk(path.join(root, 'renderer/js'), [])) {
+for (const f of walk(path.join(root, 'renderer/js'), { exts: ['.js', '.vue'] })) {
   const src = fs.readFileSync(f, 'utf8')
   for (const m of src.matchAll(PATTERNS.call)) {
     if (!used.has(m[1])) used.set(m[1], path.relative(root, f))

@@ -16,8 +16,9 @@ const ts = require('typescript')
 const ROOT = process.env.GATE_ROOT || path.resolve(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const SRC = path.join(ROOT, 'renderer', 'js')
 const ENTRY = path.join(SRC, 'main.js')
-// Dynamic imports may escape renderer/js only to these targets (runtime dependencies, not part of the source module graph)
-const EXTERNAL_PREFIXES = ['node_modules']
+// Dynamic imports may escape renderer/js only as BARE specifiers (W28: existence escape is
+// `!spec.startsWith('.')` — the old EXTERNAL_PREFIXES substring list made relative paths
+// containing "node_modules" dodge the existence check)
 const ALIAS_BARE = new Set(['vue', 'solarlunar'])
 
 const errors = []
@@ -131,7 +132,18 @@ function checkFile (file) {
     let spec = null, isDynamic = false, isReexport = false
     if (node.type === 'ImportDeclaration') spec = node.source.value
     else if (node.type === 'ImportExpression' && typeof node.source.value === 'string') { spec = node.source.value; isDynamic = true }
-    else if (node.type === 'ExportAllDeclaration' && typeof node.source.value === 'string') spec = node.source.value // `export * from './x'` — check the re-export edge too
+    else if (node.type === 'ExpressionStatement') {
+      // W28 fix(#4 anchor): a top-level dynamic import is wrapped in an ExpressionStatement
+      // (`import('./x').then(...)` / `await import('./x')`) — the loop previously matched
+      // node.type === 'ImportExpression' only, which NEVER occurs at top-level body, so the
+      // entire dynamic-import existence check (and the #4 substring escape inside it) was
+      // dead code. Descend into the statement's expression: one `await` unwrap, then one
+      // `.then(...)`/`.catch(...)` member-call unwrap (the dominant repo spelling).
+      let expr = node.expression
+      if (expr.type === 'AwaitExpression') expr = expr.argument
+      if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression') expr = expr.callee.object
+      if (expr && expr.type === 'ImportExpression' && typeof expr.source.value === 'string') { spec = expr.source.value; isDynamic = true }
+    } else if (node.type === 'ExportAllDeclaration' && typeof node.source.value === 'string') spec = node.source.value // `export * from './x'` — check the re-export edge too
     else if (node.type === 'ExportNamedDeclaration' && node.source && typeof node.source.value === 'string') {
       // W18 fix: `export { x } from './y'` named re-exports previously created NO
       // graph edge at all — the target's existence/case and the re-exported name's
@@ -143,13 +155,21 @@ function checkFile (file) {
     if (!spec) continue
     const r = resolveImport(file, spec)
     if (r.external) {
-      if (!ALIAS_BARE.has(spec)) {
+      // W28 (#4 anchor): dynamic imports keep the bare escape (runtime deps outside the module
+      // graph — the original EXTERNAL_PREFIXES intent); STATIC bare imports still need the alias.
+      if (!isDynamic && !ALIAS_BARE.has(spec)) {
         errors.push(`${path.relative(ROOT, file)}: 裸名导入 "${spec}"（本架构无 bundler,禁止 node_modules 裸导入）`)
       }
       continue
     }
     if (!r.file) {
-      if (isDynamic && EXTERNAL_PREFIXES.some(p => spec.includes(p))) continue
+      // W28 fix(2026-11-01): the escape hatch used a SUBSTRING match
+      // (EXTERNAL_PREFIXES.some(p => spec.includes(p))), so a RELATIVE specifier whose path
+      // merely contains "node_modules" (e.g. '../vendor/node_modules-shim/x.js') was treated
+      // as external and skipped the existence check entirely. An escaping dynamic import must
+      // be a BARE specifier (not starting with '.') — relative specs are always in-graph and
+      // must exist on disk.
+      if (isDynamic && !spec.startsWith('.')) continue
       errors.push(`${path.relative(ROOT, file)}: import 目标不存在 "${spec}"`)
       continue
     }

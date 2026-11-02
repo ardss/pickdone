@@ -32,7 +32,11 @@ test('P3-7: renderer nextSort === shared sort-core implementation (re-export, no
   for (const [top, minS, maxS] of cases) {
     assert.equal(nextSort(top, minS, maxS), sortCore.nextSort(top, minS, maxS))
   }
-  assert.equal(nextSort(true, 0, 0), 1024)
+  // W28: (0,0) is an ALL-ZERO list now (sort=0 is a legal stored value), not "empty" — the 1024
+  // baseline requires explicit null. Empty-pool callers (cli/lib.js) pass null and still get 1024.
+  assert.equal(nextSort(true, 0, 0), Math.fround(512))
+  assert.equal(nextSort(false, 0, 0), Math.fround(-512))
+  assert.equal(nextSort(true, null, null), 1024, 'explicitly empty pool keeps the 1024 baseline')
   assert.equal(nextSort(true, 100, 200), Math.fround(712))
   assert.equal(nextSort(false, 100, 200), Math.fround(-412))
 })
