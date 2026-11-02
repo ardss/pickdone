@@ -156,18 +156,25 @@ function parseAllFiles (out) {
   return null
 }
 
-module.exports = { parseAllFiles, loadBaseline, writeBaseline, readBaselineDoc, BASELINE_FILE, summarySuite, suiteMatchesCalibration, summaryIsTierScoped }
-
-if (require.main !== module) return
-
-const SUMMARY_FILE = path.join(__dirname, '..', 'tests', '.artifacts', 'coverage-summary.json')
 // The unit-test gate (check-all pool ②) runs run-all with --experimental-test-coverage, which
 // writes coverage-summary.json. Reuse it when fresh instead of re-running the whole unit suite:
 // running both suites CONCURRENTLY on a 4-vCPU CI runner doubled the load enough to time tests
 // out (2026-09-26 windows red). Wait briefly for the concurrent unit stage to produce it.
+const SUMMARY_FILE = path.join(__dirname, '..', 'tests', '.artifacts', 'coverage-summary.json')
 const SUMMARY_MAX_AGE_MS = 30 * 60 * 1000
-const SUMMARY_WAIT_MS = 12 * 60 * 1000
+// W30 (2026-11-01): was 12 * 60 * 1000. A 12-minute empty wait means the upstream unit stage
+// already DIED without writing coverage-summary.json (crash, budget kill, spawn failure) — the
+// gate just sat there doubling the wall time of an already-red check:all before falling back to
+// its own suite run. Proper short-circuiting on an upstream failure signal needs a cross-gate
+// channel that does not exist yet; until then, 3 minutes is ample for a healthy concurrent unit
+// stage to produce the summary while capping the dead-wait penalty (check-all's own stage-level
+// failure still surfaces separately; this gate just no longer babysits a corpse).
+const SUMMARY_WAIT_MS = 3 * 60 * 1000
 const SUMMARY_POLL_MS = 15 * 1000
+
+module.exports = { parseAllFiles, loadBaseline, writeBaseline, readBaselineDoc, BASELINE_FILE, summarySuite, suiteMatchesCalibration, summaryIsTierScoped, SUMMARY_WAIT_MS }
+
+if (require.main !== module) return
 
 function loadFreshSummary (notBefore) {
   try {
@@ -227,7 +234,14 @@ if (measuredFromSummary) {
   console.log(`[check-coverage-ratchet] reused coverage summary (suite=${summarySuite(measuredFromSummary) || 'unknown/legacy'}) from the unit gate (${measured.lines}/${measured.branches}/${measured.functions})`)
   reuseSuiteMatches = suiteMatchesCalibration(measuredFromSummary)
   if (!reuseSuiteMatches) {
-    console.error(`[check-coverage-ratchet] warning: summary suite is "${summarySuite(measuredFromSummary) || 'unknown/legacy'}", not "${CALIBRATION_SUITE}" — coverage differs per suite, so this comparison is instrument-mismatched; gating by threshold only and SKIPPING the auto-raise (baseline must only move on ${CALIBRATION_SUITE}-suite evidence)`)
+    // W30: upgraded from a one-line warning to a banner — this condition means the number being
+    // gated on came from a DIFFERENT instrument (another suite's file set), which is exactly the
+    // 2026-10-08 baseline-drift failure mode. Threshold semantics unchanged (still green/red by
+    // the numbers, never a red by itself), but the operator must not be able to miss it.
+    console.error(`⚠⚠⚠ [check-coverage-ratchet] 仪器口径不匹配 INSTRUMENT MISMATCH ⚠⚠⚠`)
+    console.error(`  reused coverage-summary.json suite="${summarySuite(measuredFromSummary) || 'unknown/legacy'}" ≠ 校准口径 "${CALIBRATION_SUITE}"`)
+    console.error(`  coverage differs per suite — this round is gated by threshold ONLY and the auto-raise is SKIPPED (the baseline must only move on ${CALIBRATION_SUITE}-suite evidence)`)
+    console.error(`  修法:等 unit stage 真正产出 suite=${CALIBRATION_SUITE} 的摘要后重跑本门禁;勿据本轮读数手工调基线`)
   }
 } else {
   const { out, code } = runCoverage()
