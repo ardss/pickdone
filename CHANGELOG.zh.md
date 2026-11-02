@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- 门禁（W31）：三个真实测试套件对所有 runner 不可见——`TEST_EXTS` 缺 `.test.cjs`，多实例 lock/port 与 relay 证据维护套件从未执行过，且 fail-closed 检查看不见这种缺口；现已全部被发现且实测全绿。gate-doctor 的 git 子进程未剥离 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE（换共享 gitEnv）；覆盖率仪器锚测试把任何非零/null 退出都当"预期红"（`notEqual(0)` → 钉死 `equal(1)`）；check-command-bus 的 electron-log `Module._load` stub 在 require 时无条件安装并静默泄漏进三个进程内消费测试（改 require.main 门控）；w30-stopsync 测试质量三连：no-op 用例恒真断言 `ok(true)`、exit 钩子里的装饰性还原永不生效、裸 mkdtemp 泄漏（改断言真实可观察量 + try/finally + isolatedTmpDir）。
+- 渲染层（W31）：番茄记录弹层手动补录用 startTs 确定性生成 id——同一分钟补第二条记录被按 id 幂等去重静默吞掉，但每日限额照扣、成功 toast 照弹（id 加随机尾，与 DayRail/TaskAccountModal 同款）；DayRail 补录卡可把结束时刻存进未来（卡片内 time-picker 可把 startMin 推到 23:59；saveEntry 现在在创建与编辑两条路径都拒绝当日 end>now）；删除死代码 computed `selDayLabel`（毫秒时间戳直接拼"今天"后缀）；dragOverSeg 复位哨兵统一为 null。
+- 主进程（W31）：sync-apply 的 S1 causal-current 覆盖逐行探测 `revisionsList`——主线程同步 better-sqlite3 查询，数千行 relay 首拉会阻塞整个 ingest 期间的 IPC/提醒；现在按 ingest pass 记忆化（每个 distinct id 至多探测一次，per-pass cache 生命周期已核验，保守的 no-head 落 LWW 路径保持不变）。
+
 - 覆盖率仪器统一（W30）：单测门的 run-all 调用从不传 `--suite=unit`，CI 的 coverage summary 标签恒为 suite=all，棘轮拿全量口径读数对 unit 口径基线硬比（只警告不拦）；且 EXCLUDE 出池的 live journey 文件按 0% 计入分母——任何碰同步域的分支都会确定性撞红。现在 check-test-summary 产 unit 池摘要（--core+--with-coverage 组合直接拒绝；--affected dirs 与 unit 池求交），棘轮 12 分钟等待降 3 分钟封顶，基线按平台以 fresh unit 证据重校准（win32@node22 80/83/75、win32@node24 65/74/55；linux@node22 两步走待 CI），四个最差文件落下约 1000 行真实行为覆盖（external-db-watch 9.5→98.8%、backup.js 17.9→98.3%、updater 25.6→99.4%、windows.js 49.7→87.9%）。
 - 附件领域架构第一刀（W30）：EditPanel 保存路径区分「已入队」与「SQLite 已确认」（2 秒 pendingUpserts 探测，双语"保存未确认"弱提示+重试）；附件渲染收敛到共享四态助手（ok/syncing/missing/broken）；protocol 404 打结构化 reason（无用户内容）；启动对账零引用附件文件（默认只审计，TODO_CLI_ATTACH_ORPHAN_SWEEP=1 才删）。
 - 主进程（W30）：bumpSnow undo 不再把 focusMinutes 打成负数（MAX(0,…) 下限，多 dedupKey 叠加覆盖）；F2 共享引用守卫补齐全部四条批量/级联删除路径（此前只守单文件入口——复制粘贴/repeat 模板共享 key 在级联删除时静默丢文件）；sync-kick 重试计时器泄漏（重复投递）关闭；restartLatestDbWatch 幂等化（先 stop，杜绝 fs.watchFile 叠加双重处理）；stopSync 在 node 已消失时仍冲洗安全环节流并清定时器；scheduler 持久化重试耗尽后 120s 兜底 re-flush。
