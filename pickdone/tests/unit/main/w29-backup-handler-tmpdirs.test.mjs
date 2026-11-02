@@ -122,18 +122,31 @@ test('run-auto-backup happy path: snapshot exists with the payload; dedup return
   assert.equal(fs.readFileSync(snapPath, 'utf8'), GOOD_DUMP, 'the snapshot file holds the exact payload')
   assert.ok(fs.readdirSync(defaultRoot).every(f => !f.startsWith('.tmp-')), 'no atomic-write residue')
 
-  // identical content → dedup: no new snapshot, the twin name is returned
+  // identical content → dedup: no new snapshot, the twin name is returned.
+  // CI-slow machines can cross a second boundary between r1 and r2 (the dedup twin window is
+  // same-second) — in that case r2 legitimately becomes the NEW baseline and r3 (same second
+  // as r2) must dedup against it; exactly one extra snapshot exists either way.
   const before = fs.readdirSync(defaultRoot).length
   const r2 = h['run-auto-backup'](mainEvent, GOOD_DUMP)
   assert.equal(r2.ok, true)
-  assert.equal(r2.dedup, true, 'same-byte-length same-content payload dedups')
-  assert.equal(r2.file, r1.file, 'the dedup hit points at the existing snapshot')
-  assert.equal(fs.readdirSync(defaultRoot).length, before, 'a dedup hit writes no second snapshot')
+  let baseline = r1
+  if (!r2.dedup) {
+    assert.notEqual(r2.file, r1.file, 'a missed window wrote a second snapshot (second boundary crossed)')
+    assert.match(r2.file, /^auto-\d{8}-\d{6}\.json$/)
+    baseline = r2
+  } else {
+    assert.equal(r2.file, r1.file, 'the dedup hit points at the existing snapshot')
+  }
+  const r3dedup = h['run-auto-backup'](mainEvent, GOOD_DUMP)
+  assert.equal(r3dedup.ok, true)
+  assert.equal(r3dedup.dedup, true, 'same-byte-length same-content payload dedups within the window')
+  assert.equal(r3dedup.file, baseline.file, 'the dedup hit points at the existing snapshot')
+  assert.equal(fs.readdirSync(defaultRoot).length, before + (baseline === r1 ? 0 : 1), 'a dedup hit writes no extra snapshot')
 
   // changed content → a NEW snapshot is written
   const changed = JSON.stringify({ backup: { todoState: { todoList: [{ id: 't2' }], recycleList: [] } } })
   const r3 = h['run-auto-backup'](mainEvent, changed)
-  assert.equal(r3.ok, true)
+  assert.equal(r3dedup.ok, true)
   assert.notEqual(r3.file, r1.file)
   assert.equal(fs.readFileSync(path.join(defaultRoot, r3.file), 'utf8'), changed)
 })
