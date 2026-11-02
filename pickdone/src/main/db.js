@@ -214,6 +214,17 @@ function initInner (userDataPath) {
       db = null
       const msg = String(e.message)
       const ioLike = /disk i\/o|sqlite_ioerr|i\/o error|database is locked|database table is locked|EBUSY|EPERM|ENOENT|can'?t open|unable to open/i.test(msg)
+      // W29 (P3): an ENOENT-class failure is DETERMINISTIC (disconnected network volume,
+      // deleted parent directory) — the 1.5+3+4.5+6s synchronous backoff followed by a reopen
+      // of the same unreachable path cannot succeed, yet it blocked the whole boot for ~15s.
+      // Fail immediately (NOT flagged transientHold — retrying upstream is equally pointless).
+      // Fresh installs never land here: a healthy driver CREATES a missing db file, and the
+      // explicit deletion/rebuild path in the encryption block below owns that contract.
+      if (/ENOENT/i.test(msg)) {
+        const err = new Error(i18nM.mt('dbDiskIoError', { msg }))
+        err.enoent = true
+        throw err
+      }
       if (!ioLike || attempt >= PROBE_RETRIES) {
         // [J4 2026-10-24] retries exhausted on a transient hold: surface 'transient' to the
         // recovery chain instead of the plain error — the recovery path must treat the db as
