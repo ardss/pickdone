@@ -1,5 +1,5 @@
 {
-  "_comment": "ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent",
+  "_comment": "ratchet baseline per platform (win32/linux/darwin file sets differ ~10pt): each metric = last passing run on that platform, floored to whole percent; linux@node22 re-floored 2026-11-02 from the first suite=unit CI reading (78.87/83.66/75.26) after the instrument unification — the old 82/81/75 was full-pool calibration-era",
   "_calibration": "W30 2026-11-01 instrument unification: --with-coverage now pins --suite=unit, so ALL baselines must be unit-suite readings. win32@node22 and win32@node24 recalibrated 2026-11-01 from fresh green runs (clean HEAD worktree, 887 unit files, TODO_DB_DIR=tmp): node24 65.00/74.36/55.74, node22 80.47/83.81/75.83. Previous values were mixed-caliber: win32@node22 83/83/77 was a full-pool (suite='all') residual; win32@node24 68/74/58 was a stale unit reading that drifted. linux@node22 82/81/75 is STILL a full-pool-residual (cannot calibrate locally) — kept deliberately as the floor until CI produces a suite=unit reading (check-test-summary --with-coverage now writes one); if the CI linux unit reading is lower, rewrite this key from CI's printed numbers (two-step recalibration, see the W30 commit message).",
   "baselines": {
     "win32@node22": {
@@ -8,8 +8,8 @@
       "functions": 75
     },
     "linux@node22": {
-      "lines": 82,
-      "branches": 81,
+      "lines": 78,
+      "branches": 83,
       "functions": 75
     },
     "win32@node24": {
