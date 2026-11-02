@@ -47,6 +47,14 @@ const BASELINE = process.env.GATE_BASELINE || path.join(__dirname, 'structure-ba
 // 新文件严档（W21）：无 baseline/grandfather 的新文件按这对判；存量文件用各自分级上限。
 const NEW_FILE_LIMITS = { warn: 400, error: 600 }
 
+// w29 fix(2026-11-01): 豁免目录用段边界匹配。旧 `rel.startsWith('tests')` 是裸前缀——
+// `tests-utils.js`、`teststrap.js`、`scripts-v2/` 这类恰好共用前缀的路径会被整条豁免
+// （连 fallback 上限都吃不到）。只有「目录本身」或「目录/子路径」才豁免。
+const EXEMPT_DIRS = ['tests', 'scripts', 'browser-dev']
+function inExemptDir (rel) {
+  return EXEMPT_DIRS.some(d => rel === d || rel.startsWith(d + '/'))
+}
+
 // 行数上限（warn, error），按目录/类型分级。error 才判红；warn 打印但不阻塞。
 // W21: 补 server/ 条目——此前 server/ 落在 fallback(1200) 盲区（sync-relay.mjs 620 行无人看管）。
 const LIMITS = [
@@ -176,7 +184,7 @@ function main () {
     const files = {}
     for (const file of listFiles(ROOT)) {
       const rel = path.relative(ROOT, file).replace(/\\/g, '/')
-      if (rel.startsWith('tests') || rel.startsWith('scripts') || rel.startsWith('browser-dev')) continue
+      if (inExemptDir(rel)) continue
       const { error } = limitFor(rel)
       const m = measure(fs.readFileSync(file, 'utf8'), file.endsWith('.vue'))
       if (m.lines <= error) { delete files[rel]; continue } // 降到限内：棘轮条目退役
@@ -255,7 +263,7 @@ function main () {
   const warns = []
   for (const file of files) {
     const rel = path.relative(ROOT, file).replace(/\\/g, '/')
-    if (rel.startsWith('tests') || rel.startsWith('scripts') || rel.startsWith('browser-dev')) continue
+    if (inExemptDir(rel)) continue
     const { warn, error } = limitFor(rel)
     const src = fs.readFileSync(file, 'utf8')
     const m = measure(src, file.endsWith('.vue'))

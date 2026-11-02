@@ -16,7 +16,15 @@ const path = require('path')
 // residue in %TEMP%). This is a SYNCED MANIFEST of tests/lib/tmp-dir.mjs's FAMILY_FALLBACK
 // (that registry is ESM and extracts prefixes from the tests/ sources; cli/env-clean.js is CJS
 // and cannot require it — keep the two in step when a new prefix family lands there).
-const TEST_TMP_FAMILY = /^(?:todo-|todo-cov-|jrelay-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+// w29 fixes (2026-11-01), both synced to tmp-dir.mjs FAMILY_FALLBACK:
+//  ① 补齐实测在用前缀：cov-ratchet-test- (tests/unit/cli/check-coverage-ratchet.test.mjs:70)、
+//     ratchet-test- (tests/unit/cli/d11-cli-tomato-schedule-taxonomy.test.mjs:224)、
+//     vp-linux-sha- (tests/verify-packaged-linux-sha.test.mjs:21)。
+//  ② 收窄破坏面：旧 `d\d{1,3}-` / `r\d+-` 是裸前缀圈地——os.tmpdir() 是共享面，用户自己的
+//     `d1-tools`、`r42-notes` 等（stale>12h）会被 rmSync recursive 误删。逐个 grep tests/|cli/
+//     实测后枚举真实产出前缀（mkdtempSync/isolatedTmpDir/withTmpDir/newTmpLib 调用点），宁可
+//     少清（漏网的靠 tmp-dir.mjs 抽取式 sweeper 兜）也不误删无关目录。
+const TEST_TMP_FAMILY = /^(?:todo-|todo-cov-|jrelay-|cov-ratchet-test-|ratchet-test-|vp-linux-sha-|lan-sync-|pd-|journey-|relay-|pickdone-|d(?:3|4|6|7|9|1[0-5]|1[789]|2[0-2]|25|26)-|r(?:1|4c?|6|17)-)/
 // Same safety doctrine as the tmp-dir.mjs preflight sweeper: a FRESH directory may belong to a
 // suite running RIGHT NOW (deleting it mid-run cascades MODULE_NOT_FOUND into unrelated tests),
 // and a live `pid<N>` marker means an owning process still exists — never touch either.
@@ -28,7 +36,10 @@ function collectTargets ({ all = false, appRoot }) {
   for (const entry of fs.readdirSync(tmp)) {
     if (!TEST_TMP_FAMILY.test(entry)) continue
     const pidM = entry.match(/pid(\d+)/)
-    if (pidM) { try { process.kill(Number(pidM[1]), 0); continue } catch { /* not running → orphaned */ } }
+    // w29 fix(2026-11-01): only ESRCH proves the owner is gone. On Windows process.kill(pid, 0)
+    // throws EPERM for a LIVE process owned by someone else — treating any catch as "dead" used
+    // to delete a running suite's temp dir mid-flight (same semantics as tmp-dir.mjs pidDead).
+    if (pidM) { try { process.kill(Number(pidM[1]), 0); continue } catch (e) { if (!e || e.code !== 'ESRCH') continue } }
     try { if (Date.now() - fs.statSync(path.join(tmp, entry)).mtimeMs < STALE_MS) continue } catch { continue }
     targets.push({ p: path.join(tmp, entry), label: '测试临时 userData' })
   }

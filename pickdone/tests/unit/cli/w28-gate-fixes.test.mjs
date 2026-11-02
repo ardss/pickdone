@@ -49,8 +49,8 @@ for (const e of GREEN_EMAILS) test(`W28 #1: ${e} is not personal`, () => assert.
 // ---- #3 env-clean prefix family sync ----
 const { TEST_TMP_FAMILY } = require_(path.join(CLI, 'env-clean.js'))
 const FAMILIES = ['todo-cli-smoke-x', 'todo-shared-y', 'todo-smoke-z', 'pd-upd-pid1-a', 'pd-it-b', 'todo-test-c',
-  'journey-relay-d', 'pickdone-e2e-x', 'jrelay-a-pid2', 'lan-sync-pid3', 'd10-cfg-z', 'r12-snap-w',
-  'relay-boot-pid4', 'todo-cov-pid5']
+  'journey-relay-d', 'pickdone-e2e-x', 'jrelay-a-pid2', 'lan-sync-pid3', 'd10-cfg-z', 'r17-att-x',
+  'relay-boot-pid4', 'todo-cov-pid5'] // w29: r12-snap-w was synthetic — r\d+- narrowed to enumerated real prefixes
 for (const n of FAMILIES) {
   test(`W28 #3: env-clean recognizes ${n}`, () => assert.ok(TEST_TMP_FAMILY.test(n), `${n} must be cleanable residue`))
 }

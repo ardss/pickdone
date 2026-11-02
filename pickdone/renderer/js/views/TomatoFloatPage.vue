@@ -463,7 +463,7 @@ export default {
   min-height: 0;
   padding: 8px 10px 10px;
   /* 与卡片同款玻璃白（勿用 var(--panel)：暗色主题下会变成深灰，和玻璃卡不协调） */
-  background: rgba(255,255,255,.88);
+  background: rgba(255,255,255,.88); /* 玻璃白 */
   backdrop-filter: blur(10px);
   border-radius: var(--radius-lg);
   box-shadow: 0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px 0 rgba(0,0,0,.06);
@@ -669,7 +669,7 @@ html.widget-preview .tomato--expand-noise { width: 240px; height: 320px; }
   flex-direction: column;
   min-height: 0;
   padding: 8px 10px 10px;
-  background: rgba(255,255,255,.88);
+  background: rgba(255,255,255,.88); /* 玻璃白 */
   backdrop-filter: blur(10px);
   border-radius: var(--radius-lg);
   box-shadow: 0 1px 3px 0 rgba(0,0,0,.1), 0 1px 2px 0 rgba(0,0,0,.06);
