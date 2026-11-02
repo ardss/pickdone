@@ -56,6 +56,7 @@ function makeCtx (taskId) {
   const calls = []
   return {
     calls,
+    deleted: [],
     e: { taskId },
     imgList: [],
     fileList: [],
@@ -74,8 +75,9 @@ function stubUpload (ctx, afterFirst) {
       calls = ctx.calls; calls.push({ taskId, name })
       n++
       if (n === 1 && afterFirst) afterFirst()
-      return { url: 'blob:' + name, size: 1 }
-    }
+      return { url: 'local:///' + name, size: 1 }
+    },
+    deleteFile: async url => { ctx.deleted.push(url); return true }
   }
 }
 let calls
@@ -89,8 +91,8 @@ test('[w28.4] onDescDrop batch: task switch mid-upload aborts remaining files â€
   await attachments.onDescDrop(ctx, dt)
   assert.equal(ctx.calls.length, 1, 'uploads stop after the switch')
   assert.equal(ctx.calls[0].taskId, 'task-A', 'the one completed upload keeps its original owner')
-  assert.equal(ctx.imgList.length, 1)
-  assert.ok(ctx.imgList.every(i => !i.name.includes('two') && !i.name.includes('three')))
+  assert.equal(ctx.imgList.length, 0, 'completed upload for task A must never appear in task B panel')
+  assert.deepEqual(ctx.deleted, ['local:///one.png'], 'unattached minted file must be cleaned')
 })
 
 test('[w28.4] onDescDrop batch with NO task switch uploads every file (behavior unchanged)', async () => {
@@ -101,6 +103,7 @@ test('[w28.4] onDescDrop batch with NO task switch uploads every file (behavior 
   assert.equal(ctx.calls.length, 2)
   assert.ok(ctx.calls.every(c => c.taskId === 'task-A'))
   assert.equal(ctx.imgList.length, 2)
+  assert.deepEqual(ctx.deleted, [], 'successful uploads must not be deleted')
 })
 
 test('[w28.4] onDescPaste: upload carries the taskId snapshotted at entry, not the post-hydrate one', async () => {
@@ -110,6 +113,8 @@ test('[w28.4] onDescPaste: upload carries the taskId snapshotted at entry, not t
   await attachments.onDescPaste(ctx, { clipboardData: { items: [item] }, preventDefault () {} })
   assert.equal(ctx.calls.length, 1)
   assert.equal(ctx.calls[0].taskId, 'task-A', 'paste must not re-read ctx.e.taskId after awaiting')
+  assert.equal(ctx.imgList.length, 0, 'paste finishing after a task switch must not pollute task B')
+  assert.deepEqual(ctx.deleted, ['local:///paste.png'])
 })
 
 test('[w28.4] direct uploadOne (no snapshot arg) still attributes to the current task; failed upload does not strand the batch', async () => {
