@@ -5,6 +5,11 @@
 module.exports = {
   root: true,
   env: { es2022: true, browser: true },
+  globals: {
+    // Vite build-time defines (vite.config.mjs define) — injected at build, absent in plain node
+    __APP_BUILD_SHA__: 'readonly',
+    __APP_BUILD_CHANNEL__: 'readonly'
+  },
   plugins: ['vue'],
   parser: 'vue-eslint-parser',
   parserOptions: { parser: '@typescript-eslint/parser', ecmaVersion: 2022, sourceType: 'module', extraFileExtensions: ['.vue'] },
@@ -38,7 +43,7 @@ module.exports = {
     },
     {
       // Node 侧代码
-      files: ['src/main/**/*.js', 'src/preload/**/*.js', 'cli/**/*.js', 'tests/**/*.mjs', '*.cjs', '.eslintrc.cjs'],
+      files: ['src/main/**/*.js', 'src/preload/**/*.js', 'cli/**/*.{js,mjs}', 'tests/**/*.mjs', '*.cjs', '.eslintrc.cjs'],
       env: { node: true, browser: false, es2022: true },
       parserOptions: { ecmaVersion: 2022 },
       globals: {

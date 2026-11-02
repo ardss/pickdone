@@ -56,7 +56,6 @@ test('migration: chinese case-twin rows — each entry gets a unique attachmentI
 })
 
 test('findKeyRefs: hits by attachmentId and does NOT hit the case-twin (basename误伤 fixed)', () => {
-  const diskNames = ['中文.png', '中文.PNG']
   const mk = (taskId, attId, url) => ({ taskId, image: JSON.stringify([{ url, attachmentId: attId, missing: true }]), files: '[]' })
   const r1 = mk('r1', 'att-id-1', legacyUrl('中文.png'))
   const r2 = mk('r2', 'att-id-2', legacyUrl('中文.PNG'))
