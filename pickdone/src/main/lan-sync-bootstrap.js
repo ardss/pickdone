@@ -746,9 +746,9 @@ function initLanSync ({ db, getWindowSenders, resyncExternalWatch } = {}) {
   const peerWatermarks = null
   state = { db, getWindowSenders, node: null, engine: null, timers: [], pendingToSeq: 0, peerWatermarks, localUserId: null, pendingWrites: { todos: [], settings: [], tomatoes: [], categories: [], plans: [], filters: [] }, pendingPair: null, applied: null, resyncExternalWatch: typeof resyncExternalWatch === 'function' ? resyncExternalWatch : null }
   state.peerWatermarks = createTrackedWatermarks()
+  registerOps()
   // v1 watermark cleanup (round-3 review) — moved into watermark-store (W30 size split)
   watermarkStore.deleteV1WatermarkRow({ settingGet, settingsRowDelete: k => busWrite('settingsRowDelete', { key: k }), log })
-  registerOps()
   // Running-tomato announcements (feature): wire the announce module to the db + identity,
   // and relay remotely-applied announces to the renderer as 'tomato-announce' syncEvents.
   // The announce key itself travels as a regular meta entity row (see sync-apply.js).

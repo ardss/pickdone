@@ -58,9 +58,11 @@ test('M8B 1: restartLatestDbWatch re-arms the fs.watchFile poll after stopLatest
     assert.equal(unwatched, 2, 'stop releases both polls')
     assert.equal(watched, afterStart, 'stop must not re-arm')
     ew.restartLatestDbWatch()
+    // W30: restart is idempotent — it releases the previous pair first, then re-arms both.
+    assert.equal(unwatched, 4, 'restart stops the previous watch before re-arming')
     assert.equal(watched, afterStart + 2, 'restart re-arms both polls (session no longer blind)')
     ew.stopLatestDbWatch() // leave no dangling timers behind
-    assert.equal(unwatched, 4)
+    assert.equal(unwatched, 6)
   } finally {
     fs.watchFile = realWatchFile
     fs.unwatchFile = realUnwatchFile
