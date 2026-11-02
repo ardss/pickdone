@@ -444,3 +444,39 @@ test('J4 edit panel rename saves → list reflects the new title → search view
 
 // Teardown: close the WS handle so the event loop drains naturally
 after(() => { try { ws?.close() } catch {} })
+
+
+// A successful upload-attachment IPC call is not evidence of visible pixels.
+// Exercise ClipboardEvent -> renderer -> SQLite -> local:// -> actual <img> -> reopen.
+test('J5 clipboard image in the right edit panel renders, persists and reopens', { skip: !available || !isolated }, async t => {
+  if (!preconditionOk) return t.skip('precondition failed — never write to a non-isolated instance')
+  const ids = []
+  const cleanup = async () => hardCleanup(ids)
+  registerCleanup(cleanup)
+  try {
+    await gotoHash('#/todo-list/today', '.qa-input')
+    const task = await seedTask('J5 clipboard acceptance ' + Math.random().toString(36).slice(2))
+    assert.ok(task && task.taskId)
+    ids.push(task.taskId)
+    const tid = JSON.stringify(task.taskId)
+    const open = "(()=>{const s=" + st() + ";const r=s.state.todo.todoList.find(x=>x.taskId===" + tid + ");if(!r)return false;s.commit('ui/openEdit',r);return true})()"
+    assert.equal(await evalAwait(open), true)
+    assert.ok(await until("!!document.querySelector('.ep-desc textarea,textarea.ep-desc')", 16, 250), 'description textarea not mounted')
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const paste = "(()=>{const ta=document.querySelector('.ep-desc textarea,textarea.ep-desc');const bytes=Uint8Array.from(atob('" + png + "'),c=>c.charCodeAt(0));const dt=new DataTransfer();dt.items.add(new File([bytes],'clipboard.png',{type:'image/png'}));const e=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData:dt});ta.dispatchEvent(e);return e.defaultPrevented})()"
+    assert.equal(await evalAwait(paste), true, 'image paste event must be consumed')
+    const inspect = "(()=>{const i=document.querySelector('.ep-img-cell img');return i&&i.complete&&i.naturalWidth>0&&!i.classList.contains('ep-img-broken')?{url:i.getAttribute('src'),width:i.naturalWidth}:null})()"
+    const visible = await until(inspect, 24, 250)
+    assert.ok(visible && visible.url.startsWith('local:///'), 'image pixels must actually decode; mock IPC success is insufficient')
+    const db = "(async()=>{const rows=await window.todoAPI.dbCall('queryTodos',{deleted:0});const row=rows.find(x=>x.taskId===" + tid + ");return row&&row.image&&row.image.includes('local:///')?row.image:null})()"
+    const saved = await until(db, 24, 250)
+    assert.ok(saved && JSON.parse(saved).some(x => x.url === visible.url), 'SQLite must durably store the same rendered image')
+    const reopen = "(()=>{const s=" + st() + ";s.commit('ui/closeEdit');const r=s.state.todo.todoList.find(x=>x.taskId===" + tid + ");if(!r)return false;s.commit('ui/openEdit',r);return true})()"
+    assert.equal(await evalAwait(reopen), true)
+    const reopened = await until(inspect, 24, 250)
+    assert.ok(reopened && reopened.url === visible.url, 'image must decode after closing and reopening the panel')
+  } finally {
+    await cleanup()
+    cleanupFn = null
+  }
+})
