@@ -413,7 +413,16 @@ function initInner (userDataPath) {
   // merge layer reads the bumped row as "unknown author" and treats every later same-writer
   // echo as divergent (junk conflict copies). NULL (identity not yet established) stays honest:
   // unknown = always-divergent = conservative, never a wrong attribution.
-  stmts.bumpSnow = db.prepare("UPDATE todos SET focusMinutes = focusMinutes + @minutes, status = 'update', updatedAt = @now, syncAuthor = @author WHERE id = @taskId AND deleted = 0")
+  // W30 (2026-11-01, P2): balance floor — MAX(0, focusMinutes + @minutes). The JS-side undo clamp
+  // (dedupKey 'undo:' → [-FOCUS_MAX, 0], see the bumpSnow op below) mirrors only the SINGLE-SESSION
+  // cap, not the LEDGER BALANCE: stacked undos of different sessions (each individually <= the
+  // credited amount, but together exceeding the current balance after a prior undo / a peer's
+  // plain-caliber upsert lowered the row) drove focusMinutes below zero through the blind `+=`.
+  // A negative focusMinutes then poisons every aggregate (stats totals, float-window display) and
+  // a later credit starts from the hole. For a credit (minutes >= 0) MAX(0, x) is a no-op, so the
+  // positive path is byte-identical; only the undo path gains the floor. DB-side (not a JS
+  // pre-read) to stay atomic under the concurrent-write contract the `+=` itself exists for.
+  stmts.bumpSnow = db.prepare("UPDATE todos SET focusMinutes = MAX(0, focusMinutes + @minutes), status = 'update', updatedAt = @now, syncAuthor = @author WHERE id = @taskId AND deleted = 0")
   log.info('[TodoDB] 数据库初始化完成:', file)
   return file
 }
