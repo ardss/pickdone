@@ -292,8 +292,7 @@
                 <div class="form-item__control"><button class="mini" @click="openLogsDir">{{ $t('statsH.SettingsModal.openLogsDir') }}</button></div></div>
             </div>
             <div class="form">
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span>
-                <div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span><!-- W31 P1: build fingerprint (version+SHA+channel), same string as the diagnostic payload --><div><span class="tip">{{ buildFingerprint }}</span></div></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.syncSurveyLabel') }}</span>
                 <div class="form-item__control">
                   <button class="mini" @click="openSyncSurvey">{{ $t('statsE.SettingsModal.syncSurveyBtn') }}</button>
@@ -319,7 +318,7 @@
 /** Settings center -- structure aligned with the reference: full-screen base-modal (modal-container/modal-tablecloth--body)
  *  + el-tabs.setting_tabs tabs in the header + .tab-panel>.form>.form-label+.form-item rows in the body.
  *  All feature bindings are preserved (visual rework only, no functional change). */
-import { appVersion } from '../utils/core.js'
+import { appVersion } from '../utils/core.js'; import { buildFingerprint as buildFingerprintOf, channelFromVersion } from '../../../shared/build-fingerprint.mjs' // W31 P1: same builder as the 'app:build-info' diagnostic payload
 import { CONFIRM_SOUNDS, confirmUrl } from '../utils/mediaRegistry.js'
 import { SETTING_ENUMS } from '../store/settings.js'
 import dialogA11y from '../utils/dialogA11y.js'
@@ -360,6 +359,7 @@ export default {
     /** Note: the computed name collides with the appVersion function in utils/core.js -- {{ appVersion }} in the template is a string;
      *  writing appVersion() would recursively call itself and report "appVersion is not a function" (this once broke the settings modal render) */
     appVersion () { return appVersion() },
+    buildFingerprint () { /* W31 P1: version+SHA+channel; __APP_BUILD_SHA__/__APP_BUILD_CHANNEL__ are vite-define injected (vite.config.mjs) — undeclared outside vite, try/catch degrades to 'unknown' */ let sha = 'unknown'; let channel = channelFromVersion(appVersion()); try { sha = __APP_BUILD_SHA__ } catch (e) { /* plain node */ } try { channel = __APP_BUILD_CHANNEL__ } catch (e) { /* plain node */ } return buildFingerprintOf({ version: appVersion(), gitSha: sha, channel }) },
     confirmSoundOptions () { return CONFIRM_SOUNDS },
     /** Settings enum options: derived from the SETTING_ENUMS schema in store/settings.js (do not hardcode options in the template) */
     enumOptions () { return key => SETTING_ENUMS[key] || [] },
