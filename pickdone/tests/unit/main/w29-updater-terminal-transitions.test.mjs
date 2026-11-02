@@ -34,6 +34,7 @@ const require = createRequire(import.meta.url)
 const ROOT = path.resolve(import.meta.dirname, '../../..')
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'w29-updater-'))
 delete process.env.PORTABLE_EXECUTABLE_DIR
+delete process.env.PICKDONE_NO_AUTOUPDATE // the consent semantics must not depend on host env
 process.env.PICKDONE_UPDATER_RETRY_MS = '80' // shorten the backoff window for the retry test
 
 // ---- autoUpdater stub: an event registry we fire by hand ----
@@ -91,17 +92,22 @@ test('syncAutoDownload: default consent ON; an explicit opt-out holds; a corrupt
   fs.writeFileSync(path.join(TMP, 'config.json'), JSON.stringify({ autoDownloadUpdates: false }))
   updater.syncAutoDownload()
   assert.equal(autoUpdater.autoDownload, false, 'autoDownloadUpdates:false must survive a readable config')
-  // unreadable blob whose QUARANTINE also fails (config.json AND the .bad quarantine target are
-  // both directories → the rename fails) → isReadFailed → the opt-out state is UNKNOWABLE →
-  // fail closed
-  fs.rmSync(path.join(TMP, 'config.json'), { force: true })
+  // unreadable blob whose QUARANTINE also fails → isReadFailed → the opt-out state is
+  // UNKNOWABLE → fail closed. The quarantine is a rename config.json → config.json.bad; make it
+  // deterministically fail on BOTH platforms: config.json is a directory (EISDIR read) and the
+  // .bad target is a NON-EMPTY directory — POSIX rename() silently REPLACES an empty target dir,
+  // which is exactly the CI-vs-local divergence this test once had (the quarantine succeeded on
+  // linux, so the fail-closed branch never ran there while passing on win32).
+  fs.rmSync(path.join(TMP, 'config.json'), { force: true, recursive: true })
   fs.rmSync(path.join(TMP, 'config.json.bad'), { force: true, recursive: true })
   fs.mkdirSync(path.join(TMP, 'config.json'))
   fs.mkdirSync(path.join(TMP, 'config.json.bad'))
+  fs.writeFileSync(path.join(TMP, 'config.json.bad', 'occupied'), 'x') // ENOTEMPTY on rename, win32 AND posix
   updater.syncAutoDownload()
+  assert.equal(configStore.isReadFailed(), true, 'the quarantine genuinely failed (platform-independent instrument self-check)')
   assert.equal(autoUpdater.autoDownload, false, 'a known-failed config read must NOT fail open to auto-download')
-  fs.rmdirSync(path.join(TMP, 'config.json'))
-  fs.rmdirSync(path.join(TMP, 'config.json.bad'))
+  fs.rmSync(path.join(TMP, 'config.json'), { force: true, recursive: true })
+  fs.rmSync(path.join(TMP, 'config.json.bad'), { force: true, recursive: true })
   updater.syncAutoDownload()
   assert.equal(autoUpdater.autoDownload, true)
 })

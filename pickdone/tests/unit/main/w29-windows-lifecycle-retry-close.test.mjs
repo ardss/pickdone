@@ -266,13 +266,18 @@ test('close intents: hide (+tray notice + durable write), quit (deferred request
   lastWin._m.winHandlers['close'].forEach(cb => cb(ev))
   assert.equal(ev.prevented, true, 'a hide close is prevented (window stays, tray mode)')
   assert.ok(calls.hidden >= 1, 'the window hides')
-  assert.equal(calls.balloon, 1, 'the win32 tray balloon notice is shown once')
+  // the balloon itself is win32-only production behavior (windows.js gates on
+  // process.platform === 'win32'); on other platforms the counter stays 0 by design — the
+  // OBSERVABLE contract on every platform is the durable closeTrayNotified write below.
+  const expectedBalloons = process.platform === 'win32' ? 1 : 0
+  assert.equal(calls.balloon, expectedBalloons, 'the tray balloon notice fires exactly once where the platform supports it')
   assert.equal(cfg.closeTrayNotified, true, 'the notice flag is durably written')
-  // hide intent, notice already shown → no second balloon
+  // hide intent, notice already shown → shouldShowTrayNotice goes false → no second notice write
   calls.writes.length = 0
   ev = mkCloseEvent()
   lastWin._m.winHandlers['close'].forEach(cb => cb(ev))
-  assert.equal(calls.balloon, 1, 'no repeated balloon after the first notify')
+  assert.equal(calls.balloon, expectedBalloons, 'no repeated balloon after the first notify')
+  assert.equal(calls.writes.length, 0, 'no repeated closeTrayNotified write once already notified')
 
   // quit intent: preventDefault + DEFERRED requestUserQuit (sync hang avoidance)
   closeIntent = 'quit'
