@@ -22,7 +22,10 @@
              gets an inert placeholder cell — no :src binding (no beacon on paint), no 'preview'
              emit. The entry STAYS in imgList (EditPanel persists the list verbatim; stripping it
              would delete the peer's attachment record on next save). -->
-        <button v-if="!im.missing && isRenderableAttachmentUrl(im.url)" type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
+        <!-- w30 P1: the ok/missing/syncing decision now comes from utils/attachmentState.js
+             (attachmentStateOf) — the same pure mapping the task-list thumbnail is specified to
+             consume (TodoItem.vue is territory-frozen; it keeps its own logic until unlocked). -->
+        <button v-if="imState(im) === 'ok'" type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
           <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event, im)" @load="onImgLoad($event)">
         </button>
         <!-- W29 (2026-11-01) explicit-missing state: the startup migration (main/attachment-migrate.js)
@@ -30,7 +33,7 @@
              file with `missing: true`. Those render as a labeled placeholder (filename + the existing
              attachmentMissing i18n text) instead of a silently broken <img> — the fourth
              "裂图" report must be impossible to miss. -->
-        <span v-else-if="im.missing" class="ep-img-btn ep-img-remote ep-img-missing" role="img" :aria-label="remotePlaceholderName(im)">
+        <span v-else-if="imState(im) === 'missing'" class="ep-img-btn ep-img-remote ep-img-missing" role="img" :aria-label="remotePlaceholderName(im)">
           <span class="ep-img-remote__name">{{ remotePlaceholderName(im) }}</span>
           <span class="ep-img-remote__hint">{{ $t('statsJ.EditPanel.attachmentMissing') }}</span>
         </span>
@@ -92,6 +95,7 @@ function arrivalTouchesCurrent (lists, key) {
 import { logger } from '../../utils/logger.js'
 import { isRenderableAttachmentUrl } from '../../utils/core.js'
 import { roleButtonActivate } from '../../utils/roleButtonKey.js' // [D18-DOM3] Space+Enter button activation
+import { attachmentStateOf, shouldKickPull } from '../../utils/attachmentState.js' // [w30 P1] shared state mapping
 
 export default {
   name: 'EpAttachments',
@@ -129,6 +133,9 @@ export default {
     onRemoveKey (list, i, e) { roleButtonActivate(function () { this.$emit('remove', list, i) }, { stop: true }).call(this, e) },
     onOpenFileKey (f, e) { roleButtonActivate(function () { this.openFileUrl(f) }, { stop: true }).call(this, e) },
     isRenderableAttachmentUrl,
+    /* [w30 P1] the shared pure mapping (attachmentStateOf) — 'ok' | 'missing' | 'syncing'
+       (the runtime 'broken' overlay is the ep-img-broken DOM class, see onImgErr). */
+    imState (im) { return attachmentStateOf(im, null) },
     /* W23: label for a non-renderable synced row — prefer the stored name, fall back to the
        decoded url basename (same decode-or-raw fallback as attachmentPath in main/attachments.js) */
     remotePlaceholderName (im) {
@@ -151,10 +158,20 @@ export default {
     onImgErr (e, im) {
       const img = (e && e.target) as HTMLElement
       if (img) img.classList.add('ep-img-broken')
-      if (!im || im.__pullTried) return
+      if (!im) return
+      // [w30 P1] the pull-kick decision (local-only, one-shot guard) moved to the shared pure
+      // mapping in utils/attachmentState.js — same semantics, one implementation for every
+      // thumbnail surface.
       const url = String(im.url || '')
-      if (!url.startsWith('local://')) return // non-local urls have no pull chain (see W23 verdict above)
-      im.__pullTried = true
+      if (!shouldKickPull(im)) {
+        // w30 P1 observability: a SECOND error after the pull retry already fired = the key is
+        // genuinely broken ('broken' state in attachmentState terms). Log the key so "which
+        // layer failed first" is traceable against main/protocol.js's nf-* reason logs.
+        if (im.__pullTried && url.startsWith('local://')) {
+          console.warn('[ep-img-broken] key=' + url.slice('local://'.length))
+        }
+        return
+      }
       try {
         // fire-and-forget: the result only matters via the attachments-arrived re-key; open-file's
         // own missing-toast already tells the user why the image is gray.

@@ -4,6 +4,8 @@
   <aside v-if="e" class="edit-panel" @click.stop>
     <div class="ep-inner">
         <div v-if="saveFailed" class="ep-save-failed" role="alert">{{ $t('statsJ.EditPanel.saveFailed') }}<span class="ep-save-retry" role="button" tabindex="0" :aria-label="$t('statsJ.EditPanel.saveRetry')" @click="retrySave" @keydown="onSaveRetryKey">{{ $t('statsJ.EditPanel.saveRetry') }}</span></div>
+        <!-- w30 P0: "enqueued vs persisted" weak hint — markup in editpanel/EditPanelSaveHint.vue -->
+        <ep-save-hint :show="saveUnconfirmed && !saveFailed" @retry="retrySave"/>
         <!-- F3 (2026-09-20): a peer updated the open task while the panel holds UNSAVED user edits — never auto-overwrite user input; offer an explicit re-hydrate instead -->
         <div v-if="remoteStale" class="ep-remote-updated" role="status">
           <span>{{ $t('statsJ.EditPanel.remoteUpdated') }}</span>
@@ -156,7 +158,8 @@ import { isRenderableAttachmentUrl } from '../utils/core.js' // [W21] subsComple
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
 import { getEstimate, setEstimate, ensureEstimate } from '../utils/tomatoEstimate.js'
-import { createSaveQueue } from '../utils/editSave.js'
+import { createSaveQueue, createPersistProbe } from '../utils/editSave.js'
+import { pendingUpserts } from '../store/helpers/todoPendingUpserts.js' // [w30 P0] enqueue-vs-persisted probe (store/todo.js itself is territory-frozen; this reads its exported queue seam)
 import { attachmentUrlPresent } from '../utils/attachmentRefs.js'
 import { contentFingerprint, shouldRefreshRemote, taskAbsentIn } from '../utils/editPanelRemoteSync.js'
 import { buildEditSnapshot } from '../store/ui.js'
@@ -176,6 +179,7 @@ import * as repeat from './edit-panel/repeat.js'
 import { catOutsideClose, FIELD_MAP } from './edit-panel/interactions.js'
 import EpDateChips from './editpanel/EditPanelDateChips.vue' // W21 split: date chips + hidden picker
 import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recycle-bin banner markup
+import EpSaveHint from './editpanel/EditPanelSaveHint.vue' // [w30 P0] weak "保存未确认" hint markup
 import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
 import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
 import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder emit handlers + close-verify timer
@@ -184,7 +188,7 @@ import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
 // W21 split additions to the local component registry (spread into the options above)
-const w21Components = { EpDateChips, EpBinBanner }
+const w21Components = { EpDateChips, EpBinBanner, EpSaveHint }
 
 // [component-fixes] pure helper now lives in utils/attachmentRefs.js (imported below)
 
@@ -200,6 +204,7 @@ export default {
       DESC_MAX, // [F7 P3] template access to the shared describe clamp
       saving: false,
       saveFailed: false,
+      saveUnconfirmed: false, // [w30 P0] row is still in the safeUpsert retry queue after the dispatch settled
       catOpen: false,
       subList: [] as any,
       imgList: [] as any,
@@ -222,10 +227,17 @@ export default {
         preds: { predecessors: this.e && this.e.predecessors }
       }[k]),
       onSaving: (v) => { this.saving = v },
-      onDone: () => { this.saveFailed = false },
-      onFail: () => { this.saveFailed = true }
+      // [w30 P0] todo/updateTodoFields resolves when the write is ENQUEUED (safeUpsert retries),
+      // not when SQLite has the row. onDone therefore schedules the deferred persist probe
+      // (createPersistProbe, impl utils/editSave.js): a row still in the pendingUpserts queue
+      // after the settle window lights the weak EpSaveHint ("已入队, 未持久化"), never the hard banner.
+      onDone: () => {
+        this.saveFailed = false
+        this._probe.schedule(this.e && this.e.taskId, (q) => { this.saveUnconfirmed = q })
+      },
+      onFail: () => { this.saveFailed = true; this.saveUnconfirmed = false }
     })
-    this._save.boot()
+    this._save.boot(); this._probe = createPersistProbe(pendingUpserts) // [w30 P0] persist probe backs the onDone callback (impl editSave.createPersistProbe)
     // Auto-increment sequence for stable subtask row keys (render-only, stripped at save time)
     this._subKeySeq = 0
   },
@@ -353,6 +365,7 @@ export default {
     // Esc 关闭路径不经 close():防抖回调会在卸载后写 this.saving,_sortable 也不会 destroy(2026-09-05 终审 P2)
     try { this.flushSave() } catch (e) { /* 卸载期落库失败不阻断卸载 */ }
     if (this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
+    if (this._probe) this._probe.cancel() // [w30 P0] probe must not fire into an unmounted panel
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
@@ -363,7 +376,7 @@ export default {
     /** Immediately commit pending saves (must be called before switching tasks, so A's edits do not land on B).
      *  Review P1 (2026-09-22): the flush PROMISE is returned — ui/closeEditCleanup registers this method as window.__editPanelFlushSave and awaits it before the inline-created emptiness check; resolving undefined re-opened the 60ms race against the 350ms debounce (fast-typed title orphan-deleted). */
     flushSave () { return this._save ? this._save.flushSave() : undefined },
-    retrySave () { this.saveFailed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure
+    retrySave () { this.saveFailed = false; this.saveUnconfirmed = false; this.flushSave() }, // D6-F9: banner Retry — onFail re-flags on failure, onDone re-probes the queue (w30 P0)
     /* [W8] remote-refresh chip: roleButtonActivate contract (Space owned by main.js capture) */
     onRemoteRefreshKey: roleButtonActivate(function () { this.refreshFromStore() }),
     onCollapseKey: roleButtonActivate(function () { this.collapse() }), // [W8]
@@ -417,6 +430,7 @@ export default {
       this._remoteUpdateTime = liveRow ? liveRow.updateTime : s.updateTime
       this._remoteFingerprint = contentFingerprint(this.e)
       this.remoteStale = false
+      this.saveUnconfirmed = false // [w30 P0] the hint is per-task; a re-hydrate re-probes on the next save settle
       this.repeatGroupInfo()
       this.initSubSortable()
     },

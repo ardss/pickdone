@@ -14,6 +14,10 @@
   color: var(--text-2); background: var(--bg-2, rgba(0,0,0,.04)); border: 1px solid var(--line-1, rgba(0,0,0,.12)); border-radius: var(--radius-md);
   display: flex; align-items: center; gap: 8px; }
 .ep-save-retry { margin-left: 8px; text-decoration: underline; }
+/* [w30 P0] "保存未确认" weak hint: same banner shape as .ep-save-failed but warning-tinted,
+   not danger — the edit IS in the retry queue (quit-flush will land it), it is just not
+   SQLite-confirmed yet. */
+.ep-save-unconfirmed.ep-save-failed { color: var(--warning, #e6a23c); background: rgba(230, 162, 60, .1); border-color: rgba(230, 162, 60, .35); }
 .ep-remote-refresh { margin-left: auto; color: var(--primary, var(--text-1)); cursor: pointer; font-weight: 600; white-space: nowrap; }
 .ep-remote-refresh:hover { text-decoration: underline; }
 .ep-collapse-btn {

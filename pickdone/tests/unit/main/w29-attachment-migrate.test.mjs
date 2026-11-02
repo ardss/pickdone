@@ -179,7 +179,9 @@ test('anchor: EpAttachments img-error kicks the missing-file pull once and the m
   assert.ok(/onImgErr\s*\(e,\s*im\)/.test(src), 'onImgErr must receive the entry to kick its pull')
   assert.ok(/todoAPI\.openFile\(url\)/.test(src), 'the pull must ride the existing open-file missing-file chain')
   // explicit-missing placeholder (migration marker renders text, not a bare broken img)
-  assert.ok(/v-else-if="im\.missing"/.test(src), 'missing-marked entries must render the placeholder branch')
+  // w30 P1: the branch decision moved to the shared attachmentStateOf mapping (imState);
+  // the placeholder branch itself is unchanged — missing-marked entries still render it.
+  assert.ok(/v-else-if="imState\(im\) === 'missing'"/.test(src), 'missing-marked entries must render the placeholder branch')
   assert.ok(/attachmentMissing/.test(src), 'the placeholder must carry the bilingual attachmentMissing i18n text')
   assert.ok(/ep-img-missing/.test(src), 'the missing cell must carry its distinct class')
 })

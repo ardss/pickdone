@@ -9,6 +9,32 @@ const { attachDir, attachmentPath, resolveAttachmentCase } = require('./attachme
 // (see the handler comment). Null until first resolved; recomputed on transient failure.
 let realRoot = null
 
+/* ---- [w30 P1 observability] structured 404 reason logs ----
+ * "第一次失败在哪一层" must be answerable from the log trail alone: the renderer only sees a
+ * broken <img>, so each 404 branch here now emits ONE structured warn per (reason, key) pair
+ * — nf-missing-file (key resolved but no on-disk bytes), nf-bad-encoding (malformed
+ * percent-encoding, raw-key fallback in play), nf-bookkeeping (internal bookkeeping name),
+ * nf-outside-root (app:// allowlist rejection), nf-internal-error (unexpected throw).
+ * The KEY ITSELF is user content (`<taskId>_<ts>_<name>` mints embed the filename) — the log
+ * carries only its LENGTH and a djb2 fingerprint, enough to correlate with the renderer's
+ * ep-img-broken console.warn without leaking names into the log. Once per key: a LAN
+ * thumbnail grid fires many requests for the same dead key; one line is the signal.
+ * Read-only relative to parsing: every branch's resolution semantics are untouched. */
+const _nfReasonLogged = new Set()
+function nfKeyTag (key) {
+  const s = String(key || '')
+  let h = 5381
+  for (let i = 0; i < s.length; i++) h = (((h << 5) + h) + s.charCodeAt(i)) >>> 0
+  return 'len=' + s.length + ' fp=' + h.toString(16)
+}
+function logNf (reason, key) {
+  const tag = reason + '|' + nfKeyTag(key)
+  if (_nfReasonLogged.has(tag)) return
+  _nfReasonLogged.add(tag)
+  const line = '[local://app://] 404 reason=' + reason + ' ' + nfKeyTag(key)
+  try { require('electron-log').warn(line) } catch { try { console.warn(line) } catch { /* headless */ } }
+}
+
 /* Media elements (audio/video) in newer Chromium (confirmed on Electron 39) require Range support from custom protocols:
    replying with a whole-file 200 makes <audio> fail outright with MEDIA_ERR_SRC_NOT_SUPPORTED (code 4) — white noise/confirm sounds all mute.
    Everything goes through this responder: no Range = 200 full body + Accept-Ranges; with Range = 206 slice. */
@@ -94,6 +120,7 @@ function handleAppProtocol () {
       const segs = rel.split(path.sep)
       if (!rel || rel.startsWith('..') || path.isAbsolute(rel) ||
           segs.some(s => s === '..') || !APP_ROOTS.includes(segs[0])) {
+        logNf('nf-outside-root', u) // [w30 P1]
         return new Response('not found', { status: 404 })
       }
       const mime = {
@@ -140,7 +167,7 @@ function handleAppProtocol () {
       // semantics as attachmentPath — the downstream containment + realpath checks still
       // gate what is actually served.
       let key = keyRaw
-      try { key = decodeURIComponent(keyRaw) } catch { /* keep raw key (attachmentPath parity) */ }
+      try { key = decodeURIComponent(keyRaw) } catch { logNf('nf-bad-encoding', keyRaw); /* keep raw key (attachmentPath parity) */ }
       let resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
@@ -157,7 +184,7 @@ function handleAppProtocol () {
       // dangling link) keeps the existing 404 contract. attachRoot's realpath is cached — the
       // attachment dir never moves mid-process; one fs syscall per request for the file itself.
       let real = null
-      try { real = await fs.promises.realpath(resolved) } catch { return new Response('nf', { status: 404 }) }
+      try { real = await fs.promises.realpath(resolved) } catch { logNf('nf-missing-file', key); return new Response('nf', { status: 404 }) }
       try { realRoot = realRoot || await fs.promises.realpath(attachRoot) } catch { realRoot = null }
       if (!realRoot || !(real === realRoot || real.startsWith(realRoot + path.sep))) return new Response('forbidden', { status: 403 })
       // Serve the REAL path so a symlink swap between check and read cannot race the decision.
@@ -168,7 +195,7 @@ function handleAppProtocol () {
       // saveAttachment and conflict renames never start with '.' and never equal aliases.json, so
       // no legitimate local:// url can land here (see isLocalBookkeepingFile for the unit-tested
       // decision).
-      if (isLocalBookkeepingFile(path.basename(resolved))) return new Response('nf', { status: 404 })
+      if (isLocalBookkeepingFile(path.basename(resolved))) { logNf('nf-bookkeeping', key); return new Response('nf', { status: 404 }) }
       // C13/C15 (2026-09-25): single-source mime table + legacy-svg forced download (see the
       // EXT_MIME/localAttachmentHeaders comment at the bottom of this file).
       const { mime, extraHeaders } = localAttachmentHeaders(resolved)
@@ -185,7 +212,10 @@ function handleAppProtocol () {
       if (/\.(ogg|mp3|wav|mp4|webm)$/i.test(resolved)) return await fileResponse(resolved, mime, req, secureHeaders)
       const data = await fs.promises.readFile(resolved)
       return new Response(data, { headers: { 'Content-Type': mime, ...secureHeaders } })
-    } catch { return new Response('nf', { status: 404 }) }
+    } catch {
+      logNf('nf-internal-error', typeof keyRaw !== 'undefined' ? keyRaw : req.url) // [w30 P1]
+      return new Response('nf', { status: 404 })
+    }
   })
 }
 

@@ -29,6 +29,7 @@
  */
 
 const fs = require('fs')
+const path = require('path')
 
 /** Legacy host-form detector: `local://<key>` with the key in the HOST component (no
  *  third slash). The W16+ path form (`local:///...`) is never legacy. Non-local urls → false. */
@@ -145,6 +146,14 @@ function migrateLegacyAttachmentUrlsOnBoot (d, deps = {}) {
     }
     log.info('[attachment-migrate] legacy local:// host-form scan: rows=' + result.scanned +
       ' rewritten=' + result.rewritten + ' missing=' + result.missing + ' changedRows=' + result.changedRows)
+    // [w30 P0 supplement] orphan reconciliation rides the same boot pass (its own fail-open
+    // try/catch — an audit failure must never fail the migration or the boot): files that sit
+    // in userData/files but are referenced by NO todo row and are not bookkeeping/alias-reserved
+    // are counted (and swept ONLY when TODO_CLI_ATTACH_ORPHAN_SWEEP=1) so ghosts cannot eat the
+    // 64MB quota silently.
+    try { result.orphanAudit = reconcileOrphanAttachmentsOnBoot(d, deps) } catch (e) {
+      try { log.warn('[attachment-orphan] audit skipped (non-blocking): ' + (e && e.message)) } catch { /* logging is best-effort */ }
+    }
   } catch (e) {
     result.error = (e && e.message) || String(e)
     try { require('electron-log').warn('[attachment-migrate] boot migration failed (non-blocking): ' + result.error) } catch { console.error('[attachment-migrate] boot migration failed (non-blocking): ' + result.error) }
@@ -152,4 +161,78 @@ function migrateLegacyAttachmentUrlsOnBoot (d, deps = {}) {
   return result
 }
 
-module.exports = { isLegacyHostFormUrl, decodeLegacyHostKey, resolveAgainstDisk, migrateRowAttachments, migrateLegacyAttachmentUrlsOnBoot }
+module.exports = { isLegacyHostFormUrl, decodeLegacyHostKey, resolveAgainstDisk, migrateRowAttachments, migrateLegacyAttachmentUrlsOnBoot, findOrphanAttachments, reconcileOrphanAttachmentsOnBoot }
+
+/* ---- [w30 P0 supplement] orphan attachment reconciliation ----
+ * userData/files accumulates "ghosts": bytes that landed on disk (upload acked, conflict
+ * rename residue, a row whose JSON update never persisted) but that NO todo row references
+ * anymore. They are invisible to every UI yet count against the attachment quota. This audit
+ * lists them at boot — the default action is AUDIT ONLY (a warn log with counts); deletion
+ * happens exclusively when TODO_CLI_ATTACH_ORPHAN_SWEEP=1 is set, because a full-row scan miss
+ * can still be wrong in edge shapes the reference counters do not model (e.g. a row mid-flush
+ * in the renderer's safeUpsert retry queue). */
+/** Pure core: given the on-disk names, the DB rows, and the alias map, return the orphan
+ *  names — bookkeeping files (aliases.json / atomic-write temp residue) and alias-map
+ *  entries (both directions: the renamed on-disk key AND the original key it stands for)
+ *  are never orphans; everything else needs at least one image/files reference via
+ *  attachments.findKeyRefs (the same resolution rules the unlink guards use). */
+function findOrphanAttachments ({ diskNames, rows, aliases } = {}) {
+  const { isLocalBookkeepingFile } = require('./protocol')
+  const { findKeyRefs } = require('./attachments')
+  const reserved = new Set()
+  if (aliases && typeof aliases === 'object') {
+    for (const [k, v] of Object.entries(aliases)) { reserved.add(String(k)); reserved.add(String(v)) }
+  }
+  const orphans = []
+  for (const name of (diskNames || [])) {
+    const n = String(name)
+    if (isLocalBookkeepingFile(n)) continue
+    if (reserved.has(n)) continue
+    if (findKeyRefs(n, rows).length === 0) orphans.push(n)
+  }
+  return orphans
+}
+
+/** Boot entry (piggybacks migrateLegacyAttachmentUrlsOnBoot): audit-only by default.
+ *  deps (all optional, unit-test seams): listDiskNames() / attachDirPath / rows /
+ *  listAliases() / log / sweepEnv ('1' forces the sweep; undefined reads the real env).
+ *  Returns { scanned, orphanCount, deleted, orphans, error } and NEVER throws. */
+function reconcileOrphanAttachmentsOnBoot (d, deps = {}) {
+  const result = { scanned: 0, orphanCount: 0, deleted: 0, orphans: [], error: null }
+  try {
+    const log = deps.log || (() => { try { return require('electron-log') } catch { return { info: console.error, warn: console.error } } })()
+    const dir = deps.attachDirPath || require('./attachments').attachDir()
+    const diskNames = deps.listDiskNames ? deps.listDiskNames() : fs.readdirSync(dir)
+    result.scanned = diskNames.length
+    const rows = deps.rows || d.prepare('SELECT id, image, files FROM todos').all()
+    const aliases = deps.listAliases ? deps.listAliases() : require('./attachments').readAliases()
+    result.orphans = findOrphanAttachments({ diskNames, rows, aliases })
+    result.orphanCount = result.orphans.length
+    // Audit stamp in meta (best-effort, same doctrine as the migration stamp). The names
+    // themselves are user content — only counts go to storage/logs.
+    try {
+      d.prepare("INSERT INTO meta (key, value) VALUES ('attOrphan.audit', ?) " +
+        'ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+        .run(JSON.stringify({ at: Date.now(), files: result.scanned, orphans: result.orphanCount, deleted: result.deleted }))
+    } catch { /* meta table absent in some fixtures */ }
+    // Deletion is opt-in via env ONLY. Default: audit and keep — the full-row scan cannot see
+    // a row still sitting in the renderer's pending-upsert queue, so "zero references" is not
+    // proof of ghosthood within one process lifetime.
+    const sweep = deps.sweepEnv !== undefined
+      ? (deps.sweepEnv === '1' || deps.sweepEnv === true)
+      : process.env.TODO_CLI_ATTACH_ORPHAN_SWEEP === '1'
+    if (sweep && result.orphans.length) {
+      for (const name of result.orphans) {
+        try { fs.unlinkSync(path.join(dir, name)); result.deleted++ } catch (e) {
+          log.warn('[attachment-orphan] sweep unlink failed for one file (kept): ' + (e && e.message))
+        }
+      }
+    }
+    log.warn('[attachment-orphan] audit: files=' + result.scanned + ' orphans=' + result.orphanCount +
+      ' deleted=' + result.deleted + ' sweep=' + (sweep ? 'on' : 'off'))
+  } catch (e) {
+    result.error = (e && e.message) || String(e)
+    try { require('electron-log').warn('[attachment-orphan] audit failed (non-blocking): ' + result.error) } catch { console.error('[attachment-orphan] audit failed (non-blocking): ' + result.error) }
+  }
+  return result
+}
