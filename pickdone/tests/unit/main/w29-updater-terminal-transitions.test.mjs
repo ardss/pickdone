@@ -147,7 +147,7 @@ test('manual downloadUpdate: idempotent reentry, state ownership, consent restor
   autoUpdater.emit('update-available', { version: '9.9.9' })
   assert.equal(updater.getStatus().status, 'available', 'with consent off, availability shows as a notice')
 
-  let releaseDownload // eslint-disable-line no-unused-vars — populated by the download promise path
+  let releaseDownload // eslint-disable-line no-unused-vars
   downloadBehavior = () => new Promise(res => { releaseDownload = res })
   const p1 = updater.downloadUpdate()
   const p2 = updater.downloadUpdate()
