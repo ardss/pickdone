@@ -532,12 +532,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // [H5 2026-10-25] plaintext-fallback session: surface the degradation once (see enc-migration-notice.js).
     require('./enc-migration-notice').showEncMigrationNotice(win, log)
 
-    // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
-    if (readConfig().enableSecurityLock) {
-      win.webContents.once('did-finish-load', () => {
-        try { lockAppNow() } catch (e) { log.error('[SecurityLock] lock failed', e) }
-      })
-    }
+    // Security lock arming moved to windows.js createMainWindow (W29 P2 2026-11-01): the old
+    // once('did-finish-load') here covered only the FIRST window — a window destroyed and
+    // recreated before its first load completed left the rebuilt window permanently unlocked.
+    // createMainWindow now arms on every creation (fire-time guard keeps it from double-
+    // triggering with the load-failure fallback in windows.js).
     log.info('[App] init done. userData=', app.getPath('userData'))
   }).catch(e => {
     // Uncaught exceptions inside the whenReady chain (createTray/registerIpc/applyShortcuts etc.): Electron by default only logs and does not exit,
