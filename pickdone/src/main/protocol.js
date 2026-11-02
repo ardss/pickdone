@@ -132,7 +132,15 @@ function handleAppProtocol () {
       // '/' to normalize both forms onto the same key.
       let keyRaw = req.url.slice('local://'.length)
       if (keyRaw.startsWith('/')) keyRaw = keyRaw.slice(1)
-      const key = decodeURIComponent(keyRaw)
+      // W29 (P3): a malformed percent-encoding ('a%zz.png') made decodeURIComponent throw
+      // URIError; the outer catch mapped it to a 404 — while attachmentPath()'s raw-key
+      // fallback (same file) could still resolve such a key. The result was a key the
+      // reference-counters saw as present but this handler could never serve (the file
+      // survived as a dead residual on task delete). Fall back to the RAW key here, same
+      // semantics as attachmentPath — the downstream containment + realpath checks still
+      // gate what is actually served.
+      let key = keyRaw
+      try { key = decodeURIComponent(keyRaw) } catch { /* keep raw key (attachmentPath parity) */ }
       let resolved = path.resolve(attachmentPath(key))
       const attachRoot = path.resolve(attachDir())
       if (!(resolved === attachRoot || resolved.startsWith(attachRoot + path.sep))) return new Response('forbidden', { status: 403 }) // 带尾分隔符,防同前缀兄弟目录(2026-09-05 终审 hardening)
