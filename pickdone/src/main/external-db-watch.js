@@ -391,14 +391,19 @@ function createExternalDbWatch (deps) {
     resyncDbWatch = () => { lastMtime = nextWatchBaseline(lastMtime, readWatchMtime) }
     pollTickHook = () => forwardTomatoCmd() // test seam: one manual poll tick without fs.watchFile
     changeHook = () => onChange() // M2a test seam: one poll tick that goes through the change path
-    // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
-    stopDbWatch = () => {
-      // Round-3 stability (2026-09-26): a pending debounce kick survived the unwatch and fired against the closed DB handle. Clear it first.
-      try { clearTimeout(debounce) } catch {}
-      try { fs.unwatchFile(dbFile, onChange) } catch {}
-      try { fs.unwatchFile(walFile, onChange) } catch {}
-      resyncDbWatch = null
-    }
+  // P2 2026-09-11: fs.watchFile never unwatched — poll timers kept the quit chain alive/lint-y; release them on quit
+  stopDbWatch = () => {
+    // Round-3 stability (2026-09-26): a pending debounce kick survived the unwatch and fired against the closed DB handle. Clear it first.
+    try { clearTimeout(debounce) } catch {}
+    try { fs.unwatchFile(dbFile, onChange) } catch {}
+    try { fs.unwatchFile(walFile, onChange) } catch {}
+    // W30 (P3): the test-seam hooks were left stale after a stop — a __pollTickForTests /
+    // __pollChangeForTests call between stop and the next start ticked the DEAD closure (stale
+    // baseline / closed-handle reads) instead of being a no-op. Null them with everything else.
+    pollTickHook = null
+    changeHook = null
+    resyncDbWatch = null
+  }
   }
   const api = {
     watchDbForExternalWrites,
@@ -414,7 +419,17 @@ function createExternalDbWatch (deps) {
     __pollChangeForTests: () => { try { if (changeHook) changeHook() } catch { /* onChange swallows its own */ } }
   }
   latestStopDbWatch = () => { try { if (stopDbWatch) stopDbWatch() } catch {} }
-  latestRestartDbWatch = () => { try { watchDbForExternalWrites() } catch {} }
+  // W30 (P3 2026-11-01): restart is now IDEMPOTENT — it stops the previous watch first. The old
+  // `watchDbForExternalWrites()` alone stacked a SECOND fs.watchFile pair (both closures alive,
+  // every external write processed twice: double reload+broadcast, double tomato/sync forwarding)
+  // whenever restart ran without an intervening stop — and it did: system.js's relocate-failure
+  // and re-init branches call restartLatestDbWatch on paths where the stop may already have been
+  // consumed by an earlier stop+start cycle. stopDbWatch also clears the poll/change test hooks,
+  // so the restarted watch re-arms every closure from scratch (already the rebuild contract).
+  latestRestartDbWatch = () => {
+    try { if (latestStopDbWatch) latestStopDbWatch() } catch {}
+    try { watchDbForExternalWrites() } catch {}
+  }
   return api
 }
 
