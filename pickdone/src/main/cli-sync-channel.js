@@ -62,7 +62,9 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
       const cur = JSON.parse(getMeta('cliSyncCmd') || 'null')
       // Compare-and-delete: only clear the slot when it STILL holds the command we just
       // handled — a newer command must never be eaten by an older handler's cleanup.
-      if (cur && Number(cur.seq) === Number(cmd.seq)) deleteMeta('cliSyncCmd')
+      // 2026-11-03 (W31 P2): await the delete so an awaited caller observes the slot as
+      // durably gone when this resolves (an unawaited async delete left the exit-replay window).
+      if (cur && Number(cur.seq) === Number(cmd.seq)) await deleteMeta('cliSyncCmd')
     } catch (e) { log.warn('[CLI] sync slot cleanup failed:', e.message) }
   }
   const respond = (seq, payload) => {
@@ -174,7 +176,13 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
       return
     }
     // Slot cleanup after handling (see clearHandledSlot): no restart replay of a handled command.
-    Promise.resolve(handle(cmd)).finally(() => { clearHandledSlot(cmd) })
+    // 2026-11-03 (W31 P2): the clear used to be fire-and-forget (`finally(() => { clear(cmd) })`),
+    // so an app exit between the receipt write and the async deleteMeta landing left the slot
+    // persisted — the next startup's slot seed REPLAYED an already-executed command (an unpair
+    // replay re-rotates the pairing secret, non-idempotent). Await the delete inside finally AND
+    // return the chain so poll callers that await `forward` block until the slot is durably gone;
+    // callers that don't await keep their old fire-and-forget behavior.
+    return Promise.resolve(handle(cmd)).finally(async () => { await clearHandledSlot(cmd) })
   }
   return { forward }
 }
