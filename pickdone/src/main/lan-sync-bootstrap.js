@@ -441,21 +441,27 @@ async function restartSync ({ preserveEnabled = true } = {}) {
 }
 
 async function stopSync () {
-  if (!state.node) return
-  for (const t of state.timers) { clearTimeout(t); clearInterval(t) }
-  state.timers = []
-  const n = state.node
-  // P2 2026-09-20: the security-ring persist is write-throttled to <=1 write/sec — pending
-  // throttled entries lived only in the node's memory ring and were LOST when the app quit
-  // inside the throttle window (the unref'd timer never fires). Flush synchronously BEFORE the
-  // node is torn down; quit/disable/unpair all funnel through here.
+  // W30 (P3 2026-11-01): the throttled security-persist handling moved ABOVE the node early-return.
+  // The old `if (!state.node) return` skipped the flush AND the timer clear — after any path that
+  // tears the node down without stopSync (or a stop racing an in-flight throttle window), the
+  // pending securityPersistTimer stayed armed and its callback later hit the `!state.node` guard
+  // and silently dropped the ring entries it was holding (lost security ring writes on quit).
+  // Now every stopSync entry: clear the timer, then attempt the same guarded flush (the flush
+  // itself still requires a live node + non-degraded store, so a node-less stop just drains the
+  // timer — the honest outcome when there is no ring left to persist).
   try {
     if (securityPersistTimer) { clearTimeout(securityPersistTimer); securityPersistTimer = null }
+    const n = state.node
     // Round-1 P0: guard getStatus — a stale/mocked node reference threw
     // `n.getStatus is not a function` and masked the flush with a warning.
     // S6: the flush also aborts while degraded — a corrupt read must never shrink the ring.
     if (n && typeof n.getStatus === 'function' && securitySettingStore.canPersist()) settingPut(K_SECURITY_LOG, JSON.stringify(n.getStatus().security.slice(-20)))
   } catch (e) { log.warn('[LanSync] security log flush on stop failed:', e.message) }
+  const node = state.node
+  if (!node) return
+  for (const t of state.timers) { clearTimeout(t); clearInterval(t) }
+  state.timers = []
+  const n = node
   state.node = null
   state.pendingPair = null
   // P1-4 (2026-09-19 data-safety round): the engine (and its hydration caches) used to be nulled
