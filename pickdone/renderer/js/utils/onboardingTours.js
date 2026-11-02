@@ -84,18 +84,30 @@ export function runTour (key, force = false) {
   const appRoot = document.getElementById('app')
   if (appRoot) appRoot.setAttribute('inert', '')
   const releaseInert = () => { if (appRoot) appRoot.removeAttribute('inert') }
-  const drv = factory({
-    animate: true,
-    allowClose: true,
-    overlayOpacity: 0.6,
-    showProgress: false,
-    nextBtnText: tt(T('next')),
-    prevBtnText: tt(T('prev')),
-    doneBtnText: tt(T('done')),
-    steps,
-    onDestroy: () => releaseInert()
-  })
-  drv.drive()
+  // [w30 P2] the synchronous section (driver construction + drive) can throw (bad step config,
+  // driver.js internal error) — without this guard the freshly-set inert attribute is never
+  // released and the WHOLE app shell stays unclickable until reload. On failure: release inert,
+  // log, leave the tour unseen so a later entry can retry. The normal path still releases via
+  // onDestroy (async, fires when the user finishes/closes the tour).
+  let drv = null
+  try {
+    drv = factory({
+      animate: true,
+      allowClose: true,
+      overlayOpacity: 0.6,
+      showProgress: false,
+      nextBtnText: tt(T('next')),
+      prevBtnText: tt(T('prev')),
+      doneBtnText: tt(T('done')),
+      steps,
+      onDestroy: () => releaseInert()
+    })
+    drv.drive()
+  } catch (e) {
+    releaseInert()
+    console.error('[tours] driver failed to start, inert released:', e)
+    return false
+  }
   markSeen(key)
   return true
 }

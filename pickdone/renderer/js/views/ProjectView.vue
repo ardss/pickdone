@@ -491,7 +491,9 @@ export default {
       // warning (same fix family as ProjectOverviewView.createProject); any OTHER rejection is a
       // real persistence error and now surfaces instead of being read as a cancel.
       try {
-        const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryName: name })
+        // [w29 P2] dispatch (not commit): store.commit() discards the mutation's persist
+        // boolean, so a failed SQLite write read as ok === undefined and toasted success.
+        const ok = await this.$store.dispatch('category/updateCategory', { categoryId: this.catId, categoryName: name })
         if (ok === false) return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
         this.$message.success(this.$t('statsB.ProjectView.renamed'))
       } catch (e) {
@@ -501,7 +503,8 @@ export default {
     },
     async setColor (color) {
       // [A4 fix] same confirmed-write contract as renameProject: surface a failed persist
-      const ok = await this.$store.commit('category/updateCategory', { categoryId: this.catId, categoryColor: color })
+      // [w29 P2] dispatch: commit() swallows the persist boolean (see renameProject)
+      const ok = await this.$store.dispatch('category/updateCategory', { categoryId: this.catId, categoryColor: color })
       if (ok === false) this.$message.error(this.$t('statsH.main.actionFailedMsg'))
     },
     async setDeadline () {

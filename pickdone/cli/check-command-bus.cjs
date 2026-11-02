@@ -248,7 +248,9 @@ function run () {
     // INJECTED db handle so unit tests can drive corrupt-read/degraded-persist scenarios
     // against a fresh table — same injected-contract class as tomato-announce (routing it
     // through the module bus would bypass the injected contract the tests stub).
-    { file: 'src/main/lan-sync-bootstrap.js', frags: ["db.call('settingsRowPut', { key, value })"] }
+    // W30 size split: the helper moved to lan-sync/watermark-store.js (the host passes its
+    // bus-anchored dbCall seam; the module never sees the raw handle).
+    { file: 'src/main/lan-sync/watermark-store.js', frags: ["dbCall('settingsRowPut', { key: k, value })"] }
   ]
   // Exact-line anchors for the DYNAMIC wholesale-dispatch surfaces (rec #4): these closures
   // pass the op through variable — mixed read/write injected surfaces that cannot route
@@ -256,6 +258,7 @@ function run () {
   const DYNAMIC_ANCHORS = [
     { file: 'src/main/lan-sync-bootstrap.js', frags: ["require('./sync-conflict-backups').ops(() => (op, p) => state.db.call(op, p))"] },
     { file: 'src/main/lan-sync-bootstrap.js', frags: ['dbCall: (op, p) => state.db.call(op, p)'] },
+    { file: 'src/main/lan-sync-bootstrap.js', frags: ["makeWatermarkStoresForDb: (db) => require('./lan-sync/watermark-store').makeWatermarkStoresForDb({ dbCall: (op, p) => db.call(op, p)"] },
     { file: 'src/main/sync-apply-flush.js', frags: ['createBus((op, p) => state.db.call(op, p))'] },
     { file: 'src/main/sync-apply-hydrate.js', frags: ['new Map((state.db.call(op, {}) || [])'] },
     // f4 category-tombstone filter cascade: the writer param defaults to the bus; callers pass

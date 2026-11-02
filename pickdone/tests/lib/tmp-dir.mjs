@@ -72,7 +72,18 @@ const STALE_MS = 12 * 60 * 60 * 1000
 // tests/ source walk, so extraction could never discover them (same structural blind spot the
 // todo-cov- seeding below fixed); a relay run killed mid-flight leaked the dir forever. Note
 // neither `journey-` nor `relay-` (both already here) matches the `jrelay-` spelling.
-const FAMILY_FALLBACK = /^(todo-|todo-cov-|jrelay-|d\d{1,3}-|lan-sync-|pd-|journey-|relay-|pickdone-|r\d+-)/
+// W29 2026-11-01: keep in step with cli/env-clean.js TEST_TMP_FAMILY (that gate is CJS and
+// cannot import this ESM module — the two manifests are a hand-synced pair):
+//  ① seeded cov-ratchet-test- / ratchet-test- / vp-linux-sha- (real mkdtemp prefixes the
+//     extraction walk misses: check-coverage-ratchet.test.mjs / d11-cli-tomato-schedule-
+//     taxonomy.test.mjs / verify-packaged-linux-sha.test.mjs).
+//  ② the bare `d\d{1,3}-` / `r\d+-` alternations were narrowed to the ENUMERATED real
+//     prefixes (grep over mkdtempSync/isolatedTmpDir/withTmpDir/newTmpLib call sites):
+//     d3/d4/d6/d7/d9/d10-d15/d17-d22/d25/d26, r1/r4/r4c/r6/r17. os.tmpdir() is a shared
+//     surface — a bare prefix family would rmSync user dirs like `d1-tools` / `r42-notes`.
+// w29: exported so the w29 sync-anchor test can prove this manifest and cli/env-clean.js's
+// TEST_TMP_FAMILY stay behaviorally equal (direct sharing is blocked by the CJS/ESM boundary).
+export const FAMILY_FALLBACK = /^(todo-|todo-cov-|jrelay-|cov-ratchet-test-|ratchet-test-|vp-linux-sha-|lan-sync-|pd-|journey-|relay-|pickdone-|d(3|4|6|7|9|1[0-5]|1[789]|2[0-2]|25|26)-|r(1|4c?|6|17)-)/
 
 let cachedPrefixes = null
 function collectPrefixesFromSources () {

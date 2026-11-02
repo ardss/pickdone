@@ -63,7 +63,14 @@ function makeSyncKick (notify, { timerMs = 750, setTimeout: st = setTimeout, cle
     try { notify(op); return true } catch { return false }
   }
   const retry = () => {
-    timer = null
+    // W30 (P3 2026-11-01): clearTimeout the OLD timer before nulling the slot. retry() is not only
+    // the timer callback — kick() calls it INLINE on re-entry while a retry timer is still pending.
+    // The inline run nulled `timer` without clearing the scheduled setTimeout, so the stale timer
+    // later fired a second retry; if that retry re-queued (still failing) it scheduled ANOTHER
+    // timer on the now-empty slot, leaving TWO live one-shot retries — duplicate notify() delivery
+    // attempts and, with a mock-less real timer, a self-multiplying retry chain on sustained
+    // failure. Clearing makes the slot genuinely single-timer again.
+    if (timer) { ct(timer); timer = null }
     if (deferred == null) return
     const op = deferred
     deferred = null
@@ -98,17 +105,66 @@ const { ownsAttachmentFile } = require('../attachment-ownership')
  *  Lifecycle (2026-10-02): after the bulk unlink the device-local alias map is pruned — entries
  *  whose target file this purge just removed must die with it, or they keep resolving the dead
  *  logical key to a missing file forever (leak + blocks the missing-file re-pull). */
-function purgeAttachmentFiles (attachDir, ids) {
+function purgeAttachmentFiles (attachDir, ids, opts = {}) {
   if (!ids || !ids.length) return
   try {
     const dir = attachDir()
-    for (const f of fs.readdirSync(dir)) {
-      if (ids.some(id => ownsAttachmentFile(f, id))) {
-        try { fs.unlinkSync(path.join(dir, f)) } catch (err) { log.warn('[Purge] 附件删除失败:', f, err.message) }
-      }
+    // W30 (P2): shared-reference guard — skip files whose local:// key another surviving row still
+    // references (copy/paste / repeat-template sharing). `opts.rows` is the caller's pre-fetched
+    // getAll({deleted:null}) snapshot (the dying ids are excluded inside the filter); without it
+    // (legacy callers / fetch failure) the behavior is the old unconditional unlink (fail-open).
+    const owned = filterSharedAttachmentFiles(fs.readdirSync(dir).filter(f => ids.some(id => ownsAttachmentFile(f, id))), { rows: opts.rows || null, excludeIds: ids })
+    for (const f of owned) {
+      try { fs.unlinkSync(path.join(dir, f)) } catch (err) { log.warn('[Purge] 附件删除失败:', f, err.message) }
     }
     try { require('../attachments').pruneMissingAliases() } catch { /* alias prune is best-effort */ }
   } catch (err) { log.warn('[Purge] 附件目录遍历失败:', err.message) }
+}
+
+/** W30 (P2, F2 follow-up 2026-11-01): shared-reference guard for BATCH/cascade attachment deletes.
+ *  The single-entry delete-file channel already refuses to unlink a file whose local:// key is
+ *  still referenced by ANOTHER row (F2 2026-10-15, findKeyRefs) — but delete-todo-files,
+ *  delete-todo-files-many, hardDelete's file cascade and purgeAttachmentFiles all unlinked purely
+ *  by filename ownership, so a copy-pasted / repeat-template-shared key died silently with the
+ *  first purged owner while other rows still pointed at it. This is the batch twin: given the
+ *  candidate on-disk filenames and the CURRENT full row set ({deleted:null} — tombstones count,
+ *  a recycle-bin row is one restore click away), drop every file whose key is still referenced by
+ *  a row whose taskId is NOT in `excludeIds` (the rows about to die — hardDelete/purge pass them;
+ *  delete-todo-files passes nothing, parity with delete-file which excludes nobody). Pure: files
+ *  in, surviving-candidate files out, no IO. A `rows` fetch failure at the caller is fail-open
+ *  (callers pass rows=null → every candidate survives the filter), matching delete-file's
+ *  documented "db scan failure keeps the old behavior" tradeoff. Reference scan is ONE pass over
+ *  the rows (a Set of referenced keys), not findKeyRefs per file — batch scale. */
+function filterSharedAttachmentFiles (files, { rows = null, excludeIds = [] } = {}) {
+  const list = Array.isArray(files) ? files : [files]
+  const excl = new Set((excludeIds || []).map(String))
+  const surviving = (rows || []).filter(r => r && r.taskId != null && !excl.has(String(r.taskId)))
+  if (!surviving.length) return list
+  // Key extraction mirrors attachments.attachmentKeyOfUrl verbatim (local:// prefix, optional
+  // path-form slash, decodeURIComponent fallback, basename). Inlined instead of required because
+  // attachments.js drags electron in at module top — the same electron-free-seam rationale that
+  // produced attachment-ownership.js; if the two ever drift, the drift can only over-keep files
+  // (safe direction), never unlink a referenced one.
+  const keyOfUrl = url => {
+    if (typeof url !== 'string' || !url.startsWith('local://')) return null
+    let k = url.slice(8)
+    if (k.startsWith('/')) k = k.slice(1)
+    try { k = decodeURIComponent(k) } catch { /* malformed encoding: raw key */ }
+    return path.basename(k)
+  }
+  const refs = new Set()
+  for (const row of surviving) {
+    for (const field of ['image', 'files']) {
+      let items
+      try { items = JSON.parse(row[field] || '[]'); if (!Array.isArray(items)) continue } catch { continue }
+      for (const item of items) {
+        const k = keyOfUrl(item && item.url)
+        if (k) refs.add(k)
+      }
+    }
+  }
+  if (!refs.size) return list
+  return list.filter(f => !refs.has(path.basename(String(f))))
 }
 
 /** Pure decision for the startup meta GC (extracted 2026-09-19 from index.js for unit testing —
@@ -322,4 +378,4 @@ function crashRelaunchDecision (persistedRelaunchCount, { cap = CRASH_RELAUNCH_C
   return Number(persistedRelaunchCount) >= cap ? 'give-up' : 'relaunch'
 }
 
-module.exports = { makeAssertMainWindow, makeSenderIsMain, purgeAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS, isLiveTextFresh, TOMATO_LIVE_TTL_MS, crashRelaunchDecision, CRASH_RELAUNCH_CAP, openExternalSafely }
+module.exports = { makeAssertMainWindow, makeSenderIsMain, purgeAttachmentFiles, filterSharedAttachmentFiles, ownsAttachmentFile, computeMetaGc, classifyCommitKey, makeSyncKick, stripForbiddenSettingsKeys, FLOAT_FORBIDDEN_SETTINGS_KEYS, isLiveTextFresh, TOMATO_LIVE_TTL_MS, crashRelaunchDecision, CRASH_RELAUNCH_CAP, openExternalSafely }

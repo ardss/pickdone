@@ -49,7 +49,8 @@ function launch () {
     const id = 'm' + nextId++
     pending.set(id, resolve)
     child.stdin.write(JSON.stringify({ id, ...msg }) + '\n')
-    setTimeout(() => { if (pending.has(id)) { pending.delete(id); resolve({ error: 'side timeout' }) } }, 15000)
+    // CI windows runners are heavily CPU-throttled: a PS/adapter cold start can eat >10s
+    setTimeout(() => { if (pending.has(id)) { pending.delete(id); resolve({ error: 'side timeout' }) } }, 30000)
   })
   const kill = () => { try { child.kill('SIGKILL') } catch {} }
   return { child, send, kill }
@@ -88,7 +89,8 @@ test('smoke: 4 concurrent drill sides — distinct ports, distinct dirs, two ind
     await sides[2].send({ do: 'write', ops: [task('smoke_p2', 'pair two')] })
 
     const converge = async (driver, reader, taskId, label) => {
-      const deadline = Date.now() + 12000
+      // convergence semantics are timing-independent — the deadline only bounds the wait
+      const deadline = Date.now() + 45000
       for (;;) {
         for (let i = 0; i < 3; i++) {
           await driver.send({ do: 'round' })

@@ -475,6 +475,12 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     scheduler.setShowMainEntry(showMainOrLock) // D10: reminder notification clicks honor the security lock
     registerIpc()
     extWatch.watchDbForExternalWrites()
+    // T7 win-bind P1-1: pay the PS cold start (~2.5s spawn + Add-Type) ONCE here at boot so the
+    // first drag-release identify probes a hot adapter — the only binding entry point used to
+    // spawn PS on the first release itself, and GetCursorPos then sampled ~1-1.7s AFTER the hand
+    // let go (wrong-window binds / silent OWN_WINDOW-DESKTOP misses). prewarm never rejects and
+    // is deliberately NOT called per-IPC.
+    try { require('./win-bind').prewarm() } catch { /* best-effort boot prewarm */ }
     // Perf (2026-10-02): reloadAll + Meta GC moved AFTER registerIpc/extWatch — they used to run
     // before the IPC/bus wiring, blocking the window-ready path on synchronous GC work. No
     // behavior change: registerIpc is synchronous wiring, reloadAll's fingerprint gate
@@ -532,12 +538,11 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // [H5 2026-10-25] plaintext-fallback session: surface the degradation once (see enc-migration-notice.js).
     require('./enc-migration-notice').showEncMigrationNotice(win, log)
 
-    // Security lock: when enabled the main process takes over — hide the main window and pop a standalone lock screen (aligned with the reference enableSecurityLock)
-    if (readConfig().enableSecurityLock) {
-      win.webContents.once('did-finish-load', () => {
-        try { lockAppNow() } catch (e) { log.error('[SecurityLock] lock failed', e) }
-      })
-    }
+    // Security lock arming moved to windows.js createMainWindow (W29 P2 2026-11-01): the old
+    // once('did-finish-load') here covered only the FIRST window — a window destroyed and
+    // recreated before its first load completed left the rebuilt window permanently unlocked.
+    // createMainWindow now arms on every creation (fire-time guard keeps it from double-
+    // triggering with the load-failure fallback in windows.js).
     log.info('[App] init done. userData=', app.getPath('userData'))
   }).catch(e => {
     // Uncaught exceptions inside the whenReady chain (createTray/registerIpc/applyShortcuts etc.): Electron by default only logs and does not exit,

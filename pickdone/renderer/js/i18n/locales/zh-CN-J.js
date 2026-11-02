@@ -97,6 +97,7 @@ export default {
   'statsJ.DoneEntry.label': '已达成',
   'statsJ.EditPanel.saveFailed': '保存失败 · 更改未写入，请重试',
   'statsJ.EditPanel.saveRetry': '重试保存',
+  'statsJ.EditPanel.saveUnconfirmed': '已入待保存队列 · 持久化未确认，可重试保存',
   'statsJ.EditPanel.remoteUpdated': '内容已在其他设备更新',
   'statsJ.EditPanel.remoteRefresh': '刷新',
   'statsJ.EditPanel.priorityNormal': '一般',

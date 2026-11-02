@@ -98,6 +98,7 @@ export default {
   'statsJ.DoneEntry.label': 'Completed',
   'statsJ.EditPanel.saveFailed': 'Save failed · changes not written, please retry',
   'statsJ.EditPanel.saveRetry': 'Retry save',
+  'statsJ.EditPanel.saveUnconfirmed': 'Queued for save · persistence unconfirmed, retry to force a write',
   'statsJ.EditPanel.remoteUpdated': 'Content updated on another device',
   'statsJ.EditPanel.remoteRefresh': 'Refresh',
   'statsJ.EditPanel.priorityNormal': 'Low',

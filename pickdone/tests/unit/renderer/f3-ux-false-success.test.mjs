@@ -126,7 +126,7 @@ test('F3-3 SnManageCategoriesModal.toggleProject gates the success toast on the 
 
 test('F3-4 saveMgrEdit: a failed persist keeps the editor open on the old name', () => {
   const src = read('renderer/js/components/side-nav/SnManageCategoriesModal.vue')
-  assert.match(src, /const ok = await this\.\$store\.commit\('category\/updateCategory', \{ categoryId: c\.categoryId, categoryName: this\.mgrName\.trim\(\) \}\)/, 'persist result captured')
+  assert.match(src, /const ok = await this\.\$store\.dispatch\('category\/updateCategory', \{ categoryId: c\.categoryId, categoryName: this\.mgrName\.trim\(\) \}\)/, 'persist result captured')
   assert.match(src, /if \(ok === false\) \{[\s\S]*?statsH\.main\.actionFailedMsg[\s\S]*?this\.mgrName = c\.categoryName/, 'failure: toast + editor restored to the old name (kept open)')
   // the CATEGORY_EXISTS branch must keep its refocus convention
   assert.match(src, /e\.code === 'CATEGORY_EXISTS'/, 'duplicate-name warning branch preserved')
@@ -141,7 +141,7 @@ test('F3-5 renameProject: cancel scoped to the dialog await; persistence errors 
   const body = m[0]
   assert.match(body, /catch \{ return \} \/\/ user cancelled the dialog/, 'the ONLY swallow is the $prompt cancel')
   assert.equal((body.match(/catch ?[{(]/g) || []).length, 2, 'exactly two catch scopes: dialog cancel + persist errors')
-  assert.match(body, /const ok = await this\.\$store\.commit\('category\/updateCategory', \{ categoryId: this\.catId, categoryName: name \}\)/, '[A4] pinned gate line shape preserved (d20 contract)')
+  assert.match(body, /const ok = await this\.\$store\.dispatch\('category\/updateCategory', \{ categoryId: this\.catId, categoryName: name \}\)/, '[A4] pinned gate line shape preserved (d20 contract)')
   assert.match(body, /e\.code === 'CATEGORY_EXISTS'/, 'duplicate-name warning preserved')
   assert.match(body, /statsH\.main\.actionFailedMsg/, 'unknown persistence rejections surface (no cancel swallow)')
   assert.doesNotMatch(body, /throw e\s*\n\s*\}\s*\n\s*\} catch \{/, 'no rethrow into an outer cancel-swallowing catch')

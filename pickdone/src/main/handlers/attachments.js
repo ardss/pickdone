@@ -148,12 +148,21 @@ module.exports = function attachmentHandlers (ctx) {
       assertMainWindow(e) // D6 P2 (2026-09-21): destructive channel, main-window-only like backup write
       if (isLocked()) throw new Error('locked')
       const dir = attachDir()
-      const { ownsAttachmentFile } = require('./shared')
+      const { ownsAttachmentFile, filterSharedAttachmentFiles } = require('./shared')
+      // W30 (P2, F2 follow-up): shared-reference guard — the single delete-file channel refuses to
+      // unlink a key another row still references (F2 2026-10-15), but this bulk path unlinked by
+      // ownership alone, so a copy-pasted / repeat-template-shared file died with the first caller.
+      // No exclusion here (parity with delete-file: a surviving reference in ANY row — including
+      // this task's own, which the renderer splices+flushes before calling — keeps the file).
+      // db scan failure = fail-open (old behavior), same documented tradeoff as delete-file.
+      let rows = null
+      try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }
+      const doomed = filterSharedAttachmentFiles(
+        fs.readdirSync(dir).filter(f => ownsAttachmentFile(f, String(taskId))),
+        { rows }
+      )
       const failures = []
-      for (const f of fs.readdirSync(dir)) {
-        // P2 2026-09-17: exact ownership via the timestamp segment — a bare taskId+'_' prefix let
-        // task 'a' delete task 'a_b''s attachments when the ids were prefix-related
-        if (!ownsAttachmentFile(f, String(taskId))) continue
+      for (const f of doomed) {
         try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') failures.push(f + ': ' + String((err && err.message) || err)) }
       }
       if (failures.length) throw new Error('delete-todo-files failed: ' + failures.join('; '))
@@ -172,11 +181,19 @@ module.exports = function attachmentHandlers (ctx) {
       if (!Array.isArray(taskIds) || !taskIds.length) return 0
       const idStrs = taskIds.map(String)
       const dir = attachDir()
-      const { ownsAttachmentFile } = require('./shared')
+      const { ownsAttachmentFile, filterSharedAttachmentFiles } = require('./shared')
+      // W30 (P2, F2 follow-up): shared-reference guard (see delete-todo-files above). The dying
+      // ids ARE excluded — these rows are already committed/purging, so their own references do
+      // not count; only OTHER surviving rows keep a file alive. Fail-open on the db scan.
+      let rows = null
+      try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }
       const failures = []
       let deleted = 0
-      for (const f of fs.readdirSync(dir)) {
-        if (!idStrs.some(taskId => ownsAttachmentFile(f, taskId))) continue
+      const doomed = filterSharedAttachmentFiles(
+        fs.readdirSync(dir).filter(f => idStrs.some(taskId => ownsAttachmentFile(f, taskId))),
+        { rows, excludeIds: idStrs }
+      )
+      for (const f of doomed) {
         try { fs.unlinkSync(path.join(dir, f)); deleted++ } catch (err) { if ((err && err.code) !== 'ENOENT') failures.push(f + ': ' + String((err && err.message) || err)) }
       }
       if (failures.length) throw new Error('delete-todo-files-many failed: ' + failures.join('; '))

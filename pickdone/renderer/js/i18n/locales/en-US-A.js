@@ -129,6 +129,7 @@ export default {
       weekdayTitle: 'Weekday distribution',
       weekdaySubtitle: 'By weekday · bars = completed events, line = focus minutes (right axis)',
       weekdaySummary: 'The day with the most focus minutes is {d}.',
+      weekdaySummaryEmpty: 'No focus sessions yet — the most-focused day shows up once you have some',
       trendTitle: 'Completion trend',
       trendSummaryEmpty: 'Not enough data yet — keep going to build your normal',
       trendSummaryBase: 'The dashed line is your usual daily level ({n}/day) — bars above it mean a better-than-usual stretch.',

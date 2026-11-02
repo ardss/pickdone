@@ -24,6 +24,10 @@ function parseEnglishDate (text, base) {
   let restText = text
   let date = null
   let label = ''
+  // [w29 P3] the parsed date words carried an EXPLICIT year (2026-01-15 / Jan 15 2026 / jan 2027):
+  // the time roll-forward below must NOT re-interpret the user's literal date when an explicit
+  // time makes it past ("Jan 15 2020 3pm" stays Jan 15 2020, it is not nudged forward).
+  let explicitYear = false
 
   // Step 1: strip English time words from text first (recording into h/min/hasTime)
   // This lets later "date + time" combos (e.g. tomorrow 3pm) reuse the same logic
@@ -92,6 +96,7 @@ function parseEnglishDate (text, base) {
         const y = +m[1]; const mo = +m[2]; const d = +m[3]
         if (mo >= 1 && mo <= 12 && d >= 1 && d <= base.year(y).month(mo - 1).daysInMonth()) {
           date = base.year(y).month(mo - 1).date(d).startOf('day')
+          explicitYear = true
           label = `${y}-${String(mo).padStart(2, '0')}-${String(d).padStart(2, '0')}`
         }
       } else {
@@ -108,7 +113,7 @@ function parseEnglishDate (text, base) {
           const numRun = m[2]
           const yearOnly = numRun.length === 4 // "jan 2027": month + bare year, no day
           const d = yearOnly ? 1 : +numRun
-          const explicitYear = yearOnly || m[3] != null
+          explicitYear = yearOnly || m[3] != null
           const y = m[3] != null ? +m[3] : (yearOnly ? +numRun : base.year())
           if (d >= 1 && d <= base.year(y).month(mo).daysInMonth()) {
             date = base.year(y).month(mo).date(d).startOf('day')
@@ -183,8 +188,13 @@ function parseEnglishDate (text, base) {
     // in the task body — QuickAdd rendered a chip for an input the user never got.
     if (h > 23 || min > 59) return { date: null, label: '', restText: text }
     let d = date.hour(h).minute(min).second(0)
-    // Explicit time given: already past → roll forward one day (consistent with the Chinese version)
-    if (d.isBefore(base)) d = d.add(1, 'day')
+    // [w29 P3] Explicit time given: already past → roll forward one day (consistent with the
+    // Chinese version) — but ONLY when the date words did not pin a year: "Jan 15 2020 3pm" is
+    // the user's literal date and must not be silently nudged. After the single roll the result
+    // is re-checked and KEPT even if base has moved past it (e.g. an implicit date more than a
+    // day behind): one corrective roll max — we never loop into multi-day shifts the user
+    // did not ask for.
+    if (!explicitYear && d.isBefore(base)) d = d.add(1, 'day')
     date = d
     label = (label ? label + ' ' : '') + mmToHHmm(h * 60 + min)
   }
@@ -224,8 +234,17 @@ export function parseNaturalDate (text, base = dayjs()) {
     if (peeled.h > 23 || peeled.min > 59) return parseChineseNaturalDate(raw, base, FMT.cnFull)
     const cnResult = parseChineseNaturalDate(peeled.text, base, FMT.cnFull)
     const d = cnResult.date || base.startOf('day')
+    // [w30 P2] explicit-year gate — same semantics as the English branch's `!explicitYear`
+    // roll guard above: a PINNED full date ("2025年1月1日 3pm" / "2025-1-1 3pm") is the user's
+    // literal date; when its explicit time already passed the old unconditional +1 day moved
+    // the date AND silently changed its year. Detect the core's full-date shapes (the whole
+    // trimmed string must be a full date for the core to consume them, so anchoring here is
+    // faithful) and skip the corrective roll for them.
+    const trimmedCn = peeled.text.trim()
+    const explicitYear = /(?:^|\s)\d{4}[-/.]\d{1,2}[-/.]\d{1,2}(?:$|\s)/.test(trimmedCn) ||
+      /^\d{4}\s*年\s*\d{1,2}\s*月\s*\d{1,2}\s*[日号]$/.test(trimmedCn)
     let withTime = d.hour(peeled.h).minute(peeled.min).second(0)
-    if (withTime.isBefore(base)) withTime = withTime.add(1, 'day')
+    if (!explicitYear && withTime.isBefore(base)) withTime = withTime.add(1, 'day')
     return {
       date: withTime,
       label: (cnResult.label ? cnResult.label + ' ' : '') + mmToHHmm(peeled.h * 60 + peeled.min),

@@ -60,4 +60,20 @@ function bootEnableWithRetry ({ startSync, log, emitSyncEvent }) {
   bootEnable()
 }
 
-module.exports = { bootEnableWithRetry, syncDegradedNotice, BOOT_ENABLE_ATTEMPTS, BOOT_ENABLE_RETRY_MS, BOOT_ENABLE_LATE_RETRY_MS }
+module.exports = {
+  bootEnableIfConfigured, bootEnableWithRetry, syncDegradedNotice, BOOT_ENABLE_ATTEMPTS, BOOT_ENABLE_RETRY_MS, BOOT_ENABLE_LATE_RETRY_MS }
+
+/** [w30 size split] the conditional startup-enable moved here from lan-sync-bootstrap (that
+ *  module is at its size ratchet). Reads the enabled flag itself; warn-only on failure. */
+function bootEnableIfConfigured ({ settingGet, enabledKey, startSync, log, emitSyncEvent } = {}) {
+  try {
+    if (settingGet(enabledKey) !== true) return false
+    // D2-c: startSync is async and fail-closed — a bind failure at boot must be logged,
+    // not become an unhandled rejection. K_ENABLED stays true so the toggle reflects the
+    // user's intent, but getStatus().listening=false shows the device card the truth.
+    // [H1 2026-10-25] the retry ladder + visible degradation live here: fast arm 3x5s for
+    // the crash-storm window, one late arm at 60s, then ONE visible notice if sync is down.
+    bootEnableWithRetry({ startSync, log, emitSyncEvent })
+    return true
+  } catch (e) { try { log.warn('[LanSync] startup enable failed:', e.message) } catch { /* noop */ } return false }
+}

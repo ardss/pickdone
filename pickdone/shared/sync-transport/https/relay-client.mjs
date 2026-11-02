@@ -203,10 +203,18 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       // cursor is the fingerprint of a lost relay store: reset the local sync state (cursor and
       // pushed-set) and bail; the next round re-pushes every revision and re-pulls from 0 —
       // applyEnvelope treats the replays as duplicates/ignored, so convergence is LWW-safe.
+      // W29 (P2): a relay that answers 200 with a malformed pull body (no `items`) used to
+      // throw TypeError on the first `pull.items` access; the durable host classifies that
+      // shapeless throw as RETRYABLE, burned every retry of the round and — with the relay
+      // answering the same way forever — left sync idle permanently. Tolerate the missing
+      // field like `skipped` above (same defensive shape as the relay contract's optional
+      // lists) and surface the anomaly as a diagnostic count instead.
+      const pullItems = Array.isArray(pull.items) ? pull.items : []
+      const malformedPull = Array.isArray(pull.items) ? 0 : 1
       if (Number.isFinite(pull.headSeq) && pull.headSeq < cursorState.cursor) {
         cursorState.cursor = 0
         cursorState.pushed.clear()
-        return { pushed: 0, pulled: pull.items.length, quarantined: 0, cursor: 0, regressionReset: true }
+        return { pushed: 0, pulled: pullItems.length, quarantined: 0, cursor: 0, regressionReset: true, malformedPull }
       }
       let applied = cursorState.cursor
       let quarantined = 0
@@ -230,7 +238,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
         applied = Math.max(applied, sk.serverSeq)
         quarantined++
       }
-      for (const item of pull.items) {
+      for (const item of pullItems) {
         let env
         try {
           env = dataKey ? open(dataKey, item.envelope) : unpackEnvelope(item.envelope)
@@ -286,7 +294,7 @@ export function createRelayClient({ nodeId, account, baseUrl, fetchImpl = fetch,
       cursorState.cursor = ackSeq
       let ackInfo = null
       if (ackSeq > 0) ackInfo = await post('/v1/sync/ack', { account, device: nodeId, ackSeq })
-      return { pushed: items.length, pulled: pull.items.length, quarantined, cursor: ackSeq, ack: ackInfo, received }
+      return { pushed: items.length, pulled: pullItems.length, quarantined, cursor: ackSeq, ack: ackInfo, received, malformedPull }
     },
     register: doRegister,
     materialized() { return materializedAll(s) },

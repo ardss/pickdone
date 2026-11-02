@@ -7,7 +7,9 @@
  *  Lifecycle hard rules (repo lessons applied):
  *   - the spawned child MUST carry 'error' AND 'exit' listeners (D13 C4 lesson,
  *     notify-sound.js:45-47: an un-listened 'error' crashed the main process);
- *   - an unexpected exit respawns lazily on the next call, bounded by maxRespawn;
+ *   - an unexpected exit respawns lazily on the next call, bounded by maxRespawn — the budget
+ *     counts CONSECUTIVE failures: every answered (non-ping) round trip resets it, so transient
+ *     PS deaths (AV kill, OOM) cannot permanently brick the tray-resident adapter;
  *   - every query has its own timeout; a wedged child is killed and costs one respawn;
  *   - the boot handshake (ping→pong) doubles as the Add-Type compile barrier, so the first
  *     real query is hot and cold-start (~2.5s) is paid exactly once, inside prewarm;
@@ -34,9 +36,9 @@ function createWinAdapter (deps = {}) {
   let starting = null
   let disposed = false
   let nextId = 1
-  let respawnUsed = 0
+  let respawnUsed = 0 // deaths since the last answered (non-ping) round trip — consecutive, not lifetime
   let buffer = ''
-  const pending = new Map() // id → { resolve, reject, timer }
+  const pending = new Map() // id → { resolve, reject, timer, op }
 
   function failAll (err) {
     for (const p of pending.values()) {
@@ -63,6 +65,11 @@ function createWinAdapter (deps = {}) {
     if (!p) return
     pending.delete(msg.id)
     clearTimeout(p.timer)
+    // P2-1: any dispatched response proves the CURRENT child served a real query — the respawn
+    // budget guards against consecutive crash/respawn cycles, not lifetime totals, so a healthy
+    // round trip zeroes it. The boot ping is excluded on purpose: a child that answers ping but
+    // wedges every real query is exactly the recycle loop maxRespawn must bound.
+    if (p.op !== 'ping') respawnUsed = 0
     if (msg.ok) p.resolve(msg.result)
     else p.reject(new Error('win-bind native error: ' + (msg.error || 'unknown')))
   }
@@ -108,7 +115,7 @@ function createWinAdapter (deps = {}) {
         starting = null
         killChild()
       }, timeout)
-      pending.set(id, { resolve, reject, timer })
+      pending.set(id, { resolve, reject, timer, op })
       try {
         cWrite(JSON.stringify(payload) + '\n')
       } catch (err) {

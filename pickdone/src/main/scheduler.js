@@ -69,6 +69,8 @@ let _persistTimer = null
 // M-10 (2026-09-20): a failed flushFiredNow used to silently drop the persist — already-fired
 // reminders then re-fired after restart. On setMeta failure: log + re-arm a 30s retry, max 3.
 let _persistRetries = 0
+// W30 (P3): cadence for the post-exhaustion safety re-flush (see flushFiredNow's catch).
+const PERSIST_EXHAUSTED_REFLUSH_MS = 120_000
 function schedulePersistFired () {
   if (_persistTimer) return
   _persistTimer = setTimeout(() => { flushFiredNow() }, 60_000)
@@ -116,12 +118,24 @@ function flushFiredNow () {
     }
   } catch (e) {
     // M-10: log + bounded 30s retry backoff instead of the old silent drop; the in-process LRU
-    // still dedupes meanwhile. After 3 failed retries give up (the next markFired re-arms the
-    // 60s debounce anyway).
+    // still dedupes meanwhile.
     log.warn('[Scheduler] fired-reminder persist failed, will retry:', e && e.message)
     if (_persistRetries < 3) {
       _persistRetries++
       _persistTimer = setTimeout(() => { flushFiredNow() }, 30_000)
+      if (_persistTimer && _persistTimer.unref) _persistTimer.unref()
+    } else {
+      // W30 (P3 2026-11-01): retry exhaustion used to leave NOTHING armed — the comment claimed
+      // "the next markFired re-arms the 60s debounce anyway", but a reminder fires ONCE per
+      // instance: after the last markFired of a burst, an exhausted retry window left every
+      // pending watermark unwritten in memory only, and a crash inside that window re-fired ALL
+      // of them after restart (exactly the loss the watermark exists to prevent) — the two arms
+      // at the markFired eviction site (:38-52) both flush for the same reason. Close the loop:
+      // a single delayed re-flush replaces the abandoned retry chain; each exhausted re-flush
+      // that fails schedules the next one (self-perpetuating but bounded to one timer, unref'd,
+      // 2min cadence — a success resets _persistRetries and the normal 60s debounce resumes).
+      if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null }
+      _persistTimer = setTimeout(() => { flushFiredNow() }, PERSIST_EXHAUSTED_REFLUSH_MS)
       if (_persistTimer && _persistTimer.unref) _persistTimer.unref()
     }
   }

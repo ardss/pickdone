@@ -127,8 +127,8 @@ test('[A4] category.updateCategory returns persist() success; ProjectView gates 
     global.window.todoAPI = prevCall
   }
   const pv = read('renderer/js/views/ProjectView.vue')
-  assert.match(pv, /const ok = await this\.\$store\.commit\('category\/updateCategory', \{ categoryId: this\.catId, categoryName: name \}\)/)
-  assert.match(pv, /const ok = await this\.\$store\.commit\('category\/updateCategory', \{ categoryId: this\.catId, categoryColor: color \}\)/)
+  assert.match(pv, /const ok = await this\.\$store\.dispatch\('category\/updateCategory', \{ categoryId: this\.catId, categoryName: name \}\)/)
+  assert.match(pv, /const ok = await this\.\$store\.dispatch\('category\/updateCategory', \{ categoryId: this\.catId, categoryColor: color \}\)/)
   // both failure branches toast the shared actionFailedMsg key
   assert.match(pv, /statsH\.main\.actionFailedMsg/)
 })

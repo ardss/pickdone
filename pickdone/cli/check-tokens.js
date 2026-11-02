@@ -16,7 +16,9 @@ const path = require('path')
 const ROOT = process.env.GATE_ROOT || path.join(__dirname, '..') // GATE_ROOT: golden-fixture self-tests point the gate at a temp tree
 const FILES = ['assets/css/base.css', 'assets/css/theme-dark.css']
 
-// Exemptions: white that is intentional by design (does not flip with the theme). Substring matching.
+// Exemptions: white that is intentional by design (does not flip with the theme).
+// w29(2026-11-01): matching is SAME-LINE only — a fragment no longer exempts violations that
+// merely sit within 8 lines below it (the old look-back let one entry silence a drifting window).
 const WHITELIST = [
   '纯白定稿', // tomato-float card background: intentionally pure white as marked by a comment (whitelist matches by inline comment)
   'sn-dot.none', // sidebar no-category dot's white center
@@ -59,9 +61,11 @@ for (const rel of FILES) {
     for (const [re, msg, scope] of RULES) {
       if (scope && !scope.includes(rel)) continue
       if (re.test(line)) {
-        // match against the line AND its 8-line look-back context, so selector-scoped exemptions survive upstream line drift
-      const ctx = lines.slice(Math.max(0, i - 8), i + 1).join('\n')
-        if (WHITELIST.some(w => line.includes(w) || ctx.includes(w))) continue
+        // w29 fix(2026-11-01): the old 8-line look-back context match exempted ANY violation
+        // line within 8 lines above a whitelist substring — one registered fragment silenced a
+        // whole drifting window (new violations added nearby greened silently). Whitelist now
+        // anchors to the SAME LINE only (存量实测：收紧后全量扫描 0 命中，无误伤).
+        if (WHITELIST.some(w => line.includes(w))) continue
         hits.push(`${rel}:${i + 1}  [${msg}]\n    ${line.trim().slice(0, 120)}`)
       }
     }
@@ -75,8 +79,8 @@ for (const { rel, css } of cssSources(ROOT).filter(src => src.rel.includes("rend
   lines.forEach((line, i) => {
     for (const [re, msg] of RULES) {
       if (re.test(line)) {
-        const ctx = lines.slice(Math.max(0, i - 8), i + 1).join("\n")
-        if (WHITELIST.some(w => line.includes(w) || ctx.includes(w))) continue
+        // w29 fix(2026-11-01): same-line anchor only (mirror of the note in the FILES loop).
+        if (WHITELIST.some(w => line.includes(w))) continue
         hits.push(`${rel}:${i + 1}  [${msg}]`)
       }
     }

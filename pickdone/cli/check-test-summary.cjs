@@ -121,6 +121,42 @@ function red (msg, tapFile) {
   process.exit(1)
 }
 
+// W30 (2026-11-01) coverage instrument unification. run-all tags its coverage-summary.json with
+// the suite pool it ran (suiteTag: `all` with no --suite, `unit` with --suite=unit, `unit+core`
+// when --tier rides along), and the ratchet gate treats anything but bare 'unit' as a foreign
+// instrument (tier-suffixed summaries are outright slot pollution → hard red). A bare
+// `--with-coverage` therefore used to produce an 'all'-pool summary that the ratchet could only
+// compare-not-raise against — the two gates were measuring with different instruments.
+// Fix: --with-coverage pins --suite=unit (the ratchet's calibration pool). Consequences handled:
+//   - --with-coverage + --core is FORBIDDEN outright: the pool would be unit∩core = unit-minus-deep,
+//     tagged 'unit+core', which summaryIsTierScoped reds on. There is no legal calibration story
+//     for that combo, so fail fast before spawning any tests.
+//   - --affected dirs come from the code-surface map (any suite); under --suite=unit the pool is
+//     tests/unit/** + sibling test/ only, and run-all fail-closes on a --dirs entry matching zero
+//     pool files. Intersect with the unit pool; empty intersection → drop --dirs entirely
+//     (degrade to the full unit pool, still the right instrument) instead of a hard red.
+// Pure + exported so the w30 anchor test can pin the matrix without spawning tests.
+const UNIT_POOL_DIRS = ['tests/unit', 'test'] // run-all suiteOf: tests/unit/** + sibling test/ dir
+function resolveCoverageScope ({ withCoverage, core, affectedDirs }) {
+  if (!withCoverage) return { suite: null, dirs: affectedDirs || null, degraded: false }
+  if (core) {
+    return {
+      fatal: '--with-coverage 与 --core 不得组合:池为 unit∩core 且摘要 suite 标签会是 "unit+core",被覆盖率棘轮判为共享槽污染直接报红,组合无合法口径。校准请单跑 --with-coverage(全量 unit 池);core 层单测走无覆盖率门禁。',
+      suite: null, dirs: null, degraded: false
+    }
+  }
+  const requested = affectedDirs || []
+  const dirs = requested.filter(d => UNIT_POOL_DIRS.some(p => d === p || d.startsWith(p + '/')))
+  return {
+    suite: 'unit',
+    dirs: dirs.length ? dirs : null,
+    degraded: requested.length > 0 && dirs.length === 0
+  }
+}
+
+module.exports = { parseSummary, resolveCoverageScope, UNIT_POOL_DIRS }
+
+function main () {
 // Only a non-flag argument is a TAP-file path; flags (--with-coverage) are options
 const arg = process.argv.slice(2).find(a => !a.startsWith('--')) ?? null
 let tapFile = arg || null
@@ -131,16 +167,18 @@ if (arg) {
 } else {
   // 主管道模式:跑单测层,TAP 重定向进临时文件(不靠管道,exit code 不被吞)
   tapFile = path.join(os.tmpdir(), `check-test-summary-${process.pid}-${Date.now()}.tap`)
-  // --with-coverage: forward --experimental-test-coverage so run-all also writes the coverage
-  // summary for the ratchet gate (avoids a second concurrent full-suite run)
+  // --with-coverage: forward --experimental-test-coverage so run-all writes the coverage
+  // summary for the ratchet gate (avoids a second concurrent full-suite run). W30: this gate
+  // now ALWAYS pins --suite=unit alongside it (see resolveCoverageScope) so the shared slot
+  // always holds the ratchet's calibration instrument.
   // --core: forward --tier=core (pure in-process specs; deep suites — live Electron, two-instance
-  // lan-sync journeys, loopback drills — stay with the full check:all gate)
+  // lan-sync journeys, loopback drills — stay with the full check:all gate). Forbidden with
+  // --with-coverage (resolveCoverageScope fatal) — no legal coverage-calibration story for it.
   // --affected: consult cli/check-test-scope.cjs; scoped → --dirs run, full → plain --core,
   // skip → docs-only change, unit stage not meaningful (loud, never silent).
-  const extra = [
-    ...(process.argv.includes('--with-coverage') ? ['--experimental-test-coverage'] : []),
-    ...(process.argv.includes('--core') ? ['--tier=core'] : []),
-  ]
+  const withCoverage = process.argv.includes('--with-coverage')
+  const core = process.argv.includes('--core')
+  let affectedDirs = null
   if (process.argv.includes('--affected')) {
     const { scopeFor } = require('./check-test-scope.cjs')
     const verdict = scopeFor() // no args: reads git staged set itself
@@ -149,12 +187,21 @@ if (arg) {
       process.exit(0)
     }
     if (verdict.verdict === 'scoped') {
-      extra.push(`--dirs=${verdict.dirs.join(',')}`)
+      affectedDirs = verdict.dirs
       console.log(`[check-test-summary] affected scope: ${verdict.reason}`)
     } else {
       console.log(`[check-test-summary] affected scope unavailable → full core tier (${verdict.reason})`)
     }
   }
+  const cov = resolveCoverageScope({ withCoverage, core, affectedDirs })
+  if (cov.fatal) red(cov.fatal)
+  if (cov.degraded) console.log('[check-test-summary] affected scope 与 unit 池目录交集为空 → 去掉 --dirs,降级为全量 unit 口径(--with-coverage 的覆盖率摘要必须来自 unit 池;空 --dirs 会被 run-all 判硬红)')
+  const extra = [
+    ...(withCoverage ? ['--experimental-test-coverage'] : []),
+    ...(cov.suite ? [`--suite=${cov.suite}`] : []),
+    ...(!withCoverage && core ? ['--tier=core'] : []),
+  ]
+  if (cov.dirs) extra.push(`--dirs=${cov.dirs.join(',')}`)
   const runOnce = tapPath => {
     const fd = fs.openSync(tapPath, 'w')
     // run-all is streaming now: the tap file grows live, so a hung/budget-killed run leaves
@@ -226,5 +273,13 @@ if (skip > SKIP_BASELINE) {
 }
 
 console.log(`✓ [check-test-summary] # pass ${pass ?? '?'} / # fail ${fail} / # cancelled ${cancelled} / # skipped ${skip} ≤ 基线 ${SKIP_BASELINE}`)
-// 临时 TAP:成功即清;失败路径经 red() exit 保留在 tmpdir 供人工回放(有意为之)
-if (!arg) { try { fs.unlinkSync(tapFile) } catch { /* already gone */ } }
+// 临时 TAP:成功即清;失败路径经 red() exit 保留在 tmpdir 供人工回放(有意为之)。
+// W30: --retry-once 的 pass-1 存证(*.prev)同样只在失败路径保留——成功路径必须一并清掉,
+// 否则每次带 retry 的绿跑都在 %TEMP% 泄漏一份全量 TAP(原实现只删了正本)。
+if (!arg) {
+  try { fs.unlinkSync(tapFile) } catch { /* already gone */ }
+  try { fs.unlinkSync(tapFile + '.prev') } catch { /* no retry pass-1 this run */ }
+}
+} // main
+
+if (require.main === module) main()

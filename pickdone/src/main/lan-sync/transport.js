@@ -59,14 +59,8 @@ const PROTO_VER = 2
 const MIN_PROTO_VER = 2
 // W16: our own app version, advertised in `hello` so a peer can record which build it is
 // talking to (stored on the server's state.peer, delivered to the app via onPeer). Resolved
-// lazily from package.json (present in dev and inside app.asar) — this module stays pure Node,
-// no Electron import.
-let _cachedAppVersion = null
-function ownAppVersion () {
-  if (_cachedAppVersion !== null) return _cachedAppVersion
-  try { _cachedAppVersion = String(require('../../../package.json').version || '') } catch { _cachedAppVersion = '' }
-  return _cachedAppVersion
-}
+// lazily from package.json (see lan-sync/app-version.js — [w29 size split])
+const { ownAppVersion, __resetOwnAppVersionForTests } = require('./app-version.js')
 // W16: structured code for a version-gate rejection.
 function protoVerRejectCode (peerProto) {
   return peerProto > PROTO_VER ? 'peer-too-new' : 'peer-too-old'
@@ -851,4 +845,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, flushThenDestroy, PAIR_FLUSH_CAP_MS, ProtocolError, PROTO_VER, MIN_PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }
+module.exports = { createLanServer, connect, send, wireConnection, flushThenDestroy, PAIR_FLUSH_CAP_MS, ProtocolError, PROTO_VER, MIN_PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget, ownAppVersion, __resetOwnAppVersionForTests }

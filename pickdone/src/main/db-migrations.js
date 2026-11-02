@@ -119,6 +119,25 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       ensureRepeatDayUniqueness(d)
       return true
     } },
+    { v: 10, fn: d => {
+      // W29 (2026-11-01): legacy `local://<host>` attachment urls (pre-W16 mint form) are
+      // permanently 404 — Chromium punycode/lowercases the HOST component, so a Chinese or
+      // uppercase filename can never decode back at the serve boundary (the user-reported
+      // broken-paste-image incident, 3 reports). One-time repair: rewrite recoverable rows
+      // to the W16 path form (`local:///<encoded>`), mark unrecoverable entries
+      // `missing: true` (renderer shows an explicit placeholder, never a silent broken img).
+      // Fail-open by contract: the migration itself never throws (all-or-log inside
+      // attachment-migrate.migrateLegacyAttachmentUrlsOnBoot), so a poisoned row can never
+      // wedge schemaVersion. Non-Electron contexts (pure fixtures) skip silently.
+      try {
+        if (process.versions && process.versions.electron) {
+          require('./attachment-migrate').migrateLegacyAttachmentUrlsOnBoot(d)
+        }
+      } catch (e) {
+        console.error('[db-migrations] v10 attachment url migration failed (non-blocking, legacy values stay serve-boundary-resolvable):', e)
+      }
+      return true
+    } },
     ]
   buildMigrations.ensureRepeatDayUniqueness = ensureRepeatDayUniqueness
   return migrationsOverride || BUILT_IN

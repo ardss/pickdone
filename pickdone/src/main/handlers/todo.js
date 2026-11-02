@@ -6,7 +6,7 @@ const path = require('path')
 const tomatoFloat = require('../tomato-float')
 const scheduler = require('../scheduler')
 const appAudit = require('../audit')
-const { makeAssertMainWindow, purgeAttachmentFiles, classifyCommitKey, makeSyncKick } = require('./shared')
+const { makeAssertMainWindow, purgeAttachmentFiles, filterSharedAttachmentFiles, classifyCommitKey, makeSyncKick } = require('./shared')
 const { evalFloatLedger } = require('../float-ledger')
 const { collectOwnedAttachmentFiles } = require('../attachment-ownership')
 const bus = require('../command-bus')
@@ -158,12 +158,13 @@ module.exports = function todoHandlers (ctx) {
       // the row goes (collect failure must not block the delete: log and skip cleanup), then remove
       // them after the write landed.
       let hardDeleteFiles = null
+      let hardDeleteId = null
       if (op === 'hardDelete' && params != null) {
         try {
           // D3 (2026-09-24): the owned-file collection moved to the electron-free domain module
           // src/main/attachment-ownership.js (collectOwnedAttachmentFiles) — same filter, same call.
-          const id = String(Array.isArray(params) ? params[0] : params)
-          hardDeleteFiles = collectOwnedAttachmentFiles(attachDir, id)
+          hardDeleteId = String(Array.isArray(params) ? params[0] : params)
+          hardDeleteFiles = collectOwnedAttachmentFiles(attachDir, hardDeleteId)
         } catch (err) { log.warn('[IPC] hardDelete attachment collect failed (files may be orphaned):', err) }
         // Lifecycle (2026-10-02): files BEFORE the commit — the unlink used to run only AFTER the
         // bus commit landed, i.e. rows-before-files, the exact order main-ipc-8 rejected for the
@@ -175,6 +176,13 @@ module.exports = function todoHandlers (ctx) {
         // The alias prune rides the same sweep: entries whose target file just died must not keep
         // resolving the dead key forever.
         if (hardDeleteFiles && hardDeleteFiles.length) {
+          // W30 (P2, F2 follow-up): shared-reference guard — the row being hard-deleted dies with
+          // its references (excluded below), but a copy-pasted / repeat-template-shared key must
+          // survive if ANY other row (live or tombstone) still points at it. Fail-open on the db
+          // scan = old unconditional unlink, same tradeoff as delete-file.
+          let allRows = null
+          try { allRows = dbm.call('getAll', { deleted: null }) || [] } catch { allRows = null }
+          hardDeleteFiles = filterSharedAttachmentFiles(hardDeleteFiles, { rows: allRows, excludeIds: hardDeleteId != null ? [hardDeleteId] : [] })
           const dir = attachDir()
           for (const f of hardDeleteFiles) {
             try { fs.unlinkSync(path.join(dir, f)) } catch (err) { if ((err && err.code) !== 'ENOENT') log.warn('[IPC] hardDelete attachment file removal failed (pre-commit):', f, err) }
@@ -349,7 +357,12 @@ module.exports = function todoHandlers (ctx) {
         throw new Error('purge aborted: failed to collect recycle-bin rows, no rows or files were deleted: ' + String((err && err.message) || err))
       }
       // Files BEFORE the commit (main-ipc-8): see the comment above the ids collection.
-      purgeAttachmentFiles(attachDir, ids)
+      // W30 (P2): rows snapshot rides along so purgeAttachmentFiles' shared-reference guard can
+      // keep a file whose local:// key a SURVIVING row (live or tombstone not in this purge,
+      // e.g. a copy-pasted entry on a live task) still references.
+      let purgeRows = null
+      try { purgeRows = dbm.call('getAll', { deleted: null }) || [] } catch { purgeRows = null }
+      purgeAttachmentFiles(attachDir, ids, { rows: purgeRows })
       // Phase-2: the purge commits go through the command bus (todo.purgeBin manifest row) —
       // the 'ls-mirror' hook fires the sync kick, 'undo-barrier' re-baselines the external-write
       // watcher (our own WAL write must not surface as an external CLI write).
@@ -363,7 +376,7 @@ module.exports = function todoHandlers (ctx) {
         const purged = Array.isArray(r) ? r.map(String) : []
         const seen = new Set(ids.map(String))
         const missed = purged.filter(id => !seen.has(id))
-        if (missed.length) purgeAttachmentFiles(attachDir, missed)
+        if (missed.length) purgeAttachmentFiles(attachDir, missed, { rows: purgeRows })
       } catch (err) { log.warn('[Purge] commit-race attachment sweep failed (files may be orphaned):', err) }
       // M-4 (2026-09-20): mirror the GAP-B pattern — purge is a write; without the kick peers only
       // saw emptied recycle bins at the next 5-min periodic round.
@@ -386,10 +399,12 @@ module.exports = function todoHandlers (ctx) {
       // A collect failure must not block the purge: log and skip cleanup.
       let seedIds = []
       try {
-        seedIds = (dbm.call('getAll', { deleted: null }) || [])
+        const allRows = dbm.call('getAll', { deleted: null }) || []
+        seedIds = allRows
           .map(t => t && t.taskId != null ? String(t.taskId) : '')
           .filter(id => id.startsWith('seed_'))
-        if (seedIds.length) purgeAttachmentFiles(attachDir, seedIds)
+        // W30 (P2): rows ride along for the shared-reference guard (same as purge-recycle-bin).
+        if (seedIds.length) purgeAttachmentFiles(attachDir, seedIds, { rows: allRows })
       } catch (err) { log.warn('[Purge] 种子任务附件收集失败（跳过文件清理，仅删行）:', err) }
       const r = bus.commit('todo', 'purgeSeed')
       // Symmetric with purge-recycle-bin: purging demo data also refreshes the scheduler + broadcasts (once missing → other windows kept stale seed records and scheduled reminders still fired)

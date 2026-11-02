@@ -11,7 +11,12 @@ import i18n from '../../i18n/index.js'
 /* Project warning badge: number of projects with an approaching deadline/milestone due (within 7 days, including overdue) — the template previously referenced a never-declared projectWarn so the badge was always empty (confirmed by the template identifier guard's first run) */
 export function projectWarn (vm) {
   const meta = vm.$store.state.category.projectMeta || {}
-  const now = Date.now()
+  // [w30 P3] reactive clock: a bare Date.now() has NO reactive dependency, so the computed never
+  // re-evaluated — a badge that appeared as "due within 7 days" stayed (or stayed absent) across
+  // midnight until an unrelated projectMeta write. Read the store-owned todayTimestamp
+  // (store/todo.js setTodayTs, refreshed on the day rollover timer) instead — same caliber the
+  // habit domain uses for its day reads.
+  const now = (vm.$store.state.todo && vm.$store.state.todo.todayTimestamp) || Date.now()
   const WEEK = 7 * 86400000
   let n = 0
   for (const id of Object.keys(meta)) {

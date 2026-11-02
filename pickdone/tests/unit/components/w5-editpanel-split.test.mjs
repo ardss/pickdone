@@ -43,7 +43,7 @@ test('split: children declare their change events', () => {
 
 test('split: EditPanel owns the unified save pipeline via utils/editSave.js', () => {
   const src = read(PARENT)
-  assert.match(src, /import \{ createSaveQueue \} from '\.\.\/utils\/editSave\.js'/)
+  assert.match(src, /import \{ createSaveQueue, createPersistProbe \} from '\.\.\/utils\/editSave\.js'/) // w30 P0: the enqueue-vs-persisted probe rides the same module
   assert.match(src, /this\._save = createSaveQueue\(this\.\$store, \{/)
   // dirty list-style fields collected at drain time, keyed like the original flags
   for (const k of ['subtasks', 'imgs', 'files', 'preds']) {

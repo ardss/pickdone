@@ -130,6 +130,19 @@ function createWindowManager (ctx) {  const {
     // 否则 ctrl+n/ctrl+1… 静默失效直到下次改快捷键设置(2026-09-05 终审 P1,与 taskbar/updater 同类)
     try { applyShortcuts(readConfig().shortcutKeySettings) } catch (e) { log.warn('[Shortcuts] re-init failed', e) }
     win.loadURL('app://app/renderer-dist/index.html').catch(e => log.error('[Window] loadURL failed', e))
+    // W29 (P2): arm the security lock on EVERY main-window creation. The startup arming used to
+    // live only in index.js (once('did-finish-load') on the first window) — a window destroyed
+    // and recreated before its first load completed (X-close→tray→showMainOrLock) left the new
+    // window permanently unlocked: the setting was on but data rendered in the clear. The guard
+    // runs at FIRE time (not arm time) so this arming and the load-failure fallback below can
+    // never double-trigger lockAppNow; whichever fires first wins, the other call is a no-op.
+    win.webContents.once('did-finish-load', () => {
+      try {
+        if (!readConfig().enableSecurityLock || isLocked()) return
+        log.info('[SecurityLock] arming lock on main window load')
+        lockAppNow()
+      } catch (e) { log.error('[SecurityLock] lock failed', e) }
+    })
     if (isTestEnv) {
       // Multi-instance mode (PICKDONE_MULTI=1, src/main/multi-instance.js): append the userData
       // dir scope hash so the two instances of a dev-duo session are tellable apart at a glance.

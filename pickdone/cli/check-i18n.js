@@ -46,6 +46,10 @@ const IGNORE_FILES = new RegExp([
   // (showError('真实泄漏中文') etc.) proving the bracket-window fix works; editing the file makes
   // it dirty → incremental scan → self-inflicted red otherwise.
   'tests[/\\\\]unit[/\\\\]cli[/\\\\]w27-gates-fixes\\.test\\.mjs$',
+  // 2026-11-01 W29: same shape — w29-maintenance-fixes.test.mjs carries the T_HELPER escape
+  // fixtures (t(中文参数) etc.) proving the whitelist-tightening fix works; without this entry
+  // editing the file makes it dirty → incremental scan → self-inflicted red.
+  'tests[/\\\\]unit[/\\\\]cli[/\\\\]w29-maintenance-fixes\\.test\\.mjs$',
   ].join('|'))
 
 // 2026-10-30 (W19) multi-line call escape: `ElMessage.error(\n  '中文'\n)` puts the Chinese on a
@@ -98,7 +102,12 @@ function bracketDelta (s) {
   return d
 }
 const COMMENT_LINE = /^\s*(\/\/|\*|\/\*)/
-const T_HELPER = /\$t\(|i18n\.t\(|\bt\(/
+// w29 fix(2026-11-01): the old `\bt\(` alternative whitelisted a WHOLE CN line whenever any
+// bare `t(` appeared anywhere in it — arrow params like `items.forEach(t => t(中文))` or
+// `fn(t(中文))` let hardcoded CN escape the gate. Tightened to the i18n-helper call shape:
+// `t(` preceded by line start / non-identifier-non-dot char AND followed by a string literal
+// (`$t(` / `i18n.t(` keep their own alternations).
+const T_HELPER = /\$t\(|i18n\.t\(|(^|[^\w.$])t\(\s*['"`]/
 const CONSOLE_RE = /(?:console|log)\.(log|error|warn|info)\(/
 
 function scanFile (p, text, ignoreDebt) {

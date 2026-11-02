@@ -133,13 +133,19 @@ export function countGiveUps7 (records, now = Date.now()) {
  */
 export function buildWeekdayModel (m, t) {
   const labels = ['wd1', 'wd2', 'wd3', 'wd4', 'wd5', 'wd6', 'wd7'].map(k => t(T + k))
+  // [w29 P3] zero-data honesty: with every focus minute at 0, indexOf(Math.max(...)) === 0 and the
+  // summary claimed Monday was the most-focused day. All-zero focus → neutral placeholder instead
+  // (i18n key, no hardcoded copy); any real maximum still resolves through weekdaySummary.
+  const maxFocus = Math.max(...m.focusByWeekday)
   return {
     modelType: 4,
     title: t(T + 'weekdayTitle'),
     subTitle: t(T + 'weekdaySubtitle'),
     chartList: labels.map((l, i) => ({ label: l, value: m.doneByWeekday[i] })),
     overlayList: labels.map((l, i) => ({ label: l, value: m.focusByWeekday[i] })),
-    summary: t(T + 'weekdaySummary', { d: labels[m.focusByWeekday.indexOf(Math.max(...m.focusByWeekday))] || '—' })
+    summary: maxFocus > 0
+      ? t(T + 'weekdaySummary', { d: labels[m.focusByWeekday.indexOf(maxFocus)] || '—' })
+      : t(T + 'weekdaySummaryEmpty')
   }
 }
 

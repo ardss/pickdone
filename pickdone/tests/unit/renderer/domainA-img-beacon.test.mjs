@@ -43,12 +43,21 @@ test('isRenderableAttachmentUrl: local:// only', () => {
 test('render path: EpAttachments binds :src only inside the isRenderableAttachmentUrl-gated branch and preview cannot fire for non-local urls', () => {
   const src = read('renderer/js/components/edit-panel/EpAttachments.vue')
   // the imgList v-for cell must gate the real thumbnail on the pure guard
-  assert.ok(src.includes('v-if="isRenderableAttachmentUrl(im.url)"'),
-    'thumbnail branch must be guarded by isRenderableAttachmentUrl(im.url)')
+  // W29 (2026-11-01): the guard may carry the explicit-missing prefix (`!im.missing && ...`) —
+  // migration-marked entries render the labeled placeholder instead of a doomed <img>; the
+  // security contract (src binding only behind the renderable gate) is unchanged.
+  // w30 P1: the branch decision moved to the shared attachmentStateOf mapping (imState(im) ===
+  // 'ok') — attachmentStateOf's local gate is isLocalAttachmentUrl (the SAME local://-only
+  // predicate as isRenderableAttachmentUrl), so the security contract is unchanged; the
+  // delegation is asserted explicitly below.
+  assert.ok(/v-if="imState\(im\) === 'ok'"/.test(src),
+    'thumbnail branch must be guarded by the shared state gate (imState ok = renderable local://)')
+  assert.ok(/attachmentStateOf/.test(src) && /imState \(im\) \{ return attachmentStateOf\(im/.test(src),
+    'the gate must delegate to the shared pure mapping (same local:// predicate), not re-implement it')
   // exactly one :src binding for im.url, and it must live on the guarded button
   const srcBindings = src.match(/:src="im\.url"/g) || []
   assert.equal(srcBindings.length, 1, 'exactly one :src="im.url" binding')
-  const guardedButton = src.match(/<button v-if="isRenderableAttachmentUrl\(im\.url\)"[\s\S]*?:src="im\.url"/)
+  const guardedButton = src.match(/<button v-if="imState\(im\) === 'ok'"[\s\S]*?:src="im\.url"/)
   assert.ok(guardedButton, ':src="im.url" must sit on the guarded button')
   // the non-local branch must be an inert placeholder: no src binding, no preview emit
   const elseSpan = src.match(/<span v-else[\s\S]*?>/)
@@ -57,8 +66,8 @@ test('render path: EpAttachments binds :src only inside the isRenderableAttachme
   // preview may only be emitted from the guarded button (which v-if excludes for non-local)
   const previewEmits = src.match(/\$emit\('preview'[^)]*\)/g) || []
   assert.equal(previewEmits.length, 1, "exactly one 'preview' emit site")
-  assert.ok(/v-if="isRenderableAttachmentUrl\(im\.url\)"[^`]*@click="\$emit\('preview'/.test(src) ||
-    src.indexOf('v-if="isRenderableAttachmentUrl(im.url)"') < src.indexOf("$emit('preview'"),
+  assert.ok(/v-if="imState\(im\) === 'ok'"[^`]*@click="\$emit\('preview'/.test(src) ||
+    src.indexOf('v-if="imState(im) === \'ok\'"') < src.indexOf("$emit('preview'"),
     "'preview' emit must be inside the guarded branch")
 })
 

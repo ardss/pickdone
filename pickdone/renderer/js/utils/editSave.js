@@ -109,7 +109,11 @@ export function createSaveQueue (store, opts) {
       const succeededEntries = new Set()
       let drainedPersisted = false
       try {
-        const { keys: drained, patch: dirtyPatch } = drain()
+        // [w30 P3] drain only when the dirty fields have a CURRENT task to land on: taskId null
+        // (panel closed / row deleted mid-debounce) used to drain the flags unconditionally while
+        // the `taskId && ...` guards below silently skipped the dispatch — the drained batch was
+        // gone for good. Keeping the flags dirty preserves them for the next queueSave/flush.
+        const { keys: drained, patch: dirtyPatch } = taskId ? drain() : { keys: [], patch: {} }
         drainedKeys = drained
         const sameTask = taskId && entries.length === 1 && entries[0].taskId === taskId ? entries[0] : null
         if (sameTask) {
@@ -172,7 +176,10 @@ export function createSaveQueue (store, opts) {
     const entries = pendingEntries()
     pending = {}
     const taskId = getTaskId()
-    const { keys, patch } = drain()
+    // [w30 P3] same no-current-task guard as queueSave: a null taskId must not drain the dirty
+    // flags it cannot dispatch (`taskId && keys.length` below would skip the write and the batch
+    // was silently lost). Undrained flags survive for the next flush/queueSave.
+    const { keys, patch } = taskId ? drain() : { keys: [], patch: {} }
     const sameTask = taskId && entries.length === 1 && entries[0].taskId === taskId ? entries[0] : null
     if (sameTask) {
       // Same task: merge the pending debounce patch with the dirty fields into one dispatch (H1 fix —
@@ -227,5 +234,33 @@ export function createSaveQueue (store, opts) {
     takeDirty: (keysFilter) => drain(keysFilter).patch,
     clearTimer: () => clearTimeout(timer),
     boot: () => { booted = true }
+  }
+}
+
+/** [w30 P0] enqueue-vs-persisted probe factory. todo/updateTodoFields resolves when the write is
+ *  ENQUEUED (safeUpsert retry queue in store/helpers/todoPendingUpserts.js), not when SQLite has
+ *  the row — the consumer cannot tell from the dispatch result alone. This probe schedules a
+ *  short deferred check of the pending-queue seam after a save settles: an entry with the same
+ *  taskId still present means "queued, not persisted" and the caller lights its weak
+ *  "保存未确认" hint (the authoritative persist-result signal lives in the territory-frozen
+ *  store/todo.js — the complete fix needs that ban lifted; the w30 report documents the gap).
+ *  `pendingEntries` is the seam getter (pendingUpserts); `delayMs` defaults to 2000 — one settle
+ *  window for the in-flight command-bus commit that safeUpsert fired. */
+export function createPersistProbe (pendingEntries, { delayMs = 2000 } = {}) {
+  let timer = null
+  return {
+    /** Cancel a pending probe (panel unmount / a newer save supersedes it). */
+    cancel () { if (timer) { clearTimeout(timer); timer = null } },
+    /** Schedule the probe for `taskId`; `onVerdict(stillQueued, taskId)` fires once. */
+    schedule (taskId, onVerdict) {
+      this.cancel()
+      timer = setTimeout(() => {
+        timer = null
+        const queued = pendingEntries()
+        const stillQueued = taskId != null && queued.some(en => en && en.params && en.params.taskId === taskId)
+        if (stillQueued) console.warn('[edit-panel] save unconfirmed: row still in safeUpsert pending queue, taskId=' + taskId)
+        onVerdict(!!stillQueued, taskId)
+      }, delayMs)
+    }
   }
 }

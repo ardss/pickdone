@@ -89,9 +89,9 @@ test('[V2] renameProject catches CATEGORY_EXISTS around the updateCategory commi
   assert.ok(body.includes('statsH.main.actionFailedMsg'), 'non-duplicate persistence rejections surface (no cancel swallow)')
   // the updateCategory commit now sits inside its OWN try (the inner guard), not bare in the
   // cancel-only try scope: the line right before `const ok = await ...updateCategory` must be a try opener
-  const iCommit = body.indexOf("const ok = await this.$store.commit('category/updateCategory'")
+  const iCommit = body.indexOf("const ok = await this.$store.dispatch('category/updateCategory'")
   assert.ok(iCommit > -1)
-  const before = body.slice(Math.max(0, iCommit - 120), iCommit)
+  const before = body.slice(Math.max(0, iCommit - 400), iCommit)
   assert.ok(/try \{[^}]*$/.test(before), 'the commit is wrapped in its own inner try block')
 })
 
@@ -129,7 +129,8 @@ test('[V3] saveMgrEdit: duplicate-name commit keeps the edit state, warns and re
     $t: k => k,
     $message: { warning: m => warnings.push(m) },
     $nextTick: fn => { fn() },
-    $store: { commit: () => { const e = new Error('already exists'); e.code = 'CATEGORY_EXISTS'; throw e } }
+    // W29: the modal dispatches category/updateCategory (the action returns the persist boolean)
+    $store: { dispatch: () => { const e = new Error('already exists'); e.code = 'CATEGORY_EXISTS'; throw e } }
   }
   try {
     await saveMgrEdit.call(vm, { categoryId: 7 })
