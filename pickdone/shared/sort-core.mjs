@@ -8,7 +8,10 @@
  */
 export function nextSort (addToTop, minS, maxS) {
   let s
-  if (!minS && !maxS) s = 1024 // first element of the list, arbitrary baseline
+  // Explicit null/undefined check (not truthiness): sort=0 is a legal stored value
+  // (legacy-restore / import artifacts). An all-zero list is NOT empty — falling into the
+  // 1024 baseline would put a bottom-appended task ABOVE the zeros.
+  if (minS == null && maxS == null) s = 1024 // first element of the list, arbitrary baseline
   else if (addToTop) s = maxS + 512
   else s = minS - 512
   return Math.fround(s)

@@ -4,6 +4,9 @@
  * `_dayBounds` delegate preserving the internal op surface), so db.call behavior is unchanged.
  */
 const dayjs = require('dayjs')
+// utc plugin: provides .utcOffset(n) — an explicit-offset render (dayjs core formats in the
+// machine-local timezone only, which is exactly the split this module must avoid vs the SQL).
+dayjs.extend(require('dayjs/plugin/utc'))
 
 // Per-day task total/completed counts (by due date), plus completion counts by "completion day" (unaffected by due date)
 // scheduledDay stores millisecond timestamps; callers may pass a YYYYMMDD integer (CLI), uniformly converted to a millisecond range
@@ -68,8 +71,12 @@ exports.statsByDay = (db, { from, to }) => {
   }
   const rows = [...byDay.values()].sort((a, b) => a.ds - b.ds)
   // 完成日查询的边界须与 strftime 产出的 YYYYMMDD 同单位(2026-09-05 终审 P1:与毫秒边界 BETWEEN 恒假→恒空)
-  const fKey = f == null ? 0 : Number(dayjs(f).format('YYYYMMDD'))
-  const tKey = t == null ? 99991231 : Number(dayjs(t).format('YYYYMMDD'))
+  // 2026-11-01: the key conversion must use the SAME timezone convention as the SQL above
+  // (explicit '+8 hours'). Plain dayjs(f).format uses the MACHINE-LOCAL timezone — on a non-+8
+  // machine, completion events in the local 0-8am window land on the previous +8 day and were
+  // silently dropped / mis-dayed by the BETWEEN on these keys. utcOffset(480) pins +8 on both ends.
+  const fKey = f == null ? 0 : Number(dayjs(f).utcOffset(480).format('YYYYMMDD'))
+  const tKey = t == null ? 99991231 : Number(dayjs(t).utcOffset(480).format('YYYYMMDD'))
   // P3 2026-09-23 完成日口径对齐(与渲染端 metrics.js doneTsOf 一致): completedAt=0 的历史/异常完成行
   // 按 updateTime 兜底落日 — 旧 SQL `completedAt > 0` 把这类行从所有完成日统计里永久剔除,App 侧却计入
   // 2026-11-01: 'localtime' -> 显式 '+8 hours'。应用目标时区固定 UTC+8,而 sqlite CRT 对 TZ 环境变量

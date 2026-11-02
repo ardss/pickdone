@@ -255,8 +255,11 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     .filter(x => (x.dayStart || 0) === targetDay)
     .map(x => x.taskSort).filter(v => v != null)
   const addToTop = String(settingsDoc().newTodoDefaultSort || 'top') !== 'bottom'
+  // W28 (2026-11-01): nextSort now gates its 1024 baseline on explicit null/undefined (sort=0 is
+  // a legal stored value — an all-zero day pool is NOT empty), so an EMPTY pool must pass null,
+  // not 0, to keep the documented F3 "first row sits at the 1024 baseline" convention.
   const taskSort = Math.fround(
-    nextSort(addToTop, daySorts.length ? Math.min(...daySorts) : 0, daySorts.length ? Math.max(...daySorts) : 0) +
+    nextSort(addToTop, daySorts.length ? Math.min(...daySorts) : null, daySorts.length ? Math.max(...daySorts) : null) +
     (Math.random() - 0.5) * 64)
   const t = {
     complete: false, createTime: createdTs, delete: false,

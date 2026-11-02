@@ -327,7 +327,7 @@ async function migrateDataInner (srcDir, targetDir, opts = {}) {
     for (const name of names) {
       const s = path.join(srcDir, name)
       const d = path.join(t, name)
-      if (name === 'backups' || name === 'files') { await copyDirRecursive(s, d, n => report({ phase: 'copy', done: n, total }), counter); written.push(d) }
+      if (name === 'backups' || name === 'files') { written.push(d); await copyDirRecursive(s, d, n => report({ phase: 'copy', done: n, total }), counter) }
       else { fs.copyFileSync(s, d); counter.n++; written.push(d); if (counter.n % YIELD_EVERY === 0) await tick() }
     }
     report({ phase: 'copy', done: total, total })

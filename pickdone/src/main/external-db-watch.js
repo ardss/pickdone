@@ -299,7 +299,14 @@ function createExternalDbWatch (deps) {
           // Round-3 stability (2026-09-26): a kick scheduled within the 150ms debounce just before
           // ext-watch-gate arms fires INSIDE the flush window — the un-gated forwardTomatoCmd could
           // consume a CLI command slot whose write lands after dbm.close() (same C11 loss class).
-          if (!extWatchGate.canPoll()) return
+          if (!extWatchGate.canPoll()) {
+            // Same loss class as the catch below: onChange already advanced lastMtime to the
+            // observed change before arming this debounce — a bare return here silently CONSUMES
+            // an external write that landed inside the flush window (next poll sees m ===
+            // lastMtime). Roll the baseline back so a post-quit-window poll re-processes it.
+            lastMtime = rollbackMtime
+            return
+          }
           scheduler.reloadAll(dbApi())
           broadcastTodosChanged('external-db-write')
           // CLI 直写账本行(独立进程,db 层钩子在 CLI 进程内不挂)——外部写轮询是唯一跨进程通知点,
