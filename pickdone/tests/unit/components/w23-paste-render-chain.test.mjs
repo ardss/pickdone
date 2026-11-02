@@ -177,7 +177,7 @@ test('fix2: listThumbs renders only local:// urls (beacon contract) — first im
 // Use the actual CSP meta tag, not comments or a mocked upload response.
 test('chain/renderer CSP: local attachments permitted in image and media sources', () => {
   const html = readFileSync(path.join(ROOT, 'renderer/index.html'), 'utf8')
-  const match = html.match(/<meta\s+http-equiv=["']Content-Security-Policy["']\s+content=["']([^"']+)["']/i)
+  const match = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i)
   assert.ok(match, 'renderer must define its CSP in the real meta tag')
   const directives = new Map(match[1].split(';').map(s => s.trim()).filter(Boolean).map(s => {
     const [key, ...values] = s.split(/\s+/)
