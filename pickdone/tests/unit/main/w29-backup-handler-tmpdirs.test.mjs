@@ -71,7 +71,6 @@ const h = backupHandlers(ctx)
 
 const GOOD_DUMP = JSON.stringify({ backup: { todoState: { todoList: [{ id: 't1', title: 'real row' }], recycleList: [] } }, metaState: { k: 'v' } })
 const EMPTY_DUMP = JSON.stringify({ backup: { todoState: { todoList: [], recycleList: [] } } })
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 test('gates: every dangerous backup channel rejects non-main-window senders and the locked state', () => {
   assert.throws(() => h['write-critical-state-backup'](floatEvent, GOOD_DUMP), /forbidden: main window only/)

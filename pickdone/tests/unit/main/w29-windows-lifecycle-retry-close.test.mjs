@@ -81,7 +81,8 @@ function makeFakeWindow (opts) {
 
 const ELECTRON_STUB = {
   app: { getPath: () => UD, relaunch: () => { calls.relaunch++ }, quit: () => { calls.quit++ } },
-  BrowserWindow: function (opts) { const m = makeFakeWindow(opts); Object.assign(this, m.win); this._m = m; lastWin = this },
+  // object-shorthand exempted: shorthand methods are non-constructible and `new BrowserWindow(...)` needs [[Construct]]
+  BrowserWindow: function (opts) { const m = makeFakeWindow(opts); Object.assign(this, m.win); this._m = m; lastWin = this }, // eslint-disable-line object-shorthand
   shell: { openExternal: async url => { calls.openExternal.push(url) } },
   dialog: { showErrorBox: (t, m) => { calls.errorBox.push([t, m]) } },
   screen: {
@@ -187,7 +188,7 @@ test('did-fail-load: 3 backoff reloads captured to the live webContents; benign 
   assert.equal(calls.loadURLs.length, beforeLoads + 1, 'main-frame failure schedules one backoff reload')
   // reset counter as did-finish-load would, then exhaust the remaining budget
   for (const cb of lastWin._m.wcHandlers['did-finish-load']) cb({ sender: lastWin.webContents })
-  let beforeLoads2 = calls.loadURLs.length
+  const beforeLoads2 = calls.loadURLs.length
   lastWin._m.wcHandlers['did-fail-load'].forEach(cb => cb(undefined, -326, 'ERR', 'x', true))
   await sleep(520)
   lastWin._m.wcHandlers['did-fail-load'].forEach(cb => cb(undefined, -326, 'ERR', 'x', true))
