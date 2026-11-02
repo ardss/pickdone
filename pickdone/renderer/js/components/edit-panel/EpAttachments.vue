@@ -23,7 +23,7 @@
              emit. The entry STAYS in imgList (EditPanel persists the list verbatim; stripping it
              would delete the peer's attachment record on next save). -->
         <button v-if="isRenderableAttachmentUrl(im.url)" type="button" class="ep-img-btn" :aria-label="$t('statsJ.EditPanel.zoomImage') + (Number(i)+1)" @click="$emit('preview', im.url)">
-          <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)">
+          <img :src="im.url" alt="" loading="lazy" @error="onImgErr($event)" @load="onImgLoad($event)">
         </button>
         <!-- W23 (2026-10-31) dead-gray-cell fix: the placeholder used to be a featureless empty
              span — LAN-synced metadata rows (or any non-local url) showed as an unlabeled gray
@@ -132,6 +132,8 @@ export default {
     },
     /* 粘贴/上传失败的兜底：不显示 Chromium 碎图图标，改用居中感叹号占位（视觉上与关闭✕可区分） */
     onImgErr (e) { (e.target as HTMLElement).classList.add('ep-img-broken') },
+    // A previous transient 404 must not leave a permanent broken-image marker after pixels load.
+    onImgLoad (e) { (e.target as HTMLElement).classList.remove('ep-img-broken') },
     openFileUrl (f) {
       // Missing-file guard (LAN-synced attachments): the metadata row can arrive before the
       // file is pulled over sync — toast a friendly notice instead of a silent failure.
