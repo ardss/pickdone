@@ -63,7 +63,14 @@ function makeSyncKick (notify, { timerMs = 750, setTimeout: st = setTimeout, cle
     try { notify(op); return true } catch { return false }
   }
   const retry = () => {
-    timer = null
+    // W30 (P3 2026-11-01): clearTimeout the OLD timer before nulling the slot. retry() is not only
+    // the timer callback — kick() calls it INLINE on re-entry while a retry timer is still pending.
+    // The inline run nulled `timer` without clearing the scheduled setTimeout, so the stale timer
+    // later fired a second retry; if that retry re-queued (still failing) it scheduled ANOTHER
+    // timer on the now-empty slot, leaving TWO live one-shot retries — duplicate notify() delivery
+    // attempts and, with a mock-less real timer, a self-multiplying retry chain on sustained
+    // failure. Clearing makes the slot genuinely single-timer again.
+    if (timer) { ct(timer); timer = null }
     if (deferred == null) return
     const op = deferred
     deferred = null
