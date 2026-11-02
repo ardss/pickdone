@@ -64,6 +64,13 @@ const calls = { stop: 0, restart: 0 }
 watchMod.stopLatestDbWatch = () => { calls.stop++ }
 watchMod.restartLatestDbWatch = () => { calls.restart++ }
 
+// The ratchet/coverage runs set TODO_DB_DIR for isolation; hasIsolationEnv() then makes
+// data:relocate refuse outright ('disabled in isolated/test instances') and the test never
+// reaches the close-failure branch. The sandbox stubs app.getPath itself, so the isolation
+// guard is irrelevant here — scrub the two vars for this process (restored on exit).
+for (const k of ['TODO_DB_DIR', 'TODO_USER_DATA_DIR']) { process.env['__w29_saved_' + k] = process.env[k]; delete process.env[k] }
+process.on('exit', () => { for (const k of ['TODO_DB_DIR', 'TODO_USER_DATA_DIR']) { const v = process.env['__w29_saved_' + k]; if (v != null) process.env[k] = v; delete process.env['__w29_saved_' + k] } })
+
 function buildCtx (dbm) {
   return {
     isLocked: () => false,
