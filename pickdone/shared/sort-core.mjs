@@ -17,6 +17,14 @@ export function nextSort (addToTop, minS, maxS) {
   return Math.fround(s)
 }
 
+/** [min,max] of a sort pool, or [null,null] when empty (W28: nextSort's 1024 baseline keys on
+ *  explicit null — sort=0 is a legal stored value, so emptiness must be decided HERE, not by
+ *  truthiness at each call site). */
+export function poolBounds (list) {
+  if (!Array.isArray(list) || !list.length) return [null, null]
+  return [Math.min(...list), Math.max(...list)]
+}
+
 /* ================= F-B2 (dw wave 3): manual-reorder scale, single source =================
  * Two reorder idioms previously existed as private twins with overlapping scales — the renderer's
  * TodoItem._writeSort (whole-table 9999→-9999 linear rewrite on drag / Ctrl+Up/Down) and the CLI's

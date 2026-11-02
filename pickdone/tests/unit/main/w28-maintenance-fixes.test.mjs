@@ -88,7 +88,14 @@ test('w28[1]: a copy failure mid-dir-tree leaves NO orphan half-tree in the targ
 
 /* ================= 2. sort-core: all-zero list is not an empty list ================= */
 
-const { nextSort } = await import('../../../shared/sort-core.mjs')
+const { nextSort, poolBounds } = await import('../../../shared/sort-core.mjs')
+
+test('w28[2b]: poolBounds returns explicit nulls on empty pools (the call-site contract nextSort keys on)', () => {
+  assert.deepEqual(poolBounds([]), [null, null], 'empty pool must yield null (not 0) so nextSort hits the 1024 baseline')
+  assert.deepEqual(poolBounds([0, 0, 0]), [0, 0], 'an all-zero pool keeps its zeros — non-empty')
+  assert.deepEqual(poolBounds([5, -3, 100]), [-3, 100], 'plain min/max otherwise')
+  assert.deepEqual(poolBounds(null), [null, null], 'null-ish input is tolerated as empty')
+})
 
 test('w28[2]: nextSort treats an all-zero sort list as non-empty (bottom-append goes BELOW the zeros)', () => {
   assert.equal(nextSort(false, 0, 0), Math.fround(0 - 512),

@@ -44,7 +44,7 @@ const { ownsAttachmentFile } = require('../src/main/attachment-ownership.js')
 const audit = require('./audit.js')
 const nlDate = require('./nl-date.cjs')
 const { parseMilestoneDateCore } = require('../shared/parse-date.mjs') // milestone-date core shared with the renderer (require(esm), same pattern as limits.mjs)
-const { nextSort, moveWithin, reorderScale } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm)); F2: reorderScale for the sortTask gap-exhaustion rewrite
+const { nextSort, moveWithin, reorderScale, poolBounds } = require('../shared/sort-core.mjs') // P3-7 / F-B2: sort-score single source with renderer utils/core.js (require(esm)); F2: reorderScale for the sortTask gap-exhaustion rewrite
 // W7 P1 (2026-10-23): undo renewal discriminator single-sourced with renderer/js/utils/repeatUndo.js via shared/repeat-undo-core.mjs — the hand-copied day-only heuristic below still soft-deleted `repeat on` PRE-GENERATED future instances on undo (the 2026-10-09 P1 renderer root fix never landed CLI-side). require(esm), same pattern as limits.mjs.
 const { findRenewedNextInstance } = require('../shared/repeat-undo-core.mjs')
 
@@ -249,17 +249,14 @@ function addTodo ({ content, desc, date, reminder, category, difficulty, priorit
     const binned = db.call('queryTodos', { deleted: 1, repeatId, dayStartFrom: targetDay, dayStartTo: targetDay })
     if (Array.isArray(binned) && binned.length) return null
   }
-  // Insert sort unified on renderer nextSort semantics (F3 2026-09-21, shared nextSort): the side (top/bottom) follows newTodoDefaultSort; the ±32 jitter keeps concurrently identical sorts distinct.
+  // Insert sort unified on renderer nextSort semantics (F3 2026-09-21): side follows newTodoDefaultSort; the ±32 jitter keeps concurrent identical sorts distinct.
   const targetDay = todoTime ? +dayjs(todoTime).startOf('day') : 0
   const daySorts = db.call('queryTodos', { deleted: 0 })
     .filter(x => (x.dayStart || 0) === targetDay)
     .map(x => x.taskSort).filter(v => v != null)
   const addToTop = String(settingsDoc().newTodoDefaultSort || 'top') !== 'bottom'
-  // W28 (2026-11-01): nextSort now gates its 1024 baseline on explicit null/undefined (sort=0 is
-  // a legal stored value — an all-zero day pool is NOT empty), so an EMPTY pool must pass null,
-  // not 0, to keep the documented F3 "first row sits at the 1024 baseline" convention.
-  const taskSort = Math.fround(
-    nextSort(addToTop, daySorts.length ? Math.min(...daySorts) : null, daySorts.length ? Math.max(...daySorts) : null) +
+  const taskSort = Math.fround( // W28: poolBounds → null on empty pool (sort=0 is legal, F3)
+    nextSort(addToTop, ...poolBounds(daySorts)) +
     (Math.random() - 0.5) * 64)
   const t = {
     complete: false, createTime: createdTs, delete: false,
