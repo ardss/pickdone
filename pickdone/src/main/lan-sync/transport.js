@@ -62,11 +62,19 @@ const MIN_PROTO_VER = 2
 // lazily from package.json (present in dev and inside app.asar) — this module stays pure Node,
 // no Electron import.
 let _cachedAppVersion = null
-function ownAppVersion () {
+function ownAppVersion (load = () => require('../../../package.json').version) {
   if (_cachedAppVersion !== null) return _cachedAppVersion
-  try { _cachedAppVersion = String(require('../../../package.json').version || '') } catch { _cachedAppVersion = '' }
-  return _cachedAppVersion
+  // W29 (P3): a failed first read used to cache '' permanently — every subsequent hello
+  // broadcast advertised an empty version. A failed read is not a VALUE: leave the cache
+  // untouched (null) so the next call retries instead of pinning the empty string.
+  try {
+    const v = String(load() || '')
+    if (v) _cachedAppVersion = v
+    return v
+  } catch { return '' }
 }
+// Test seam: clear the version cache between cases (never used in production paths).
+function __resetOwnAppVersionForTests () { _cachedAppVersion = null }
 // W16: structured code for a version-gate rejection.
 function protoVerRejectCode (peerProto) {
   return peerProto > PROTO_VER ? 'peer-too-new' : 'peer-too-old'
@@ -851,4 +859,4 @@ function connect(host, port, opts) {
   return em
 }
 
-module.exports = { createLanServer, connect, send, wireConnection, flushThenDestroy, PAIR_FLUSH_CAP_MS, ProtocolError, PROTO_VER, MIN_PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget }
+module.exports = { createLanServer, connect, send, wireConnection, flushThenDestroy, PAIR_FLUSH_CAP_MS, ProtocolError, PROTO_VER, MIN_PROTO_VER, DEFAULT_PORT, resolveSyncPort, MAX_LINE_BYTES, PRE_AUTH_LINE_BYTES, PAIR_CONFIRM_TIMEOUT_MS, AUTH_IDLE_TIMEOUT_MS, PRE_AUTH_MAX_LIFE_MS, cleanDeviceName, LINE_BUFFER_BUDGET_BYTES, __setLineBufferBudget, ownAppVersion, __resetOwnAppVersionForTests }
