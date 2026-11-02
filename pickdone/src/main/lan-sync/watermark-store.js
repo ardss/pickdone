@@ -107,10 +107,12 @@ module.exports.deleteV1WatermarkRow = deleteV1WatermarkRow
 /** [w30 size split] test surface moved here from lan-sync-bootstrap: the same store wiring over
  *  an INJECTED db handle, so regression tests can drive corrupt-read/degraded-persist scenarios
  *  against a fresh settings table without swapping the module-level state singleton. */
-function makeWatermarkStoresForDb (db, deps = {}) {
-  const get = key => { const row = db.call('settingsRowsAll', {}).find(r => r.key === key && !r.deleted); return row ? row.value : null }
-  const put = (key, value) => db.call('settingsRowPut', { key, value })
-  const store = deps.createJsonSettingStore({ settingGet: get, settingPut: put, log: deps.log, key: deps.key, name: 'peer watermarks', defaultValue: '{}' })
-  return { store, wm: module.exports({ settingGet: get, settingPut: put, log: deps.log, key: deps.key, store }) }
+function makeWatermarkStoresForDb ({ dbCall, createJsonSettingStore, log, key } = {}) {
+  // dbCall is the HOST's seam (bootstrap passes its bus-anchored settingsRowPut wrapper) — this
+  // module itself never touches raw write-form db.call (command-bus single-write gate).
+  const get = k => { const row = dbCall('settingsRowsAll', {}).find(r => r.key === k && !r.deleted); return row ? row.value : null }
+  const put = (k, value) => dbCall('settingsRowPut', { key: k, value })
+  const store = createJsonSettingStore({ settingGet: get, settingPut: put, log, key, name: 'peer watermarks', defaultValue: '{}' })
+  return { store, wm: module.exports({ settingGet: get, settingPut: put, log, key, store }) }
 }
 module.exports.makeWatermarkStoresForDb = makeWatermarkStoresForDb

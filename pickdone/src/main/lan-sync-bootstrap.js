@@ -784,7 +784,7 @@ module.exports.__test = {
   createTrackedWatermarks,
   loadPeerWatermarks,
   // S3/S6 test surface: db-injectable store wiring (corrupt-read / degraded-persist scenarios).
-  makeWatermarkStoresForDb: (db) => require("./lan-sync/watermark-store").makeWatermarkStoresForDb(db, { createJsonSettingStore, log, key: K_PEER_WATERMARKS }),
+  makeWatermarkStoresForDb: (db) => require('./lan-sync/watermark-store').makeWatermarkStoresForDb({ dbCall: (op, p) => db.call(op, p), createJsonSettingStore, log, key: K_PEER_WATERMARKS }),
   // S6 test surface: security-ring store contract (read-throw seeds empty + degrades writes).
   loadSecurityLog,
   scheduleSecurityPersist,
