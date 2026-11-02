@@ -121,9 +121,13 @@ export default {
     /* ===== Time block view ===== */
     // Fix (domain-3, 2026-09-23): the time-block week now follows settings.weekStartDay instead of
     // the dayjs default (Sunday — no dayjs locale is set in the renderer), matching DayDateStrip's grid.
+    // [w28 P3 fix 2026-11-01] week anchor fallback derives from todayTimestamp (reactive) instead
+    // of a bare Date.now(): the old expression had NO reactive dependency when tbWeekStart was 0,
+    // so the time-block grid froze on the week of first render across a Sunday rollover.
+    tbWeekAnchor () { return this.tbWeekStart || weekGridStart(this.today0Ts, this.settings.weekStartDay === 'sun') },
     tbDays () {
-      const start = this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')
-      const today = today0()
+      const start = this.tbWeekAnchor
+      const today = this.today0Ts
       return Array.from({ length: 7 }, (_, i) => {
         const ts = dayShift(start, i)
         return { ts, label: wdLabel(this.$t.bind(this), dayjs(ts).day()), dom: dayjs(ts).date(), isToday: ts === today }
@@ -139,7 +143,7 @@ export default {
     // Perf-E2: taskId → row index for every click/drop/edit entry point (was linear .find each time)
     taskById () { return indexById(this.$store.state.todo.todoList) },
     tbPool () {
-      const start = this.tbWeekStart || weekGridStart(Date.now(), this.settings.weekStartDay === 'sun')
+      const start = this.tbWeekAnchor
       const end = dayShift(start, 7)
       return this.$store.state.todo.todoList.filter(t => {
         if (t.complete || t.delete || !t.dayStart || t.dayStart < start || t.dayStart >= end) return false
@@ -151,8 +155,13 @@ export default {
     editCollapsed () { return this.$store.state.ui.rightSidebarTodoEdit.collapsed },
     selYear () { return this.selMonthTs ? dayjs(this.selMonthTs).year() : -1 },
     selMonth () { return this.selMonthTs ? dayjs(this.selMonthTs).month() + 1 : -1 },
-    thisYear () { return dayjs().year() },
-    thisMonth () { return dayjs().month() + 1 },
+    // [w28 P3 fix 2026-11-01] the year/month panel's "today" highlight used to freeze on the wall
+    // clock of first render (zero-dependency computed): crossing a month boundary while the page
+    // stayed open kept highlighting the stale date. Anchor to the store's todayTimestamp (same
+    // midnight-caliber the rest of the calendar uses via todayBounds).
+    today0Ts () { return this.$store.state.todo.todayTimestamp || today0() },
+    thisYear () { return dayjs(this.today0Ts).year() },
+    thisMonth () { return dayjs(this.today0Ts).month() + 1 },
     fcEvents () {
       // Caution: this array must never read settings — any settings change goes through the watcher and triggers a full FullCalendar re-layout,
       // and the relayout causes layout drift (event widths flickering large/small). Hiding for "show completed" is now done via container CSS

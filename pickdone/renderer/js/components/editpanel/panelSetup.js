@@ -16,7 +16,11 @@ export function disableSpellcheck (vm) {
 export function dynamicSpellcheckGuard () {
   return e => {
     const t = e.target
-    if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT') && t.hasAttribute('spellcheck')) t.setAttribute('spellcheck', 'false')
+    // [w28 P2 fix 2026-11-01] the old guard `t.hasAttribute('spellcheck')` was inverted dead code:
+    // it only re-set the attribute on elements that ALREADY had it, while dynamically created
+    // inputs (subtask rows etc.) never carry one — exactly the targets this guard exists for.
+    // Set unconditionally (idempotent, cheap).
+    if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) t.setAttribute('spellcheck', 'false')
   }
 }
 
