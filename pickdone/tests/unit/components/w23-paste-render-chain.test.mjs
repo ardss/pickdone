@@ -169,3 +169,23 @@ test('fix2: listThumbs renders only local:// urls (beacon contract) — first im
   assert.match(tpl, /is-broken/, 'broken-load fallback class present')
   assert.doesNotMatch(tpl, /img \(\) \{ return firstImageOfList/, 'the dead img computed is removed')
 })
+
+
+/* ---------- 6. security policy must allow the local attachment protocol ---------- */
+// Regression: beta.22's renderer CSP omitted local: and blocked <img src="local:///...">
+// even when the uploaded PNG was valid and the protocol handler returned 200.
+// Use the actual CSP meta tag, not comments or a mocked upload response.
+test('chain/renderer CSP: local attachments permitted in image and media sources', () => {
+  const html = readFileSync(path.join(ROOT, 'renderer/index.html'), 'utf8')
+  const match = html.match(/<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"/i)
+  assert.ok(match, 'renderer must define its CSP in the real meta tag')
+  const directives = new Map(match[1].split(';').map(s => s.trim()).filter(Boolean).map(s => {
+    const [key, ...values] = s.split(/\s+/)
+    return [key, values]
+  }))
+  for (const directive of ['default-src', 'img-src', 'media-src', 'connect-src']) {
+    assert.ok(directives.get(directive)?.includes('local:'),
+      directive + ' must explicitly permit local:// attachments; otherwise Win+Shift+S Ctrl+V shows a broken image')
+  }
+  assert.ok(!directives.get('img-src').includes('https:'), 'do not weaken the remote-image beacon guard')
+})
