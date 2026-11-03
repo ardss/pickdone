@@ -246,8 +246,9 @@ test("error path bookkeeping: 'error' status + message slice; concurrent second 
   // drive the updater's own check() rejection path in a NON-ready state by... ready is permanent
   // in this process; the error/retry contract was covered above via the first check() rejection
   // (before 'ready'), including the backoff re-issue. Here we pin the remaining observable:
-  // getStatus always merges the active flag and version over the terminal state.
+  // getStatus always merges the active flag and version over the terminal state
+  // (issue #224: plus the classified lastCheckError field)
   const s = updater.getStatus()
-  assert.deepEqual(Object.keys(s).sort(), ['active', 'info', 'status', 'version'])
+  assert.deepEqual(Object.keys(s).sort(), ['active', 'info', 'lastCheckError', 'status', 'version'])
   assert.equal(s.active, true)
 })
