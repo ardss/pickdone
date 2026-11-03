@@ -62,6 +62,7 @@ const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-vis
   // e2e.test.mjs, never in the quick/pre-commit regression (boots + dev-host state).
   'j-todo-core.test.mjs', 'j-habit-moment.test.mjs', 'j-rail-stats-settings.test.mjs',
   'j-attachment-image.test.mjs', // W29 (2026-11-01) paste-image live journey — same live-Electron pool class
+  'j-pd20-episode.test.mjs', // pd20 (2026-11-03) work-episode live journey — same live-pool class (run-interactions-shared target)
   // 2026-09-28 un-excluded: the --test-force-exit + 2min-ceiling harness added after that wave
   // contains exactly the runaway-test scenario the flake feared, so the file re-joins the
   // default pool — an orphaned integration spec is a regression nobody sees.

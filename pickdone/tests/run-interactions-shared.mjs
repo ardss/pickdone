@@ -52,6 +52,10 @@ const DEFAULT_TARGETS = [
   // every live pool — no gate ran it at all. It fails loud on a failed precondition
   // (skip=green is not acceptable evidence), so it belongs in the mandatory pool.
   'tests/e2e-journeys/j-attachment-image.test.mjs',
+  // pd20 (2026-11-03): the work-episode vertical-slice journey (switch gate → episode put →
+  // sourceRef link → Copy-Handoff clipboard → reload persistence) — same fail-loud live-pool
+  // class as its j-* siblings.
+  'tests/e2e-journeys/j-pd20-episode.test.mjs',
   'tests/keyboard-e2e.mjs',
   'tests/cssom-integrity.mjs',
   'tests/ui-coverage.mjs',
