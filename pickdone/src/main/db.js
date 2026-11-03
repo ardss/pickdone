@@ -8,8 +8,6 @@ const crypto = require('crypto')
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
 const { normalizeContent, rowToTodo, todoToRow, setSyncAuthor, selfSyncAuthor, matchTodoKeywordTerms, matchTodoKeyword, keywordLimitWindow } = require('./db-rows')
 // snowDedup key-cap (R5 P3): past the cap, older-than-30d entries are pruned (see bumpSnow).
-const SNOW_DEDUP_CAP = 2000
-const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
 // electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
@@ -486,7 +484,7 @@ function assertHasTaskId (t) {
 
 const makeBulkOps = require('./db-bulk-ops')(() => db, () => OPS)
 // Per-task meta-key GC helpers (snowDedup / planChipsSnapshot) moved to db-meta-gc.cjs verbatim:
-const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor, deleteEstimateKeysFor } = require('./db-meta-gc.cjs')(() => db)
+const { deleteSnowDedupKeysFor, deleteChipsSnapshotKeysFor, deleteEstimateKeysFor, pruneSnowDedupPastCap } = require('./db-meta-gc.cjs')(() => db)
 // Category / filter / stats / plan-chip / tomato-ledger op groups extracted verbatim to their own
 // modules (structure-size ratchet). Thin delegates in OPS below keep every db.call surface,
 // return shape and the internal _dayBounds/_recToRow/_rowToRec seams unchanged; `db` is read at
@@ -547,15 +545,13 @@ const OPS = {
     // P3 2026-10-09: m===0 is a zero-content no-op (the old path still touched updatedAt/status/oplog/sync) — short-circuit before any row touch.
     if (m === 0) return { ok: true, minutes: 0 }
     // P1 2026-09-20 idempotency contract: the renderer replays bumpSnow on an AMBIGUOUS failure
-    // (timeout / IPC drop where the write may or may not have landed): without a dedup fence the replay re-runs the blind `+=` and double-credits the ledger. Optional `dedupKey`
-    // (string, e.g. the focus session id) installs a once-guard under the meta key
-    // `snowDedup:<taskId>:<dedupKey>`: the check + increment + stamp run in ONE transaction, so
-    // two concurrent replays cannot both pass the check. The first call credits and stamps; any
-    // later call with the same key returns { ok:true, minutes:0, deduped:true } without touching
-    // the row. Each key is stamped with its creation time; once the meta table holds more than
-    // SNOW_DEDUP_CAP keys, entries older than SNOW_DEDUP_MAX_AGE_MS are pruned — replay protection
-    // only needs recent keys (a replay lands within seconds of the ambiguous failure), while the
-    // one-row-per-focus-session accumulation used to grow the meta table unboundedly. Callers that    // send no dedupKey keep the legacy non-idempotent behavior (backward compatible).
+    // (timeout / IPC drop where the write may or may not have landed); without a dedup fence the
+    // replay re-runs the blind `+=` and double-credits the ledger. Optional `dedupKey` installs a
+    // once-guard under `snowDedup:<taskId>:<dedupKey>` — check + increment + stamp run in ONE
+    // transaction, so the first call credits and stamps, any later call with the same key returns
+    // { ok:true, minutes:0, deduped:true }. Keys are stamped with creation time; past
+    // SNOW_DEDUP_CAP keys, entries older than SNOW_DEDUP_MAX_AGE_MS are pruned (replay protection
+    // only needs recent keys). Callers that send no dedupKey keep the legacy non-idempotent behavior.
     if (dedupKey != null && dedupKey !== '') {
       const key = `snowDedup:${taskId}:${dedupKey}`
       const tr = db.transaction(() => {
@@ -569,29 +565,9 @@ const OPS = {
         return { ok: true, minutes: m }
       })
       const out = tr()
-      // Prune outside the bump transaction (COUNT per dedup bump, DELETE past the cap); legacy '1' stamps cast to epoch 0 and age out.
-      try {
-        // Ordered-bounds range instead of LIKE: 'snowDedup;' is ':' + 1, and every
-        // 'snowDedup:...' key has ':' (0x3A) at that position — always < ';' — so the range
-        // covers exactly the same rows while letting the key index do a B-tree range scan
-        // instead of a full-table LIKE scan on every focus bump (linear-in-DB-size).
-        const n = db.prepare("SELECT COUNT(*) n FROM meta WHERE key >= 'snowDedup:' AND key < 'snowDedup;'").get().n
-        if (n > 0) {
-          db.prepare("DELETE FROM meta WHERE key LIKE 'snowDedup:%' AND CAST(value AS INTEGER) < ?")
-            .run(Date.now() - SNOW_DEDUP_MAX_AGE_MS)
-        }
-        if (n > SNOW_DEDUP_CAP) {
-          // W33 fix (2026-11-03): the age-based DELETE above matched 0 rows when ALL keys were
-          // young (a 30-day burst past the cap) — the cap never converged and every bump paid a
-          // COUNT for nothing. Delete the oldest excess by stamp ASC (LIMIT form) so the count
-          // always converges back to the cap regardless of key ages.
-          const nAfterAge = db.prepare("SELECT COUNT(*) n FROM meta WHERE key >= 'snowDedup:' AND key < 'snowDedup;'").get().n
-          if (nAfterAge > SNOW_DEDUP_CAP) {
-            db.prepare("DELETE FROM meta WHERE key IN (SELECT key FROM meta WHERE key >= 'snowDedup:' AND key < 'snowDedup;' ORDER BY CAST(value AS INTEGER) ASC LIMIT ?)")
-              .run(nAfterAge - SNOW_DEDUP_CAP)
-          }
-        }
-      } catch { /* pruning is best-effort and must never fail the bump */ }
+      // Prune outside the bump transaction (best-effort, never fails the bump); lives in
+      // db-meta-gc.cjs with the other snowDedup key-family helpers.
+      try { pruneSnowDedupPastCap() } catch { /* best-effort */ }
       return out
     }
     const r = stmts.bumpSnow.run({ taskId, minutes: m, now: Date.now(), author: selfSyncAuthor() })
