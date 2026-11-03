@@ -29,7 +29,9 @@ export default {
     // A persistent failure fires this once, not on every failed timer tick (no storm);
     // the full history stays in Settings→Data's status line + runtimeState.
     let backupDegradedShown = false
-    window.addEventListener('pd:backup-degraded', (e: Event) => {
+    // [W32 P3] named handler on the instance: an anonymous listener can never be removed,
+    // and app-root remounts (e.g. HMR / recovery paths) used to stack duplicate warnings.
+    this._onBackupDegraded = (e: Event) => {
       if (backupDegradedShown) return
       backupDegradedShown = true
       const detail = (e as CustomEvent).detail as { error?: string } | null
@@ -37,7 +39,12 @@ export default {
       try {
         this.$message.warning(this.$i18n.global.t('backupDegradedToast', { err }))
       } catch { /* toast must never throw from an event handler */ }
-    })
+    }
+    window.addEventListener('pd:backup-degraded', this._onBackupDegraded)
+  },
+
+  beforeUnmount () {
+    window.removeEventListener('pd:backup-degraded', this._onBackupDegraded)
   }
 }
 </script>
