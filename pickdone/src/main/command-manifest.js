@@ -132,6 +132,21 @@ const COMMANDS = {
   'sync.setPeerAlias': { entity: 'sync', verb: 'setPeerAlias', sync: 'local', lwwField: null, tombstone: null, op: 'syncSetPeerAlias' },
   'sync.conflictBackupRestore': { entity: 'sync', verb: 'conflictBackupRestore', sync: 'local', lwwField: null, tombstone: null, op: 'syncConflictBackupRestore' },
 
+  // ---- work episodes / source refs / task-source links (S1 vertical slice, migration v11) ----
+  // Machine-local domain storage (sync:'local'): never egresses. internal:true — backend closed
+  // loop this slice; no renderer surface yet, so no facade row (the gate's mirror covers
+  // renderer-reachable commands only). lwwField 'updatedAt': the bus stamps the age local
+  // callers omit; the domain ops preserve an explicit age (sync-apply parity).
+  'episode.put':        { entity: 'episode', verb: 'put', sync: 'local', lwwField: 'updatedAt', tombstone: null, op: 'episodePut', internal: true },
+  'episode.removeIds':  { entity: 'episode', verb: 'removeIds', sync: 'local', lwwField: 'updatedAt', tombstone: 'pointer', op: 'episodeRemoveIds', internal: true },
+  'source.put':         { entity: 'source', verb: 'put', sync: 'local', lwwField: 'updatedAt', tombstone: null, op: 'sourcePut', internal: true },
+  'source.removeByIds': { entity: 'source', verb: 'removeByIds', sync: 'local', lwwField: 'updatedAt', tombstone: 'pointer', op: 'sourceRemoveByIds', internal: true },
+  // Note: the task-source entity key is ALL-LOWERCASE (`tasksource.*`) per the manifest's
+  // existing naming convention (every entity is lowercase; the row-hygiene gate enforces it) —
+  // only the op names are camelCase.
+  'tasksource.put':     { entity: 'tasksource', verb: 'put', sync: 'local', lwwField: 'updatedAt', tombstone: null, op: 'taskSourcePut', internal: true },
+  'tasksource.remove':  { entity: 'tasksource', verb: 'remove', sync: 'local', lwwField: 'updatedAt', tombstone: 'pointer', op: 'taskSourceRemove', internal: true },
+
   // ---- Phase 2: internal (non-renderer-surface) commands ----
   // Dangerous purge channels (db:purge-recycle-bin / db:purge-seed-todos): main-window-only IPC
   // + the CLI's `purge` command. oplog captures per-id todo tombstones (db-oplog.js), so sync:'full'.
@@ -141,7 +156,17 @@ const COMMANDS = {
   // wire-carried LWW stamps; declared here so every write op in db.js WRITE_OPS has a manifest
   // row and the gate's census is total. Payloads are row arrays — the bus passes them verbatim.
   'category.putMany':  { entity: 'category', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsertCategoryMany', internal: true },
-  'filter.putMany':    { entity: 'filter', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'filterUpsertMany', internal: true }
+  'filter.putMany':    { entity: 'filter', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'filterUpsertMany', internal: true },
+
+  // ---- capture endpoint (S4 browser-extension track, 2026-11-03) ----
+  // The local HTTP capture door (src/main/capture-endpoint/) routes its DEDUPE-INDEX meta pair —
+  // 'taskSourceLink:<fingerprint>' → JSON {taskId, sourceRefId} — through this internal row in
+  // ONE setMetaMany commit. That pair IS the capture dedupe index: a re-sent fingerprint reads
+  // it back and resolves to the original task without writing. The inbox task itself goes via
+  // the existing todo.put row; the SourceRef/TaskSourceLink rows go via S1's source.put /
+  // tasksource.put rows. Machine-local filter on the pair keys is deliberate bookkeeping parity
+  // with the capture door's per-device state. lwwField null: meta pairs carry no age column.
+  'capture.ingest':    { entity: 'capture', verb: 'ingest', sync: 'local', lwwField: null, tombstone: null, localKeys: isMachineLocalMetaKey, op: 'setMetaMany', internal: true }
 }
 
 // op → command reverse index (derived, not hand-maintained). Multiple commands per op is

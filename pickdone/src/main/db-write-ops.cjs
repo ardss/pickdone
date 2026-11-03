@@ -12,7 +12,9 @@ const WRITE_OPS = new Set([
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
   'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
   'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
-  'upsertCategoryMany', 'filterUpsertMany', 'setMetaMany'
+  'upsertCategoryMany', 'filterUpsertMany', 'setMetaMany',
+  // S1 vertical slice (migration v11): work_episodes / source_refs / task_source_links
+  'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove'
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
 

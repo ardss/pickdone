@@ -546,16 +546,12 @@ const OPS = {
       : Math.max(0, Math.min(LIMITS.FOCUS_MAX_MINUTES, Math.floor(Number(minutes) || 0)))
     // P3 2026-10-09: m===0 is a zero-content no-op (the old path still touched updatedAt/status/oplog/sync) — short-circuit before any row touch.
     if (m === 0) return { ok: true, minutes: 0 }
-    // P1 2026-09-20 idempotency contract: the renderer replays bumpSnow on an AMBIGUOUS failure
-    // (timeout / IPC drop where the write may or may not have landed): without a dedup fence the replay re-runs the blind `+=` and double-credits the ledger. Optional `dedupKey`
-    // (string, e.g. the focus session id) installs a once-guard under the meta key
-    // `snowDedup:<taskId>:<dedupKey>`: the check + increment + stamp run in ONE transaction, so
-    // two concurrent replays cannot both pass the check. The first call credits and stamps; any
-    // later call with the same key returns { ok:true, minutes:0, deduped:true } without touching
-    // the row. Each key is stamped with its creation time; once the meta table holds more than
-    // SNOW_DEDUP_CAP keys, entries older than SNOW_DEDUP_MAX_AGE_MS are pruned — replay protection
-    // only needs recent keys (a replay lands within seconds of the ambiguous failure), while the
-    // one-row-per-focus-session accumulation used to grow the meta table unboundedly. Callers that    // send no dedupKey keep the legacy non-idempotent behavior (backward compatible).
+    // P1 2026-09-20 idempotency contract: replay on an AMBIGUOUS failure (timeout/IPC drop where the
+    // write may or may not have landed) must not re-run the blind `+=` and double-credit the ledger.
+    // Optional `dedupKey` installs a once-guard under meta key `snowDedup:<taskId>:<dedupKey>` — check
+    // + increment + stamp in ONE transaction; the first call credits, any later replay returns
+    // { ok:true, minutes:0, deduped:true } untouched. Keys carry creation time; past SNOW_DEDUP_CAP
+    // entries older than SNOW_DEDUP_MAX_AGE_MS are pruned. No dedupKey = legacy non-idempotent behavior.
     if (dedupKey != null && dedupKey !== '') {
       const key = `snowDedup:${taskId}:${dedupKey}`
       const tr = db.transaction(() => {
@@ -692,6 +688,13 @@ const OPS = {
   tomatoUpdateById: (...a) => tomatoOps.tomatoUpdateById(db, ...a),
   tomatoRemoveByIds: (...a) => tomatoOps.tomatoRemoveByIds(db, ...a),
   tomatoMigrateFromMeta: (...a) => tomatoOps.tomatoMigrateFromMeta(db, stmts, ...a),
+  // Work-episode/source-ref/task-source-link ops (S1 slice, migration v11; impl db-episode-ops.cjs)
+  episodePut: (...a) => require('./db-episode-ops.cjs').episodePut(db, ...a),
+  episodeRemoveIds: (...a) => require('./db-episode-ops.cjs').episodeRemoveIds(db, ...a),
+  sourcePut: (...a) => require('./db-episode-ops.cjs').sourcePut(db, ...a),
+  sourceRemoveByIds: (...a) => require('./db-episode-ops.cjs').sourceRemoveByIds(db, ...a),
+  taskSourcePut: (...a) => require('./db-episode-ops.cjs').taskSourcePut(db, ...a),
+  taskSourceRemove: (...a) => require('./db-episode-ops.cjs').taskSourceRemove(db, ...a),
   // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
   // limit guards the first pull on a large existing log; callers page through via the returned max seq.
   // Main-process/CLI-only op by design: the future sync engine lives in the main process and reads the
