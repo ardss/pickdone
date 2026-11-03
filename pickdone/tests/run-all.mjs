@@ -597,6 +597,9 @@ if (r.status !== 0 && !r.error && r.stdout) {
         // fire: fake green on cancelled tests in absorbed runs. Scanning per line is fail-loud
         // by construction (any cancelled line anywhere in the tail is counted).
         const countCancelled = tail => tail.reduce((n, l) => { const m = /^# cancelled\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
+        // W32 fix(#2) 2026-11-03: same per-line anchoring for skip counts, used by the
+        // low-confidence branch below to merge pass1+retry skips into the stream the gate sees.
+        const countSkips = tail => tail.reduce((n, l) => { const m = /^# skip(?:ped)?\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
         const cancelled1 = countCancelled(p1.tail)
         const cancelled2 = countCancelled(rt.tail)
         if (planOk && keptNotOk === 0 && notOkInRetry === 0 && cancelled1 === 0 && cancelled2 === 0 && rt.blocks.length > 0) {
@@ -707,7 +710,18 @@ if (r.status !== 0 && !r.error && r.stdout) {
             // emitting Buffer.concat([r.stdout, retry.stdout]) again would double-plan. Only the
             // retry tail is appended after a separator, so the LAST plan (the retry's) stays
             // what parseSummary anchors.
-            r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + (retry.stdout || ''), stderr: r.stderr, streamed: false }
+            // W32 fix(#2) 2026-11-03: that LAST-plan anchoring is exactly why pass1's skips
+            // escaped the ratchet here — the gate anchored the RETRY's plan and its `# skip`
+            // counts only the retried files' retry pass; every pass1 skip was invisible and the
+            // live pool could be eroded by skips through this branch with the gate green. A
+            // merged `# skip pass1+retry` line is appended AFTER the retry summary so the
+            // gate's last-match parsing sees the whole corpus's skip count (the stream is not
+            // COMPOSED-marked, so plan-vs-summary drift stays a warning, not a red).
+            const pass1Skips = countSkips(p1.tail)
+            const retrySkips = countSkips(rt.tail)
+            const retryOut = retry.stdout || ''
+            const nl = retryOut.endsWith('\n') || retryOut === '' ? '' : '\n'
+            r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + retryOut + nl + `# skip ${pass1Skips + retrySkips}\n`, stderr: r.stderr, streamed: false }
           } else {
             console.error(`[run-all] ⚑FLAKY absorption REFUSED: parse low-confidence AND no clean-retry corroboration (retry exit=${retry.status}, plan-line=${/^1\.\.\d+/m.test(retryTap)}, not-ok-in-retry=${!/^\s*not ok\b/m.test(retryTap) ? 0 : 'present'}) — pass1's RED stands, retry TAP below is evidence only`)
             await recordFlake([{
