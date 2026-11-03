@@ -68,9 +68,14 @@ exports.queryEpisodesByTask = (db, taskId) => {
 exports.querySourcesByTask = (db, taskId) => {
   if (taskId == null || taskId === '') return []
   return db.prepare(
-    'SELECT sr.providerId, sr.externalId, sr.title FROM task_source_links tsl JOIN source_refs sr ON sr.id = tsl.sourceRefId' +
+    'SELECT sr.id AS refId, sr.providerId, sr.externalId, sr.title, tsl.id AS linkId' +
+    ' FROM task_source_links tsl JOIN source_refs sr ON sr.id = tsl.sourceRefId' +
     ' WHERE tsl.taskId = @taskId AND tsl.deleted = 0 AND sr.deleted = 0 ORDER BY sr.id ASC'
   ).all({ taskId: String(taskId) }).map(r => ({
+    linkId: r.linkId,
+    sourceRefId: r.refId,
+    providerId: r.providerId,
+    externalId: r.externalId,
     level: 'L0',
     canonicalUri: String(r.providerId) + '://' + String(r.externalId),
     title: r.title || ''

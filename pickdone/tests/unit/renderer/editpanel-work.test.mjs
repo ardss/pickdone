@@ -38,7 +38,25 @@ const I18N = {
   'statsJ.EditPanel.workEpisodeResources': '关联资源',
   'statsJ.EditPanel.workEpisodeHandoff': '继续工作',
   'statsJ.EditPanel.workEpisodeCopyHandoff': '复制 Handoff',
-  'statsJ.EditPanel.workEpisodeEmpty': '暂无工作记录'
+  'statsJ.EditPanel.workEpisodeEmpty': '暂无工作记录',
+  'statsJ.EditPanel.workEpisodeRecordTitle': '记录工作轮次',
+  'statsJ.EditPanel.workEpisodeGoal': '目标',
+  'statsJ.EditPanel.workEpisodeOutcome': '成果',
+  'statsJ.EditPanel.workEpisodeNext': '下一步',
+  'statsJ.EditPanel.workEpisodeSave': '保存',
+  'statsJ.EditPanel.workEpisodeUpdate': '更新',
+  'statsJ.EditPanel.workEpisodeCancel': '取消',
+  'statsJ.EditPanel.workEpisodeEdit': '编辑',
+  'statsJ.EditPanel.workEpisodeDelete': '删除',
+  'statsJ.EditPanel.workEpisodeSaveOk': '已保存',
+  'statsJ.EditPanel.workEpisodeSaveFail': '保存失败',
+  'statsJ.EditPanel.workEpisodeSourceTitle': '关联来源',
+  'statsJ.EditPanel.workEpisodeSourceProvider': '来源类型',
+  'statsJ.EditPanel.workEpisodeSourceExternal': '外部 ID / URL',
+  'statsJ.EditPanel.workEpisodeSourceTitleField': '标题（可选）',
+  'statsJ.EditPanel.workEpisodeTrust': '信任级别',
+  'statsJ.EditPanel.workEpisodeBind': '绑定',
+  'statsJ.EditPanel.workEpisodeUnbind': '解绑'
 }
 
 let cleanupGlobals = () => {}
@@ -84,7 +102,11 @@ before(async () => {
   }
   for (const [k, v] of Object.entries({
     window: w, document: w.document, navigator: w.navigator,
-    HTMLElement: w.HTMLElement, Element: w.Element, Node: w.Node, CustomEvent: w.CustomEvent, KeyboardEvent: w.KeyboardEvent, SVGElement: w.SVGElement, requestAnimationFrame: (cb) => setTimeout(() => cb(Date.now()), 0), cancelAnimationFrame: (id) => clearTimeout(id)
+    HTMLElement: w.HTMLElement, Element: w.Element, Node: w.Node, CustomEvent: w.CustomEvent, KeyboardEvent: w.KeyboardEvent, SVGElement: w.SVGElement,
+    // pd20 write forms: Vue's v-model directive hook reads the Document/Event/MouseEvent
+    // constructors via bare globals during patch — alias them like the rest of the DOM surface
+    Document: w.Document, Event: w.Event, MouseEvent: w.MouseEvent,
+    requestAnimationFrame: (cb) => setTimeout(() => cb(Date.now()), 0), cancelAnimationFrame: (id) => clearTimeout(id)
   })) setGlobal(k, v)
   // Track every timer scheduled while the jsdom window is installed so after() can cancel the
   // stragglers (persist probe backoff, save-queue retries) BEFORE window is torn down.
@@ -107,7 +129,7 @@ before(async () => {
     pendingTimers.clear()
     setGlobal('setTimeout', rawSetTimeout)
     setGlobal('setInterval', rawSetInterval)
-    for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'CustomEvent', 'KeyboardEvent']) {
+    for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'CustomEvent', 'KeyboardEvent', 'Document', 'Event', 'MouseEvent']) {
       try { delete g[k] } catch { Object.defineProperty(g, k, { value: undefined, configurable: true }) }
     }
     dom.window.close()
@@ -121,11 +143,20 @@ after(async () => {
 })
 
 const EPISODES = [
-  { episodeId: 1, summary: '白天写了渲染层', resources: ['spec.md'] },
-  { episodeId: 2, summary: '晚上补了回归', resources: [] }
+  { episodeId: 1, startedAt: 1717000001000, summary: '白天写了渲染层', resources: ['spec.md'] },
+  { episodeId: 2, startedAt: 1717000002000, summary: '晚上补了回归', resources: [] }
 ]
 
-function mountPanel ({ settings = {}, episodes = EPISODES } = {}) {
+function mountPanel ({ settings = {}, episodes = EPISODES, sources = [], commitImpl = null } = {}) {
+  // pd20 write tests: the component's ONLY mutation door is the command-bus facade. The stub
+  // records (entity, verb, payload) triples — the unit contract is the COMMIT PAYLOAD, and the
+  // live journey (j-pd20-episode) proves the real bus persists it end to end.
+  const commitCalls = []
+  const commitStub = (entity, verb, payload) => {
+    commitCalls.push({ entity, verb, payload })
+    if (commitImpl) return commitImpl(entity, verb, payload)
+    return Promise.resolve('minted-' + commitCalls.length)
+  }
   // The S2 pure function arrives via EditPanel's provide (deps-injected here as a mock; production
   // wires the real one from utils/handoff.js). Real signature: buildHandoff(episodes, sources, task)
   // → { text, json } — the clipboard gets `.text`.
@@ -135,10 +166,12 @@ function mountPanel ({ settings = {}, episodes = EPISODES } = {}) {
     return { text: 'HANDOFF:' + task.title + ':' + eps.length, json: {} }
   }
   const dbCalls = []
+  let liveEpisodes = episodes
   globalThis.window.todoAPI = {
     dbCall: (op, params) => {
       dbCalls.push({ op, params })
-      if (op === 'queryEpisodesByTask') return Promise.resolve(JSON.parse(JSON.stringify(episodes)))
+      if (op === 'queryEpisodesByTask') return Promise.resolve(JSON.parse(JSON.stringify(liveEpisodes)))
+      if (op === 'querySourcesByTask') return Promise.resolve(JSON.parse(JSON.stringify(sources)))
       return Promise.resolve([])
     }
   }
@@ -158,8 +191,9 @@ function mountPanel ({ settings = {}, episodes = EPISODES } = {}) {
     const sanitize = await import('../../../shared/sanitize-text.mjs')
     const editSave = await import('../../../renderer/js/utils/editSave.js')
 
-    // The work-episode child component (RED phase: file missing → this load throws and the whole file runs red)
-    const workOption = loadScript(WORK_SFC, {})
+    // The work-episode child component (RED phase: file missing → this load throws and the whole file runs red).
+    // The command-bus facade import is stripped by loadScript; the stub is injected as a dep.
+    const workOption = loadScript(WORK_SFC, { commit: commitStub })
     workOption.template = templateOf(WORK_SFC)
 
     // Host helpers: the interactive/mechanical ones are stubbed (drag/tour/DB retry plumbing);
@@ -248,7 +282,29 @@ function mountPanel ({ settings = {}, episodes = EPISODES } = {}) {
     await nextTick()
 
     return {
-      root, state, dbCalls, clipboardWrites, handoffCalls,
+      root, state, dbCalls, clipboardWrites, handoffCalls, commitCalls,
+      setLiveEpisodes: rows => { liveEpisodes = rows },
+      // typeInto: the real user chain — native value setter + input event (v-model listens on input)
+      async typeInto (sel, text) {
+        const el = root.querySelector(sel)
+        assert.ok(el, 'input not found: ' + sel)
+        const proto = el.tagName === 'SELECT' ? globalThis.window.HTMLSelectElement.prototype : globalThis.window.HTMLInputElement.prototype
+        Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, text)
+        el.dispatchEvent(new globalThis.window.Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }))
+      },
+      async click (sel) {
+        const el = root.querySelector(sel)
+        assert.ok(el, 'click target not found: ' + sel)
+        el.dispatchEvent(new globalThis.window.MouseEvent('click', { bubbles: true, cancelable: true }))
+        await this.flushAsync()
+      },
+      // flushAsync: a dispatched click kicks off an async component handler (commit → state line
+      // → reload). Drain the microtask queue and one macrotask so Vue re-renders before asserts.
+      async flushAsync () {
+        for (let i = 0; i < 5; i++) await Promise.resolve()
+        await new Promise(r => setTimeout(r, 0))
+        await nextTick()
+      },
       copyBtn: () => root.querySelector('.ep-work-copy'),
       section: () => root.querySelector('.ep-work-section')
     }
@@ -281,8 +337,105 @@ test('S3 ON: clicking 复制 Handoff writes buildHandoff(payload) to the clipboa
   const btn = h.copyBtn()
   assert.ok(btn, 'the copy-Handoff button renders in the handoff block')
   btn.click()
-  await Promise.resolve()
+  await h.flushAsync()
   assert.equal(h.clipboardWrites.length, 1, 'one clipboard write')
   assert.equal(h.clipboardWrites[0], 'HANDOFF:写周报:2', 'clipboard content === buildHandoff output (S2 pure function, mocked)')
   assert.equal(h.handoffCalls.length, 1, 'buildHandoff called once with the assembled payload')
+})
+
+// ---- pd20 write path: the section's ONLY mutation door is the command-bus facade ----
+
+test('pd20 write: filling the episode form and saving commits episode.put with the taskId and the round-trip note, then shows the persisted state line', async () => {
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } }, episodes: [] })
+  await h.typeInto('[data-input="new-goal"]', 'Finish the draft')
+  await h.typeInto('[data-input="outcome"]', 'Outline done')
+  await h.typeInto('[data-input="next-action"]', 'Send to review')
+  await h.click('.ep-work-save-episode')
+  const ep = h.commitCalls.find(c => c.entity === 'episode' && c.verb === 'put')
+  assert.ok(ep, 'episode.put committed through the bus facade')
+  assert.equal(ep.payload.taskId, '42', 'payload carries the open task id')
+  assert.ok(ep.payload.startedAt > 0, 'startedAt is epoch ms')
+  assert.ok(ep.payload.note.includes('goal: Finish the draft'), 'note serializes the goal field')
+  assert.ok(ep.payload.note.includes('outcome: Outline done'), 'note serializes the outcome field')
+  assert.ok(ep.payload.note.includes('nextAction: Send to review'), 'note serializes the nextAction field')
+  await h.flushAsync()
+  const state = h.root.querySelector('[data-state="episode"]')
+  assert.ok(state, 'a user-visible state line renders')
+  assert.ok(state.textContent.includes('已保存'), 'the state line shows success only AFTER the commit resolved')
+  // round-trip: the refresh re-reads the task's episodes (load() re-issued after the commit)
+  assert.ok(h.dbCalls.filter(c => c.op === 'queryEpisodesByTask').length >= 2, 'the list reloads after a successful commit')
+})
+
+test('pd20 write: plain goal-only save keeps the note plain (CLI-written notes stay legible)', async () => {
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } }, episodes: [] })
+  await h.typeInto('[data-input="new-goal"]', 'Just a goal')
+  await h.click('.ep-work-save-episode')
+  const ep = h.commitCalls.find(c => c.entity === 'episode' && c.verb === 'put')
+  assert.equal(ep.payload.note, 'Just a goal', 'no field lines → the note IS the goal (plain round-trip)')
+})
+
+test('pd20 edit: clicking a history row fills the form, and saving commits episode.put with the SAME id and preserved startedAt', async () => {
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } } })
+  const row = h.root.querySelector('[data-episode-id="1"]')
+  assert.ok(row, 'the history row renders with its episode id')
+  await h.click('[data-episode-id="1"] .ep-work-edit')
+  const goalInput = h.root.querySelector('[data-input="edit-goal"]')
+  assert.ok(goalInput, 'the goal input switches to the edit marker')
+  assert.equal(goalInput.value, EPISODES[0].summary, 'the form is prefilled from the row note (plain note → goal)')
+  await h.click('.ep-work-save-episode')
+  const ep = h.commitCalls.find(c => c.entity === 'episode' && c.verb === 'put')
+  assert.ok(ep, 'update commits episode.put')
+  assert.equal(ep.payload.id, 1, 'the update carries the SAME episode id')
+  assert.equal(ep.payload.startedAt, EPISODES[0].startedAt, 'the original startedAt is preserved')
+})
+
+test('pd20 delete: the row delete button commits episode.removeIds with the tombstone id', async () => {
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } } })
+  await h.click('[data-episode-id="2"] .ep-work-del')
+  const rm = h.commitCalls.find(c => c.entity === 'episode' && c.verb === 'removeIds')
+  assert.ok(rm, 'episode.removeIds committed through the bus facade')
+  assert.deepEqual(rm.payload, [2], 'the tombstone carries exactly the deleted episode id')
+})
+
+test('pd20 source: binding commits source.put FIRST then tasksource.put with the minted refId (no optimistic state line)', async () => {
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } }, episodes: [] })
+  await h.typeInto('[data-input="provider"]', 'github')
+  await h.typeInto('[data-input="external-id"]', 'org/repo#123')
+  await h.typeInto('[data-input="source-title"]', 'The PR')
+  await h.click('.ep-work-save-source')
+  const put = h.commitCalls.find(c => c.entity === 'source' && c.verb === 'put')
+  assert.ok(put, 'source.put committed (dedup is the storage pair-unique pre-check)')
+  assert.deepEqual({ providerId: put.payload.providerId, externalId: put.payload.externalId, trustLevel: put.payload.trustLevel },
+    { providerId: 'github', externalId: 'org/repo#123', trustLevel: 'L0' }, 'the ref payload carries provider/external id/trust')
+  const link = h.commitCalls.find(c => c.entity === 'tasksource' && c.verb === 'put')
+  assert.ok(link, 'tasksource.put committed after source.put')
+  assert.equal(link.payload.sourceRefId, 'minted-1', 'the link uses the refId RETURNED by source.put (persisted receipt, not a guess)')
+  assert.equal(link.payload.taskId, '42', 'the link targets the open task')
+  const state = h.root.querySelector('[data-state="source"]')
+  assert.ok(state && state.textContent.includes('已保存'), 'the source state line shows success only after BOTH commits resolved')
+})
+
+test('pd20 source: unlink commits tasksource.remove with the linkId; delete commits source.removeByIds with the refId', async () => {
+  const sources = [{ linkId: 7, sourceRefId: 3, providerId: 'manual', externalId: 'x', level: 'L0', canonicalUri: 'manual://x', title: 'X' }]
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } }, episodes: [], sources })
+  await h.click('.ep-work-unbind')
+  assert.ok(h.commitCalls.some(c => c.entity === 'tasksource' && c.verb === 'remove' && String(c.payload) === String([7])),
+    'unlink tombstones the link row by linkId')
+  await h.click('.ep-work-src-del')
+  assert.ok(h.commitCalls.some(c => c.entity === 'source' && c.verb === 'removeByIds' && String(c.payload) === String([3])),
+    'delete tombstones the source ref by refId')
+})
+
+test('pd20 failure: a rejected commit surfaces the failure state line and does NOT reset the form', async () => {
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } }, episodes: [],
+    commitImpl: () => Promise.reject(new Error('db locked')) })
+  await h.typeInto('[data-input="new-goal"]', 'Will fail')
+  await h.click('.ep-work-save-episode')
+  await new Promise(r => setTimeout(r, 0))
+  const state = h.root.querySelector('[data-state="episode"]')
+  assert.ok(state, 'the state line renders on failure too')
+  assert.ok(state.textContent.includes('保存失败'), 'the failure is user-visible')
+  assert.ok(state.textContent.includes('db locked'), 'the failure message carries the cause')
+  assert.equal(h.root.querySelector('[data-input="edit-goal"]') ? 1 : h.root.querySelector('[data-input="new-goal"]').value, 'Will fail',
+    'the form is NOT reset on failure (the user keeps their input)')
 })

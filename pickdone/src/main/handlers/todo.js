@@ -98,7 +98,10 @@ module.exports = function todoHandlers (ctx) {
     'queryEpisodesByTask',
     // querySourcesByTask (pd20 handoff copy): read-only source-ref read feeding the Copy-Handoff
     // button's buildHandoff(sources) input (impl db-episode-ops.cjs; same read-only class as above)
-    'querySourcesByTask'
+    'querySourcesByTask',
+    // pd20 (2026-11-03): the EditPanelWork 'continue work' forms write episodes + source links
+    // through the SAME bus door — the six domain writes are non-internal manifest rows now.
+    'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —
