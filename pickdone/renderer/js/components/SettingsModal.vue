@@ -265,10 +265,9 @@
           <!-- LAN sync tab (P3a 2026-09-16): v-if keeps its DOM out of the default view (visual
                baseline gate); it also participates in cross-tab search while a query is active -->
           <settings-sync-tab v-if="tab==='sync' || searching" v-show="searching || tab==='sync'"/>
-
+          <settings-capture-tab v-show="searching || tab==='capture'"/>
           <!-- Data management tab (child component); the DOM order matches the tab order: tomato → sync → data → about -->
           <settings-data-tab v-show="searching || tab==='data'"/>
-
           <!-- About / feedback (kept last in the DOM to match the visual tab order: ...tomato → data → about) -->
           <div v-show="searching || tab==='about'" class="tab-panel">
             <div class="form">
@@ -328,17 +327,18 @@ import { SUPPORTED, getLocale, setLocale } from '../i18n/index.js'
 import SettingsShortcutsTab from './settings/SettingsShortcutsTab.vue'
 import SettingsDataTab from './settings/SettingsDataTab.vue'
 import SettingsSyncTab from './settings/SettingsSyncTab.vue'
+import SettingsCaptureTab from './settings/SettingsCaptureTab.vue'
 import { filterSettingsPanels } from './settings/settingsSearch.js'
 
 export default {
   name: 'SettingsModal',
   mixins: [dialogA11y],
-  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab },
+  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab },
   data () {
     let tab0 = 'general'
     try { tab0 = localStorage.getItem('settingsTab') || 'general' } catch (e) { /* privacy mode etc. */ }
     return {
-      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
+      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'capture', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
       searchQ: '',
       searching: false,
       searchEmpty: false,
@@ -370,7 +370,7 @@ export default {
       const u = this.$store.state.auth.user || {}
       return u.userNameDefault ? this.$t('statsA.core.offlineUser') : (u.userName || '')
     },
-    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
+    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['capture', 'Capture'], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
     localDescLines: {
       get () { return this.st.todoDescriptionDisplayLineNumber },
       set (v) { this.set({ todoDescriptionDisplayLineNumber: v }) }

@@ -481,6 +481,7 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // let go (wrong-window binds / silent OWN_WINDOW-DESKTOP misses). prewarm never rejects and
     // is deliberately NOT called per-IPC.
     try { require('./win-bind').prewarm() } catch { /* best-effort boot prewarm */ }
+    try { require('./capture-endpoint').start() } catch (e) { log.warn('[Init] capture endpoint failed to start:', e && e.message) } // S4: local capture door (127.0.0.1, default OFF)
     // Perf (2026-10-02): reloadAll + Meta GC moved AFTER registerIpc/extWatch — they used to run
     // before the IPC/bus wiring, blocking the window-ready path on synchronous GC work. No
     // behavior change: registerIpc is synchronous wiring, reloadAll's fingerprint gate
