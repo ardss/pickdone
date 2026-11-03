@@ -237,7 +237,7 @@ export default {
       },
       onFail: () => { this.saveFailed = true; this.saveUnconfirmed = false }
     })
-    this._save.boot(); this._probe = createPersistProbe(pendingUpserts) // [w30 P0] persist probe backs the onDone callback (impl editSave.createPersistProbe)
+    this._save.boot(); this._probe = createPersistProbe(pendingUpserts, { flush: () => this.flushSave() }) // [w30 P0] persist probe backs onDone; [w31 P1] flush hooks auto-retry: unconfirmed verdict re-runs the save on backoff, terminal failures self-terminate (impl editSave.createPersistProbe)
     // Auto-increment sequence for stable subtask row keys (render-only, stripped at save time)
     this._subKeySeq = 0
   },

@@ -267,7 +267,15 @@ function attachmentKeyOfUrl (url) {
  *  repeat template). Pure (rows in, hits out): callers pass db.getAll rows (App) or liveTasks()
  *  (CLI); `excludeTaskId` drops one row (the task whose own entry was already spliced out in
  *  memory — its UPDATED list is scanned by the caller as a pseudo-row). Returns [{taskId, field}];
- *  empty array = no other row references the key = safe to unlink. */
+ *  empty array = no other row references the key = safe to unlink.
+ *  W31 P2 (2026-11-03): `key` may also be an entry's `attachmentId` (stamped by the W31
+ *  attachment migration) — an id match wins outright. Basename matching stays the rule for
+ *  legacy entries without an id AND for id-carrying entries that are cleanly resolved
+ *  (two rows sharing one real file must both guard its unlink — the original F2 bug).
+ *  The one exclusion: an id-carrying entry marked `missing: true` matches ONLY by id —
+ *  with a Chinese case-twin pair on disk both legacy urls decode to the SAME basename,
+ *  and the old basename-only compare counted the twin's entry as a reference to the
+ *  other twin's bytes (delete-guard/orphan audit hit two rows, 误伤). */
 function findKeyRefs (key, rows, { excludeTaskId = null } = {}) {
   const target = path.basename(String(key || ''))
   if (!target) return []
@@ -278,7 +286,15 @@ function findKeyRefs (key, rows, { excludeTaskId = null } = {}) {
       let list
       try { list = JSON.parse(row[field] || '[]'); if (!Array.isArray(list)) continue } catch { continue }
       for (const item of list) {
-        if (attachmentKeyOfUrl(item && item.url) === target) hits.push({ taskId: row.taskId, field })
+        if (!item) continue
+        const id = item.attachmentId
+        let matched = false
+        if (id != null && String(id) === target) {
+          matched = true
+        } else if (!(id != null && item.missing === true) && attachmentKeyOfUrl(item.url) === target) {
+          matched = true
+        }
+        if (matched) hits.push({ taskId: row.taskId, field })
       }
     }
   }

@@ -391,6 +391,12 @@ module.exports = function systemHandlers (ctx) {
       try { dialog.showMessageBoxSync({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg', { old: ud }) }) } catch { /* best-effort */ }
       setTimeout(() => { try { app.relaunch(); app.exit(0) } catch { /* dying anyway */ } }, 400)
       return { ok: true, target: r.target }
-    }
+    },
+
+    // --- Build fingerprint (W31 P1) — the diagnostic payload for the About section ---
+    // Same shared builder as the About UI (shared/build-fingerprint.mjs): version + git SHA
+    // (build-time injection or live git description) + channel, so a user report and the
+    // diagnostic bundle always carry the identical build string.
+    'app:build-info': () => require('../build-info.cjs').getBuildInfo()
   }
 }
