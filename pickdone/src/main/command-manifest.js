@@ -140,8 +140,18 @@ const COMMANDS = {
   // Sync-apply bulk variants: called directly by the engine ingress (sync-apply.js) with
   // wire-carried LWW stamps; declared here so every write op in db.js WRITE_OPS has a manifest
   // row and the gate's census is total. Payloads are row arrays — the bus passes them verbatim.
+  // W33 fix: setMetaMany was the last WRITE_OPS entry with no manifest row — via the bus its
+  // commitOp threw USAGE, but a direct db.call import-path bypass was silent (two outcomes for
+  // one write path). Declared internal (never renderer-reachable, sync-kick surface only),
+  // lwwField null + localKeys mirrored from meta.put (KV table: no age column, machine-local
+  // filtering per key — see the meta section above).
   'category.putMany':  { entity: 'category', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'upsertCategoryMany', internal: true },
-  'filter.putMany':    { entity: 'filter', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'filterUpsertMany', internal: true }
+  'filter.putMany':    { entity: 'filter', verb: 'putMany', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'filterUpsertMany', internal: true },
+
+  // W33 fix: bulk meta write (sync-kick / engine surface only, not on the renderer whitelist).
+  // Semantics mirror meta.put (KV rows, no LWW age column, per-key machine-local filtering) but
+  // with NO facade row — internal commands are main-process/CLI-surface by design.
+  'meta.putMany':      { entity: 'meta', verb: 'putMany', sync: 'full', lwwField: null, tombstone: null, localKeys: isMachineLocalMetaKey, op: 'setMetaMany', internal: true }
 }
 
 // op → command reverse index (derived, not hand-maintained). Multiple commands per op is
