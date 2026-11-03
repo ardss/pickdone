@@ -62,6 +62,7 @@
       <div v-if="devMode" class="ep-cat-wrap">
         <ep-dependencies ref="depBlock" :task="e" @patch="patchPreds"/>
       </div>
+      <ep-work v-if="($store.state.settings.workEpisode || {}).enabled" :task-id="(e && e.taskId) || 0" :task-title="(e && e.title) || ''"/>
 
       <ep-tags :tags="taskTags" @add="addTag" @remove="removeTag"/>
 
@@ -179,7 +180,7 @@ import * as repeat from './edit-panel/repeat.js'
 import { catOutsideClose, FIELD_MAP } from './edit-panel/interactions.js'
 import EpDateChips from './editpanel/EditPanelDateChips.vue' // W21 split: date chips + hidden picker
 import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recycle-bin banner markup
-import EpSaveHint from './editpanel/EditPanelSaveHint.vue' // [w30 P0] weak "保存未确认" hint markup
+import EpSaveHint from './editpanel/EditPanelSaveHint.vue'; import EpWork from './editpanel/EditPanelWork.vue' // [w30 P0] hint markup; pd20 S3 'continue work' section (gated by the workEpisode switch)
 import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
 import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
 import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder emit handlers + close-verify timer
@@ -188,7 +189,7 @@ import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
 // W21 split additions to the local component registry (spread into the options above)
-const w21Components = { EpDateChips, EpBinBanner, EpSaveHint }
+const w21Components = { EpDateChips, EpBinBanner, EpSaveHint, EpWork } // pd20 S3 adds EpWork
 
 // [component-fixes] pure helper now lives in utils/attachmentRefs.js (imported below)
 
