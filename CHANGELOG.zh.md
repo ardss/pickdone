@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+- 渲染层（W32）：快速添加小窗三路丢数据——忙碌期提交时粘贴的多行只存在内存队列里被自动隐藏销毁；排水路径把用户排队期间继续打的草稿静默清掉（未创建也未持久化）；焦点不在输入框时 Esc 只清文本、队列残留到下次 Enter 被悄悄创建。现在：排队行持久化 localStorage（唤起还原、排水/显式取消清除）、排水保留草稿、Esc 委托完整取消、成功 toast 读 await 前的日期快照、重唤起不再复活过期的失败横幅。另：backup-degraded 监听器卸载时移除。
+- 主进程（W32）：data:relocate 的 relaunch 路径完全绕过 quit 链——DB 关闭前先做同步 stop/settle（对齐 updater W16）；关键备份"空快照"隔离不再误伤合法删光全部任务的场景（计入全部恢复段而非只数 todoState，主恢复源不再冻结在删除前）；relay enable() 在已注册设备密钥但无记录 relay URL 时拒绝静默换 origin（旧 bearer 与 cursor 可能发往另一主机）；disable-lock 的写失败兜底改为落恢复标记而非假报成功，下次启动可读时补写解锁；数据迁移把目录 symlink 重建为 junction、文件 symlink fail-closed 列出冲突而非中止/错拷。
+- 门禁（W32）：活体池 skip 不再不可见——run-interactions-shared 聚合各目标 TAP skip 计数，check-test-summary 可并入 skip 棘轮（--live-pool-skip / 环境变量；check-all 接线待其结构禁区解锁）；低置信重试流的合成摘要改为合并 pass1+retry 的 skip 数（pass1 新增 skip 不再逃逸）；parity-cli-ui 不再泄漏 tmp 目录与环境变量；boot 日志 fd 在 reap 时关闭。
+
 - 门禁（W31）：三个真实测试套件对所有 runner 不可见——`TEST_EXTS` 缺 `.test.cjs`，多实例 lock/port 与 relay 证据维护套件从未执行过，且 fail-closed 检查看不见这种缺口；现已全部被发现且实测全绿。gate-doctor 的 git 子进程未剥离 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE（换共享 gitEnv）；覆盖率仪器锚测试把任何非零/null 退出都当"预期红"（`notEqual(0)` → 钉死 `equal(1)`）；check-command-bus 的 electron-log `Module._load` stub 在 require 时无条件安装并静默泄漏进三个进程内消费测试（改 require.main 门控）；w30-stopsync 测试质量三连：no-op 用例恒真断言 `ok(true)`、exit 钩子里的装饰性还原永不生效、裸 mkdtemp 泄漏（改断言真实可观察量 + try/finally + isolatedTmpDir）。
 - 渲染层（W31）：番茄记录弹层手动补录用 startTs 确定性生成 id——同一分钟补第二条记录被按 id 幂等去重静默吞掉，但每日限额照扣、成功 toast 照弹（id 加随机尾，与 DayRail/TaskAccountModal 同款）；DayRail 补录卡可把结束时刻存进未来（卡片内 time-picker 可把 startMin 推到 23:59；saveEntry 现在在创建与编辑两条路径都拒绝当日 end>now）；删除死代码 computed `selDayLabel`（毫秒时间戳直接拼"今天"后缀）；dragOverSeg 复位哨兵统一为 null。
 - 主进程（W31）：sync-apply 的 S1 causal-current 覆盖逐行探测 `revisionsList`——主线程同步 better-sqlite3 查询，数千行 relay 首拉会阻塞整个 ingest 期间的 IPC/提醒；现在按 ingest pass 记忆化（每个 distinct id 至多探测一次，per-pass cache 生命周期已核验，保守的 no-head 落 LWW 路径保持不变）。
