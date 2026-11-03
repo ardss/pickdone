@@ -32,7 +32,10 @@ module.exports = function systemHandlers (ctx) {
     let stamps = senderRateBuckets.get(id)
     if (!stamps) { stamps = []; senderRateBuckets.set(id, stamps) }
     const ok = allowWithinRate(stamps, Date.now(), opts)
-    if (!stamps.length) senderRateBuckets.delete(id) // drained window: drop the map entry immediately
+    // W32 (P3): the old "drained window: drop the map entry" branch here was dead code —
+    // allowWithinRate always pushes on the allow path and a refusal leaves the window non-empty,
+    // so stamps.length was never 0 at this point. Bounded-map cleanup is owned exclusively by
+    // the size>64 sweep below.
     if (senderRateBuckets.size > 64) {
       // Sweep dead senders whose newest stamp is older than the largest window we use here (10s)
       const now = Date.now()
@@ -275,6 +278,31 @@ module.exports = function systemHandlers (ctx) {
         // and the copy would read/write through the moved tree (and a pending debounce kick would
         // fire against the closed handle). Re-exported by external-db-watch.js (index.js untouched).
         try { require('../external-db-watch').stopLatestDbWatch() } catch (werr) { log.warn('[IPC] data:relocate stop external db watch failed', werr) }
+        // W32 (P2, mirrors updater.js preInstallSyncSettle's W16 ordering): after dbm.close() the
+        // migration runs for minutes and the exit timer adds a further 400ms window — the LAN sync
+        // server / in-flight rounds / relay poller stayed alive through it and would write
+        // watermarks or cursors against the CLOSED handle. Fire the quit-path stops HERE, while
+        // the DB handle is still open (same trigger set index.js's quit flush uses):
+        //   1. stopSyncForQuit: closes in-flight LAN round sockets and persists pull/push
+        //      watermarks + the security ring before the handle closes.
+        //   2. relay stopForQuit: halts the poller and lets an in-flight round's persist land
+        //      (same await-the-stop contract as the quit chain).
+        // Fire-and-forget: the stops' internal await chains settle by design margin, the same
+        // trade-off updater.js documents for the install window.
+        try {
+          const lanSync = require('../lan-sync-bootstrap')
+          if (typeof lanSync.stopSyncForQuit === 'function') {
+            const p = lanSync.stopSyncForQuit()
+            if (p && typeof p.catch === 'function') p.catch(() => { /* best-effort */ })
+          }
+        } catch (e) { try { log.warn('[IPC] data:relocate LAN sync settle failed:', e && e.message) } catch { /* best-effort */ } }
+        try {
+          const relay = require('../relay-sync-bootstrap')
+          if (typeof relay.stopForQuit === 'function') {
+            const p = relay.stopForQuit()
+            if (p && typeof p.catch === 'function') p.catch(() => { /* best-effort */ })
+          }
+        } catch (e) { try { log.warn('[IPC] data:relocate relay settle failed:', e && e.message) } catch { /* best-effort */ } }
         try { if (ctx.scheduler && ctx.scheduler.flushFiredNow) ctx.scheduler.flushFiredNow() } catch { /* best-effort */ }
         if (ctx.dbm && ctx.dbm.close) ctx.dbm.close()
       } catch (err) {
