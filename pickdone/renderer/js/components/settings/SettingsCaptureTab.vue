@@ -13,17 +13,41 @@
           <el-switch :model-value="captureEnabled" :disabled="!loaded" @change="toggleCapture"/>
         </div>
       </div>
-      <div class="form-item" v-if="captureEnabled">
+      <!-- Key visible only while it exists in plaintext (just minted, or plaintext fallback).
+           Once the main process has encrypted it at rest (safeStorage), the raw meta value is
+           the 'enc1:' blob — shown as "stored encrypted" instead of garbage. -->
+      <div class="form-item" v-if="captureEnabled && captureKey">
         <span class="form-item__label">Access key</span>
         <div class="form-item__control">
-          <span class="tip capture-key-text">{{ captureKey || 'Generating…' }}</span>
+          <span class="tip capture-key-text">{{ captureKey }}</span>
           <button class="mini capture-copy-btn" @click="copyKey">Copy</button>
           <button class="mini capture-regen-btn" @click="regenKey">Regenerate</button>
         </div>
       </div>
+      <div class="form-item" v-if="captureEnabled && storedEncrypted">
+        <span class="form-item__label">Access key</span>
+        <div class="form-item__control">
+          <span class="tip capture-key-text">Stored encrypted (OS keyring). Regenerate to set a new visible key.</span>
+          <button class="mini capture-regen-btn" @click="regenKey">Regenerate</button>
+        </div>
+      </div>
+      <!-- Plaintext fallback warning: main-process safeStorage unavailable → the key sits in
+           meta unencrypted. Machine-local ('_' keys never sync), but readable in the db file. -->
+      <div class="form-item form-item--bare" v-if="captureEnabled && plaintextFallback">
+        <div class="form-item__control">
+          <span class="tip capture-plaintext-warning">⚠ Plaintext fallback: the OS keyring is unavailable, so the access key is stored unencrypted. It never leaves this machine ('_' meta keys are excluded from sync), but it is readable in the database file.</span>
+        </div>
+      </div>
+      <div class="form-item" v-if="captureEnabled">
+        <span class="form-item__label">Endpoint URL</span>
+        <div class="form-item__control">
+          <span class="tip capture-endpoint-text">{{ captureEndpoint }}</span>
+          <button class="mini capture-copy-btn" @click="copyEndpoint">Copy</button>
+        </div>
+      </div>
       <div class="form-item form-item--bare" v-if="captureEnabled">
         <div class="form-item__control">
-          <span class="tip">POST to http://127.0.0.1:7789/capture with the X-PickDone-Key header set to the key above. Regenerating invalidates the old key immediately. The endpoint stays fully OFF (every request rejected) until this switch is on.</span>
+          <span class="tip">The browser extension (popup) posts to the endpoint URL above with the X-PickDone-Key header set to the key. Regenerating invalidates the old key immediately. The endpoint stays fully OFF (every request rejected) until this switch is on.</span>
         </div>
       </div>
     </div>
@@ -37,11 +61,21 @@
  *  endpoint toggle can never ride the LAN/cloud sync to a peer). Writes go through the SAME
  *  command-bus facade every other settings surface uses (commit('meta','put',…)); reads go
  *  through the whitelisted getMetaMany batch read. No i18n keys exist for this tab yet and the
- *  i18n lexicon is outside this slice's allowed paths — the labels are literal strings. */
+ *  i18n lexicon is outside this slice's allowed paths — the labels are literal strings.
+ *
+ *  Secret-at-rest: the main process encrypts the meta row with safeStorage when the OS keyring
+ *  is available ('enc1:'-prefixed blob). This tab detects that state — showing a placeholder
+ *  instead of the blob — and shows a PLAINTEXT FALLBACK warning when the key is stored in the
+ *  clear (no keyring). The extension default endpoint literal must match
+ *  src/main/capture-endpoint/contract.cjs (asserted by the contract test). */
 import { commit } from '../../utils/commandBus.js'
 
 const META_ENABLED_KEY = '_captureEndpointEnabled'
 const META_SECRET_KEY = '_captureEndpointSecret'
+// MUST equal src/main/capture-endpoint/contract.cjs DEFAULT_CAPTURE_ENDPOINT — the
+// contract test (tests/unit/main/capture-endpoint/contract.test.mjs) asserts this literal.
+const CAPTURE_ENDPOINT_URL = 'http://127.0.0.1:7789/capture'
+const SECRET_ENC_PREFIX = 'enc1:' // mirrors capture-endpoint/index.js
 
 /** 48-hex-char key (24 random bytes) — same shape/entropy as the main-process secret.js. */
 function randomKey () {
@@ -57,8 +91,15 @@ export default {
     return {
       loaded: false, // the switch stays disabled until the meta read lands (no boot flicker)
       captureEnabled: false, // DEFAULT OFF — absent meta rows mean OFF, never ON
-      captureKey: '',
+      captureKey: '', // visible only while stored in plaintext ('' when encrypted at rest)
+      storedEncrypted: false, // meta row is an 'enc1:' safeStorage blob
+      captureEndpoint: CAPTURE_ENDPOINT_URL,
       copied: false
+    }
+  },
+  computed: {
+    plaintextFallback () {
+      return this.captureEnabled && !this.storedEncrypted && !!this.captureKey
     }
   },
   mounted () { this.refresh() },
@@ -70,10 +111,13 @@ export default {
         const map = {}
         for (const r of (rows || [])) map[r.key] = r.value
         this.captureEnabled = map[META_ENABLED_KEY] === '1'
-        this.captureKey = map[META_SECRET_KEY] || ''
+        const raw = map[META_SECRET_KEY] || ''
+        this.storedEncrypted = raw.startsWith(SECRET_ENC_PREFIX)
+        this.captureKey = this.storedEncrypted ? '' : raw
         // fail-closed: an enabled endpoint without a stored key mints one on open
-        if (this.captureEnabled && !this.captureKey) {
+        if (this.captureEnabled && !raw) {
           this.captureKey = randomKey()
+          this.storedEncrypted = false
           await commit('meta', 'put', [META_SECRET_KEY, this.captureKey])
         }
       } finally {
@@ -83,7 +127,7 @@ export default {
     async toggleCapture (v) {
       this.captureEnabled = !!v
       await commit('meta', 'put', [META_ENABLED_KEY, v ? '1' : '0'])
-      if (v && !this.captureKey) {
+      if (v && !this.captureKey && !this.storedEncrypted) {
         this.captureKey = randomKey()
         await commit('meta', 'put', [META_SECRET_KEY, this.captureKey])
       }
@@ -91,6 +135,7 @@ export default {
     async regenKey () {
       const fresh = randomKey()
       this.captureKey = fresh
+      this.storedEncrypted = false
       await commit('meta', 'put', [META_SECRET_KEY, fresh])
     },
     async copyKey () {
@@ -99,6 +144,9 @@ export default {
       this.copied = true
       if (this._copiedTimer) clearTimeout(this._copiedTimer)
       this._copiedTimer = setTimeout(() => { this.copied = false }, 1500)
+    },
+    async copyEndpoint () {
+      await navigator.clipboard.writeText(this.captureEndpoint)
     }
   }
 }

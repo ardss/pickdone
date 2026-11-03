@@ -22,8 +22,18 @@
 const http = require('http')
 const { ingestCapture } = require('./handlers')
 const { keysMatch, KEY_HEADER } = require('./secret')
+const { CAPTURE_HOST, CAPTURE_PORT, CAPTURE_PATH } = require('./contract.cjs')
 
 const MAX_BODY = 64 * 1024
+
+// CORS: the browser extension's origin is a random chrome-extension:// id, so the answer is
+// `*`. The X-PickDone-Key handshake (fail-closed, per request) is the security boundary —
+// CORS only lets the browser complete the fetch the key already gates.
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type, ' + KEY_HEADER
+}
 
 function startCaptureServer (opts = {}) {
   const getSecret = opts.getSecret || (() => null)
@@ -31,7 +41,7 @@ function startCaptureServer (opts = {}) {
   const getMeta = opts.getMeta || (() => null)
   const bus = opts.bus || null
   const customIngest = opts.ingest || null
-  const basePort = Number.isFinite(opts.port) ? opts.port : 7789
+  const basePort = Number.isFinite(opts.port) ? opts.port : CAPTURE_PORT
   const attempts = Number.isFinite(opts.attempts) && opts.attempts > 0 ? opts.attempts : 10
 
   function runIngest (payload) {
@@ -62,14 +72,26 @@ function startCaptureServer (opts = {}) {
 
   function respond (res, status, json) {
     if (res.writableEnded) return
+    // 204 (OPTIONS preflight) must not carry a body
+    const headers = Object.assign({}, CORS_HEADERS)
+    if (status === 204) {
+      res.writeHead(204, headers)
+      res.end()
+      return
+    }
     const body = JSON.stringify(json)
-    res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) })
+    headers['content-type'] = 'application/json'
+    headers['content-length'] = Buffer.byteLength(body)
+    res.writeHead(status, headers)
     res.end(body)
   }
 
   const server = http.createServer((req, res) => {
     Promise.resolve().then(async () => {
-      if (req.method !== 'POST' || req.url !== '/capture') return respond(res, 404, { error: 'not found' })
+      // preflight first: browsers send OPTIONS WITHOUT the key header, so it must be answered
+      // before the auth/kill-switch gates (it carries no payload and touches nothing db-side)
+      if (req.method === 'OPTIONS' && req.url === CAPTURE_PATH) return respond(res, 204)
+      if (req.method !== 'POST' || req.url !== CAPTURE_PATH) return respond(res, 404, { error: 'not found' })
       // kill switch first: a disabled endpoint answers 503 to everything, exposing nothing
       if (!isEnabled()) return respond(res, 503, { error: 'capture endpoint is disabled' })
       // then the handshake — before anything touches the db
@@ -114,7 +136,7 @@ function startCaptureServer (opts = {}) {
           reject(e)
         }
       })
-      server.listen(p, '127.0.0.1', () => {
+      server.listen(p, CAPTURE_HOST, () => {
         actualPort = server.address().port
         resolve(actualPort)
       })

@@ -5,23 +5,20 @@
 
 import { normalizeUrl, fingerprint } from './shared/capture-url.js';
 import { createQueue } from './shared/queue.js';
+import { DEFAULT_CAPTURE_ENDPOINT } from './shared/endpoint-contract.js';
+import { createDeliver } from './shared/deliver.js';
 
-const DELIVER_ENDPOINT_DEFAULT = 'http://127.0.0.1:8741/api/capture';
-
-async function getEndpoint() {
-  const got = await chrome.storage.local.get('pdEndpoint');
-  return got.pdEndpoint || DELIVER_ENDPOINT_DEFAULT;
-}
-
-async function deliver(payload) {
-  const endpoint = await getEndpoint();
-  const res = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error(`delivery failed: HTTP ${res.status}`);
-}
+const deliver = createDeliver({
+  getEndpoint: async () => {
+    const got = await chrome.storage.local.get('pdEndpoint');
+    return got.pdEndpoint || DEFAULT_CAPTURE_ENDPOINT;
+  },
+  // the access key the user pasted in the popup — sent as the X-PickDone-Key handshake
+  getKey: async () => {
+    const got = await chrome.storage.local.get('pdCaptureKey');
+    return got.pdCaptureKey || '';
+  },
+});
 
 const queue = createQueue({
   storage: chrome.storage.local,

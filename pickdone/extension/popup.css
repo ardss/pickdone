@@ -30,3 +30,19 @@ button {
   width: 100%;
   padding: 6px;
 }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.row label {
+  flex: 0 0 70px;
+  color: #555;
+}
+.row input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px;
+  font: inherit;
+}
