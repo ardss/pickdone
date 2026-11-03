@@ -29,7 +29,6 @@ const read = p => fs.readFileSync(path.join(ROOT, p), 'utf8')
 const QA_SFC = path.join(ROOT, 'renderer/js/components/QuickAdd.vue')
 const QAPAGE_SFC = path.join(ROOT, 'renderer/js/views/QuickAddPage.vue')
 const QA_SRC = read('renderer/js/components/QuickAdd.vue').replace(/\r/g, '')
-const QAPAGE_SRC = read('renderer/js/views/QuickAddPage.vue').replace(/\r/g, '')
 const APPROOT_SRC = read('renderer/js/app-root.vue').replace(/\r/g, '')
 
 let cleanupGlobals = () => {}

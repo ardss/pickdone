@@ -38,7 +38,7 @@ module.exports = {
     },
     {
       // Node 侧代码
-      files: ['src/main/**/*.js', 'src/preload/**/*.js', 'cli/**/*.js', 'tests/**/*.mjs', '*.cjs', '.eslintrc.cjs'],
+      files: ['src/main/**/*.js', 'src/preload/**/*.js', 'cli/**/*.js', 'cli/**/*.mjs', 'tests/**/*.mjs', '*.cjs', '.eslintrc.cjs'],
       env: { node: true, browser: false, es2022: true },
       parserOptions: { ecmaVersion: 2022 },
       globals: {

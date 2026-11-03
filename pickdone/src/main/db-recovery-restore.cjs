@@ -341,8 +341,6 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
  *  generically: a parsed segment contributes its own array length (tomatoRecords is a bare
  *  array) plus every array-valued property (todoList/recycleList/entries/list/chips/habits/...). */
 function criticalBackupRowCount (jsonText) {
-  let parse
-  try { parse = JSON.parse } catch { return 0 }
   try {
     const backup = (JSON.parse(jsonText).backup) || {}
     let total = 0

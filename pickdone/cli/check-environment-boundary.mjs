@@ -11,7 +11,7 @@ const rules = [
   ['machine-specific Windows path', /\b[A-Z]:[\\/](?:Users|AIControl|ZPROJECT|pickdone-drill|PickDone)(?:[\\/]|(?=['"\s]|$))/i],
   ['private LAN address', /\b(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/],
   ['personal Windows computer name', /\bDESKTOP-[A-Z0-9-]{5,}\b/i],
-  ['absolute personal home path', /\/(?:home|Users)\/[A-Za-z0-9._-]+\/[A-Za-z0-9._~\/-]+/i]
+  ['absolute personal home path', /\/(?:home|Users)\/[A-Za-z0-9._-]+\/[A-Za-z0-9._~/-]+/i]
 ]
 
 // Ignore generated dependencies and tests (which may contain negative fixtures).
