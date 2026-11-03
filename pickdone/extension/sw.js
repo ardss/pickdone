@@ -34,13 +34,29 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// The ONE capture body: normalize → fingerprint → enqueue → flush. The context menu and the
+// 'pd-capture-page' message (the headless/testable seam — a page can't drive native menus)
+// both land here, so the journey exercises the exact shipped capture path.
+async function capturePageUrl (rawUrl) {
+  const { canonicalUri } = normalizeUrl(rawUrl);
+  const fp = await fingerprint(canonicalUri);
+  // Server contract (capture-endpoint/server): {content, dedupeFingerprint?, sourceUrl?,
+  // sourceTitle?}. The queued page URL is both the task text and the source link; the
+  // sha-256 hex fingerprint is the server-side dedupe key. (The old shape — raw
+  // {canonicalUri, fingerprint} — was rejected 400 by the desktop door: contract break
+  // caught by the live Chrome journey j-pd20-extension.)
+  await queue.enqueue({
+    payload: { content: canonicalUri, dedupeFingerprint: fp, sourceUrl: canonicalUri },
+    canonicalUri,
+    fingerprint: fp,
+  });
+  await queue.flush();
+  return { canonicalUri, fp };
+}
+
 chrome.contextMenus.onClicked.addListener(async (info) => {
   if (info.menuItemId !== 'pd-capture-page') return;
-  const rawUrl = info.pageUrl;
-  const { canonicalUri, videoId, tSeconds } = normalizeUrl(rawUrl);
-  const fp = await fingerprint(canonicalUri);
-  await queue.enqueue({ payload: { canonicalUri, videoId, tSeconds, fingerprint: fp }, canonicalUri, fingerprint: fp });
-  await queue.flush();
+  await capturePageUrl(info.pageUrl);
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -48,6 +64,10 @@ chrome.runtime.onStartup.addListener(() => {
 });
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type === 'pd-capture-page') {
+    capturePageUrl(msg.url).then(sendResponse);
+    return true;
+  }
   if (msg?.type === 'pd-queue-flush') {
     queue.flush().then(sendResponse);
     return true;

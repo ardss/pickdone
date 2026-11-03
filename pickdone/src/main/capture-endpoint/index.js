@@ -108,6 +108,12 @@ function start (opts = {}) {
   }
   migrate() // encrypt anything plaintext left over from an earlier session
   return startCaptureServer(Object.assign({
+    // THE ingest door's write side: every capture becomes a todo + sourceRef + link through
+    // the SAME command bus every other writer uses. Without this wiring the door binds and
+    // authenticates but answers 500 'no bus wired' to EVERY ingest (dead on arrival — the
+    // live Chrome journey j-pd20-extension E1 door-probe pins it: 400 invalid payload must
+    // reach the handler, never a 500).
+    bus: require('../command-bus'),
     getMeta: k => readMeta(k),
     getSecret: () => {
       migrate() // also covers a key the settings tab minted after boot

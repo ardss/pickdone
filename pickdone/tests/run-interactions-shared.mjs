@@ -56,6 +56,9 @@ const DEFAULT_TARGETS = [
   // sourceRef link → Copy-Handoff clipboard → reload persistence) — same fail-loud live-pool
   // class as its j-* siblings.
   'tests/e2e-journeys/j-pd20-episode.test.mjs',
+  // pd20 (2026-11-04): the MV3 capture live journey — real Chrome with the unpacked
+  // extension talking to a real isolated app instance (self-spawning like its siblings).
+  'tests/e2e-journeys/j-pd20-extension.test.mjs',
   'tests/keyboard-e2e.mjs',
   'tests/cssom-integrity.mjs',
   'tests/ui-coverage.mjs',
