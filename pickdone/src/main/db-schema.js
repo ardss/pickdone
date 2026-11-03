@@ -143,6 +143,45 @@ CREATE TABLE IF NOT EXISTS sync_revision_payloads (
 CREATE TABLE IF NOT EXISTS sync_revision_current (
   entityId   TEXT PRIMARY KEY,
   revisionId TEXT NOT NULL
-);`
+);
+-- Work-episode ledger (S1 vertical slice, migration v11 — v8-style dual manifest: fresh
+-- databases get the tables from SCHEMA, upgrades get them from the v11 migration; the two
+-- DDL copies must stay column-identical, asserted by db-migrations-episode-tables.test.mjs).
+CREATE TABLE IF NOT EXISTS work_episodes (
+  id        TEXT PRIMARY KEY,
+  taskId    TEXT NOT NULL,
+  startedAt INTEGER NOT NULL DEFAULT 0,
+  endedAt   INTEGER NOT NULL DEFAULT 0,
+  note      TEXT,
+  deleted   INTEGER NOT NULL DEFAULT 0,
+  deletedAt INTEGER NOT NULL DEFAULT 0,
+  updatedAt INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_work_episodes_task ON work_episodes (taskId, startedAt);
+-- External source references. The (providerId, externalId) UNIQUE constraint is the domain
+-- backstop: sourcePut pre-checks the pair for an explicit error, the index makes the race
+-- impossible at the storage layer.
+CREATE TABLE IF NOT EXISTS source_refs (
+  id         TEXT PRIMARY KEY,
+  providerId TEXT NOT NULL,
+  externalId TEXT NOT NULL,
+  title      TEXT,
+  deleted    INTEGER NOT NULL DEFAULT 0,
+  deletedAt  INTEGER NOT NULL DEFAULT 0,
+  updatedAt  INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (providerId, externalId)
+);
+-- Task ↔ source-ref links. A pair-unique link: one task links a given source ref at most once.
+CREATE TABLE IF NOT EXISTS task_source_links (
+  id          TEXT PRIMARY KEY,
+  taskId      TEXT NOT NULL,
+  sourceRefId TEXT NOT NULL,
+  deleted     INTEGER NOT NULL DEFAULT 0,
+  deletedAt   INTEGER NOT NULL DEFAULT 0,
+  updatedAt   INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (taskId, sourceRefId)
+);
+CREATE INDEX IF NOT EXISTS idx_task_source_links_task ON task_source_links (taskId);
+CREATE INDEX IF NOT EXISTS idx_task_source_links_ref ON task_source_links (sourceRefId);`
 
 module.exports = { SCHEMA }

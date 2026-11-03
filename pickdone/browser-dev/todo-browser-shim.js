@@ -587,6 +587,10 @@
         return { ok: true }
       case 'syncConflictBackupsList':
         return []
+      case 'queryEpisodesByTask':
+        // pd20 S3 'continue work' read (renderer-shaped view model {episodeId, summary, resources});
+        // the web demo serves one static sample episode so the folded section has something to show.
+        return [{ episodeId: 'ep-demo-1', startedAt: 0, endedAt: 0, summary: 'demo episode', resources: [] }]
       default:
         // 未实现 op 显式失败(此前返回 null 假成功,调用方把 null 当真结果渲染/入库)。console.warn 曾被 UI 吞掉,排查不到
         throw new Error('[appBrowserShim] dbCall 未实现操作:' + op)

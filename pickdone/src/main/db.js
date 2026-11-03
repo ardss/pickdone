@@ -679,6 +679,14 @@ const OPS = {
   tomatoUpdateById: (...a) => tomatoOps.tomatoUpdateById(db, ...a),
   tomatoRemoveByIds: (...a) => tomatoOps.tomatoRemoveByIds(db, ...a),
   tomatoMigrateFromMeta: (...a) => tomatoOps.tomatoMigrateFromMeta(db, stmts, ...a),
+  episodePut: (...a) => require('./db-episode-ops.cjs').episodePut(db, ...a), // S1 v11 episode/source/tasksource ops (impl db-episode-ops.cjs); queryEpisodesByTask (pd20 S3) = read-only renderer-shaped episode read for the EditPanel 'continue work' section — whitelisted in handlers/todo.js, no manifest row (read-only class)
+  episodeRemoveIds: (...a) => require('./db-episode-ops.cjs').episodeRemoveIds(db, ...a),
+  sourcePut: (...a) => require('./db-episode-ops.cjs').sourcePut(db, ...a),
+  sourceRemoveByIds: (...a) => require('./db-episode-ops.cjs').sourceRemoveByIds(db, ...a),
+  taskSourcePut: (...a) => require('./db-episode-ops.cjs').taskSourcePut(db, ...a),
+  taskSourceRemove: (...a) => require('./db-episode-ops.cjs').taskSourceRemove(db, ...a),
+  queryEpisodesByTask: (...a) => require('./db-episode-ops.cjs').queryEpisodesByTask(db, ...a),
+  captureIngest: (...a) => OPS.setMetaMany(...a), // S4 capture door dedupe-index pair — same setMetaMany impl, distinct op so manifest one-op-one-command holds alongside meta.putMany
   // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
   // limit guards the first pull on a large existing log; callers page through via the returned max seq.
   // Main-process/CLI-only op by design: the future sync engine lives in the main process and reads the
