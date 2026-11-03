@@ -1,0 +1,32 @@
+body {
+  font: 13px system-ui, sans-serif;
+  width: 320px;
+  margin: 0;
+  padding: 12px;
+}
+h1 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+#summary {
+  color: #555;
+  margin-bottom: 8px;
+}
+ul {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+li {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button {
+  width: 100%;
+  padding: 6px;
+}
