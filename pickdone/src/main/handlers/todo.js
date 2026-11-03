@@ -95,7 +95,10 @@ module.exports = function todoHandlers (ctx) {
     'syncSetPeerAlias',
     // queryEpisodesByTask (pd20 S3): read-only episode read for the EditPanel 'continue work'
     // section (impl db-episode-ops.cjs; read-only → any window, no manifest row — tomatoGetById class)
-    'queryEpisodesByTask'
+    'queryEpisodesByTask',
+    // querySourcesByTask (pd20 handoff copy): read-only source-ref read feeding the Copy-Handoff
+    // button's buildHandoff(sources) input (impl db-episode-ops.cjs; same read-only class as above)
+    'querySourcesByTask'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —

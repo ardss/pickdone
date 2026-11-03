@@ -43,6 +43,7 @@ const I18N = {
 
 let cleanupGlobals = () => {}
 const mountedApps = [] // drained in after(): leftover transition timers must not outlive the jsdom window
+const pendingTimers = new Set() // pd20 fix: tracked node timers cleared in after() — the panel's persist-probe/save-queue retries used to fire after cleanupGlobals and hit "window is not defined" (file-level async leak)
 
 /* Strip the SFC <script> block's imports + TS type annotations, keep the option object.
  * Same convention as tests/unit/components/j4-tag-title-dedup.test.mjs. */
@@ -85,7 +86,27 @@ before(async () => {
     window: w, document: w.document, navigator: w.navigator,
     HTMLElement: w.HTMLElement, Element: w.Element, Node: w.Node, CustomEvent: w.CustomEvent, KeyboardEvent: w.KeyboardEvent, SVGElement: w.SVGElement, requestAnimationFrame: (cb) => setTimeout(() => cb(Date.now()), 0), cancelAnimationFrame: (id) => clearTimeout(id)
   })) setGlobal(k, v)
+  // Track every timer scheduled while the jsdom window is installed so after() can cancel the
+  // stragglers (persist probe backoff, save-queue retries) BEFORE window is torn down.
+  const rawSetTimeout = g.setTimeout
+  const rawSetInterval = g.setInterval
+  const wrappedSetTimeout = (fn, ms, ...rest) => {
+    const h = rawSetTimeout((...a) => { pendingTimers.delete(h); return fn(...a) }, ms, ...rest)
+    pendingTimers.add(h)
+    return h
+  }
+  const wrappedSetInterval = (fn, ms, ...rest) => {
+    const h = rawSetInterval(fn, ms, ...rest)
+    pendingTimers.add(h)
+    return h
+  }
+  setGlobal('setTimeout', wrappedSetTimeout)
+  setGlobal('setInterval', wrappedSetInterval)
   cleanupGlobals = () => {
+    for (const h of pendingTimers) { try { clearTimeout(h) } catch { /* already fired */ } }
+    pendingTimers.clear()
+    setGlobal('setTimeout', rawSetTimeout)
+    setGlobal('setInterval', rawSetInterval)
     for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'Element', 'Node', 'CustomEvent', 'KeyboardEvent']) {
       try { delete g[k] } catch { Object.defineProperty(g, k, { value: undefined, configurable: true }) }
     }
@@ -105,11 +126,13 @@ const EPISODES = [
 ]
 
 function mountPanel ({ settings = {}, episodes = EPISODES } = {}) {
-  // The S2 pure function arrives here as an injected mock (production wires the real one).
+  // The S2 pure function arrives via EditPanel's provide (deps-injected here as a mock; production
+  // wires the real one from utils/handoff.js). Real signature: buildHandoff(episodes, sources, task)
+  // → { text, json } — the clipboard gets `.text`.
   const handoffCalls = []
-  const buildHandoff = (payload) => {
-    handoffCalls.push(payload)
-    return 'HANDOFF:' + payload.taskTitle + ':' + payload.episodes.length
+  const buildHandoff = (eps, srcs, task) => {
+    handoffCalls.push({ episodes: eps, sources: srcs, task })
+    return { text: 'HANDOFF:' + task.title + ':' + eps.length, json: {} }
   }
   const dbCalls = []
   globalThis.window.todoAPI = {
@@ -187,6 +210,7 @@ function mountPanel ({ settings = {}, episodes = EPISODES } = {}) {
       EpBinBanner: { name: 'EpBinBanner', emits: ['restore'], template: '<div class="stub-binbanner"/>' },
       EpSaveHint: { name: 'EpSaveHint', props: ['show'], emits: ['retry'], template: '<div class="stub-savehint"/>' },
       EpWork: workOption,
+      buildHandoff, // pd20 fix: EditPanel provides the injected formatter to EpWork
       ...stubs
     })
     panelOption.template = templateOf(PANEL_SFC)
@@ -204,7 +228,6 @@ function mountPanel ({ settings = {}, episodes = EPISODES } = {}) {
     }
 
     const app = Vue.createApp(panelOption)
-    app.provide('buildHandoff', buildHandoff)
     app.config.globalProperties.$store = store
     app.config.globalProperties.$t = (k) => I18N[k] || k
     app.config.globalProperties.$message = { success () {}, error () {} }

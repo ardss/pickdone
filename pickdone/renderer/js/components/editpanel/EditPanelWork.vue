@@ -35,6 +35,7 @@
         <div class="ep-work-text">{{ episodes.length ? taskTitle : '' }}</div>
         <button v-if="hasHandoff" class="mini ep-work-copy" @click="copyHandoff">
           {{ $t('statsJ.EditPanel.workEpisodeCopyHandoff') }}</button>
+        <span v-if="copyState" class="ep-work-copy-state" role="status">{{ copyState }}</span>
       </div>
     </div>
   </div>
@@ -57,7 +58,9 @@ export default {
     return {
       open: true,
       episodes: [] as any,
-      loadFailed: false
+      sources: [] as any, // pd20 fix: linked sourceRefs ({level, canonicalUri}) — the buildHandoff `sources` input
+      loadFailed: false,
+      copyState: '' // pd20 fix: user-visible copy feedback ('' | success | failure message)
     }
   },
   computed: {
@@ -82,9 +85,6 @@ export default {
       }
       return seen
     },
-    handoffPayload () {
-      return { taskId: this.taskId, taskTitle: this.taskTitle, episodes: this.episodes }
-    }
   },
   watch: {
     taskId: { immediate: true, handler (id) { this.load(id) } }
@@ -94,7 +94,7 @@ export default {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.open = !this.open }
     },
     async load (id) {
-      if (!id || !(window.todoAPI && window.todoAPI.dbCall)) { this.episodes = []; return }
+      if (!id || !(window.todoAPI && window.todoAPI.dbCall)) { this.episodes = []; this.sources = []; return }
       try {
         const rows = await window.todoAPI.dbCall('queryEpisodesByTask', id)
         this.episodes = Array.isArray(rows) ? rows : []
@@ -102,11 +102,38 @@ export default {
       } catch (e) {
         this.episodes = []; this.loadFailed = true
       }
+      try {
+        const srcs = await window.todoAPI.dbCall('querySourcesByTask', id)
+        this.sources = Array.isArray(srcs) ? srcs : []
+      } catch (e) {
+        this.sources = [] // provenance read failure must not break the section (handoff just carries fewer sources)
+      }
+    },
+    // Map the dbCall view-model episodes to buildHandoff's episode shape ({startedAt, role, goal,
+    // outcome, nextAction}) — the storage vm's `summary` is the episode goal; startedAt is epoch ms.
+    handoffEpisodes () {
+      return (this.episodes || []).map(ep => ({
+        startedAt: ep && ep.startedAt ? new Date(ep.startedAt).toISOString() : '',
+        role: 'human',
+        goal: (ep && ep.summary) || '',
+        outcome: '',
+        nextAction: ''
+      }))
     },
     async copyHandoff () {
-      if (typeof this.buildHandoff !== 'function') return
-      const text = String(this.buildHandoff(this.handoffPayload))
-      try { await navigator.clipboard.writeText(text) } catch (e) { /* clipboard unavailable */ }
+      if (typeof this.buildHandoff !== 'function') { this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyFail'); return }
+      try {
+        // pd20 fix: the real signature is buildHandoff(episodes, sources, task) → {text, json}.
+        // The clipboard gets result.text (the markdown), NOT the object — the old code did
+        // String(result) and pasted "[object Object]".
+        const result = this.buildHandoff(this.handoffEpisodes(), this.sources || [], { id: this.taskId, title: this.taskTitle })
+        const text = (result && typeof result.text === 'string') ? result.text : ''
+        if (!text) throw new Error('empty handoff text')
+        await navigator.clipboard.writeText(text)
+        this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyOk')
+      } catch (e) {
+        this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyFail')
+      }
     }
   }
 }

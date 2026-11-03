@@ -183,14 +183,12 @@ import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recyc
 import EpSaveHint from './editpanel/EditPanelSaveHint.vue'; import EpWork from './editpanel/EditPanelWork.vue' // [w30 P0] hint markup; pd20 S3 'continue work' section (gated by the workEpisode switch)
 import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
 import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
-import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder emit handlers + close-verify timer
+import * as reminderOps from './editpanel/reminderOps.js'; import { buildHandoff } from '../utils/handoff.js' // pd20 fix: the REAL S2 formatter provided down to EpWork (inject chain previously broken)
 
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
 // W21 split additions to the local component registry (spread into the options above)
 const w21Components = { EpDateChips, EpBinBanner, EpSaveHint, EpWork } // pd20 S3 adds EpWork
-
-// [component-fixes] pure helper now lives in utils/attachmentRefs.js (imported below)
 
 export default {
   name: 'EditPanel',
@@ -198,6 +196,7 @@ export default {
   // kept verbatim for the w5-editpanel-split anchor and spread into the live option.
   // components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags }
   components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags, ...w21Components },
+  provide: { buildHandoff }, // pd20 fix: complete the S2 inject chain — EpWork injects `buildHandoff` (default null); without a provider EpWork hides the copy button (fallback)
   data () {
     return {
       e: null as any,

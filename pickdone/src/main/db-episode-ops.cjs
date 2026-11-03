@@ -59,6 +59,24 @@ exports.queryEpisodesByTask = (db, taskId) => {
   return eps.map(e => ({ episodeId: e.id, startedAt: e.startedAt, endedAt: e.endedAt, summary: e.note || '', resources }))
 }
 
+// Read-side (pd20 handoff copy): the EditPanel 'continue work' section's Copy-Handoff button
+// assembles the handoff from this task's linked source refs (buildHandoff's `sources` input:
+// L0..Ln provenance rows with canonicalUri). Storage models a source as (providerId, externalId);
+// the canonical URI is composed HERE, once — the renderer never learns the row schema (same
+// doctrine as queryEpisodesByTask). Read-only → no manifest row needed; whitelisted alongside
+// queryEpisodesByTask in handlers/todo.js.
+exports.querySourcesByTask = (db, taskId) => {
+  if (taskId == null || taskId === '') return []
+  return db.prepare(
+    'SELECT sr.providerId, sr.externalId, sr.title FROM task_source_links tsl JOIN source_refs sr ON sr.id = tsl.sourceRefId' +
+    ' WHERE tsl.taskId = @taskId AND tsl.deleted = 0 AND sr.deleted = 0 ORDER BY sr.id ASC'
+  ).all({ taskId: String(taskId) }).map(r => ({
+    level: 'L0',
+    canonicalUri: String(r.providerId) + '://' + String(r.externalId),
+    title: r.title || ''
+  }))
+}
+
 // ---- source_refs ----
 exports.sourcePut = (db, row = {}) => {
   if (!row || row.providerId == null || row.providerId === '' || row.externalId == null || row.externalId === '') {

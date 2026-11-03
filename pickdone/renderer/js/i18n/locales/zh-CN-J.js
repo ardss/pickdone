@@ -159,6 +159,8 @@ export default {
   'statsJ.EditPanel.workEpisodeResources': '关联资源',
   'statsJ.EditPanel.workEpisodeHandoff': '继续工作',
   'statsJ.EditPanel.workEpisodeCopyHandoff': '复制 Handoff',
+  'statsJ.EditPanel.workEpisodeCopyOk': '已复制到剪贴板',
+  'statsJ.EditPanel.workEpisodeCopyFail': '复制失败',
   'statsJ.EditPanel.workEpisodeEmpty': '暂无工作记录',
   'statsJ.EditPanel.ruleLabel': '规则',
   'statsJ.EditPanel.deleteEllipsis': '删除…',

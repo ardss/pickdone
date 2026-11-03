@@ -686,6 +686,7 @@ const OPS = {
   taskSourcePut: (...a) => require('./db-episode-ops.cjs').taskSourcePut(db, ...a),
   taskSourceRemove: (...a) => require('./db-episode-ops.cjs').taskSourceRemove(db, ...a),
   queryEpisodesByTask: (...a) => require('./db-episode-ops.cjs').queryEpisodesByTask(db, ...a),
+  querySourcesByTask: (...a) => require('./db-episode-ops.cjs').querySourcesByTask(db, ...a), // pd20 handoff copy: read-only source-ref read (canonicalUri composed in db-episode-ops.cjs) — whitelisted with queryEpisodesByTask, no manifest row (read-only class)
   captureIngest: (...a) => OPS.setMetaMany(...a), // S4 capture door dedupe-index pair — same setMetaMany impl, distinct op so manifest one-op-one-command holds alongside meta.putMany
   // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
   // limit guards the first pull on a large existing log; callers page through via the returned max seq.
