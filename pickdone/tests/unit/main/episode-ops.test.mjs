@@ -73,12 +73,13 @@ test('episode.removeIds tombstones (deleted=1) and a repeat remove is a no-op', 
   d.close()
 })
 
-test('source.put: duplicate (providerId, externalId) fails with an explicit error', () => {
+test('source.put dedupes: a repeated (providerId, externalId) reuses the SAME id (pair-unique upsert), one row only', () => {
   const { d, bus } = wired()
   bus.commit('source', 'put', { id: 's1', providerId: 'github', externalId: '42', title: 'x' })
-  assert.throws(() => bus.commit('source', 'put', { id: 's2', providerId: 'github', externalId: '42', title: 'y' }),
-    e => /github/.test(e.message) && /42/.test(e.message), 'the duplicate-pair error names the colliding pair (explicit, not a bare SQLITE message)')
-  assert.equal(d.prepare('SELECT COUNT(*) n FROM source_refs').get().n, 1)
+  const again = bus.commit('source', 'put', { providerId: 'github', externalId: '42', title: 'y' })
+  assert.equal(again, 's1', 'the duplicate pair reuses the existing ref id (true dedupe, not an error)')
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM source_refs').get().n, 1, 'still exactly one row')
+  assert.equal(d.prepare('SELECT title FROM source_refs WHERE id = ?').get('s1').title, 'y', 'the upsert refreshed the title')
   const changed = bus.commit('source', 'removeByIds', ['s1'])
   assert.deepEqual(changed, ['s1'])
   assert.equal(d.prepare('SELECT deleted FROM source_refs WHERE id = ?').get('s1').deleted, 1)
@@ -95,6 +96,32 @@ test('tasksource.put/remove round-trip through the bus', () => {
   const changed = bus.commit('tasksource', 'remove', [row.id])
   assert.deepEqual(changed, [row.id])
   assert.equal(d.prepare('SELECT deleted FROM task_source_links WHERE id = ?').get(row.id).deleted, 1)
+  d.close()
+})
+
+// [pd20 live-journey regression, j-pd20-episode T4] Any existing pair — live or tombstoned —
+// is REUSED by a fresh put (the normal UI unlink → re-link round-trip): same id, deleted=0.
+test('pairs revive/reuse: source.put and tasksource.put after remove (or on a live pair) reuse the same id (deleted=0)', () => {
+  const { d, bus } = wired()
+  // source ref: put → remove (tombstone) → put the same pair again → same id, alive again
+  const s1 = bus.commit('source', 'put', { providerId: 'github', externalId: 'a/1', title: 'v1' })
+  bus.commit('source', 'removeByIds', [s1])
+  const s1b = bus.commit('source', 'put', { providerId: 'github', externalId: 'a/1', title: 'v2' })
+  assert.equal(s1b, s1, 're-putting a tombstoned pair must REUSE the existing ref id (no duplicate minting)')
+  assert.equal(d.prepare('SELECT deleted FROM source_refs WHERE id = ?').get(s1).deleted, 0, 'the revived ref is live again')
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM source_refs').get().n, 1, 'no second row was minted')
+  // link: put → remove (tombstone) → put the same pair again → same id, alive again
+  const l1 = bus.commit('tasksource', 'put', { taskId: 't1', sourceRefId: s1 })
+  bus.commit('tasksource', 'remove', [l1])
+  const l1b = bus.commit('tasksource', 'put', { taskId: 't1', sourceRefId: s1 })
+  assert.equal(l1b, l1, 're-linking a tombstoned pair must REUSE the existing link id')
+  assert.equal(d.prepare('SELECT deleted FROM task_source_links WHERE id = ?').get(l1).deleted, 0, 'the revived link is live again')
+  assert.equal(d.prepare('SELECT COUNT(*) n FROM task_source_links').get().n, 1, 'no second link row was minted')
+  // a LIVE pair is reused too (the renderer Link form has no prior id to address)
+  const s2 = bus.commit('source', 'put', { providerId: 'github', externalId: 'a/1', title: 'v3' })
+  assert.equal(s2, s1, 'a live duplicate pair reuses the id as well (put = upsert by pair)')
+  const l2 = bus.commit('tasksource', 'put', { taskId: 't1', sourceRefId: s1 })
+  assert.equal(l2, l1, 'a live duplicate link reuses the id as well')
   d.close()
 })
 

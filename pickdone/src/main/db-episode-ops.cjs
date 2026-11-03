@@ -91,21 +91,23 @@ exports.sourcePut = (db, row = {}) => {
   const providerId = String(row.providerId)
   const externalId = String(row.externalId)
   const now = Date.now()
-  // Explicit pair pre-check → a named error (the UNIQUE index is the storage backstop for races).
+  // Pair-unique DEDUPE (j-pd20): put is an upsert by (providerId, externalId). A pair that
+  // already exists — LIVE or TOMBSTONED — is reused (same id, deleted=0, title refreshed),
+  // never duplicated; the UNIQUE index is the storage backstop for races. The renderer's
+  // Link form has no way to know a prior ref's id, so erroring on a live pair would make the
+  // ordinary unlink→re-link UI round-trip impossible (caught live by j-pd20-episode T4).
   const pair = db.prepare('SELECT id FROM source_refs WHERE providerId = ? AND externalId = ?').get(providerId, externalId)
-  if (pair && pair.id !== id) {
-    throw new Error(`[db-episode-ops] sourcePut: (providerId=${providerId}, externalId=${externalId}) already exists as id ${pair.id} — put that id instead of minting a duplicate`)
-  }
+  const rowId = pair ? pair.id : id
   db.prepare(`INSERT INTO source_refs (id, providerId, externalId, title, deleted, deletedAt, updatedAt)
     VALUES (@id,@providerId,@externalId,@title,0,0,@updatedAt)
     ON CONFLICT(id) DO UPDATE SET providerId=excluded.providerId, externalId=excluded.externalId, title=excluded.title,
       deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
     .run({
-      id, providerId, externalId,
+      id: rowId, providerId, externalId,
       title: row.title != null ? String(row.title) : null,
       updatedAt: Number(row.updatedAt) > 0 ? Number(row.updatedAt) : now
     })
-  return id
+  return rowId
 }
 
 exports.sourceRemoveByIds = (db, ids, opts = {}) => removeByIds(db, 'source_refs', ids, opts)
@@ -119,16 +121,16 @@ exports.taskSourcePut = (db, row = {}) => {
   const taskId = String(row.taskId)
   const sourceRefId = String(row.sourceRefId)
   const now = Date.now()
+  // Same pair-unique dedupe as sourcePut: an existing (taskId, sourceRefId) pair — live or
+  // tombstoned — is re-linked through the upsert's deleted=0 revive with the SAME id.
   const pair = db.prepare('SELECT id FROM task_source_links WHERE taskId = ? AND sourceRefId = ?').get(taskId, sourceRefId)
-  if (pair && pair.id !== id) {
-    throw new Error(`[db-episode-ops] taskSourcePut: (taskId=${taskId}, sourceRefId=${sourceRefId}) already exists as id ${pair.id}`)
-  }
+  const rowId = pair ? pair.id : id
   db.prepare(`INSERT INTO task_source_links (id, taskId, sourceRefId, deleted, deletedAt, updatedAt)
     VALUES (@id,@taskId,@sourceRefId,0,0,@updatedAt)
     ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, sourceRefId=excluded.sourceRefId,
       deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
-    .run({ id, taskId, sourceRefId, updatedAt: Number(row.updatedAt) > 0 ? Number(row.updatedAt) : now })
-  return id
+    .run({ id: rowId, taskId, sourceRefId, updatedAt: Number(row.updatedAt) > 0 ? Number(row.updatedAt) : now })
+  return rowId
 }
 
 exports.taskSourceRemove = (db, ids, opts = {}) => removeByIds(db, 'task_source_links', ids, opts)

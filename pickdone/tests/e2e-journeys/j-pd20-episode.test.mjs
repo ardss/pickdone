@@ -1,500 +1,358 @@
 /**
  * pd20 work-episode live journey — j-pd20-episode.test.mjs
- * Walks the REAL vertical closed loop of the pd20 'continue work' (work episode) slice
- * against a live isolated instance:
+ * PRODUCT-grade acceptance of the pd20 'continue work' (work episode) vertical: the USER
+ * drives the real UI in a real isolated Electron instance. No bus-door shortcut, no mock:
  *
- *   J1 settings gate: the EditPanel work-episode section is v-if-gated by the
- *      workEpisode.enabled settings switch (default OFF). Toggle it through the REAL
- *      settings chain (store dispatch('settings/update') → mutation → LS persist),
- *      assert the section is ABSENT before the switch and VISIBLE after it.
- *   J2 episode add + persistence: `episode.put` is an internal:true manifest row at this
- *      HEAD — the renderer-visible surface (EditPanelWork.vue) is read + copy ONLY; there
- *      is no add-episode form yet. The write therefore goes through the REAL main-process
- *      door that exists: the command bus + db.js exactly as cli/pickdone.js drives them
- *      (bus.commit('episode','put') → episodePut → todos.db), against the live instance's
- *      isolated data dir. The READ side is fully renderer-real: dbCall('queryEpisodesByTask')
- *      and the rendered .ep-work-row must show the episode's goal.
- *   J3 source-ref link: same doctrine — bus.commit('source','put') + bus.commit
- *      ('tasksource','put') (providerId 'manual', file-form externalId), then the renderer
- *      read (querySourcesByTask → {level:'L0', canonicalUri:'manual://<file>'}) and the
- *      rendered resources block must carry it.
- *   J4 Copy Handoff: click the real .ep-work-copy button → the clipboard text (result.text
- *      of the injected buildHandoff, NOT "[object Object]") must contain the real goal,
- *      the canonicalUri, and the L0 tag.
- *   J5 reload persistence: location reload → the switch survives (LS settingsState), the
- *      section re-appears, and Episode/SourceRef reads are still complete (restart-grade
- *      persistence semantics).
+ *   Session A (fresh isolated userData):
+ *   T1 boot: dedicated spawnApp instance, en-US locale, onboarding dismissed (real store).
+ *   T2 gate: workEpisode section absent (default OFF) → settings/update ON → section visible
+ *      on the real EditPanel of a UI-created task.
+ *   T3 episode CRUD through the REAL form (EditPanelWork): type goal/outcome/nextAction →
+ *      click Save → the persisted state line shows only after the commit resolves → dbCall
+ *      read-back carries the round-trip note → history row renders the goal. Then UI EDIT
+ *      (row click → form prefill → Update keeps id + startedAt) and UI DELETE
+ *      (row button → read-back gone).
+ *   T4 source bind/unbind/delete through the REAL source form: provider select + external id
+ *      + title → Link → read-back carries linkId + canonicalUri (+L0) → resources row
+ *      renders; UI unlink tombstones the link (read-back empty); UI re-link REUSES the same
+ *      source ref (pair-unique dedupe); UI delete removes the ref itself.
+ *   T5 Copy Handoff: real .ep-work-copy button → clipboard markdown carries goal/outcome/
+ *      nextAction lines, the task title, [L0] and the canonicalUri — never "[object Object]".
  *
- * Structure mirrors j-attachment-image.test.mjs: CDP attach / isolation gate / pool
- * fail-loud / registered cleanups / watchdog. Run inside the shared pool:
- *   cd pickdone && node tests/run-interactions-shared.mjs tests/e2e-journeys/j-pd20-episode.test.mjs
+ *   RESTART (the restart-grade promise, a REAL process restart, not a page reload):
+ *   T6 stopApp (graceful before-quit flush) → spawnApp on the SAME userDataDir → the gate,
+ *      the episode rows and the source link all come back; reopen the panel and see them.
+ *
+ * Self-spawns a dedicated instance (spawnApp refuses non-isolated userData dirs by design;
+ * TODO_SHARED_CDP is deliberately ignored here — the restart leg must OWN its instance).
+ * Run: cd pickdone && node --test tests/e2e-journeys/j-pd20-episode.test.mjs
  */
+delete process.env.TODO_SHARED_CDP // the restart leg must own its instance lifecycle
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { createRequire } from 'node:module'
+import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { spawnApp, stopApp, connectCdp, evalJson, send, sleep } from '../lib/runtime.mjs'
+const diag = msg => { try { fs.appendFileSync(path.join(os.tmpdir(), 'j-pd20-diag.log'), new Date().toISOString() + ' ' + msg + '\n') } catch {} }
 
-const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
+let ctx = null
+let userDataDir = null
+const storeQ = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;return a&&a._instance&&a._instance.proxy?a._instance.proxy.$store:null})()`
 
-// 隔离门:附着实例必须是隔离数据目录,否则 journey 的写会落在真实用户库上。
-let available = false
-let isolated = false
-try {
-  const list = await (await fetch(CDP + '/json', { signal: AbortSignal.timeout(1500) })).json()
-  const page = list.find(t => t.type === 'page' && !t.url.includes('__tomato-float') && /#\/todo-list/.test(t.url)) ||
-    list.find(t => t.type === 'page' && t.url.includes('index.html') && !t.url.includes('__tomato-float'))
-  available = !!page
-  if (page) {
-    const ws2 = new WebSocket(page.webSocketDebuggerUrl)
-    await new Promise((res, rej) => { ws2.onopen = res; ws2.onerror = rej })
-    const env = await new Promise(res => {
-      ws2.onmessage = e => { const m = JSON.parse(e.data); if (m.id === 1) res(m.result?.result?.value) }
-      ws2.send(JSON.stringify({ id: 1, method: 'Runtime.evaluate', params: { expression: 'JSON.stringify({iso: !!(window.todoAPI && window.todoAPI.isDataIsolated)})', returnByValue: true } }))
-      setTimeout(() => res(null), 3000)
-    })
-    try { ws2.close() } catch {}
-    try { isolated = JSON.parse(env).iso === true } catch { isolated = false }
-  }
-} catch { /* no debug port */ }
-
-const sleep = ms => new Promise(r => setTimeout(r, ms))
-
-let preconditionOk = false
-{
-  const inPool = process.env.TODO_SHARED_CDP || process.env.TODO_CDP
-  if (inPool && (!available || !isolated)) {
-    console.error(`[j-pd20-episode] ran inside the shared pool but the precondition failed (available=${available}, isolated=${isolated}) — skip=green is NOT acceptable evidence, failing loud`)
-    process.exitCode = 1
-  }
-}
-
-// Watchdog (same doctrine as j-todo-core: re-armed per test, races the registered cleanup)
-const WATCHDOG_MS = 7 * 60 * 1000
-let watchdogTimer = null
-let cleanupFn = null
-const armWatchdog = () => {
-  if (watchdogTimer) clearTimeout(watchdogTimer)
-  const watchdog = setTimeout(async () => {
-    console.error('J-PD20-EPISODE watchdog forced exit (counted as failure)')
-    try { if (cleanupFn) await Promise.race([cleanupFn(), sleep(5000)]) } catch { /* best-effort */ }
-    cleanupFn = null
-    try { ws?.close() } catch {}
-    try { closeStore() } catch {}
-    process.exit(1)
-  }, WATCHDOG_MS)
-  watchdog.unref?.()
-  watchdogTimer = watchdog
-}
-const registerCleanup = fn => { cleanupFn = fn; armWatchdog() }
-process.on('exit', () => { try { ws?.close() } catch {} })
-
-let ws = null
-let id = 0
-const pending = new Map()
-const send = (method, params = {}) => new Promise(res => {
-  const i = ++id; pending.set(i, res); ws.send(JSON.stringify({ id: i, method, params }))
-})
-const evalJson = async expression => {
-  const r = await Promise.race([
-    send('Runtime.evaluate', { expression: `(async () => JSON.stringify(await (${expression})))()`, returnByValue: true, awaitPromise: true }),
-    sleep(10000).then(() => null)
-  ])
-  return r ? JSON.parse(r.result?.result?.value ?? 'null') : null
-}
-const evalAwait = async expression => {
-  const r = await Promise.race([
-    send('Runtime.evaluate', { expression: `(${expression})`, returnByValue: true, awaitPromise: true }),
-    sleep(10000).then(() => null)
-  ])
-  if (!r) return null
-  if (r.exceptionDetails) throw new Error('page eval failed: ' + ((r.exceptionDetails.exception?.description || r.exceptionDetails.text) + '').slice(0, 300))
-  return r.result?.result?.value ?? null
-}
-const until = async (expression, tries = 12, gap = 400) => {
+const untilJson = async (expr, tries = 12, gap = 500) => {
   for (let i = 0; i < tries; i++) {
-    const v = await evalJson(expression)
+    const v = await evalJson(ctx, expr)
     if (v) return v
     await sleep(gap)
   }
   return null
 }
-const STORE_Q = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;const p=a&&a._instance&&a._instance.proxy;if(p&&p.$store)return p.$store;const el=document.querySelector('.app-shell');return (el&&el.__vue__)?el.__vue__.$root.$store:null})()`
-const st = () => `(${STORE_Q})`
-const gotoHash = async (hash, sentinel) => {
-  await send('Runtime.evaluate', { expression: `location.hash='${hash}'` })
-  if (!sentinel) { await sleep(1200); return true }
-  for (let i = 0; i < 15; i++) {
-    await sleep(800)
-    if (await evalJson(`!!document.querySelector('${sentinel}')`)) { await sleep(500); return true }
+const pageCtx = async () => evalJson(ctx, `(() => {
+  const panel = document.querySelector('.edit-panel')
+  const sec = document.querySelector('.ep-work-section')
+  return JSON.stringify({
+    panels: document.querySelectorAll('.edit-panel').length,
+    sections: document.querySelectorAll('.ep-work-section').length,
+    sectionInPanel: !!document.querySelector('.edit-panel .ep-work-section'),
+    buttons: sec ? [...sec.querySelectorAll('button')].map(b => b.className).join('|') : '',
+    saveDirect: !!document.querySelector('.edit-panel .ep-work-section .ep-work-save-episode'),
+    saveViaSec: sec ? !!sec.querySelector('.ep-work-save-episode') : null,
+    secParent: sec ? (sec.closest('.edit-panel') ? 'in-panel' : sec.parentElement.className.slice(0, 60)) : '',
+    saveCount: document.querySelectorAll('.ep-work-save-episode').length,
+    title: (document.querySelector('.ep-title') || {}).textContent || ''
+  })
+})()`)
+const clickEl = async predicateSrc => {
+  // Vue re-renders can transiently detach the target node between the caller's readiness
+  // assert and the click eval (observed live on the ep-work form actions). Poll briefly and
+  // click when the element is actually present — the same as a user clicking a visible button.
+  for (let i = 0; i < 12; i++) {
+    const r = await evalJson(ctx, `(() => { const el = (${predicateSrc}); if (!el) return 'not-found'; el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return 'clicked' })()`)
+    if (r === 'clicked') return true
+    if (r !== 'not-found') diag('click eval odd result<' + r + '> on expr<' + predicateSrc + '>')
+    await sleep(300)
   }
+  diag('click target never appeared | page context: ' + await pageCtx())
   return false
 }
-const clickEl = async predicateSrc => {
-  const clicked = await evalJson(`(() => { const el = (${predicateSrc}); if (!el) return false; el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); return true })()`)
-  return clicked === true
+// clickSec: the ep-work buttons are addressed by PLAIN selector (clickEl wants an expression)
+const clickSec = async sel => clickEl(`document.querySelector('${section(sel)}')`)
+const typeInto = async (sel, text) => {
+  const ok = await evalJson(ctx, `(() => {
+    const el = document.querySelector('${sel}')
+    if (!el) return false
+    el.focus()
+    const set = Object.getOwnPropertyDescriptor(el.tagName === 'SELECT' ? HTMLSelectElement.prototype : HTMLInputElement.prototype, 'value').set
+    set.call(el, ${JSON.stringify(text)})
+    el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true }))
+    return true
+  })()`)
+  if (!ok) diag('input missing: ' + sel + ' | page context: ' + await pageCtx())
+  assert.ok(ok, 'input not found on the live page: ' + sel)
+}
+const boot = async () => {
+  assert.ok(await untilJson(`document.querySelectorAll('.sn-nav-item').length > 0`, 40, 1000), 'the app did not finish booting within 40s')
+  await send(ctx, 'Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US')}catch(e){}" })
+  // onboarding is a settings-schema key: dismiss through the AUTHORITATIVE store channel,
+  // wait out the 2s settings dbMirror debounce, then reload so the tours stay dismissed
+  await evalJson(ctx, `(()=>{const s=${storeQ};return s?s.dispatch('settings/update',{onboardingToursSeen:{today:1,editpanel:1,pips:1}}).then(()=>'ok'):'no-store'})()`)
+  await sleep(2500)
+  await send(ctx, 'Page.reload')
+  assert.ok(await untilJson(`document.querySelectorAll('.sn-nav-item').length > 0`, 40, 1000), 'the app did not come back after the settings reload')
+}
+const gotoToday = async () => {
+  await evalJson(ctx, `location.hash='#/todo-list/today'; 'ok'`)
+  assert.ok(await untilJson(`!!document.querySelector('.qa-input')`, 15, 800), 'the today list (quick-add input) never appeared')
+}
+const quickAdd = async name => {
+  await gotoToday()
+  await evalJson(ctx, `(() => {
+    const i = document.querySelector('.qa-input'); if (!i) return false; i.focus()
+    const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+    set.call(i, ${JSON.stringify(name)}); i.dispatchEvent(new Event('input', { bubbles: true }))
+    return true
+  })()`)
+  await sleep(400)
+  await evalJson(ctx, `(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
+  const row = await untilJson(`(async () => { const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return rows.find(r => r.taskContent === ${JSON.stringify(name)}) || null })()`, 12, 500)
+  assert.ok(row && row.taskId, 'the quick-add Enter did not create the task row')
+  return row.taskId
 }
 const openEditPanel = async name => {
-  await gotoHash('#/todo-list/today', '.qa-input')
-  // A still-open panel would make the row click TOGGLE it closed — close first, always
-  if (await evalJson(`!!document.querySelector('.edit-panel')`)) {
+  await gotoToday()
+  if (await evalJson(ctx, `!!document.querySelector('.edit-panel')`)) {
     assert.ok(await closeEditPanel(), 'a leftover edit panel could not be closed before reopening')
   }
   const rowSel = `[...document.querySelectorAll('.td-item')].find(el => el.textContent.includes(${JSON.stringify(name)}))`
-  assert.ok(await until(`!!(${rowSel})`, 10, 400), `seeded row "${name}" is not visible on the today list`)
+  assert.ok(await untilJson(`!!(${rowSel})`, 10, 400), `the seeded row "${name}" is not visible on the today list`)
   assert.ok(await clickEl(rowSel), 'clicking the task row did not open anything')
-  assert.ok(await until(`!!document.querySelector('.edit-panel')`, 8, 400), 'the edit panel did not open after clicking the row')
+  // the row click is a toggle: if a close transition raced us the first click closed the
+  // panel instead — retry once before failing
+  let opened = await untilJson(`!!document.querySelector('.edit-panel')`, 5, 400)
+  if (!opened) {
+    assert.ok(await clickEl(rowSel), 'the retry row click failed')
+    opened = await untilJson(`!!document.querySelector('.edit-panel')`, 6, 500)
+  }
+  assert.ok(opened, 'the edit panel did not open after clicking the row')
 }
 const closeEditPanel = async () => {
-  // The panel's own Esc handler listens on window (EditPanel.vue `window.addEventListener('keydown')`).
-  // Try the document and window targets, then the same store commit the handler dispatches.
-  for (const target of ['document', 'window']) {
-    await send('Runtime.evaluate', { expression: `${target}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))` })
-    for (let i = 0; i < 5; i++) {
-      await sleep(400)
-      if (!await evalJson(`!!document.querySelector('.edit-panel')`)) return true
-    }
-  }
-  await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('ui/closeEditCleanup'); return true })()`).catch(() => {})
-  for (let i = 0; i < 6; i++) {
-    await sleep(400)
-    if (!await evalJson(`!!document.querySelector('.edit-panel')`)) return true
+  // Deterministic close: the panel's own Esc path is a window keydown listener that races
+  // transitions; the store commit the handler dispatches is the same door, minus the race.
+  await send(ctx, 'Runtime.evaluate', {
+    expression: `(async () => { const s = ${storeQ}; if (s) { await s.dispatch('ui/closeEditCleanup'); return 'closed' } return 'no-store' })()`,
+    returnByValue: true, awaitPromise: true
+  })
+  for (let i = 0; i < 12; i++) {
+    await sleep(500)
+    if (!await evalJson(ctx, `!!document.querySelector('.edit-panel')`)) return true
   }
   return false
 }
-// ---- node-side main-process door (the CLI door): command bus + db.js over the LIVE ----
-// ---- isolated instance's data dir. Same modules cli/pickdone.js drives; the episode/  ----
-// ---- source manifest rows are internal:true, so this IS the real write surface.       ----
-const require_ = createRequire(import.meta.url)
-const APP_ROOT = path.dirname(path.dirname(path.dirname(fileURLToPath(import.meta.url)))) // tests/e2e-journeys/x.mjs → pickdone/
-const dbm = require_(path.join(APP_ROOT, 'src', 'main', 'db.js'))
-const bus = require_(path.join(APP_ROOT, 'src', 'main', 'command-bus'))
-let storeOpen = false
-const openStore = dataDir => {
-  if (storeOpen) return
-  dbm.init(dataDir)
-  storeOpen = true
-}
-const closeStore = () => { if (storeOpen) { try { dbm.close() } catch {} storeOpen = false } }
-const resolveDataDir = async () => {
-  // The page knows its own isolation root: the default backup dir lives INSIDE userData
-  // (<userData>/backups) — dirname recovers it. Fail loud on any mismatch.
-  const backupRoot = await evalAwait(`(window.todoAPI && window.todoAPI.getDefaultBackupDir) ? window.todoAPI.getDefaultBackupDir() : null`)
-  assert.ok(backupRoot && typeof backupRoot === 'string', 'could not read the default backup dir from the live page (todoAPI.getDefaultBackupDir missing)')
-  const dataDir = path.dirname(backupRoot)
-  const fs = require_('node:fs')
-  assert.ok(fs.existsSync(path.join(dataDir, 'todos.db')), `resolved data dir ${dataDir} has no todos.db — the backup-dir derivation does not point at the live userData`)
-  return dataDir
-}
-const hardCleanup = async ids => {
-  if (!preconditionOk || !ids || !ids.length) return 0
-  const unique = [...new Set(ids)]
-  await evalAwait(`window.todoAPI.dbCall('hardDeleteMany', ${JSON.stringify(unique)})`).catch(() => {})
-  await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('todo/computeViews'); return true })()`)
-  const rows = await evalAwait(`window.todoAPI.dbCall('queryTodos', { deleted: 0 })`).catch(() => [])
-  const leaked = (rows || []).filter(r => ids.includes(r.taskId)).map(r => r.taskId)
-  if (leaked.length) {
-    console.error(`[j-pd20-episode] LEAKED ROWS after hardCleanup: ${leaked.join(', ')} — they will pollute every later pool target`)
-    assert.fail(`hardCleanup failed: seeded rows still present after hardDeleteMany: ${leaked.join(', ')}`)
-  }
-  return unique.length
-}
+const section = sel => `.edit-panel .ep-work-section ${sel}`
 
-test('J-precondition: connect CDP, pin en-US locale, dismiss onboarding overlays', { skip: !available ? 'no debug port on ' + CDP : (!isolated ? 'attached instance is NOT data-isolated; refusing writes on real user data' : false) }, async () => {
-  const targets = await (await fetch(CDP + '/json')).json()
-  const page = targets.find(t => t.type === 'page' && !t.url.includes('__tomato-float') && /#\/todo-list/.test(t.url)) ||
-    targets.find(t => t.type === 'page' && t.url.includes('index.html') && !t.url.includes('__tomato-float'))
-  assert.ok(page, 'no page target')
-  ws = new WebSocket(page.webSocketDebuggerUrl)
-  await new Promise((r, j) => { ws.onopen = r; ws.onerror = j })
-  ws.onmessage = e => {
-    const m = JSON.parse(e.data)
-    if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id) }
-  }
-  await send('Runtime.enable'); await send('Page.enable')
-  // the pool instance spawns with --no-focus; clipboard writes later need a focused page
-  await send('Page.bringToFront').catch(() => {})
-  await send('Runtime.evaluate', { expression: "try{localStorage.setItem('appLocale','en-US');localStorage.setItem('onboardingToursSeen', JSON.stringify({today:1,editpanel:1}))}catch(e){}" })
-  await send('Page.reload')
-  let booted = false
-  for (let i = 0; i < 30 && !booted; i++) {
-    booted = (await evalJson('document.querySelectorAll(".sn-nav-item").length')) > 0
-    if (!booted) await sleep(1000)
-  }
-  assert.ok(booted, 'the app did not finish booting within 30s')
-  await evalJson(`(()=>{const s=document.querySelector('.ob-mask .ob-link');if(s)s.click();return 'ok'})()`)
-  await sleep(600)
-  await evalJson(`(()=>{try{localStorage.setItem('onboardingToursSeen',JSON.stringify({today:1,editpanel:1}))}catch{};return 'ok'})()`)
-  await gotoHash('#/todo-list/today', '.qa-input')
-  preconditionOk = true
+test('T1 boot: dedicated isolated instance, en-US, onboarding dismissed', async () => {
+  ctx = await spawnApp({ name: 'j-pd20-episode' })
+  userDataDir = ctx.userDataDir
+  assert.ok(userDataDir, 'spawnApp returned no userDataDir')
+  await connectCdp(ctx)
+  await boot()
 })
 
-test('J1 workEpisode switch: section absent (default OFF) → settings/update enables → section visible', { skip: !available || !isolated }, async t => {
-  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
-  const name = 'J1 episode switch journey ' + Math.random().toString(36).slice(2, 6)
-  const ids = []
-  const cleanup = async () => { await hardCleanup([...new Set(ids)]) }
-  registerCleanup(cleanup)
-  try {
-    // Real task creation: type into the quick-add input and press Enter (the user's chain)
-    await gotoHash('#/todo-list/today', '.qa-input')
-    await evalJson(`(() => {
-      const i = document.querySelector('.qa-input')
-      if (!i) return false
-      i.focus()
-      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
-      set.call(i, ${JSON.stringify(name)})
-      i.dispatchEvent(new Event('input', { bubbles: true }))
-      return true
-    })()`)
-    await sleep(400)
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
-    const row = await until(`(async () => { const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return rows.find(r => r.taskContent === ${JSON.stringify(name)}) || null })()`, 12, 500)
-    assert.ok(row && row.taskId, 'the quick-add Enter did not create the task row')
-    ids.push(row.taskId)
-    // Gate CLOSED by default: the section must not render
-    await openEditPanel(name)
-    assert.ok(!await evalJson(`!!document.querySelector('.edit-panel .ep-work-section')`), 'the work-episode section rendered while workEpisode.enabled is unset (the experiment gate is broken open)')
-    await closeEditPanel()
-    // Real settings chain: store action → mutation → LS persist. The user-visible promise
-    // is verified by the SECTION appearing after the switch (not by the state blob alone).
-    const upd = await evalAwait(`(async () => { const s = ${st()}; return s ? s.dispatch('settings/update', { workEpisode: { enabled: true } }) : null })()`)
-    assert.ok(upd && upd.ok !== false, 'settings/update dispatch failed: ' + JSON.stringify(upd))
-    const gate = await evalJson(`(() => { const s = ${st()}; return !!(s && s.state && s.state.settings && s.state.settings.workEpisode && s.state.settings.workEpisode.enabled) })()`)
-    assert.ok(gate, 'the store gate workEpisode.enabled did not seat after the update dispatch')
-    // persist() is debounced (~2s) — poll, don't single-shot
-    const ls = await until(`(() => { try { const v = JSON.parse(localStorage.getItem('settingsState') || '{}'); return !!(v.workEpisode && v.workEpisode.enabled) } catch { return false } })()`, 12, 500)
-    assert.ok(ls, 'the switch did not persist to localStorage settingsState (it would die on the next boot)')
-    // Gate OPEN: reopen the panel — the section must be visible now (the v-if reads the store)
-    await openEditPanel(name)
-    assert.ok(await until(`!!document.querySelector('.edit-panel .ep-work-section')`, 8, 500), 'the work-episode section did not appear after workEpisode.enabled=true (the store → EditPanel v-if chain is broken)')
-  } finally {
-    await cleanup(); cleanupFn = null
-  }
+test('T2 gate: section absent (default OFF) → settings ON (store chain + LS persist) → section visible', async () => {
+  const name = 'pd20 T2 gate journey ' + Math.random().toString(36).slice(2, 6)
+  await quickAdd(name)
+  await openEditPanel(name)
+  assert.ok(!await evalJson(ctx, `!!document.querySelector('${section('')}')`),
+    'the work-episode section rendered while workEpisode.enabled is unset (the experiment gate is broken open)')
+  const upd = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s ? s.dispatch('settings/update', { workEpisode: { enabled: true } }) : null })()`)
+  assert.ok(upd && upd.ok !== false, 'settings/update dispatch failed: ' + JSON.stringify(upd))
+  assert.ok(await untilJson(`(() => { try { const v = JSON.parse(localStorage.getItem('settingsState') || '{}'); return !!(v.workEpisode && v.workEpisode.enabled) } catch { return false } })()`, 12, 500),
+    'the switch did not persist to localStorage settingsState (it would die on the next boot)')
+  assert.ok(await untilJson(`!!document.querySelector('${section('')}')`, 8, 500),
+    'the work-episode section did not appear after workEpisode.enabled=true')
 })
 
-test('J2 episode put (real bus door) → renderer read-back + visible history row + dbCall persistence', { skip: !available || !isolated }, async t => {
-  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
-  const name = 'J2 episode add journey ' + Math.random().toString(36).slice(2, 6)
-  const goal = 'Ship the pd20 vertical slice: real episode lands in the work history'
-  const ids = []
-  const cleanup = async () => { await hardCleanup([...new Set(ids)]) }
-  registerCleanup(cleanup)
-  try {
-    // seed the task (same real quick-add chain as J1)
-    await gotoHash('#/todo-list/today', '.qa-input')
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.focus(); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(name)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
-    await sleep(400)
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
-    const row = await until(`(async () => { const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return rows.find(r => r.taskContent === ${JSON.stringify(name)}) || null })()`, 12, 500)
-    assert.ok(row && row.taskId, 'seeding the J2 task failed')
-    ids.push(row.taskId)
-    // enable the switch (J1 proved the chain; here it is the precondition for visibility)
-    await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
-    // REAL write through the main-process command bus (the CLI door) on the live data dir
-    const dataDir = await resolveDataDir()
-    openStore(dataDir)
-    const startedAt = Date.now()
-    const epId = bus.commit('episode', 'put', { taskId: String(row.taskId), startedAt, note: goal })
-    assert.ok(epId && typeof epId === 'string', 'bus.commit(episode,put) returned no id — the internal write door is broken')
-    // DURABLE read-back via the renderer's own dbCall: the episode must survive in storage
-    const eps = await until(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(row.taskId)}); return (e && e.length) ? e : null })()`, 10, 500)
-    assert.ok(eps, 'queryEpisodesByTask returned nothing for the seeded episode')
-    const hit = eps.find(e => e.episodeId === epId)
-    assert.ok(hit, `the minted episode ${epId} is not in the read-back: ${JSON.stringify(eps.map(e => e.episodeId))}`)
-    assert.equal(hit.summary, goal, "the read-back episode's summary (the buildHandoff `goal` input) does not carry the written note")
-    // USER-VISIBLE: reopen the panel — the history row must render the goal text
-    await closeEditPanel()
-    await openEditPanel(name)
-    assert.ok(await until(`[...document.querySelectorAll('.edit-panel .ep-work-section [data-block="history"] .ep-work-row')].some(el => el.textContent.includes(${JSON.stringify(goal)}))`, 10, 500), 'the episode goal never became visible in the work-history block (the read → EditPanelWork render chain is broken)')
-    // "current status" block mirrors the last episode's summary — same visibility promise
-    assert.ok(await until(`(() => { const b = document.querySelector('.edit-panel .ep-work-section [data-block="current"] .ep-work-text'); return b && b.textContent.includes(${JSON.stringify(goal)}) })()`, 6, 500), 'the current-status block does not show the latest episode summary')
-  } finally {
-    await cleanup(); cleanupFn = null
-  }
+test('T3 episode CRUD through the REAL form: create → state line → read-back → edit keeps id/startedAt → delete', async () => {
+  const name = 'pd20 T3 episode journey ' + Math.random().toString(36).slice(2, 6)
+  const goal1 = 'Ship the pd20 vertical slice'
+  const outcome1 = 'Slice merged and gated'
+  const next1 = 'Run the live journey suite'
+  const goal1b = 'Ship the pd20 vertical slice (revised)'
+  const goal2 = 'A plain goal-only round'
+  const taskId = await quickAdd(name)
+  await evalJson(ctx, `(async () => { const s = ${storeQ}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
+  await openEditPanel(name)
+  assert.ok(await untilJson(`!!document.querySelector('${section('[data-block="episode-form"]')}')`, 8, 500), 'the episode form block never rendered')
+
+  // CREATE with all three fields
+  await typeInto(section('[data-input="new-goal"]'), goal1)
+  await typeInto(section('[data-input="outcome"]'), outcome1)
+  await typeInto(section('[data-input="next-action"]'), next1)
+  assert.ok(await clickSec('.ep-work-save-episode'), 'the Save button click failed')
+  const state1 = await untilJson(`(() => { const el = document.querySelector('${section('[data-state="episode"]')}'); return el ? el.textContent.trim() : null })()`, 10, 400)
+  assert.ok(state1 === 'Saved', `the persisted state line is not the success message, got ${JSON.stringify(state1)}`)
+  // storage read-back: the note round-trips as field lines
+  const eps1 = await untilJson(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length) ? e : null })()`, 10, 500)
+  assert.ok(eps1 && eps1.length === 1, 'the created episode did not land in storage')
+  assert.ok(eps1[0].summary.includes('goal: ' + goal1), 'the stored note does not carry the goal line: ' + JSON.stringify(eps1[0].summary))
+  assert.ok(eps1[0].summary.includes('outcome: ' + outcome1), 'the stored note does not carry the outcome line')
+  assert.ok(eps1[0].summary.includes('nextAction: ' + next1), 'the stored note does not carry the nextAction line')
+  const id1 = eps1[0].episodeId
+  const started1 = eps1[0].startedAt
+  // USER-VISIBLE: history row + current-status block render the goal
+  assert.ok(await untilJson(`[...document.querySelectorAll('${section('[data-block="history"] .ep-work-row')}')].some(el => el.textContent.includes(${JSON.stringify(goal1)}))`, 10, 500),
+    'the created episode never became visible in the work-history block')
+  assert.ok(await untilJson(`(() => { const b = document.querySelector('${section('[data-block="current"] .ep-work-text')}'); return b && b.textContent.includes(${JSON.stringify(goal1)}) })()`, 6, 500),
+    'the current-status block does not show the latest episode goal')
+
+  // EDIT: row click prefills the form; Update keeps id and startedAt
+  assert.ok(await clickSec('[data-episode-id="' + id1 + '"] .ep-work-edit'), 'the Edit button click failed')
+  assert.ok(await untilJson(`(() => { const el = document.querySelector('${section('[data-input="edit-goal"]')}'); return el && el.value === ${JSON.stringify(goal1)} })()`, 8, 400),
+    'the form was not prefilled with the row goal on edit')
+  await typeInto(section('[data-input="edit-goal"]'), goal1b)
+  await typeInto(section('[data-input="outcome"]'), outcome1)
+  await typeInto(section('[data-input="next-action"]'), next1)
+  assert.ok(await clickSec('.ep-work-save-episode'), 'the Update button click failed')
+  const eps2 = await untilJson(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length) ? e : null })()`, 10, 500)
+  assert.ok(eps2 && eps2.length === 1, 'the edit must update in place, not mint a second row')
+  assert.equal(eps2[0].episodeId, id1, 'the edit lost the episode id')
+  assert.equal(eps2[0].startedAt, started1, 'the edit did not preserve startedAt')
+  assert.ok(eps2[0].summary.includes('goal: ' + goal1b), 'the edit did not persist the revised goal')
+  assert.ok(await untilJson(`[...document.querySelectorAll('${section('[data-block="history"] .ep-work-row')}')].some(el => el.textContent.includes(${JSON.stringify(goal1b)}))`, 10, 500),
+    'the revised goal never became visible in the history row')
+
+  // DELETE: create a second plain episode, then delete it via the row button
+  await typeInto(section('[data-input="new-goal"]'), goal2)
+  assert.ok(await clickSec('.ep-work-save-episode'), 'the second Save click failed')
+  const eps3 = await untilJson(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length === 2) ? e : null })()`, 10, 500)
+  assert.ok(eps3, 'the second episode did not land in storage')
+  const id2 = eps3.find(e => e.episodeId !== id1).episodeId
+  assert.ok(await clickSec('[data-episode-id="' + id2 + '"] .ep-work-del'), 'the Delete button click failed')
+  assert.ok(await untilJson(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length === 1) ? true : null })()`, 10, 500),
+    'the deleted episode is still in storage after the row Delete')
 })
 
-test('J3 source-ref link (manual provider, file form) → querySourcesByTask carries level/canonicalUri + resources row', { skip: !available || !isolated }, async t => {
-  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
-  const name = 'J3 source link journey ' + Math.random().toString(36).slice(2, 6)
+test('T4 source bind/unbind/delete through the REAL form: link → L0 read-back → unlink → re-link reuses ref → delete', async () => {
+  const name = 'pd20 T4 source journey ' + Math.random().toString(36).slice(2, 6)
   const extId = 'docs/journey-' + Math.random().toString(36).slice(2, 8) + '.md'
   const title = 'Journey design notes'
-  const ids = []
-  const srcIds = []
-  const cleanup = async () => {
-    try { openStoreCleanup() } catch {}
-    await hardCleanup([...new Set(ids)])
-  }
-  const openStoreCleanup = () => {
-    if (!storeCleanDataDir) return
-    openStore(storeCleanDataDir)
-    if (srcIds.length) { try { bus.commit('source', 'removeByIds', { ids: [...srcIds] }) } catch {} }
-    if (linkIds.length) { try { bus.commit('tasksource', 'remove', { ids: [...linkIds] }) } catch {} }
-  }
-  let storeCleanDataDir = null
-  const linkIds = []
-  registerCleanup(cleanup)
-  try {
-    await gotoHash('#/todo-list/today', '.qa-input')
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.focus(); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(name)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
-    await sleep(400)
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
-    const row = await until(`(async () => { const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return rows.find(r => r.taskContent === ${JSON.stringify(name)}) || null })()`, 12, 500)
-    assert.ok(row && row.taskId, 'seeding the J3 task failed')
-    ids.push(row.taskId)
-    await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
-    const dataDir = await resolveDataDir()
-    storeCleanDataDir = dataDir
-    openStore(dataDir)
-    const srcId = bus.commit('source', 'put', { providerId: 'manual', externalId: extId, title })
-    assert.ok(srcId, 'bus.commit(source,put) returned no id')
-    srcIds.push(srcId)
-    const linkId = bus.commit('tasksource', 'put', { taskId: String(row.taskId), sourceRefId: srcId })
-    assert.ok(linkId, 'bus.commit(tasksource,put) returned no id')
-    linkIds.push(linkId)
-    // The resources block renders each EPISODE's linked resources (EditPanelWork computed),
-    // so an episode row is part of the real read model under test here
-    const epId = bus.commit('episode', 'put', { taskId: String(row.taskId), startedAt: Date.now(), note: 'J3 episode carrying the linked resources' })
-    assert.ok(epId, 'bus.commit(episode,put) returned no id')
-    // Renderer read-back: the view-model shape buildHandoff consumes (level + canonicalUri composed main-side)
-    const srcs = await until(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(row.taskId)}); return (s && s.length) ? s : null })()`, 10, 500)
-    assert.ok(srcs, 'querySourcesByTask returned nothing for the linked source')
-    const hit = srcs.find(s => s.canonicalUri === 'manual://' + extId)
-    assert.ok(hit, `the linked source's canonicalUri manual://${extId} is not in the read-back: ${JSON.stringify(srcs)}`)
-    assert.equal(hit.level, 'L0', `the read-back source must carry the L0 provenance level, got ${JSON.stringify(hit.level)}`)
-    assert.equal(hit.title, title, 'the read-back source lost its title')
-    // USER-VISIBLE: the linked-resources block must render the title
-    await closeEditPanel()
-    await openEditPanel(name)
-    assert.ok(await until(`[...document.querySelectorAll('.edit-panel .ep-work-section [data-block="resources"] .ep-work-row')].some(el => el.textContent.includes(${JSON.stringify(title)}))`, 10, 500), 'the linked source never became visible in the resources block')
-  } finally {
-    await cleanup(); cleanupFn = null
-  }
+  const taskId = await quickAdd(name)
+  await evalJson(ctx, `(async () => { const s = ${storeQ}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
+  await openEditPanel(name)
+  // LINK: provider select + external id + title (trust is L0-only in this slice)
+  await typeInto(section('[data-input="provider"]'), 'github')
+  await typeInto(section('[data-input="external-id"]'), extId)
+  await typeInto(section('[data-input="source-title"]'), title)
+  assert.ok(await clickSec('.ep-work-save-source'), 'the Link button click failed')
+  const state = await untilJson(`(() => { const el = document.querySelector('${section('[data-state="source"]')}'); return el ? el.textContent.trim() : null })()`, 10, 400)
+  assert.ok(state === 'Saved', `the source state line is not the success message, got ${JSON.stringify(state)}`)
+  const srcs1 = await untilJson(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)}); return (s && s.length) ? s : null })()`, 10, 500)
+  assert.ok(srcs1 && srcs1.length === 1, 'the linked source did not land in the task read-back')
+  assert.equal(srcs1[0].canonicalUri, 'github://' + extId, 'the read-back canonicalUri does not compose provider://externalId')
+  assert.equal(srcs1[0].level, 'L0', 'the read-back source must carry the L0 provenance level')
+  assert.equal(srcs1[0].title, title, 'the read-back source lost its title')
+  assert.ok(srcs1[0].linkId, 'the read-back lost the linkId (the unlink leg would be blind)')
+  assert.ok(srcs1[0].sourceRefId, 'the read-back lost the sourceRefId (the delete leg would be blind)')
+  assert.ok(await untilJson(`[...document.querySelectorAll('${section('[data-block="resources"] .ep-work-row')}')].some(el => el.textContent.includes(${JSON.stringify(title)}))`, 10, 500),
+    'the linked source never became visible in the resources block')
+
+  // UNLINK: tombstones the link only — a re-link of the SAME external id must reuse the ref
+  assert.ok(await clickSec('.ep-work-unbind'), 'the Unlink button click failed')
+  assert.ok(await untilJson(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)}); return (s && s.length === 0) ? true : null })()`, 10, 500),
+    'the link is still in the read-back after the Unlink')
+  const refId = srcs1[0].sourceRefId
+  await typeInto(section('[data-input="provider"]'), 'github')
+  await typeInto(section('[data-input="external-id"]'), extId)
+  await typeInto(section('[data-input="source-title"]'), title)
+  assert.ok(await clickSec('.ep-work-save-source'), 'the re-Link click failed')
+  const srcs2 = await untilJson(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)}); return (s && s.length === 1) ? s : null })()`, 10, 500)
+  if (!srcs2) diag('T4 re-link raw: srcs=' + (await evalJson(ctx, `(async () => JSON.stringify(await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)})))()`)) + ' state=' + (await evalJson(ctx, `(() => { const el = document.querySelector('${section('[data-state="source"]')}'); return el ? el.textContent.trim() : 'none' })()`)))
+  assert.ok(srcs2, 'the re-linked source is not in the read-back')
+  assert.equal(srcs2[0].sourceRefId, refId, 're-linking the same (providerId, externalId) must REUSE the existing source ref, not mint a duplicate')
+
+  // DELETE: remove the ref itself → the joined read disappears
+  assert.ok(await clickSec('.ep-work-src-del'), 'the source Delete button click failed')
+  assert.ok(await untilJson(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)}); return (s && s.length === 0) ? true : null })()`, 10, 500),
+    'the deleted source ref is still in the read-back after the row Delete')
 })
 
-test('J4 Copy Handoff: real button → clipboard text carries goal, canonicalUri, L0 tag; never "[object Object]"', { skip: !available || !isolated }, async t => {
-  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
-  const name = 'J4 handoff copy journey ' + Math.random().toString(36).slice(2, 6)
-  const goal = 'Hand the pd20 slice to the next session with a real handoff line'
+test('T5 Copy Handoff: real button → clipboard markdown with goal/outcome/nextAction, [L0], canonicalUri; never "[object Object]"', async () => {
+  const name = 'pd20 T5 handoff journey ' + Math.random().toString(36).slice(2, 6)
+  const goal = 'Hand the pd20 slice to the next session'
+  const outcome = 'All legs green'
+  const next = 'Merge and publish'
   const extId = 'docs/handoff-' + Math.random().toString(36).slice(2, 8) + '.md'
-  const ids = []
-  const srcIds = []
-  const linkIds = []
-  let dataDirRef = null
-  const cleanup = async () => {
-    if (dataDirRef) {
-      openStore(dataDirRef)
-      if (linkIds.length) { try { bus.commit('tasksource', 'remove', { ids: [...linkIds] }) } catch {} }
-      if (srcIds.length) { try { bus.commit('source', 'removeByIds', { ids: [...srcIds] }) } catch {} }
-    }
-    await hardCleanup([...new Set(ids)])
-  }
-  registerCleanup(cleanup)
-  try {
-    await gotoHash('#/todo-list/today', '.qa-input')
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.focus(); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(name)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
-    await sleep(400)
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
-    const row = await until(`(async () => { const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return rows.find(r => r.taskContent === ${JSON.stringify(name)}) || null })()`, 12, 500)
-    assert.ok(row && row.taskId, 'seeding the J4 task failed')
-    ids.push(row.taskId)
-    await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
-    const dataDir = await resolveDataDir()
-    dataDirRef = dataDir
-    openStore(dataDir)
-    const epId = bus.commit('episode', 'put', { taskId: String(row.taskId), startedAt: Date.now(), note: goal })
-    assert.ok(epId, 'episode put failed')
-    const srcId = bus.commit('source', 'put', { providerId: 'manual', externalId: extId, title: 'Handoff source' })
-    assert.ok(srcId, 'source put failed')
-    srcIds.push(srcId)
-    linkIds.push(bus.commit('tasksource', 'put', { taskId: String(row.taskId), sourceRefId: srcId }))
-    // The copy button only exists when the buildHandoff provider was injected (hasHandoff)
-    await closeEditPanel()
-    await openEditPanel(name)
-    await send('Page.bringToFront').catch(() => {}) // clipboard.writeText needs a focused page
-    assert.ok(await until(`!!document.querySelector('.edit-panel .ep-work-section .ep-work-copy')`, 10, 500), 'the Copy Handoff button is not visible (the buildHandoff provide/inject chain is broken — the S2 seam regressed)')
-    assert.ok(await clickEl(`document.querySelector('.edit-panel .ep-work-section .ep-work-copy')`), 'the Copy Handoff button click failed')
-    // User-visible feedback first
-    const state = await until(`(() => { const el = document.querySelector('.edit-panel .ep-work-section .ep-work-copy-state'); return el ? el.textContent.trim() : null })()`, 6, 400)
-    assert.ok(state === 'Copied to clipboard', `the copy feedback state is not the success message, got ${JSON.stringify(state)}`)
-    // The REAL promise: the clipboard carries the markdown handoff (result.text, not String(result))
-    const clip = await evalAwait(`navigator.clipboard.readText()`)
-    assert.ok(clip && typeof clip === 'string' && clip.length > 0, 'the clipboard is empty after Copy Handoff')
-    assert.ok(!clip.includes('[object Object]'), 'the clipboard carries "[object Object]" — the exact regression this button shipped to kill')
-    assert.ok(clip.includes('# Handoff'), 'the clipboard text is not the buildHandoff markdown (missing the "# Handoff" header)')
-    assert.ok(clip.includes(name), 'the clipboard handoff does not name the real task title')
-    assert.ok(clip.includes(goal), 'the clipboard handoff does not carry the real episode goal')
-    assert.ok(clip.includes('goal: ' + goal), "the clipboard handoff's episode block does not carry the goal line")
-    assert.ok(clip.includes('outcome:'), "the clipboard handoff's episode block lost the outcome line")
-    assert.ok(clip.includes('nextAction:'), "the clipboard handoff's episode block lost the nextAction line")
-    assert.ok(clip.includes('[L0]'), 'the clipboard handoff does not tag the source with its L0 provenance level')
-    assert.ok(clip.includes('manual://' + extId), 'the clipboard handoff does not carry the linked source canonicalUri')
-  } finally {
-    await cleanup(); cleanupFn = null
-  }
+  await quickAdd(name)
+  await evalJson(ctx, `(async () => { const s = ${storeQ}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
+  await openEditPanel(name)
+  // UI-driven data build: one full episode + one linked source
+  await typeInto(section('[data-input="new-goal"]'), goal)
+  await typeInto(section('[data-input="outcome"]'), outcome)
+  await typeInto(section('[data-input="next-action"]'), next)
+  assert.ok(await clickSec('.ep-work-save-episode'), 'the episode Save click failed')
+  assert.ok(await untilJson(`(() => { const el = document.querySelector('${section('[data-state="episode"]')}'); return el && el.textContent.includes('Saved') })()`, 10, 400), 'the episode did not save')
+  await typeInto(section('[data-input="provider"]'), 'manual')
+  await typeInto(section('[data-input="external-id"]'), extId)
+  assert.ok(await clickSec('.ep-work-save-source'), 'the source Link click failed')
+  assert.ok(await untilJson(`(() => { const el = document.querySelector('${section('[data-state="source"]')}'); return el && el.textContent.includes('Saved') })()`, 10, 400), 'the source did not link')
+  // the copy button only renders when the buildHandoff provider was injected (hasHandoff)
+  await send(ctx, 'Page.bringToFront').catch(() => {}) // clipboard needs a focused page
+  assert.ok(await untilJson(`!!document.querySelector('${section('.ep-work-copy')}')`, 10, 500),
+    'the Copy Handoff button is not visible (the buildHandoff provide/inject chain broke — the S2 seam regressed)')
+  assert.ok(await clickSec('.ep-work-copy'), 'the Copy Handoff button click failed')
+  const state = await untilJson(`(() => { const el = document.querySelector('${section('.ep-work-copy-state')}'); return el ? el.textContent.trim() : null })()`, 8, 400)
+  assert.ok(state === 'Copied to clipboard', `the copy feedback state is not the success message, got ${JSON.stringify(state)}`)
+  const clip = await evalJson(ctx, `navigator.clipboard.readText()`)
+  assert.ok(clip && typeof clip === 'string' && clip.length > 0, 'the clipboard is empty after Copy Handoff')
+  assert.ok(!clip.includes('[object Object]'), 'the clipboard carries "[object Object]" — the exact regression this button shipped to kill')
+  assert.ok(clip.includes('# Handoff'), 'the clipboard text is not the buildHandoff markdown (missing the "# Handoff" header)')
+  assert.ok(clip.includes(name), 'the clipboard handoff does not name the real task title')
+  assert.ok(clip.includes('goal: ' + goal), "the clipboard handoff's episode block does not carry the goal line")
+  assert.ok(clip.includes('outcome: ' + outcome), "the clipboard handoff's episode block lost the filled outcome line")
+  assert.ok(clip.includes('nextAction: ' + next), "the clipboard handoff's episode block lost the filled nextAction line")
+  assert.ok(clip.includes('[L0]'), 'the clipboard handoff does not tag the source with its L0 provenance level')
+  assert.ok(clip.includes('manual://' + extId), 'the clipboard handoff does not carry the linked source canonicalUri')
 })
 
-test('J5 reload persistence: switch + section + episode + source link all survive a page reload', { skip: !available || !isolated }, async t => {
-  if (!preconditionOk) return t.skip('J-precondition failed at runtime — no writes against an unbooted page (cascade guard)')
-  const name = 'J5 reload journey ' + Math.random().toString(36).slice(2, 6)
-  const goal = 'This episode must outlive a page reload'
-  const extId = 'docs/reload-' + Math.random().toString(36).slice(2, 8) + '.md'
-  const ids = []
-  const srcIds = []
-  const linkIds = []
-  let dataDirRef = null
-  const cleanup = async () => {
-    if (dataDirRef) {
-      openStore(dataDirRef)
-      if (linkIds.length) { try { bus.commit('tasksource', 'remove', { ids: [...linkIds] }) } catch {} }
-      if (srcIds.length) { try { bus.commit('source', 'removeByIds', { ids: [...srcIds] }) } catch {} }
-    }
-    await hardCleanup([...new Set(ids)])
-  }
-  registerCleanup(cleanup)
-  try {
-    await gotoHash('#/todo-list/today', '.qa-input')
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.focus(); const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set; set.call(i, ${JSON.stringify(name)}); i.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
-    await sleep(400)
-    await evalJson(`(() => { const i = document.querySelector('.qa-input'); if (!i) return false; i.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, bubbles: true })); return true })()`)
-    const row = await until(`(async () => { const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return rows.find(r => r.taskContent === ${JSON.stringify(name)}) || null })()`, 12, 500)
-    assert.ok(row && row.taskId, 'seeding the J5 task failed')
-    ids.push(row.taskId)
-    await evalAwait(`(async () => { const s = ${st()}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
-    const dataDir = await resolveDataDir()
-    dataDirRef = dataDir
-    openStore(dataDir)
-    const epId = bus.commit('episode', 'put', { taskId: String(row.taskId), startedAt: Date.now(), note: goal })
-    assert.ok(epId, 'episode put failed')
-    const srcId = bus.commit('source', 'put', { providerId: 'manual', externalId: extId, title: 'Reload source' })
-    assert.ok(srcId, 'source put failed')
-    srcIds.push(srcId)
-    linkIds.push(bus.commit('tasksource', 'put', { taskId: String(row.taskId), sourceRefId: srcId }))
-    // RELOAD the page (the restart-grade persistence semantics under test)
-    await send('Page.reload')
-    let booted = false
-    for (let i = 0; i < 30 && !booted; i++) {
-      booted = (await evalJson('document.querySelectorAll(".sn-nav-item").length')) > 0
-      if (!booted) await sleep(1000)
-    }
-    assert.ok(booted, 'the app did not come back after the reload')
-    // The switch must have survived (LS settingsState write-through)
-    const gate = await evalJson(`(() => { const s = ${st()}; return !!(s && s.state && s.state.settings && s.state.settings.workEpisode && s.state.settings.workEpisode.enabled) })()`)
-    assert.ok(gate, 'workEpisode.enabled did not survive the reload (the settings LS write-through is broken)')
-    // Both reads still complete after the reload
-    const eps = await until(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(row.taskId)}); return (e && e.length) ? e : null })()`, 10, 500)
-    assert.ok(eps && eps.find(e => e.episodeId === epId && e.summary === goal), 'the episode did not survive the reload in the dbCall read-back')
-    const srcs = await until(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(row.taskId)}); return (s && s.length) ? s : null })()`, 10, 500)
-    assert.ok(srcs && srcs.find(s => s.canonicalUri === 'manual://' + extId && s.level === 'L0'), 'the source link did not survive the reload in the dbCall read-back')
-    // USER-VISIBLE: reopen the panel — section, history row and resources row all back
-    await openEditPanel(name)
-    assert.ok(await until(`!!document.querySelector('.edit-panel .ep-work-section')`, 8, 500), 'the work-episode section did not re-appear after the reload')
-    assert.ok(await until(`[...document.querySelectorAll('.edit-panel .ep-work-section [data-block="history"] .ep-work-row')].some(el => el.textContent.includes(${JSON.stringify(goal)}))`, 8, 500), 'the episode history row is not visible after the reload')
-    assert.ok(await until(`[...document.querySelectorAll('.edit-panel .ep-work-section [data-block="resources"] .ep-work-row')].some(el => el.textContent.includes('Reload source'))`, 8, 500), 'the linked resource row is not visible after the reload')
-  } finally {
-    await cleanup(); cleanupFn = null
-    closeStore()
-  }
+test('T6 RESTART: real process stop → respawn on the SAME userDataDir → gate + episode + source link all back', async () => {
+  const name = 'pd20 T6 restart journey ' + Math.random().toString(36).slice(2, 6)
+  const goal = 'This episode must outlive a real app restart'
+  const extId = 'docs/restart-' + Math.random().toString(36).slice(2, 8) + '.md'
+  const taskId = await quickAdd(name)
+  await evalJson(ctx, `(async () => { const s = ${storeQ}; if (s) await s.dispatch('settings/update', { workEpisode: { enabled: true } }); return true })()`)
+  await openEditPanel(name)
+  await typeInto(section('[data-input="new-goal"]'), goal)
+  assert.ok(await clickSec('.ep-work-save-episode'), 'the episode Save click failed')
+  assert.ok(await untilJson(`(() => { const el = document.querySelector('${section('[data-state="episode"]')}'); return el && el.textContent.includes('Saved') })()`, 10, 400), 'the episode did not save')
+  await typeInto(section('[data-input="provider"]'), 'manual')
+  await typeInto(section('[data-input="external-id"]'), extId)
+  assert.ok(await clickSec('.ep-work-save-source'), 'the source Link click failed')
+  assert.ok(await untilJson(`(() => { const el = document.querySelector('${section('[data-state="source"]')}'); return el && el.textContent.includes('Saved') })()`, 10, 400), 'the source did not link')
+  assert.ok(await closeEditPanel(), 'the edit panel could not be closed before the restart')
+
+  // REAL restart: graceful stop (before-quit flush) → respawn on the SAME userDataDir
+  await stopApp(ctx)
+  ctx = await spawnApp({ name: 'j-pd20-episode-restart', userDataDir })
+  await connectCdp(ctx)
+  await boot()
+  // the gate survived
+  const gate = await evalJson(ctx, `(() => { const s = ${storeQ}; return !!(s && s.state && s.state.settings && s.state.settings.workEpisode && s.state.settings.workEpisode.enabled) })()`)
+  assert.ok(gate, 'workEpisode.enabled did not survive the restart (the settings write-through is broken)')
+  // storage reads survived
+  const eps = await untilJson(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length) ? e : null })()`, 10, 500)
+  if (!eps || !eps.some(e => e.summary.includes(goal))) diag('T6 raw: taskId=' + taskId + ' eps=' + (await evalJson(ctx, `(async () => JSON.stringify(await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)})))()`)) + ' tasks=' + (await evalJson(ctx, `(async () => { const r = await window.todoAPI.dbCall('queryTodos', { deleted: 0 }); return JSON.stringify(r.map(x => x.taskId)) })()`)))
+  // a goal-only save stores the PLAIN note (no field lines) — the goal text is the round-trip contract
+  assert.ok(eps && eps.some(e => e.summary.includes(goal)), 'the episode did not survive the restart')
+  const srcs = await untilJson(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)}); return (s && s.length) ? s : null })()`, 10, 500)
+  assert.ok(srcs && srcs.some(s => s.canonicalUri === 'manual://' + extId && s.level === 'L0'), 'the source link did not survive the restart')
+  // USER-VISIBLE: reopen the panel on the RESTARTED process — everything renders again
+  await openEditPanel(name)
+  assert.ok(await untilJson(`!!document.querySelector('${section('')}')`, 8, 500), 'the work-episode section did not re-appear after the restart')
+  assert.ok(await untilJson(`[...document.querySelectorAll('${section('[data-block="history"] .ep-work-row')}')].some(el => el.textContent.includes(${JSON.stringify(goal)}))`, 8, 500),
+    'the episode history row is not visible after the restart')
+  assert.ok(await untilJson(`[...document.querySelectorAll('${section('[data-block="resources"] .ep-work-row')}')].some(el => el.textContent.includes(${JSON.stringify('manual://' + extId)})) || [...document.querySelectorAll('${section('[data-block="resources"] .ep-work-row')}')].some(el => el.textContent.includes('docs/restart-'))`, 8, 500),
+    'the linked resource row is not visible after the restart')
 })
 
-after(() => { try { ws?.close(); closeStore() } catch {} })
+after(async () => { try { if (ctx) await stopApp(ctx) } catch { /* already stopped */ } })
