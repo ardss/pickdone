@@ -48,6 +48,10 @@ const DEFAULT_TARGETS = [
   'tests/e2e-journeys/j-todo-core.test.mjs',
   'tests/e2e-journeys/j-habit-moment.test.mjs',
   'tests/e2e-journeys/j-rail-stats-settings.test.mjs',
+  // #224 (2026-11-03): the paste-image live journey was EXCLUDEd from run-all yet absent from
+  // every live pool — no gate ran it at all. It fails loud on a failed precondition
+  // (skip=green is not acceptable evidence), so it belongs in the mandatory pool.
+  'tests/e2e-journeys/j-attachment-image.test.mjs',
   'tests/keyboard-e2e.mjs',
   'tests/cssom-integrity.mjs',
   'tests/ui-coverage.mjs',
