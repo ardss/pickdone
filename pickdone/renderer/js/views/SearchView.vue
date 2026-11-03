@@ -113,7 +113,12 @@ export default {
     return { qText: '', tick: 0 } // day-flip watcher fields (_dayCheckTimer/_lastSeenDay) are non-reactive instance fields, like _qTimer
   },
   created () {
-    this.qText = this.$store.state.todo.search || ''
+    // [w33 P3] echo assignment: seeding the buffer from the store must not schedule a redundant
+    // same-value setSearch 180ms later (the qText watcher has no way to know this write was an
+    // echo). _qEcho (non-reactive, like _qTimer) makes the watcher skip exactly one scheduling.
+    this._qEcho = true
+    const seed = this.$store.state.todo.search || ''
+    if (this.qText !== seed) this.qText = seed // only flag when the write actually reaches the watcher
     // Normalize legacy persisted Chinese values into stable keys (Chinese enums once mismatched every filter branch under an English UI)
     const st = this.settings
     const patch = {}
@@ -135,6 +140,8 @@ export default {
       this._qTimer = null
       // the timer was pending → the latest keystrokes never reached the store: revert the input
       // buffer to the last CONFIRMED store value instead of flushing the fragment
+      // ([w33 P3] echo flag — the revert must not re-schedule a same-value setSearch mid-teardown)
+      this._qEcho = true
       this.qText = this.$store.state.todo.search || ''
     }
     // W25 day-flip watcher teardown (merged with the duplicate hook vue-tsc flagged)
@@ -148,9 +155,13 @@ export default {
     // equality guard).
     q (v) {
       clearTimeout(this._qTimer); this._qTimer = null
-      if (v !== this.qText) this.qText = v
+      if (v !== this.qText) { this._qEcho = true; this.qText = v } // [w33 P3] echo write — see qText watcher
     },
     qText (v) {
+      // [w33 P3] an echo assignment (created seed / external store change above) already agrees
+      // with the store — skip the redundant same-value setSearch commit that the watcher would
+      // otherwise re-schedule 180ms later (setSearch has no equality guard).
+      if (this._qEcho) { this._qEcho = false; return }
       clearTimeout(this._qTimer)
       this._qTimer = setTimeout(() => { this._qTimer = null; this.$store.commit('todo/setSearch', v) }, SEARCH_DEBOUNCE_MS)
     }

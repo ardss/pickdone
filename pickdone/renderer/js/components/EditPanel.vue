@@ -580,6 +580,7 @@ export default {
       } catch (e) {
         // Restore failed: keep the item in the bin and surface the error instead of a false-success toast
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
+        for (const k of ['subtasks', 'imgs', 'files']) this.markDirty(k) // [w33 P2] takeDirty above CONSUMED these dirty flags — re-flag so a failed restore's edits still flush on a later save/restore retry (pre-fix they were stranded forever)
         return
       }
       this.$message.success(this.$t('statsJ.EditPanel.restoredMsg'))

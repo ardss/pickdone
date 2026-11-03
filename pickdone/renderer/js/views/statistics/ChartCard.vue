@@ -148,6 +148,14 @@ const ChartCard = {
       if (!win) this.$message.warning(this.$t('statsA.ChartCard.openExternalFallback', { url }))
     },
     renderChart () {
+      // [w33 P3] content-fingerprint dedupe: StatisticsView's 30s nowTick rebuilds the model
+      // objects with IDENTICAL data, and the deep `model` watcher then destroyed+recreated every
+      // live Chart instance each 30s. When the config payload (data points + labels, which also
+      // covers the locale-driven tt() copy) and the theme are unchanged and a chart is already
+      // live, skip the destroy/new cycle entirely. nowTick semantics themselves are untouched.
+      const fp = this.config ? JSON.stringify(this.config) + '|' + this.theme : ''
+      if (this._chart && fp === this._lastChartFp) return
+      this._lastChartFp = fp
       this.destroyChart()
       if (!this.config || this.canvasKind !== String(this.model.modelType)) return
       // Chart.js lazy load (2026-09-02 startup optimization): injected on first draw, re-entering this function after injection
