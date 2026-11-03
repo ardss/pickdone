@@ -103,7 +103,9 @@ test('E2E: settings modal opens (regression: an unclosed template div once broke
   // The widget tab was removed in an earlier iteration - this assertion rotted unnoticed while e2e was out of the gate (now wired into check:all it cannot rot again)
   // 关于 tab added (2282a78): standalone About+Feedback tab, appended before 数据管理
   // sync tab added (P3a LAN sync, 49f8be3): between Pomodoro and Data Management
-  assert.deepEqual(st.tabs, ['General', 'Appearance', 'Calendar', 'Shortcuts', 'Pomodoro', 'Sync', 'Data Management', 'Feedback & About'])
+  // capture tab added (S4 browser-extension capture endpoint, this branch): between Sync and
+  // Data Management — a deliberate feature tab, not broken UI; expectation updated accordingly.
+  assert.deepEqual(st.tabs, ['General', 'Appearance', 'Calendar', 'Shortcuts', 'Pomodoro', 'Sync', 'Capture', 'Data Management', 'Feedback & About'])
 })
 
 test('E2E: settings tab underline strictly aligns with text (regression: EP nth-child(2)/last-child padding misalignment)', { skip: !available || !isolated }, async () => {

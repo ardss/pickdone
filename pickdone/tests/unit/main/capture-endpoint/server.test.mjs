@@ -9,7 +9,7 @@
  *   - correct key + valid payload → 201 with a taskId, and the task/SourceRef actually landed
  *     through the command bus (fake db sees upsert + setMetaMany);
  *   - re-sending the same dedupeFingerprint → 200 duplicate, no second row;
- *   - port 7789 already occupied → falls back to 7789+1 and exposes the actual port;
+ *   - a base port already occupied → falls back to the next usable port and exposes the actual port;
  *   - disabled switch → 503; wrong path / wrong method → 404; broken JSON → 400;
  *   - regenerating the secret (getSecret now returns a new key) makes the OLD key 401.
  *
@@ -164,15 +164,28 @@ test('same dedupeFingerprint re-sent over HTTP → 200 duplicate, still one row'
   assert.equal(db.ops.filter(([op]) => op === 'upsert').length, 1, 'no second row')
 })
 
-test('port already occupied → falls back to port+1 and exposes the actual port', async t => {
+test('port already occupied → falls back to the next usable port and exposes the actual port', async t => {
+  // Probe a free base port instead of hard-coding the product default 7789: a live app instance
+  // (the gate's own shared pool) binds 7789 itself, and the unit tier runs in the same check:all —
+  // the blocker then fails to bind and the failure surfaces as an uncaught EADDRINUSE (live-repro:
+  // check:all red with the pool instance holding 7789). The fallback BEHAVIOR is port-agnostic.
+  const probe = net.createServer()
+  await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve))
+  const base = probe.address().port
+  await new Promise(resolve => probe.close(resolve))
   const blocker = net.createServer()
-  await new Promise(resolve => blocker.listen(7789, '127.0.0.1', resolve))
+  await new Promise((resolve, reject) => { blocker.once('error', reject); blocker.listen(base, '127.0.0.1', resolve) })
   t.after(() => new Promise(resolve => blocker.close(resolve)))
-  const { handle, getSecretNow } = makeServer({ port: 7789 })
+  const { handle, getSecretNow } = makeServer({ port: base })
   after(() => handle.server.close())
   await handle.ready
-  assert.equal(handle.actualPort, 7790, 'capture endpoint landed on 7789+1')
-  const r = await post(7790, '/capture', { key: getSecretNow(), body: { content: 'via fallback port' } })
+  // The contract is "the next USABLE port above the occupied base": on Windows base+1 can itself
+  // answer EACCES with no listener at all (transiently reserved as an ephemeral source port or in
+  // an excluded range), so pinning the literal +1 would tie the suite to one machine's port table.
+  // What the user/extension-visible behavior guarantees: actualPort moved off the blocked base,
+  // and the endpoint actually serves on actualPort.
+  assert.ok(handle.actualPort > base, `capture endpoint moved off ${base} (landed on ${handle.actualPort})`)
+  const r = await post(handle.actualPort, '/capture', { key: getSecretNow(), body: { content: 'via fallback port' } })
   assert.equal(r.status, 201)
 })
 

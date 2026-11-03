@@ -41,6 +41,24 @@ exports.episodePut = (db, ep = {}) => {
 // Items may be plain ids (renderer/CLI) or {id, deletedAt, updatedAt} tombstone stamps (sync apply).
 exports.episodeRemoveIds = (db, ids, opts = {}) => removeByIds(db, 'work_episodes', ids, opts)
 
+// Read-side (pd20 S3 'continue work' section): the EditPanel reads a task's episodes via
+// dbCall('queryEpisodesByTask', taskId). The renderer's contract (editpanel-work pins) is a
+// view model — {episodeId, summary, resources} — so the storage columns (id/note) are mapped
+// HERE, once: the renderer never learns the row schema. Oldest startedAt first; tombstoned
+// episodes and tombstoned links/refs are invisible. Read-only → no manifest row needed (same
+// class as tomatoGetById); whitelisted for any renderer window in handlers/todo.js.
+exports.queryEpisodesByTask = (db, taskId) => {
+  if (taskId == null || taskId === '') return []
+  const eps = db.prepare(
+    'SELECT id, startedAt, endedAt, note FROM work_episodes WHERE taskId = @taskId AND deleted = 0 ORDER BY startedAt ASC, id ASC'
+  ).all({ taskId: String(taskId) })
+  const resources = db.prepare(
+    'SELECT sr.title FROM task_source_links tsl JOIN source_refs sr ON sr.id = tsl.sourceRefId' +
+    ' WHERE tsl.taskId = @taskId AND tsl.deleted = 0 AND sr.deleted = 0 ORDER BY sr.id ASC'
+  ).all({ taskId: String(taskId) }).map(r => r.title || '').filter(Boolean)
+  return eps.map(e => ({ episodeId: e.id, startedAt: e.startedAt, endedAt: e.endedAt, summary: e.note || '', resources }))
+}
+
 // ---- source_refs ----
 exports.sourcePut = (db, row = {}) => {
   if (!row || row.providerId == null || row.providerId === '' || row.externalId == null || row.externalId === '') {

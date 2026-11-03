@@ -102,7 +102,11 @@ function startCaptureServer (opts = {}) {
     let tries = 0
     const listen = () => {
       server.once('error', e => {
-        if (e && e.code === 'EADDRINUSE' && tries < attempts) {
+        // EADDRINUSE: someone holds the port. EACCES: on Windows a port can also be unusable
+        // without a listener (excluded/managed range or security software) — the earlier
+        // EADDRINUSE-only gate made the fallback give up with an uncaught error on such boxes
+        // (live-repro: 7789 held by the test blocker, 7790 answers EACCES, 7791 binds fine).
+        if (e && (e.code === 'EADDRINUSE' || e.code === 'EACCES') && tries < attempts) {
           tries++
           p += 1
           listen()

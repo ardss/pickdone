@@ -97,3 +97,31 @@ test('tasksource.put/remove round-trip through the bus', () => {
   assert.equal(d.prepare('SELECT deleted FROM task_source_links WHERE id = ?').get(row.id).deleted, 1)
   d.close()
 })
+
+// [pd20 S3 follow-up fix] The EditPanel 'continue work' section reads a task's episodes via
+// dbCall('queryEpisodesByTask', taskId) — the renderer's user-visible contract (editpanel-work
+// pins): rows shaped {episodeId, summary, resources}, ordered oldest-first, tombstoned episodes
+// and tombstoned links/refs invisible. Before this fix the op did not exist on the db layer at
+// all (the whitelist gate flagged it: the feature was silently dead in the real app).
+test('queryEpisodesByTask: renderer-shaped read (summary/resources), oldest first, tombstones invisible', () => {
+  const { d, bus } = wired()
+  bus.commit('episode', 'put', { id: 'ep1', taskId: 't1', startedAt: 200, endedAt: 300, note: '晚上补了回归' })
+  bus.commit('episode', 'put', { id: 'ep2', taskId: 't1', startedAt: 100, endedAt: 150, note: '白天写了渲染层' })
+  const ghost = bus.commit('episode', 'put', { id: 'ep3', taskId: 't1', startedAt: 50, note: '稍后删除' })
+  bus.commit('episode', 'removeIds', [ghost])
+  const srcId = bus.commit('source', 'put', { providerId: 'github', externalId: '42', title: 'spec.md' })
+  bus.commit('source', 'put', { providerId: 'web', externalId: 'p1', title: 'notes.md' })
+  bus.commit('tasksource', 'put', { taskId: 't1', sourceRefId: srcId })
+  bus.commit('episode', 'put', { id: 'epX', taskId: 't2', note: '别的任务' })
+
+  assert.equal(typeof episodeOps.queryEpisodesByTask, 'function', 'the read op exists on the domain service')
+  const rows = episodeOps.queryEpisodesByTask(d, 't1')
+  assert.deepEqual(rows.map(r => r.episodeId), ['ep2', 'ep1'], 'oldest startedAt first, tombstoned episode invisible')
+  assert.equal(rows[0].summary, '白天写了渲染层', 'note is exposed as the renderer summary field')
+  assert.deepEqual(rows[0].resources, ['spec.md'], 'the task-linked (live) source titles ride the episode rows — the schema links refs to the TASK, so the task-level resource set is what each row carries')
+  assert.deepEqual(rows[1].resources, ['spec.md'], 'same task-level resource set on every episode of the task')
+  assert.deepEqual(episodeOps.queryEpisodesByTask(d, 't2').map(r => r.episodeId), ['epX'], 'other tasks unaffected')
+  assert.deepEqual(episodeOps.queryEpisodesByTask(d, 'missing'), [], 'unknown task reads back empty')
+  assert.deepEqual(episodeOps.queryEpisodesByTask(d, ''), [], 'empty taskId reads back empty')
+  d.close()
+})

@@ -92,7 +92,10 @@ module.exports = function todoHandlers (ctx) {
     'syncPairRespond', 'syncPairRequest', 'syncUnpairPeer', 'syncConflictBackupsList', 'syncConflictBackupRestore',
     // syncSetPeerAlias (round-2 P1 2026-09-21): machine-local per-peer display alias for Device Center —
     // writes a sync.peerAlias.<deviceId> settings row, main-window-only like the other data-mutating sync ops
-    'syncSetPeerAlias'
+    'syncSetPeerAlias',
+    // queryEpisodesByTask (pd20 S3): read-only episode read for the EditPanel 'continue work'
+    // section (impl db-episode-ops.cjs; read-only → any window, no manifest row — tomatoGetById class)
+    'queryEpisodesByTask'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —

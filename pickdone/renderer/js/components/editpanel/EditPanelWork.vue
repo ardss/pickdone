@@ -33,7 +33,7 @@
       <div class="ep-work-block" data-block="handoff">
         <div class="ep-work-label">{{ $t('statsJ.EditPanel.workEpisodeHandoff') }}</div>
         <div class="ep-work-text">{{ episodes.length ? taskTitle : '' }}</div>
-        <button v-if="buildHandoff" class="mini ep-work-copy" @click="copyHandoff">
+        <button v-if="hasHandoff" class="mini ep-work-copy" @click="copyHandoff">
           {{ $t('statsJ.EditPanel.workEpisodeCopyHandoff') }}</button>
       </div>
     </div>
@@ -61,6 +61,14 @@ export default {
     }
   },
   computed: {
+    // vue-tsc cannot see Options-API `inject` on the template surface, so the button's
+    // visibility gate goes through this computed (same runtime verdict as before: the
+    // copy button shows only when a buildHandoff provider was actually injected).
+    // Plain JS on purpose: this SFC's unit harness strips only `as any`-style casts,
+    // not `: type` annotations.
+    hasHandoff () {
+      return typeof this.buildHandoff === 'function'
+    },
     currentText () {
       const last = this.episodes[this.episodes.length - 1]
       return last ? String(last.summary || last.status || '') : ''
