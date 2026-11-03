@@ -115,10 +115,12 @@ export default {
   created () {
     // [w33 P3] echo assignment: seeding the buffer from the store must not schedule a redundant
     // same-value setSearch 180ms later (the qText watcher has no way to know this write was an
-    // echo). _qEcho (non-reactive, like _qTimer) makes the watcher skip exactly one scheduling.
-    this._qEcho = true
+    // echo). _qEcho (non-reactive, like _qTimer) makes the watcher skip exactly one scheduling —
+    // so the flag is raised ONLY when the write actually happens; a seed equal to the current
+    // buffer never triggers the watcher, and a stale flag would swallow the next REAL commit
+    // (ui-coverage search regression, 2026-11-03).
     const seed = this.$store.state.todo.search || ''
-    if (this.qText !== seed) this.qText = seed // only flag when the write actually reaches the watcher
+    if (this.qText !== seed) { this._qEcho = true; this.qText = seed }
     // Normalize legacy persisted Chinese values into stable keys (Chinese enums once mismatched every filter branch under an English UI)
     const st = this.settings
     const patch = {}
