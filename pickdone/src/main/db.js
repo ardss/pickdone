@@ -576,9 +576,20 @@ const OPS = {
         // covers exactly the same rows while letting the key index do a B-tree range scan
         // instead of a full-table LIKE scan on every focus bump (linear-in-DB-size).
         const n = db.prepare("SELECT COUNT(*) n FROM meta WHERE key >= 'snowDedup:' AND key < 'snowDedup;'").get().n
-        if (n > SNOW_DEDUP_CAP) {
+        if (n > 0) {
           db.prepare("DELETE FROM meta WHERE key LIKE 'snowDedup:%' AND CAST(value AS INTEGER) < ?")
             .run(Date.now() - SNOW_DEDUP_MAX_AGE_MS)
+        }
+        if (n > SNOW_DEDUP_CAP) {
+          // W33 fix (2026-11-03): the age-based DELETE above matched 0 rows when ALL keys were
+          // young (a 30-day burst past the cap) — the cap never converged and every bump paid a
+          // COUNT for nothing. Delete the oldest excess by stamp ASC (LIMIT form) so the count
+          // always converges back to the cap regardless of key ages.
+          const nAfterAge = db.prepare("SELECT COUNT(*) n FROM meta WHERE key >= 'snowDedup:' AND key < 'snowDedup;'").get().n
+          if (nAfterAge > SNOW_DEDUP_CAP) {
+            db.prepare("DELETE FROM meta WHERE key IN (SELECT key FROM meta WHERE key >= 'snowDedup:' AND key < 'snowDedup;' ORDER BY CAST(value AS INTEGER) ASC LIMIT ?)")
+              .run(nAfterAge - SNOW_DEDUP_CAP)
+          }
         }
       } catch { /* pruning is best-effort and must never fail the bump */ }
       return out

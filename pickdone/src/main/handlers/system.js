@@ -72,6 +72,21 @@ module.exports = function systemHandlers (ctx) {
       // object — under Electron's unhandled-event policy that can crash the main process.
       // Attach the listener BEFORE show(); the failure is logged, never thrown.
       if (typeof n.on === 'function') n.on('failed', (err) => { try { log.error('[IPC] notification delivery failed:', err && (err.message || err)) } catch { /* logging is best-effort */ } })
+      // W33 (P3, 2026-11-03): the renderer 'notification' channel had NO click route — clicking the
+      // toast did nothing, unlike scheduler.fire's reminder notifications. Route the click through
+      // the scheduler's lock-aware focusMainFromNotification (same lock-safe gate: a locked app is
+      // never revealed); a payload carrying taskId additionally locates the task in the renderer.
+      // Delayed require: scheduler.js pulls handlers/shared.js etc. — keeping it out of the module
+      // top-level avoids require-cycle risk at load time (same inline-require pattern as sanitize
+      // above). Attached BEFORE show() like the 'failed' listener.
+      if (typeof n.on === 'function') {
+        n.on('click', () => {
+          try {
+            const taskId = (o && o.taskId != null && o.taskId !== '') ? String(o.taskId) : undefined
+            require('../scheduler').focusMainFromNotification(taskId)
+          } catch (err) { try { log.warn('[IPC] notification click route failed:', err && (err.message || err)) } catch { /* best-effort */ } }
+        })
+      }
       n.show(); return true
     },
 

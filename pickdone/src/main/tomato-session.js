@@ -84,7 +84,12 @@ function reconcileDecision (row, now) {
   if (now < row.startedAt) return { action: 'void', startedAt: row.startedAt }
   const limitMs = (Number(row.tomatoTime) > 0 ? Number(row.tomatoTime) : 25) * 60_000
   if (now - row.startedAt < limitMs) return { action: 'pending', startedAt: row.startedAt }
-  const focusedMin = Math.max(1, Math.min(FOCUS_MAX_MINUTES, Math.round((now - row.startedAt) / 60_000)))
+  // W33 fix (2026-11-03): the cap took focusedMin from the WALL-CLOCK gap (now - startedAt) —
+  // after a crash/hibernate of 48h with the row still armed, boot reconciliation booked up to
+  // FOCUS_MAX_MINUTES (600) minutes of phantom focus the user never did. The bookable quantity
+  // is bounded by the phase's own budget: this stage's tomatoTime (limitMs) IS the semantic
+  // maximum, so the duration clamps to it instead of the elapsed wall clock.
+  const focusedMin = Math.max(1, Math.round(limitMs / 60_000))
   return { action: 'book', startedAt: row.startedAt, focusDuration: focusedMin }
 }
 
