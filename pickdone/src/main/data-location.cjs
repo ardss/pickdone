@@ -159,12 +159,53 @@ const YIELD_EVERY = 8 // fs objects per event-loop yield — keeps the main proc
 /** Yield to the event loop; called every YIELD_EVERY copied objects in migrateData. */
 function tick () { return new Promise(resolve => setImmediate(resolve)) }
 
-/** Pre-count fs objects of a migration entry (file=1; dir=tree incl. the dir itself). */
+/** Pre-count fs objects of a migration entry (file=1; dir=tree incl. the dir itself).
+ *  W32-F3: lstat semantics — a symlink counts as ONE object on the source side, matching the
+ *  single junction object the copy creates at the target (statSync would follow the link and
+ *  count the whole linked tree, skewing the progress denominator against the verification
+ *  count which is also readdir/lstat-based). */
 function entryObjectCount (srcDir, name) {
   const p = path.join(srcDir, name)
   if (!fs.existsSync(p)) return 0
-  const st = fs.statSync(p)
+  const st = fs.lstatSync(p)
   return st.isDirectory() ? countFsObjects(p) : 1
+}
+
+// W32-F3 (2026-11-03): symlink handling inside files/ and backups/.
+//  - Directory symlinks (OneDrive placeholders, hand-linked attachment dirs): recreated at the
+//    target as a JUNCTION pointing at the link's absolute target — junctions need no admin
+//    rights on Windows and the linked tree is neither traversed nor duplicated (byte-level
+//    rollback contract: the migration never writes through the link into its target volume).
+//  - File symlinks (incl. dangling ones): FAIL-CLOSED — copying the link's CONTENT would violate
+//    the rollback contract (cleanup could not distinguish it), copying a dead link is useless.
+//    migrateDataInner pre-scans and refuses the migration, listing every conflicting path.
+function symlinkIsDir (linkPath) {
+  try { return fs.statSync(linkPath).isDirectory() } catch (e) { return false } // dangling → not a dir → rejected
+}
+
+function normalizeLinkTarget (linkPath, rawTarget) {
+  let t = String(rawTarget || '')
+  if (t.startsWith('\\\\?\\')) t = t.slice(4) // strip the \\?\ prefix readlinkSync can return for junctions
+  return path.resolve(path.dirname(linkPath), t)
+}
+
+/** Pre-scan a migration directory for FILE symlinks that the copy would refuse. Directory
+ *  symlinks are allowed (recreated as junctions) and NOT recursed into — walking through one
+ *  could loop or scan a foreign volume before the refusal. */
+function findFileSymlinks (dir) {
+  const out = []
+  const walk = d => {
+    let entries
+    try { entries = fs.readdirSync(d, { withFileTypes: true }) } catch (e) { return }
+    for (const entry of entries) {
+      const p = path.join(d, entry.name)
+      if (entry.isSymbolicLink()) {
+        if (!symlinkIsDir(p)) out.push(p + ' -> ' + (() => { try { return fs.readlinkSync(p) } catch (e) { return '?' } })())
+      } else if (entry.isDirectory()) walk(p)
+    }
+  }
+  walk(dir)
+  return out
 }
 
 async function copyDirRecursive (src, dest, onFile, counter) {
@@ -172,6 +213,13 @@ async function copyDirRecursive (src, dest, onFile, counter) {
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const s = path.join(src, entry.name)
     const d = path.join(dest, entry.name)
+    if (entry.isSymbolicLink()) {
+      if (!symlinkIsDir(s)) throw new Error('refusing to copy a file symlink: ' + s + ' -> ' + (() => { try { return fs.readlinkSync(s) } catch (e) { return '?' } })())
+      // directory link: recreate as a junction (absolute target, no admin rights needed on Windows)
+      fs.symlinkSync(normalizeLinkTarget(s, fs.readlinkSync(s)), d, 'junction')
+      counter.n++
+      continue
+    }
     if (entry.isDirectory()) await copyDirRecursive(s, d, onFile, counter)
     else {
       fs.copyFileSync(s, d)
@@ -314,6 +362,16 @@ async function migrateDataInner (srcDir, targetDir, opts = {}) {
   const t = v.target
   const written = [] // every target path this call created — the ONLY things we may delete on failure
   const names = requiredFiles(srcDir)
+  // W32-F3 fail-closed gate: file symlinks inside backups//files must abort BEFORE anything is
+  // copied — the copy itself would throw mid-tree (whole-migration abort + cleanup on EVERY
+  // retry) or, worse, silently duplicate the link's content in violation of the rollback contract.
+  const symlinkConflicts = []
+  for (const name of names) {
+    if (name === 'backups' || name === 'files') symlinkConflicts.push(...findFileSymlinks(path.join(srcDir, name)))
+  }
+  if (symlinkConflicts.length) {
+    return { ok: false, conflicts: symlinkConflicts, error: 'source contains file symlinks that cannot be migrated safely (remove or materialize them first): ' + symlinkConflicts.join('; ') }
+  }
   let stash = new Map()
   try {
     fs.mkdirSync(t, { recursive: true })
@@ -380,5 +438,6 @@ module.exports = {
   bootRedirectPath, readBootRedirect, readBootRedirectState, writeBootRedirect, clearBootRedirect,
   requiredFiles, validateTarget, migrateData, volumeFreeBytes,
   getRelocationPending, _resetRelocationGatesForTests,
+  findFileSymlinks, symlinkIsDir,
   MIN_FREE_BYTES
 }

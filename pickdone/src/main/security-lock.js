@@ -1,6 +1,7 @@
 /** Security lock (main process holds the locked state; the plaintext password never leaves the main process) — moved from index.js with dependency injection
  *  While locked, any path that would show the main window (tray/shortcut/second-instance/IPC) is redirected to focus the lock screen. */
 const path = require('path')
+const fs = require('fs')
 const { timingSafeEqual } = require('node:crypto')
 const { BrowserWindow } = require('electron')
 
@@ -25,7 +26,69 @@ function allowWithinRate (timestamps, now, { limit = 10, windowMs = 10000 } = {}
   return true
 }
 
-function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log, isQuitting = null, configVersion = () => { try { return require('./config-store').configWriteVersion() } catch { return null } } }) {
+const LOCK_RESET_MARKER_NAME = 'lockResetPending.json'
+
+/** W32-F3 (2026-11-03): full path of the disable-lock recovery marker under `dir` (userData in
+ *  production; a temp dir in unit tests). */
+function lockResetMarkerPath (dir) {
+  return path.join(dir, LOCK_RESET_MARKER_NAME)
+}
+
+/** Durable marker write (tmp file → fsync data → rename): the marker is the ONLY record that a
+ *  disable-lock fallback could not reach config.json — a power cut after a torn rename must not
+ *  lose it, or the poisoned password survives the restart (see recoverPendingLockReset). */
+function writeLockResetMarker (dir, why) {
+  if (!dir) throw new Error('no marker dir available (userData unresolved)')
+  const final = lockResetMarkerPath(dir)
+  const tmp = final + '.tmp'
+  const payload = JSON.stringify({ why: String(why || 'lock disable fallback'), at: Date.now() }, null, 2)
+  const fd = fs.openSync(tmp, 'w')
+  try {
+    fs.writeSync(fd, payload)
+    fs.fsyncSync(fd)
+  } finally { fs.closeSync(fd) }
+  fs.renameSync(tmp, final)
+}
+
+/** Read-and-clear the marker. Returns the parsed payload, or null when absent/unreadable.
+ *  The marker is only cleared by the CALLER after the recovery writeConfig succeeds — a
+ *  still-gated config store must keep the marker for the next boot. */
+function readLockResetMarker (dir) {
+  try { return JSON.parse(fs.readFileSync(lockResetMarkerPath(dir), 'utf8')) } catch (e) { return null }
+}
+
+function clearLockResetMarker (dir) {
+  if (!dir) return
+  try { fs.rmSync(lockResetMarkerPath(dir), { force: true }) } catch (e) { /* best-effort */ }
+}
+
+/** W32-F3 startup recovery: when the marker exists, a previous disable-lock fallback ran while
+ *  config.json was unreadable (writeConfig returned null) — enableSecurityLock and the (possibly
+ *  undecryptable) password are STILL true/set on disk. Re-issue the disable write now that the
+ *  store is readable; only clear the marker on a CONFIRMED write (writeConfig returns the merged
+ *  object; null / a Promise = gated or async-degraded → keep the marker for the next boot). */
+function recoverPendingLockReset ({ markerDir, writeConfig, log }) {
+  const lg = log || console
+  const payload = readLockResetMarker(markerDir)
+  if (!payload) return { recovered: false, pending: false }
+  let result = null
+  try {
+    result = writeConfig({ enableSecurityLock: false, securityLockPassword: '', securityLockQuestion: '' })
+  } catch (e) {
+    lg.error('[SecurityLock] lock-reset recovery write threw — marker kept for next boot:', e && (e.message || e))
+    return { recovered: false, pending: true, why: payload.why }
+  }
+  const confirmed = result != null && typeof result.then !== 'function'
+  if (confirmed) {
+    clearLockResetMarker(markerDir)
+    lg.warn('[SecurityLock] pending lock reset applied at startup (previous fallback hit an unreadable config.json):', payload.why)
+  } else {
+    lg.warn('[SecurityLock] lock-reset recovery write still gated (config.json unreadable) — marker kept for next boot')
+  }
+  return { recovered: confirmed, pending: !confirmed, why: payload.why }
+}
+
+function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeConfig, i18n, log, isQuitting = null, getMarkerDir = null, configVersion = () => { try { return require('./config-store').configWriteVersion() } catch { return null } } }) {
   let lockWin = null
   let lockCrashRebuilds = 0 // rebuild counter since the last successful load; caps the crash→rebuild loop
   // P2 2026-09-19: locking intent is held INDEPENDENTLY of the lock window's liveness. The crash
@@ -70,7 +133,23 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
     lockWin = null
     try {
       // 禁用锁并清掉口令/问题(原子写),verifyLockPassword 对空口令恒真,不会再锁死
-      writeConfig({ enableSecurityLock: false, securityLockPassword: '', securityLockQuestion: '' })
+      // W32-F3: writeConfig returns null when config.json is unreadable and could not be
+      // quarantined (_readFailed write gate) — the old code ignored that and logged success while
+      // the poisoned password stayed on disk, re-locking on every restart. When the write is not
+      // CONFIRMED (null, or the degenerate async Promise path), drop a durable recovery marker so
+      // the next readable boot re-issues the disable write (recoverPendingLockReset).
+      const wrote = writeConfig({ enableSecurityLock: false, securityLockPassword: '', securityLockQuestion: '' })
+      const confirmed = wrote != null && typeof wrote.then !== 'function'
+      if (confirmed) {
+        // stale marker from a previous failed attempt must not outlive a confirmed write
+        clearLockResetMarker(getMarkerDir ? getMarkerDir() : null)
+      } else {
+        const dir = getMarkerDir ? getMarkerDir() : null
+        if (dir) {
+          try { writeLockResetMarker(dir, why) } catch (e) { log.error('[SecurityLock] 恢复标记写入失败(口令清除可能丢失):', e) }
+        }
+        log.error('[SecurityLock] 回退写配置被门禁跳过(config.json 不可读)——已落恢复标记,下次启动补写')
+      }
     } catch (e) { log.error('[SecurityLock] 回退写配置失败', e) }
     try { showMainOrLock() } catch (e) { log.error('[SecurityLock] 回退显示主窗失败', e) }
   }
@@ -285,4 +364,4 @@ function createSecurityLock ({ getMainWindow, showMainOrLock, readConfig, writeC
 // so the escaping contract is directly unit-testable (lockWin build needs Electron).
 const jsStr = s => JSON.stringify(String(s)).replace(/[<>/&\u2028\u2029]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
 
-module.exports = { createSecurityLock, crashSelfHealAction, allowWithinRate, jsStr }
+module.exports = { createSecurityLock, crashSelfHealAction, allowWithinRate, jsStr, lockResetMarkerPath, writeLockResetMarker, readLockResetMarker, clearLockResetMarker, recoverPendingLockReset, LOCK_RESET_MARKER_NAME }
