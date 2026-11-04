@@ -582,11 +582,10 @@ const { createHangFallback, createReentrancyGuard, shouldRunQuitFlush } = requir
 const quitHangFallback = createHangFallback({
   timeoutMs: 3000,
   onExit: () => {
-    // Hang fallback only; normally unreachable. app.exit() bypasses the quit event entirely, so
-    // electron-updater's autoInstallOnAppQuit would silently SKIP a pending update. When an update
-    // is ready, hand off to quitAndInstall() instead; only hard-exit when nothing is pending (or
-    // the handoff is refused, e.g. portable builds where quitAndInstall returns false).
-    try { if (updater.getStatus().status === 'ready' && updater.quitAndInstall()) return } catch { /* fall through to the hard exit */ }
+    // Hang fallback only: hard-exit after the bounded flush. Never install here;
+    // installation requires a separate explicit click in the update UI.
+
+    // Ordinary quit does not authorize installing a downloaded update.
     try { app.exit(0) } catch {}
   }
 })

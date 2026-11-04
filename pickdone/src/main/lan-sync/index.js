@@ -229,6 +229,7 @@ function createLanSyncNode(opts) {
   let lastError = null
   let roundsRunning = 0
   // Device Center bookkeeping (all in-memory, per peer):
+  const peerAppVersions = new Map() // authenticated peer hello app builds (display only; no sync authority)
   const lastSeenBy = new Map() // deviceId -> last mDNS/discovery sighting (ms epoch)
   const lastRoundBy = new Map() // deviceId -> last confirmed round (ms epoch)
   const errorBy = new Map() // deviceId -> last round error message
@@ -243,7 +244,7 @@ function createLanSyncNode(opts) {
   }
   /** Drop every per-peer trace of `id` (LRU eviction + self-dial peer removal share this). */
   function forgetPeer(id) {
-    peers.delete(id); lastSeenBy.delete(id); lastRoundBy.delete(id); errorBy.delete(id)
+    peers.delete(id); peerAppVersions.delete(id); lastSeenBy.delete(id); lastRoundBy.delete(id); errorBy.delete(id)
     const t = retryTimers.get(id)
     if (t) { clearTimeout(t); retryTimers.delete(id) }
     backoffMs.delete(id); onlineNow.delete(id); needSnapshot.delete(id); needSnapshotForce.delete(id)
@@ -534,6 +535,7 @@ function createLanSyncNode(opts) {
         // destroyed socket, so notifyUnpaired "succeeded" against a dead peer.
         try {
           if (peer && peer.deviceId && socket) {
+            if (typeof peer.appVersion === 'string' && peer.appVersion) peerAppVersions.set(peer.deviceId, peer.appVersion)
             liveServerSockets.set(peer.deviceId, socket)
             socket.once('close', () => {
               if (liveServerSockets.get(peer.deviceId) === socket) liveServerSockets.delete(peer.deviceId)
@@ -655,7 +657,7 @@ function createLanSyncNode(opts) {
         name,
         listening: !!(server && server.port),
         port: server ? server.port : null,
-        self: { deviceId, deviceName: name, port: server ? server.port : null },
+        self: { deviceId, deviceName: name, port: server ? server.port : null, appVersion: require('./app-version').ownAppVersion() },
         peers: Array.from(peers.values()).map((p) => {
           const wm = peerProgress.has(p.deviceId) ? peerProgress.get(p.deviceId) : null
           const seen = lastSeenBy.get(p.deviceId)
@@ -679,6 +681,7 @@ function createLanSyncNode(opts) {
             // Round-2 P1: the renderer reads p.deviceName — the raw peer record only carries
             // `name`, so Device Center showed raw UUIDs. Carry both.
             deviceName: p.name,
+            appVersion: peerAppVersions.get(p.deviceId) || null,
             online: (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lr && now - lr < ONLINE_WINDOW_MS),
             lastRoundAt: lr || null,
             lastError: errorBy.get(p.deviceId) || null,

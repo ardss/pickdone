@@ -39,12 +39,14 @@ export default {
     upToDate: '当前已是最新版本',
     failed: '检查更新失败，请稍后重试',
     devEnv: '开发/便携环境不支持应用内更新，请从 GitHub Releases 下载',
-    readyToast: '新版本已下载完成，退出拾事时将自动完成更新',
+    readyToast: '新版本已下载。你可以现在安装，也可以稍后再安装',
     readyBadge: '新版本待更新',
+    viewUpdate: '查看并选择更新',
+    feedMissing: '当前测试版本尚未在更新频道发布。请等待正式发布，不必重复检查。',
     available: '发现新版本',
-    downloadNow: '立即下载',
-    autoDownload: '自动下载更新',
-    openReleases: '打开下载页',
+    downloadNow: '下载更新',
+    autoDownload: '后台自动下载（安装仍需确认）',
+    openReleases: '打开已发布版本',
     switchedToEn: 'Language switched to English'
   }
 }

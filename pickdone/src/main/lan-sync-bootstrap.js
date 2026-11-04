@@ -653,7 +653,7 @@ function getStatusPayload () {
     return {
       ...s, listening: false, port: null, peers: [], recent: [], security: [], discovered: [],
       lastRoundAt: null, lastError: null, pendingPair, flushQuarantine, dbHealthy,
-      self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null },
+      self: { deviceId: s.deviceId, deviceName: s.deviceName, port: null, appVersion: require('./lan-sync/app-version').ownAppVersion() },
     }
   }
   const st = state.node.getStatus()

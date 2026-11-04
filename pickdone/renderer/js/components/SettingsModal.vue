@@ -264,7 +264,7 @@
 
           <!-- LAN sync tab (P3a 2026-09-16): v-if keeps its DOM out of the default view (visual
                baseline gate); it also participates in cross-tab search while a query is active -->
-          <settings-sync-tab v-if="tab==='sync' || searching" v-show="searching || tab==='sync'"/>
+          <settings-sync-tab v-if="tab==='sync' || searching" v-show="searching || tab==='sync'" @open-updates="tab='about'"/>
           <settings-capture-tab v-show="searching || tab==='capture'"/>
           <!-- Data management tab (child component); the DOM order matches the tab order: tomato → sync → data → about -->
           <settings-data-tab v-show="searching || tab==='data'"/>
@@ -278,7 +278,7 @@
                   <button class="mini" v-if="updActive" :disabled="updStatus === 'checking' || updStatus === 'downloading'" @click="checkUpdate">{{ $t('update.checkNow') }}</button>
                   <span v-if="updStatus === 'downloading'" class="upd-hint">{{ $t('update.downloading') }} {{ updPercent }}%</span>
                   <span v-else-if="updStatus === 'available'" class="upd-hint">{{ $t('update.available') }} v{{ updNewVersion }}</span>
-                  <span v-else-if="updStatus === 'error'" class="upd-hint">{{ $t('update.failedReason', { msg: String((updInfo && updInfo.message) || '').slice(0, 120) }) }}</span>
+                  <span v-else-if="updStatus === 'error'" class="upd-hint">{{ updInfo && updInfo._feedMissing ? $t('update.feedMissing') : $t('update.failedReason', { msg: String((updInfo && updInfo.message) || '').slice(0, 120) }) }}</span>
                   <button v-if="updStatus === 'available'" class="mini" @click="downloadNow">{{ $t('update.downloadNow') }}</button>
                   <button v-else-if="updStatus === 'ready'" class="primary mini-lg" @click="restartToUpdate">{{ $t('update.restartNow') }}</button>
                   <button class="mini" v-if="!updActive" @click="openReleases">{{ $t('update.openReleases') }}</button>
@@ -472,7 +472,7 @@ export default {
     },
     applyUpdStatus (r) {
       this.updStatus = r.status
-      this.updInfo = (r && r.info) || null
+      this.updInfo = r && r.lastCheckError && r.lastCheckError.kind === 'FEED_MISSING' ? { _feedMissing: true } : ((r && r.info) || null)
       if (r.status === 'checking') this.updPercent = 0
       if (r.info && r.info.percent != null) this.updPercent = r.info.percent
       if (r.info && r.info.version) this.updNewVersion = r.info.version
@@ -487,7 +487,7 @@ export default {
         if (r) this.applyUpdStatus(r)
         if (r && r.active === false) this.$message.info(this.$t('update.devEnv'))
         if (r && r.status === 'uptodate') this.$message.success(this.$t('update.upToDate'))
-        if (r && r.status === 'error') this.$message.error(this.$t('update.failedReason', { msg: String((r.info && r.info.message) || '').slice(0, 120) }))
+        if (r && r.status === 'error') r.lastCheckError && r.lastCheckError.kind === 'FEED_MISSING' ? this.$message.info(this.$t('update.feedMissing')) : this.$message.error(this.$t('update.failedReason', { msg: String((r.info && r.info.message) || '').slice(0, 120) }))
         // [D15-A15] a REJECTED check in a packaged build is a real failure (network down, update
         // server unreachable, IPC error) — it used to be swallowed as a benign "dev environment"
         // notice. Only the resolved `active === false` reply means "no updater in this build";
@@ -594,7 +594,7 @@ export default {
     if (target) this.$store.commit('ui/consumeSettingsTargetTab')
     this.bindMaskOnce()
     this.loadUpdStatus()
-    if (window.todoAPI.onUpdaterEvent) this._updUn = window.todoAPI.onUpdaterEvent(d => this.applyUpdStatus({ status: d.status, info: d.info }))
+    if (window.todoAPI.onUpdaterEvent) this._updUn = window.todoAPI.onUpdaterEvent(d => this.applyUpdStatus(d))
   },
 
 }

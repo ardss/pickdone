@@ -150,7 +150,7 @@ export default {
     updateReady: false
   }),
   mutations: {
-    setUpdateState (s, d) { s.updateStatus = (d && d.status) || 'idle'; s.updateReady = s.updateStatus === 'ready' },
+    setUpdateState (s, d) { s.updateStatus = (d && d.status) || 'idle'; s.updateReady = s.updateStatus === 'ready' || s.updateStatus === 'available' },
     setHoverTask (s, id) { s.hoverTaskId = id || '' },
     openEdit (s, todo) {
       if (!todo) return

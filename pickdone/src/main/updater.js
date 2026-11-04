@@ -145,7 +145,7 @@ function init (mainWin) {
   // points (tray quit in index.js, X-close quit chain, and the "restart to update" IPC in
   // handlers/system.js which now asks the same confirm). No second gate here: this path cannot
   // run without the user having already confirmed the quit.
-  autoUpdater.autoInstallOnAppQuit = true // after download, a normal user quit silently upgrades
+  autoUpdater.autoInstallOnAppQuit = false // an update installs only after explicit Restart to Update; an ordinary quit never upgrades silently
   // P1-4 (2026-09-19): electron-updater derives the feed FILE from the channel — a beta app version
   // implies channel `beta` and fetches `beta.yml`, which electron-builder never publishes for this
   // project (it only emits `latest.yml`). Pinning channel='latest' fixed that 404 but introduced a
