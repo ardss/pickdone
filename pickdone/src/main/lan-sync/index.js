@@ -55,9 +55,16 @@ const MAX_SNAPSHOT_CHUNKS = 512
 // Peer-bookkeeping ceiling (round-3 review): mDNS/UDP floods must not grow the peer table,
 // lastSeen map, or Device Center state without limit. LRU-expelled beyond this.
 const MAX_PEERS = 64
-// Device Center: a peer counts as "online" while mDNS saw it (or its last round succeeded)
-// within this window; a 30s sweep flips stale peers offline and emits peer-offline.
-const ONLINE_WINDOW_MS = 90 * 1000
+// LAN sync performs a periodic round every 5 minutes (lan-sync-bootstrap.js).
+// The old 90-second UI liveness window falsely declared a healthy peer "offline"
+// between rounds when multicast discovery was unavailable. Allow one full
+// periodic interval plus 60 seconds of scheduling/network jitter. This is
+// recent authenticated reachability, not a claim of a permanently open socket.
+const ONLINE_WINDOW_MS = 6 * 60 * 1000
+function recentlyReachable (now, seen, lastRound, windowMs = ONLINE_WINDOW_MS) {
+  const fresh = t => Number.isFinite(t) && t > 0 && now >= t && now - t < windowMs
+  return fresh(seen) || fresh(lastRound)
+}
 const SWEEP_INTERVAL_MS = 30 * 1000
 // In-memory rings surfaced by getStatus(): recent sync activity (last 50) and security
 // events (pair throttling / auth rejections, last 20).
@@ -354,10 +361,7 @@ function createLanSyncNode(opts) {
   })
 
   function computeOnline(id) {
-    const now = Date.now()
-    const seen = lastSeenBy.get(id)
-    const lastRound = lastRoundBy.get(id)
-    return (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lastRound && now - lastRound < ONLINE_WINDOW_MS)
+    return recentlyReachable(Date.now(), lastSeenBy.get(id), lastRoundBy.get(id))
   }
 
   /** Emit peer-online / peer-offline on offline<->online transitions (sweep + discovery driven). */
@@ -682,7 +686,7 @@ function createLanSyncNode(opts) {
             // `name`, so Device Center showed raw UUIDs. Carry both.
             deviceName: p.name,
             appVersion: peerAppVersions.get(p.deviceId) || null,
-            online: (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lr && now - lr < ONLINE_WINDOW_MS),
+            online: recentlyReachable(now, seen, lr),
             lastRoundAt: lr || null,
             lastError: errorBy.get(p.deviceId) || null,
             peerState,
@@ -745,4 +749,4 @@ function adoptLiveSocket (map, deviceId, socket) {
   return true
 }
 
-module.exports = { createLanSyncNode, adoptLiveSocket, pickEvictPeerId, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }
+module.exports = { createLanSyncNode, adoptLiveSocket, pickEvictPeerId, recentlyReachable, ONLINE_WINDOW_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }
