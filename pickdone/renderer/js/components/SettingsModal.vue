@@ -294,7 +294,7 @@
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span><!-- W31 P1: build fingerprint (version+SHA+channel), same string as the diagnostic payload --><div><span class="tip">{{ buildFingerprint }}</span></div></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.syncSurveyLabel') }}</span>
                 <div class="form-item__control">
-                  <button class="mini" @click="openSyncSurvey">{{ $t('statsE.SettingsModal.syncSurveyBtn') }}</button>
+                  <button class="mini" @click="openSyncSettings">{{ $t('statsE.SettingsModal.syncManageBtn') }}</button>
                   <div><span class="tip">{{ $t('statsE.SettingsModal.syncSurveyTip') }}</span></div>
                 </div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutSiteLabel') }}</span>
@@ -508,9 +508,7 @@ export default {
     openReleases () {
       if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://github.com/ardss/pickdone/releases/latest')
     },
-    openSyncSurvey () {
-      if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://github.com/ardss/pickdone/discussions/38')
-    },
+    openSyncSettings () { this.clearSearch(); this.tab = 'sync' },
     openOfficialSite () {
       if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://pickdone.app')
     },
