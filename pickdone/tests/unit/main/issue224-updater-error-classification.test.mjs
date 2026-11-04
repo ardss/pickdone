@@ -86,10 +86,10 @@ const transient = () => {
   return e
 }
 
-test('classifyUpdateError: 404/ENOTFOUND/no-published-versions are FEED_MISSING; network jitter is TRANSIENT', () => {
+test('classifyUpdateError: missing release is FEED_MISSING; DNS/proxy connectivity is TRANSIENT', () => {
   assert.equal(updater.classifyUpdateError(feed404()), 'FEED_MISSING')
   const dns = new Error('getaddrinfo ENOTFOUND github.com'); dns.code = 'ENOTFOUND'
-  assert.equal(updater.classifyUpdateError(dns), 'FEED_MISSING')
+  assert.equal(updater.classifyUpdateError(dns), 'TRANSIENT')
   assert.equal(updater.classifyUpdateError(new Error('No published versions on GitHub')), 'FEED_MISSING')
   assert.equal(updater.classifyUpdateError(transient()), 'TRANSIENT')
   assert.equal(updater.classifyUpdateError(new Error('certificate has expired')), 'TRANSIENT')
@@ -154,4 +154,16 @@ test("fixes 2+3: check()-path 404 records lastCheckError {kind,message,at}; getS
   const ok = await updater.check()
   assert.equal(ok.status, 'uptodate')
   assert.equal(updater.getStatus().lastCheckError, null, 'a successful check clears lastCheckError')
+})
+
+test('direct 404 without updater error event sends one actionable failure notice, not zero or a storm', async () => {
+  emitErrorOnReject = false
+  checkBehavior = async () => { throw feed404() }
+  const before = fakeWin.webContents.sends.length
+  const first = await updater.check()
+  assert.equal(first.lastCheckError.kind, 'FEED_MISSING')
+  assert.equal(fakeWin.webContents.sends.length - before, 1, 'the first direct failure must reach the renderer')
+  const second = await updater.check()
+  assert.equal(second.lastCheckError.kind, 'FEED_MISSING')
+  assert.equal(fakeWin.webContents.sends.length - before, 1, 'identical missing feed should not repeat notices')
 })

@@ -2,7 +2,7 @@
  *  The feed is provided by app-update.yml generated at electron-builder package time (publish: github draft);
  *  dev builds / portable versions have no app-update.yml, isUpdaterActive()=false, and all entry points degrade safely.
  *  Process convention: CI builds on tag → GitHub Draft Release → manually add changelog then Publish →
- *  installed users get a silent check at startup, background download, and auto-install on quit (or manual "restart to update" from settings).
+ *  installed users get a silent check at startup and optional background download; installation requires an explicit "restart to update" action.
  *
  *  2026-09-10 P1 — early exit-flush on 'update-downloaded' (see flushOnceOnReady below): the NSIS
  *  installer's customInit taskkill /F-kills any running instance, so once the installer is spawned the
@@ -30,7 +30,7 @@ const state = { status: 'idle', info: null, lastCheckError: null } // idle|check
 // whose own checkForUpdates rejection re-fired the autoUpdater 'error' event, which armed ANOTHER
 // backoff — an unbounded timer chain (main.log: a 404 on /releases/download/v0.4.0-beta.24/
 // latest.yml was re-requested every 30s for minutes). Two bounds now apply:
-//   * FEED_MISSING-class failures ("the resource is not there": HTTP 404, DNS ENOTFOUND, no
+//   * FEED_MISSING-class failures ("the resource is not published": HTTP 404, no
 //     published GitHub versions) are NEVER retried by the backoff — the next periodic/manual
 //     check cycle is the retry, at its natural cadence.
 //   * TRANSIENT failures (network/proxy jitter) keep the backoff retry but capped at
@@ -41,12 +41,13 @@ let _errorRetries = 0 // backoff retries spent in the current wake (reset by eac
 // Issue #224 fix 2 (P0 feed consistency): classify update failures so a missing feed/release is
 // distinguishable from a transient network fault. electron-updater surfaces the beta.24 case as an
 // HttpError (statusCode 404, message mentions the yml asset / HTTP code), DNS outage as
-// code ENOTFOUND, and the channel-mismatch case as "No published versions on GitHub".
+// DNS ENOTFOUND is transient; the channel-mismatch case says "No published versions on GitHub".
 function classifyUpdateError (e) {
   const msg = String((e && e.message) || e)
   const code = (e && e.statusCode) || (e && e.code) || ''
-  if (code === 404 || code === 'ENOTFOUND' || /\b404\b/.test(msg) || /ENOTFOUND/i.test(msg) ||
-    /no published versions/i.test(msg)) return 'FEED_MISSING'
+  if (code === 404 || /\b404\b/.test(msg) || /no published versions/i.test(msg)) return 'FEED_MISSING'
+  // DNS/proxy outages do not prove that release assets are missing. Retry them
+  // only through the existing bounded transient budget and show network failure.
   return 'TRANSIENT'
 }
 
@@ -233,7 +234,7 @@ function init (mainWin) {
   // Issue #224 rework (P0): the old "only one retry" claim was false in practice — electron-updater
   // ALSO emits the 'error' event for a checkForUpdates rejection, so the retry's own failure re-armed
   // the backoff forever (a 404 on a missing latest.yml was re-requested every 30s; main.log 02:02-02:04).
-  // Now: FEED_MISSING-class failures (404 / ENOTFOUND / no published versions) never arm the backoff —
+  // Now: FEED_MISSING-class failures (404 / no published versions) never arm the backoff —
   // the next periodic/manual check is the retry; TRANSIENT failures keep the backoff but capped at
   // MAX_ERROR_RETRIES per wake. During the retry window, a new error overwrites the state directly
   // without queuing.
@@ -303,14 +304,14 @@ async function runCheck () {
       if (state.status !== 'ready' && !_downloading) {
         const message = String(e && e.message || e).slice(0, 200)
         const kind = classifyUpdateError(e)
+        const firstSeen = !(state.lastCheckError &&
+          state.lastCheckError.kind === kind && state.lastCheckError.message === message)
         state.status = 'error'; state.info = { message }
-        // #224 fixes 2+3: a check()-path failure (a manual check outside the autoUpdater 'error'
-        // event) carries the same classified failure so "no latest.yml for this tag" is readable
-        // from state instead of looking like a generic network failure.
+        // A direct rejected checkForUpdates() can arrive WITHOUT an updater
+        // 'error' event. Compare the previous error BEFORE replacing it so
+        // the first FEED_MISSING remains visible without repeated toasts.
         state.lastCheckError = { kind, message, at: Date.now() }
-        // #224 fix 2: same no-toast-storm rule as markUpdateError — a repeated identical
-        // FEED_MISSING failure is recorded but not re-broadcast (first occurrence only).
-        if (kind !== 'FEED_MISSING' || !(state.lastCheckError && state.lastCheckError.kind === kind && state.lastCheckError.message === message)) broadcast()
+        if (kind !== 'FEED_MISSING' || firstSeen) broadcast()
       }
       return { active: true, ...state }
     } finally { _inFlight = null }
