@@ -215,7 +215,7 @@ export default {
       if (!this.epForm.goal || this.saving || !this.taskId) return
       this.saving = true
       this.epSaveState = ''
-      const payload = { taskId: String(this.taskId), startedAt: Date.now(), note: this.noteFromForm() }
+      const payload: any = { taskId: String(this.taskId), startedAt: Date.now(), note: this.noteFromForm() }
       if (this.editingId) {
         const old = this.episodes.find(e => e.episodeId === this.editingId)
         payload.id = this.editingId
