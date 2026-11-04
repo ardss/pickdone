@@ -29,7 +29,7 @@ function request (port, method, path, headers = {}) {
 }
 
 test('CORS: every response carries Access-Control-Allow-Origin: *', async () => {
-  const srv = startCaptureServer({ port: 7789, isEnabled: () => true, getSecret: () => 'k'.repeat(48) })
+  const srv = startCaptureServer({ port: 0, isEnabled: () => true, getSecret: () => 'k'.repeat(48) })
   after(() => srv.close())
   await srv.ready
   const denied = await request(srv.actualPort, 'POST', '/capture', { 'content-type': 'application/json' })

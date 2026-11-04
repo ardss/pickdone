@@ -26,6 +26,7 @@
  * Skips (fail-LOUD inside the gate, per the journey doctrine) only when Chrome/Edge is not
  * installed on the host. Run: cd pickdone && node --test tests/e2e-journeys/j-pd20-extension.test.mjs
  */
+delete process.env.TODO_SHARED_CDP // the restart leg must own its instance lifecycle (the shared-pool runner sets it; ignored on purpose)
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -132,7 +133,7 @@ const EXT_CAPTURE = url => `new Promise((resolve, reject) => { (async () => {
   const { createQueue } = await import(chrome.runtime.getURL('shared/queue.js'))
   const { createDeliver } = await import(chrome.runtime.getURL('shared/deliver.js'))
   const deliver = createDeliver({
-    getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:7789/capture',
+    getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + capturePort + '/capture',
     getKey: async () => (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || ''
   })
   const q = createQueue({ storage: chrome.storage.local, alarms: null, deliver })
@@ -162,31 +163,23 @@ const queueState = async () => {
   if (r.exceptionDetails) throw new Error('queue read failed: ' + r.exceptionDetails.text)
   return JSON.parse(r.result?.result?.value ?? '[]')
 }
-// The capture door binds 7789 and steps +1 only on EADDRINUSE — but the extension's default
-// endpoint is FIXED at 7789, so a stale listener (a crashed earlier run's app) would silently
-// misroute every capture. Only a DEBUG-PORT electron is ours (the user's production PickDone
-// never runs with --remote-debugging-port) — kill exactly that one, refuse anything else.
-const freeCapturePort = async () => {
-  const occupied = await new Promise(resolve => {
-    const srv = http.createServer()
-    srv.once('error', () => resolve(true))
-    srv.once('listening', () => srv.close(() => resolve(false)))
-    srv.listen(7789, '127.0.0.1')
-  })
-  if (!occupied) return
-  const { execSync } = require_('node:child_process')
-  let pid = null
-  try {
-    const out = execSync('netstat -ano -p tcp', { encoding: 'utf8' })
-    const hit = out.split('\n').find(l => l.includes(':7789') && l.includes('LISTENING'))
-    pid = hit && hit.trim().split(/\s+/).pop()
-  } catch { /* netstat shape drift */ }
-  assert.ok(pid && /^\d+$/.test(pid), 'port 7789 is held but no owning PID was found')
-  let cmdline = ''
-  try { cmdline = execSync(`powershell -NoProfile -Command "(Get-CimInstance Win32_Process -Filter 'ProcessId=${pid}').CommandLine"`, { encoding: 'utf8' }) } catch {}
-  assert.ok(cmdline.includes('remote-debugging-port'), `port 7789 is held by PID ${pid} WITHOUT a debug port (not ours — refusing to kill; free the port and rerun)`)
-  execSync(`taskkill /PID ${pid} /T /F`)
-  await sleep(1000)
+// The capture door binds the default 7789 and steps +1 on EADDRINUSE — the app now LOGS its
+// actual bound port ('[Init] capture endpoint listening on 127.0.0.1:<port>'), so the journey
+// ADAPTS to the real port instead of guessing (or killing — the old kill-by-heuristic shot
+// the shared-pool instance dead when it ran inside the pool: that instance is also a
+// debug-port electron holding 7789). All endpoints in this journey use capturePort().
+let capturePort = 7789 // fallback until the log line is seen
+const resolveCapturePort = async () => {
+  const logFile = app.ctx.logFile
+  assert.ok(logFile && fs.existsSync(logFile), 'the app log file is missing (cannot resolve the capture port)')
+  // the door binds asynchronously at boot — poll the log until the line lands (fail loud)
+  for (let i = 0; i < 20; i++) {
+    const log = fs.readFileSync(logFile, 'utf8')
+    const m = log.match(/\[Init\] capture endpoint listening on 127\.0\.0\.1:(\d+)/)
+    if (m) { capturePort = Number(m[1]); return }
+    await sleep(500)
+  }
+  assert.fail('the app log never named the capture endpoint port (capture door did not bind)')
 }
 const section = sel => `.edit-panel .ep-work-section ${sel}`
 const appUntil = async (expr, tries = 12, gap = 500) => {
@@ -236,11 +229,17 @@ function startPageServer () {
 
 test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', { skip: !CHROME ? 'no Chrome/Edge on host' : false }, async () => {
   app = {}
-  await freeCapturePort()
   app.ctx = await spawnApp({ name: 'j-pd20-extension' })
+  // spawnApp appends to a persistent per-name log file — stale runs leave old
+  // 'listening on 127.0.0.1:<port>' lines that resolveCapturePort would match FIRST,
+  // pointing the journey at a dead port (in-pool that port is the shared instance's
+  // disabled door → probe 503). Truncate so the log only holds THIS run's lines.
+  // Safe: the child's fds are O_APPEND, writes always land at the new end.
+  if (app.ctx.logFile && fs.existsSync(app.ctx.logFile)) fs.writeFileSync(app.ctx.logFile, '')
   userDataDir = app.ctx.userDataDir
   await connectCdp(app.ctx)
   assert.ok(await appUntil(`document.querySelectorAll('.sn-nav-item').length > 0`, 40, 1000), 'app did not boot')
+  await resolveCapturePort() // the door binds async at boot; the log line names the ACTUAL port
 
   // endpoint enable + secret: machine-local meta rows written through the SAME db the app
   // reads per-request (the settings tab writes these exact rows when the user flips the switch)
@@ -255,7 +254,7 @@ test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', 
   // 503 = not enabled, 401 = key mismatch, ERR = wrong port (all loud failures)
   await sleep(1500)
   const probeStatus = await new Promise(resolve => {
-    const req = http.request({ host: '127.0.0.1', port: 7789, path: '/capture', method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PickDone-Key': secret } }, r => { r.resume(); r.on('end', () => resolve(r.statusCode)) })
+    const req = http.request({ host: '127.0.0.1', port: capturePort, path: '/capture', method: 'POST', headers: { 'Content-Type': 'application/json', 'X-PickDone-Key': secret } }, r => { r.resume(); r.on('end', () => resolve(r.statusCode)) })
     req.on('error', e => resolve('ERR ' + e.code))
     req.end(JSON.stringify({}))
   })
@@ -307,10 +306,10 @@ test('E2 real config UI: popup.html tab types endpoint + access key through the 
     el.dispatchEvent(new Event('change', { bubbles: true }))
     return 'ok'
   })()`
-  assert.equal(await chromeEvalRaw(setField('endpoint', 'http://127.0.0.1:7789/capture'), 'popup'), 'ok', 'endpoint input missing in popup')
+  assert.equal(await chromeEvalRaw(setField('endpoint', 'http://127.0.0.1:' + capturePort + '/capture'), 'popup'), 'ok', 'endpoint input missing in popup')
   assert.equal(await chromeEvalRaw(setField('apiKey', secret), 'popup'), 'ok', 'apiKey input missing in popup')
   const stored = await chromeEval(`(async () => { const g = await chrome.storage.local.get(['pdEndpoint', 'pdCaptureKey']); return { ep: g.pdEndpoint, keySet: !!g.pdCaptureKey } })()`)
-  assert.equal(stored.ep, 'http://127.0.0.1:7789/capture', 'the endpoint did not persist through the popup change chain')
+  assert.equal(stored.ep, 'http://127.0.0.1:' + capturePort + '/capture', 'the endpoint did not persist through the popup change chain')
   assert.equal(stored.keySet, true, 'the access key did not persist through the popup change chain')
   assert.ok(!stored.ep.includes(secret), 'the key must never ride in the endpoint field')
 })
@@ -401,11 +400,12 @@ test('E6 offline queue + retry: app down → capture queues; app restart → pop
   const offline = qafter.find(e => e.canonicalUri.includes('offline=1'))
   assert.ok(offline, 'the offline capture vanished from the persistent queue')
   assert.equal(offline.status, 'queued', 'the offline capture must stay queued (never dropped), got ' + offline.status)
-  // app BACK: restart on the SAME userDataDir (capture server meta survives)
-  await freeCapturePort()
+  // app BACK: restart on the SAME userDataDir (capture server meta survives; the restarted
+  // door may bind a DIFFERENT port — re-resolve before the retry flush)
   app.ctx = await spawnApp({ name: 'j-pd20-extension-restart', userDataDir })
   await connectCdp(app.ctx)
   assert.ok(await appUntil(`document.querySelectorAll('.sn-nav-item').length > 0`, 40, 1000), 'app did not come back')
+  await resolveCapturePort()
   // the user's retry: the queue's 1-minute backoff has elapsed by design — simulate exactly
   // that (reset the entry's backoff stamp), then run the REAL flush chain over the persisted
   // queue (same deliver wiring as sw.js)
@@ -416,7 +416,7 @@ test('E6 offline queue + retry: app down → capture queues; app restart → pop
       const { createQueue } = await import(chrome.runtime.getURL('shared/queue.js'))
       const { createDeliver } = await import(chrome.runtime.getURL('shared/deliver.js'))
       const deliver = createDeliver({
-        getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:7789/capture',
+        getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + capturePort + '/capture',
         getKey: async () => (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || ''
       })
       const q = createQueue({ storage: chrome.storage.local, alarms: null, deliver })
