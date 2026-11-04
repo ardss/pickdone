@@ -92,7 +92,16 @@ module.exports = function todoHandlers (ctx) {
     'syncPairRespond', 'syncPairRequest', 'syncUnpairPeer', 'syncConflictBackupsList', 'syncConflictBackupRestore',
     // syncSetPeerAlias (round-2 P1 2026-09-21): machine-local per-peer display alias for Device Center —
     // writes a sync.peerAlias.<deviceId> settings row, main-window-only like the other data-mutating sync ops
-    'syncSetPeerAlias'
+    'syncSetPeerAlias',
+    // queryEpisodesByTask (pd20 S3): read-only episode read for the EditPanel 'continue work'
+    // section (impl db-episode-ops.cjs; read-only → any window, no manifest row — tomatoGetById class)
+    'queryEpisodesByTask',
+    // querySourcesByTask (pd20 handoff copy): read-only source-ref read feeding the Copy-Handoff
+    // button's buildHandoff(sources) input (impl db-episode-ops.cjs; same read-only class as above)
+    'querySourcesByTask',
+    // pd20 (2026-11-03): the EditPanelWork 'continue work' forms write episodes + source links
+    // through the SAME bus door — the six domain writes are non-internal manifest rows now.
+    'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —

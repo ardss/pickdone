@@ -35,12 +35,18 @@ const manifest = require(path.join(root, 'src/main/command-manifest'))
 // log-free; only the module load path pulls the logger in).
 const Module = require('module')
 const origLoad = Module._load
-Module._load = function (request, parent, isMain) {
-  if (request === 'electron-log') {
-    const stub = { info () {}, warn () {}, error () {}, scope () { return stub } }
-    return stub
+// W31 fix (2026-11-01): install the stub ONLY when this gate runs as the main entry. The only
+// consumer of the stub is the sync-apply require inside the `require.main === module` block
+// below; installing it unconditionally leaked into every in-process `require()` of this gate
+// (three unit suites ran with a global electron-log stub they never asked for).
+if (require.main === module) {
+  Module._load = function (request, parent, isMain) {
+    if (request === 'electron-log') {
+      const stub = { info () {}, warn () {}, error () {}, scope () { return stub } }
+      return stub
+    }
+    return origLoad.apply(this, arguments)
   }
-  return origLoad.apply(this, arguments)
 }
 
 let failed = 0

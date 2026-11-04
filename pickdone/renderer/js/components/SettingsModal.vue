@@ -265,10 +265,9 @@
           <!-- LAN sync tab (P3a 2026-09-16): v-if keeps its DOM out of the default view (visual
                baseline gate); it also participates in cross-tab search while a query is active -->
           <settings-sync-tab v-if="tab==='sync' || searching" v-show="searching || tab==='sync'"/>
-
+          <settings-capture-tab v-show="searching || tab==='capture'"/>
           <!-- Data management tab (child component); the DOM order matches the tab order: tomato → sync → data → about -->
           <settings-data-tab v-show="searching || tab==='data'"/>
-
           <!-- About / feedback (kept last in the DOM to match the visual tab order: ...tomato → data → about) -->
           <div v-show="searching || tab==='about'" class="tab-panel">
             <div class="form">
@@ -292,8 +291,7 @@
                 <div class="form-item__control"><button class="mini" @click="openLogsDir">{{ $t('statsH.SettingsModal.openLogsDir') }}</button></div></div>
             </div>
             <div class="form">
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span>
-                <div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span><!-- W31 P1: build fingerprint (version+SHA+channel), same string as the diagnostic payload --><div><span class="tip">{{ buildFingerprint }}</span></div></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.syncSurveyLabel') }}</span>
                 <div class="form-item__control">
                   <button class="mini" @click="openSyncSurvey">{{ $t('statsE.SettingsModal.syncSurveyBtn') }}</button>
@@ -319,7 +317,7 @@
 /** Settings center -- structure aligned with the reference: full-screen base-modal (modal-container/modal-tablecloth--body)
  *  + el-tabs.setting_tabs tabs in the header + .tab-panel>.form>.form-label+.form-item rows in the body.
  *  All feature bindings are preserved (visual rework only, no functional change). */
-import { appVersion } from '../utils/core.js'
+import { appVersion } from '../utils/core.js'; import { buildFingerprint as buildFingerprintOf, channelFromVersion } from '../../../shared/build-fingerprint.mjs' // W31 P1: same builder as the 'app:build-info' diagnostic payload
 import { CONFIRM_SOUNDS, confirmUrl } from '../utils/mediaRegistry.js'
 import { SETTING_ENUMS } from '../store/settings.js'
 import dialogA11y from '../utils/dialogA11y.js'
@@ -328,17 +326,18 @@ import { SUPPORTED, getLocale, setLocale } from '../i18n/index.js'
 import SettingsShortcutsTab from './settings/SettingsShortcutsTab.vue'
 import SettingsDataTab from './settings/SettingsDataTab.vue'
 import SettingsSyncTab from './settings/SettingsSyncTab.vue'
+import SettingsCaptureTab from './settings/SettingsCaptureTab.vue'
 import { filterSettingsPanels } from './settings/settingsSearch.js'
 
 export default {
   name: 'SettingsModal',
   mixins: [dialogA11y],
-  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab },
+  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab },
   data () {
     let tab0 = 'general'
     try { tab0 = localStorage.getItem('settingsTab') || 'general' } catch (e) { /* privacy mode etc. */ }
     return {
-      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
+      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'capture', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
       searchQ: '',
       searching: false,
       searchEmpty: false,
@@ -360,6 +359,7 @@ export default {
     /** Note: the computed name collides with the appVersion function in utils/core.js -- {{ appVersion }} in the template is a string;
      *  writing appVersion() would recursively call itself and report "appVersion is not a function" (this once broke the settings modal render) */
     appVersion () { return appVersion() },
+    buildFingerprint () { /* W31 P1: version+SHA+channel; __APP_BUILD_SHA__/__APP_BUILD_CHANNEL__ are vite-define injected (vite.config.mjs) — undeclared outside vite, try/catch degrades to 'unknown' */ let sha = 'unknown'; let channel = channelFromVersion(appVersion()); try { sha = __APP_BUILD_SHA__ } catch (e) { /* plain node */ } try { channel = __APP_BUILD_CHANNEL__ } catch (e) { /* plain node */ } return buildFingerprintOf({ version: appVersion(), gitSha: sha, channel }) },
     confirmSoundOptions () { return CONFIRM_SOUNDS },
     /** Settings enum options: derived from the SETTING_ENUMS schema in store/settings.js (do not hardcode options in the template) */
     enumOptions () { return key => SETTING_ENUMS[key] || [] },
@@ -370,7 +370,7 @@ export default {
       const u = this.$store.state.auth.user || {}
       return u.userNameDefault ? this.$t('statsA.core.offlineUser') : (u.userName || '')
     },
-    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
+    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['capture', this.$t('statsH.SettingsModal.tabCapture')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
     localDescLines: {
       get () { return this.st.todoDescriptionDisplayLineNumber },
       set (v) { this.set({ todoDescriptionDisplayLineNumber: v }) }

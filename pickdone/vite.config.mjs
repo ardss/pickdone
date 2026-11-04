@@ -7,12 +7,34 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import path from 'node:path'
+import { execSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// W31 P1: build-time fingerprint injection — the About section in the settings modal renders
+// the git SHA + channel alongside the version. The SHA comes from a live git description at
+// build time (never a hardcoded literal); without git it degrades honestly to 'unknown'.
+// Channel derives from the version prerelease suffix (same rule as the updater feed).
+const BUILD_SHA = (() => {
+  try {
+    return String(execSync('git rev-parse --short HEAD', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })).trim() || 'unknown'
+  } catch { return 'unknown' }
+})()
+const BUILD_CHANNEL = (() => {
+  const v = process.env.APP_VERSION || ''
+  if (/-alpha/i.test(v)) return 'alpha'
+  if (/-beta/i.test(v)) return 'beta'
+  return 'stable'
+})()
 
 export default defineConfig({
   root: 'renderer',
   base: '/renderer-dist/',
+  // W31 P1: injected globals consumed by renderer/js/utils/buildInfo.js
+  define: {
+    __APP_BUILD_SHA__: JSON.stringify(BUILD_SHA),
+    __APP_BUILD_CHANNEL__: JSON.stringify(BUILD_CHANNEL)
+  },
   plugins: [
     vue(),
     // 模板里的根绝对静态资源(/assets/...)是 app:// 协议的运行时 URL,保持原样不打包

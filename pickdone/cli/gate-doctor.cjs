@@ -18,6 +18,7 @@
 const fs = require('fs')
 const path = require('path')
 const { execSync, execFileSync } = require('child_process')
+const { gitEnv } = require('./lib-git-env.cjs')
 
 const ROOT = path.join(__dirname, '..')
 const VDIR = path.join(ROOT, 'browser-dev')
@@ -35,7 +36,10 @@ function blessedCheckout () {
   // checkout 路径含中文时 baseline 读取会指到不存在的转义路径（同 check-boot-order W17 /
   // check-file-size W17 / check-test-scope W18 的修法）。
   try {
-    const out = execFileSync('git', ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain'], { cwd: ROOT, encoding: 'utf8' })
+    // W31 fix (2026-11-01): gitEnv() strips GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE — when this
+    // gate runs from a git hook, a leaked GIT_DIR made worktree list resolve the real repo
+    // instead of the cwd tree (same false-green shape as the W18 per-gate fixes).
+    const out = execFileSync('git', ['-c', 'core.quotePath=false', 'worktree', 'list', '--porcelain'], { cwd: ROOT, encoding: 'utf8', env: gitEnv() })
     const first = out.split('\n').find(l => l.startsWith('worktree '))
     return first ? first.slice('worktree '.length).trim() : null
   } catch { return null }

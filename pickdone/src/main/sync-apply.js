@@ -193,6 +193,17 @@ function adjudicateDeleteEditS4 (state, payload) {
 function writeMetaConflictBackup (state, key, value) {
   adjudicate.writeMetaConflictBackup(state, key, value, busWrite)
 }
+// W31 F3 (2026-11-01): the S1 probe below used to run revisionsList PER ENVELOPE ROW (synchronous
+// better-sqlite3 on the main thread — thousands-row relay pulls stalled IPC). Memoized per ingest
+// pass on applyRowInner's pass cache: ≤1 probe per distinct id per pass; a "no head" answer stands
+// for the pass (the LWW fall-through is the conservative path for mid-pass-recorded heads anyway).
+function revHeadExists (state, cache, id) {
+  if (!cache.__revHeads) cache.__revHeads = new Map()
+  const key = String(id)
+  if (!cache.__revHeads.has(key)) cache.__revHeads.set(key, (state.db.call('revisionsList', { entityId: key, limit: 1 }) || []).length > 0)
+  return cache.__revHeads.get(key)
+}
+
 function applyRowInner (state, incoming) {
   if (!incoming || !SYNCABLE_ENTITIES.has(incoming.entity)) return false
   // Defensive: a '*gc*' oplog marker must never surface as an appliable row id (see hydrateRow).
@@ -222,32 +233,18 @@ function applyRowInner (state, incoming) {
     if (isMachineLocalMetaKey(incoming.id) || isSyncBlobMetaKey(incoming.id)) return false
     const localVal = cache.meta(incoming.id)
     if (localVal == null && incoming.deleted) return false
-    // ...deletion already landed locally (or we never had the key): re-landing it would re-log an
-    // oplog pointer and echo between peers forever — deleteMeta only needs to fire on a device
-    // that still held a live value.
-    // meta has no updatedAt column, so the local LWW age is the latest local oplog ts for this
-    // key (cached per-pass oplog scan). No local pointer (legacy pre-oplog row) = age 0: the
-    // incoming row wins once, then the identical-content no-op keeps it from churning.
-    // B13 (daily 2026-09-24, low-危 mitigation): age 0 is only honest for an ABSENT local value
-    // (first landing). For a LIVE key whose oplog pointers were ring-buffer-trimmed, age 0 lets
-    // a stale peer row win LWW against whatever unknown-age value sits here (and, via the
-    // mirrored deleteMeta hydration, even resurrect a deleted key). Age-unknown + live key =
-    // refuse this round: keep the local value, warn. A local edit re-logs a pointer and the key
-    // becomes comparable again; the peer's row re-lands on the next round if still newer.
+    // deleteMeta only fires on a device still holding a live value (re-landing an already-applied
+    // delete would re-log an oplog pointer and echo between peers forever).
+    // Local LWW age = latest local oplog ts for the key (per-pass cached scan; meta has no stamp
+    // column). B13: age 0 is only honest for an ABSENT local value — a LIVE key whose pointers
+    // were ring-trimmed must not let a stale peer row win blind, so an age-unknown live key is
+    // refused unless the inbound stamp is provably newer than the ring's floor (D11 finding 4:
+    // a stamp above metaFloorTs proves the peer's edit postdates our trimmed pointer — accept
+    // with age = floor; at/below the floor stays refused, a local edit re-logs a pointer).
     const tsMap = cache.metaTs()
     if (localVal != null && !tsMap.has(incoming.id) && !isAnnounceMetaKey(incoming.id)) {
-      // tomatoRunAnnounce.* keys are exempt: they are ephemeral per-device status beacons
-      // rewritten via setMeta on every tick and intentionally short-lived — their oplog pointers
-      // trim almost immediately, so "age unknown" is their steady state, not a red flag. Staleness
-      // is meaningless for a beacon, and the announce module dedups identical content itself.
-      // D11 finding 4 (meta snapshot reconciliation): the B13 unconditional refusal made a live
-      // user-data key whose oplog pointers fell out of the ring unsyncable FOREVER (snapshot rows
-      // pass through this same branch). The trimmed pointer still proves a bound: the local write
-      // happened at or before the ring's oldest retained ts (metaFloorTs). An inbound row stamped
-      // NEWER than that floor is provably younger than the local value — accept it (localRow age
-      // = floor, so the LWW comparison and the identical-content no-op stay sound). Only an
-      // inbound stamp at/below the floor stays refused (genuinely ambiguous); a local edit re-logs
-      // a pointer and makes the key comparable again.
+      // tomatoRunAnnounce.* are exempt: ephemeral per-device status beacons whose pointers trim
+      // almost immediately — "age unknown" is their steady state, not a red flag.
       if (stampNum(incoming.updatedAt) <= cache.metaFloorTs()) {
         log.warn('[LanSync] meta local age unknown (oplog pointer trimmed) for live key', incoming.id, '— inbound row refused this round (stamp not provably newer than the trimmed-pointer floor)')
         return false
@@ -335,18 +332,15 @@ function applyRowInner (state, incoming) {
   let winner
   let conflictCopy = null
   // S1 (Sync v2, relay pull path only): `causalCurrent` is stamped by relay-sync-apply when the
-  // revision DAG has ALREADY ruled the envelope the entity's causal current (a descendant of the
-  // local head). The business LWW must not overrule that verdict with a wall-clock stamp — a
-  // slow-clock causal successor beats a fast-clock ancestor. Live-vs-live only: delete-vs-edit
-  // stays with the S4 adjudication surface. LAN sync never stamps the field → byte-identical.
-  // P1 fix (2026-10-11 delivery audit): the ancestry verdict is only meaningful when the local
-  // row HAS a revision head to be a descendant of. A v1-era row that was never revision-recorded
-  // has no head — the sender's "current" pin proves nothing about a concurrent untracked local
-  // line, so the unconditional override let a STALE remote edit silently clobber a NEWER local
-  // edit with no conflict copy and no toast (v1 rows × first relay pull). No local head →
+  // revision DAG has ALREADY ruled the envelope the causal current (a local-head descendant) —
+  // the business LWW must not overrule that verdict with a wall-clock stamp (a slow-clock causal
+  // successor beats a fast-clock ancestor). Live-vs-live only; LAN sync never stamps the field.
+  // P1 fix (2026-10-11 delivery audit): the verdict is only meaningful when the local row HAS a
+  // revision head — a v1-era untracked row has none, and the unconditional override let a STALE
+  // remote edit silently clobber a NEWER local edit (no conflict copy, no toast). No local head →
   // fall through to mergeTodoRows LWW, which keeps the never-silently-dropped conflict copy.
   if (entity === 'todo' && incoming.causalCurrent && localRow && !localRow.deleted && !incoming.deleted &&
-      (state.db.call('revisionsList', { entityId: String(incoming.id), limit: 1 }) || []).length > 0) {
+      revHeadExists(state, cache, incoming.id)) {
     winner = incoming
   } else if (entity === 'tomato') winner = mergeCore.mergeTomatoRows(localRow, incoming).row
   else {
@@ -373,15 +367,14 @@ function applyRowInner (state, incoming) {
       (incoming.deletedAt || 0) <= (localRow.deletedAt || 0)) return false
   // Echo guard (2026-09-26 first-pair incident): the todo localRow above carries NO seq, so
   // compareRecency's seq tiebreak always reads local=0 vs the inbound pointer's seq>0 — an
-  // ECHO of this device's own row (the peer applied it, re-captured it into its oplog, pushed
-  // it back) wins every same-updatedAt tie by construction. Whether that tie-win is harmless
-  // then depends entirely on the echo's content surviving the write roundtrip byte-identically
-  // (it could not: todoToRow re-derived scheduledDay in the writer's timezone). A live row that
-  // is NOT strictly newer than the local live row must never replace it nor spawn a conflict
-  // copy of it — refuse and keep local. Real peer edits (strictly newer stamps) still win on
-  //   updatedAt before any tiebreak; live-vs-tombstone merges are left to the delete-wins rules.
-  //   S1: a causalCurrent envelope is NOT an echo — the revision DAG ruled it the causal
-  //   successor, so the same-stamp refusal does not apply to it.
+  // ECHO of this device's own row wins every same-updatedAt tie by construction, and that
+  // tie-win is only harmless if the content survives the write roundtrip byte-identically
+  // (it could not: todoToRow re-derived scheduledDay in the writer's timezone). A live row
+  // that is NOT strictly newer than the local live row must never replace it nor spawn a
+  // conflict copy of it — refuse and keep local (strictly newer peer edits still win on
+  // updatedAt before any tiebreak; live-vs-tombstone merges stay with the delete-wins rules).
+  // S1: a causalCurrent envelope is NOT an echo — the DAG ruled it the causal successor, so
+  // the same-stamp refusal does not apply to it.
   if (entity === 'todo' && localRow && !localRow.deleted && !incoming.deleted &&
       winner === incoming && stampNum(incoming.updatedAt) <= stampNum(localRow.updatedAt) && !incoming.causalCurrent) {
     log.warn('[LanSync] same-stamp echo on todo', incoming.id, '— local row stands (an echo is never strictly newer)')
@@ -396,13 +389,9 @@ function applyRowInner (state, incoming) {
     // it cannot clobber the winning row; delete-wins keeps it out of the live list.
     //
     // Loop-fix guards (2026-09-18 live incident — recycle bins ballooned one copy per row per
-    // round per machine):
-    //   1. Copies are TERMINAL: a row whose id already carries the `-conflict-` marker never
-    //      spawns another copy — a copy that loses LWW here is simply dropped. Otherwise the
-    //      peer's copy-of-the-copy arrives as an independent row and re-participates forever.
-    //   2. Materialization is IDEMPOTENT: if an equivalent copy of the same base row already
-    //      sits in the recycle bin (same `-conflict-` prefix, same content fingerprint), do
-    //      not mint a second one.
+    // round per machine): 1. copies are TERMINAL (a `-conflict-`-marked id never spawns another
+    // copy — a losing copy is dropped, else copy-of-the-copy re-participates forever);
+    // 2. materialization is IDEMPOTENT (an equivalent copy already binned = no second mint).
     const baseId = String(incoming.id)
     if (baseId.includes('-conflict-')) {
       log.warn('[LanSync] conflict on copy row', baseId, '— dropped (copies are terminal)')
@@ -434,23 +423,13 @@ function applyRowInner (state, incoming) {
       // P1-5: the user-facing toast is driven by the round summary (one per round, see markConflict)
       markConflict(state, 'todo', (conflictCopy.data && conflictCopy.data.taskContent) || baseId, false)
     } else if (entity === 'meta' && conflictCopy && conflictCopy.data) {
-      // P1-5 (2026-09-19 data-safety round): a content-differing LWW loss on a meta key used to
-      // be silently dropped (whole-document KV, no recycle-bin shape). Materialize the loser as
-      // a dated backup key `metaConflictBackup.<key>.<ts36>` (self-healing: capped at the latest
-      // 20 per implementation cap) so the losing value stays recoverable, and include it in the
-      // per-round conflict summary (the existing toast fires via consumeAppliedRound). Announce
-      // keys (tomatoRunAnnounce.*) are ephemeral runtime state — no backup for those. A null
-      // loser value means the key was ABSENT locally (mergeTodoRows fabricates a data=null
-      // localRow) — nothing was lost, no backup.
-      // M5 (2026-09-20): gamification.* keys are per-device COUNTERS/bookkeeping (delta indexes,
-      // streak caches), not user documents — a losing overwrite is routine bookkeeping churn, so
-      // minting metaConflictBackup.* copies (and toasting about it) for them was pure noise. The
-      // whole namespace is exempt from BOTH backup and conflict toast; it is already invisible to
-      // the backup-recovery list because the backups are simply never written.
-      // R7 P1-3: a null loser value means the key was ABSENT locally (mergeTodoRows fabricates a
-      // data=null localRow on first application) — nothing was lost, so no backup AND no toast:
-      // the fabricated null always content-differs, and the old unconditional markConflict burned
-      // the per-round conflict toast on every brand-new meta key, training users to ignore it.
+      // P1-5 (2026-09-19): a content-differing LWW loss on a meta key used to be silently
+      // dropped (whole-document KV, no recycle-bin shape) — materialize the loser as a dated
+      // `metaConflictBackup.<key>.<ts36>` backup + per-round conflict summary. Exemptions:
+      // M5 — gamification.* are per-device counters/bookkeeping, a losing overwrite is routine
+      // churn (no backup, no toast); announce keys are ephemeral runtime state (no backup);
+      // R7 P1-3 — a null loser value means the key was ABSENT locally (mergeTodoRows fabricates
+      // data=null on first application), nothing was lost — no backup AND no toast.
       const bk = String(incoming.id)
       const firstLanding = conflictCopy.data.value == null
       const isBookkeeping = bk.startsWith('gamification')
@@ -459,14 +438,9 @@ function applyRowInner (state, incoming) {
       }
       if (!isBookkeeping && !firstLanding) markConflict(state, 'meta', incoming.id, true)
     } else {
-      // B16 (daily 2026-09-24): merge.mjs contract says the loser is NEVER silently dropped, but
-      // for plan/filter/category/setting the loser used to vanish behind a warn-only log (only
-      // todos got a recycle-bin copy and meta got a backup). Reuse the metaConflictBackup
-      // mechanism: serialize the loser's data under a machine-local backup key
-      // `metaConflictBackup.<entity>:<id>.<ts36>` (the META_CONFLICT_BACKUP_PREFIX filter in
-      // isMachineLocalMetaKey keeps it local for ANY key, and it shows up in the existing
-      // syncConflictBackupsList recovery surface). Restoration of non-meta entities to their
-      // native tables is a separate concern — the goal here is that the losing bytes survive.
+      // B16 (2026-09-24): the loser is NEVER silently dropped — for plan/filter/category/setting
+      // (no recycle-bin shape) serialize it under a machine-local
+      // `metaConflictBackup.<entity>:<id>.<ts36>` key (recovery surface: syncConflictBackupsList).
       if (conflictCopy && conflictCopy.data !== undefined && conflictCopy.data !== null) {
         writeMetaConflictBackup(state, `${entity}:${incoming.id}`, conflictCopy.data)
       }
@@ -504,20 +478,14 @@ function applyRowInner (state, incoming) {
       // blobs like the local purge routes (renderer scrubMilestonesForPurged, cli purgeBin) —
       // a peer purge otherwise leaves a phantom taskId and flips an UNMET milestone to done.
       try { scrubMilestoneBlobsFor(state, [incoming.id]) } catch { /* best-effort, never block the delete */ }
-      // W7 root-cause fix (2026-10-23): the old bare shape `{taskId, delete:1, deletedAt,
-      // updateTime, syncAuthor}` went through upsertMany → todoToRow, which normalizes EVERY
-      // absent field to its zero value, and db.js stmts.upsert is a FULL-COLUMN
-      // `SET col = excluded.col` overwrite — so landing a peer's deletion WIPED the local row:
-      // the recycle bin lost the deleted task's content (it could no longer be restored) and
-      // recurGroupId was nulled (bypassing restore's twin-record guard). A bare tombstone must
-      // not rebuild the row — it may only flip the tombstone columns. Root fix here: base the
-      // write on the freshly-read LOCAL row (cache.todo → getAll → rowToTodo shape, which
-      // todoToRow maps back column-for-column, recurGroupId via repeatId) and override only
-      // deleted/deletedAt/updateTime/syncAuthor — semantically the column-level UPDATE the
-      // tombstone is, with no zeroed columns. The ghost guard above already returned for the
-      // no-local-row case, so the minimal fallback shape below is defensive only. The winner's
-      // LWW age still rides updateTime (= deletedAt, Sync-1) so the landed tombstone keeps its
-      // delete-ordering against the local row's own (strictly older) live stamp.
+      // W7 root-cause fix (2026-10-23): a bare tombstone went through upsertMany → todoToRow,
+      // which zero-fills every absent field, and stmts.upsert is a FULL-COLUMN overwrite —
+      // landing a peer's deletion WIPED the local row (recycle bin lost the content,
+      // recurGroupId nulled). Fix: base the write on the freshly-read LOCAL row (cache.todo →
+      // rowToTodo shape, which todoToRow maps back column-for-column) and override only
+      // deleted/deletedAt/updateTime/syncAuthor — the column-level UPDATE the tombstone is.
+      // The ghost guard already returned for no-local-row, so the fallback below is defensive
+      // only; updateTime = deletedAt (Sync-1) keeps delete-ordering against the local stamp.
       const tombAt = winner.deletedAt || incoming.deletedAt || 0
       const base = localRow && localRow.data ? localRow.data : null
       state.pendingWrites.todos.push({
@@ -597,17 +565,10 @@ function applyRowInner (state, incoming) {
       deletedAt: winner.deletedAt || incoming.deletedAt || 0,
       updatedAt: winner.updatedAt || incoming.updatedAt || 0,
     })
-    // F4 (2026-10-17): a LOCAL delete purges saved filters referencing the victim
-    // (renderer purgeFiltersForVictims: catFiltersBak backup + filterDelete), but a REMOTE
-    // tombstone landing used to skip the cascade — a filter whose conds.catId referenced the
-    // deleted category kept haunting the sidebar on this device while the peer had purged it
-    // (two-device divergence). Same core, store-free (sync-apply has no Vuex): doomed filters are
-    // selected from the DB, backed up under the stamped `catFiltersBak.<deletedAt>.<victim>` key,
-    // and tombstoned through the bus (audit + oplog) exactly like renderer/CLI deletes. The
-    // cascade runs at apply time while the tombstone row itself flushes from the buffer; filters
-    // must never block a category tombstone, so failures are logged, not fatal (best-effort
-    // contract, same rule as renderer softDelete). Re-landed tombstones are idempotent: the
-    // doomed set is empty the second time.
+    // F4 (2026-10-17): a REMOTE category tombstone must cascade saved filters exactly like a
+    // LOCAL delete (purgeFiltersForCategoryVictims: catFiltersBak backup + filterDelete) —
+    // otherwise a filter referencing the victim kept haunting the sidebar after the peer purged
+    // it. Best-effort: failures are logged, never fatal. Idempotent (doomed set empty on re-land).
     try {
       const tombStamp = winner.deletedAt || incoming.deletedAt || 0
       categoryOps.purgeFiltersForCategoryVictims(state.db, [incoming.id], tombStamp, (op, p) => busWrite(state, op, p))
@@ -764,20 +725,15 @@ function readMaxOplogSeq (state) {
 }
 
 /**
- * D11 finding 4 (egress half of the meta reconciliation): snapshot rows for the meta entity used
- * to be enumerated ONLY from retained oplog pointers (allRows' metaTs scan) — a live user-data key
- * whose pointers fell out of the ring never appeared in a snapshot and never re-pushed as an
- * increment: unsyncable in BOTH directions until a local rewrite. Enumerate from the meta TABLE
- * instead (listMetaKeys), with the retained-pointer ts as the age and the ring's floor ts as the
- * honest age BOUND for a trimmed key (the local write happened at or before the floor). Pair with
- * the ingress bound rule in applyRowInner, this closes the permanent-starvation class. Excluded:
- * machine-local meta, the settings/habits blobs (field-granular via the setting entity). D13
- * finding 5: keys whose value is ABSENT but which still hold a retained oplog pointer are
- * enumerated as TOMBSTONE snapshot rows — a locally deleted key whose increment pointers trimmed
- * out of the ring used to be invisible to snapshot pushes, so a peer still holding the key live
- * re-pushed it and (with no local tombstone left) the stale copy LWW-resurrected. Bounded by the
- * retained ring: deletions whose pointers trimmed entirely stay unresolvable by snapshot (the
- * documented residual — peers recover them via their own tombstones or the ring's floor rule).
+ * D11 finding 4 (egress meta reconciliation): snapshot meta rows used to be enumerated ONLY from
+ * retained oplog pointers — a live key whose pointers trimmed out of the ring was unsyncable in
+ * BOTH directions. Enumerate from the meta TABLE instead (listMetaKeys), aged by the retained
+ * pointer ts with the ring's floor ts as the honest BOUND for a trimmed key (paired with the
+ * ingress bound rule in applyRowInner — closes the permanent-starvation class). Excluded:
+ * machine-local meta + the settings/habits blobs. D13 finding 5: absent-valued keys with a
+ * retained pointer are enumerated as TOMBSTONE rows (aged pointer ts / floor) so a local delete
+ * invisible to snapshots cannot be LWW-resurrected by a stale peer copy. Residual: deletions
+ * whose pointers trimmed entirely stay unresolvable by snapshot (documented).
  */
 function metaSnapshotRows (state) {
   const cache = createHydrationCache(state)

@@ -12,7 +12,12 @@ const WRITE_OPS = new Set([
   'planAddMany', 'planUpdateChip', 'planRemoveIds', 'planMoveTask',
   'tomatoAppendMany', 'tomatoUpdateById', 'tomatoRemoveByIds', 'tomatoMigrateFromMeta',
   'planDeleteTask', 'planDeleteTaskDay', 'planPrune', 'settingsRowPut', 'settingsRowPutMany', 'settingsRowDelete',
-  'upsertCategoryMany', 'filterUpsertMany', 'setMetaMany'
+  'upsertCategoryMany', 'filterUpsertMany', 'setMetaMany',
+  // S1 vertical slice (migration v11): work_episodes / source_refs / task_source_links
+  'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove',
+  // S4 capture door: dedupe-index meta pair via capture.ingest (distinct op name — the manifest's
+  // one-op-one-command invariant forbids two commands sharing setMetaMany with meta.putMany).
+  'captureIngest'
 ])
 const isWriteOp = op => WRITE_OPS.has(op)
 

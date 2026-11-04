@@ -1,8 +1,15 @@
 /**
  * Extracted from src/main/db.js (structure-size ratchet): per-task meta-key GC helpers used by
- * the hard-delete/purge transactions. Factory takes a live `db` getter (same pattern as
- * db-bulk-ops) — moved verbatim, no behavior change.
+ * the hard-delete/purge transactions, plus the bumpSnow dedup-key cap pruner. Factory takes a
+ * live `db` getter (same pattern as db-bulk-ops) — moved verbatim, no behavior change.
  */
+
+// snowDedup key-cap (R5 P3): past the cap, older-than-30d entries are pruned (see bumpSnow).
+const SNOW_DEDUP_CAP = 2000
+const SNOW_DEDUP_MAX_AGE_MS = 30 * 24 * 3600 * 1000
+// Ordered-bounds range ('snowDedup;' = ':'+1 bounds every snowDedup key) lets the key index do a
+// B-tree scan instead of a full-table LIKE scan per bump.
+const SNOW_RANGE = "WHERE key >= 'snowDedup:' AND key < 'snowDedup;'"
 
 module.exports = (getDb) => ({
   // main-ipc-3 unbounded-key fix (2026-09-22): snowDedup:<taskId>:<dedupKey> meta keys are written
@@ -38,6 +45,21 @@ module.exports = (getDb) => ({
   deleteEstimateKeysFor (ids) {
     for (const id of ids) {
       getDb().prepare("DELETE FROM meta WHERE key = 'tomatoEstimateState:' || ?").run(String(id))
+    }
+  },
+  // bumpSnow's per-bump prune (runs OUTSIDE the bump transaction; legacy '1' stamps cast to epoch
+  // 0 and age out). W33: with ALL keys young the age-based DELETE matches 0 rows — prune the
+  // oldest excess by stamp ASC so the cap always converges.
+  pruneSnowDedupPastCap () {
+    const n = getDb().prepare(`SELECT COUNT(*) n FROM meta ${SNOW_RANGE}`).get().n
+    if (n > 0) {
+      getDb().prepare("DELETE FROM meta WHERE key LIKE 'snowDedup:%' AND CAST(value AS INTEGER) < ?")
+        .run(Date.now() - SNOW_DEDUP_MAX_AGE_MS)
+    }
+    const nAfterAge = getDb().prepare(`SELECT COUNT(*) n FROM meta ${SNOW_RANGE}`).get().n
+    if (nAfterAge > SNOW_DEDUP_CAP) {
+      getDb().prepare(`DELETE FROM meta WHERE key IN (SELECT key FROM meta ${SNOW_RANGE} ORDER BY CAST(value AS INTEGER) ASC LIMIT ?)`)
+        .run(nAfterAge - SNOW_DEDUP_CAP)
     }
   }
 })

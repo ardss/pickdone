@@ -77,6 +77,11 @@ test('W28 #4: relative dynamic import with node_modules in path is RED (existenc
 test('W28 #4: bare dynamic import stays allowed (escape hatch intact)', () => {
   const root = mkFixture('esm-bare')
   fs.mkdirSync(path.join(root, 'renderer/js'), { recursive: true })
+  // W33 update: bare dynamic names are no longer UNCONDITIONALLY exempt — the name must
+  // resolve against the alias set ∪ node_modules (guaranteed runtime failure otherwise).
+  // 'dayjs' is not an alias, so the fixture now ships the real node_modules entry; the
+  // anchor's intent (a resolvable bare dynamic import stays green) is unchanged.
+  fs.mkdirSync(path.join(root, 'node_modules/dayjs'), { recursive: true })
   fs.writeFileSync(path.join(root, 'renderer/js', 'main.js'),
     "import('dayjs').then(m => m())\nimport { createApp } from 'vue'\ncreateApp({})\n")
   const r = spawnSync(process.execPath, [path.join(CLI, 'check-esm-graph.cjs')], {

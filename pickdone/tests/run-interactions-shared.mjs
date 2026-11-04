@@ -48,6 +48,17 @@ const DEFAULT_TARGETS = [
   'tests/e2e-journeys/j-todo-core.test.mjs',
   'tests/e2e-journeys/j-habit-moment.test.mjs',
   'tests/e2e-journeys/j-rail-stats-settings.test.mjs',
+  // #224 (2026-11-03): the paste-image live journey was EXCLUDEd from run-all yet absent from
+  // every live pool — no gate ran it at all. It fails loud on a failed precondition
+  // (skip=green is not acceptable evidence), so it belongs in the mandatory pool.
+  'tests/e2e-journeys/j-attachment-image.test.mjs',
+  // pd20 (2026-11-03): the work-episode vertical-slice journey (switch gate → episode put →
+  // sourceRef link → Copy-Handoff clipboard → reload persistence) — same fail-loud live-pool
+  // class as its j-* siblings.
+  'tests/e2e-journeys/j-pd20-episode.test.mjs',
+  // pd20 (2026-11-04): the MV3 capture live journey — real Chrome with the unpacked
+  // extension talking to a real isolated app instance (self-spawning like its siblings).
+  'tests/e2e-journeys/j-pd20-extension.test.mjs',
   'tests/keyboard-e2e.mjs',
   'tests/cssom-integrity.mjs',
   'tests/ui-coverage.mjs',
@@ -80,11 +91,18 @@ async function cdpAlive (url) {
 let CDP = null
 let child = null
 let tmpDir = null
+// W32 fix(#4) 2026-11-03: bootInstance opened two log fds per boot (stdout+stderr into the
+// shared-pool log) and NEVER closed them — every boot/respawn leaked two handles into this
+// long-lived runner process. The fds are now saved here and closed in reapIsolated (the one
+// place every boot/respawn/exit path funnels through).
+let logFds = []
 
 function reapIsolated () {
   if (child && process.platform === 'win32') { try { execSync(`taskkill /PID ${child.pid} /T /F`, { stdio: 'ignore' }) } catch {} }
   else if (child) { try { child.kill('SIGKILL') } catch {} }
   if (child) unregisterChild(child.pid)
+  for (const fd of logFds) { try { fs.closeSync(fd) } catch {} }
+  logFds = []
   if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true, maxRetries: 3 }) } catch {} }
   child = null; tmpDir = null
 }
@@ -105,6 +123,10 @@ async function bootInstance () {
   // tests/.artifacts forever. Single reused file, opened 'a': bounded to one file, and each
   // run appends below the previous run's bytes for forensics.
   const logFile = path.join(appCwd, 'tests', '.artifacts', 'smoke-shared-pool.log')
+  // W32 fix(#4): the two fds are kept in logFds and closed by reapIsolated (see above).
+  const logFdOut = fs.openSync(logFile, 'a')
+  const logFdErr = fs.openSync(logFile, 'a')
+  logFds = [logFdOut, logFdErr]
   const env = { ...process.env, TODO_USER_DATA_DIR: tmpDir, TODO_CDP: CDP, TODO_SYNC_PORT: String(syncPort) }
   delete env.ELECTRON_RUN_AS_NODE // harness/IDE hosts export it → electron boots as plain Node (check-all strips centrally; belt-and-braces here)
   child = spawn(ELECTRON, ['.', '--no-focus', '--remote-debugging-port=' + port,
@@ -112,7 +134,7 @@ async function bootInstance () {
     ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: appCwd,
     env,
-    stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')]
+    stdio: ['ignore', logFdOut, logFdErr]
   })
   // D4: the shared instance is exactly the kind of child a hard-killed runner used to orphan.
   registerChild(child.pid, { match: ['--remote-debugging-port=' + port], purpose: 'shared live-pool electron' })
@@ -198,6 +220,29 @@ async function resetSharedPage () {
   }
 }
 
+// W32 fix(#1) 2026-11-03: pool targets that use node:test can t.skip() internally; the old
+// verdict only looked at exit code + instance aliveness, so the live pool could be eroded by
+// unlimited skips while the gate stayed green. Extract each target's skip count from its own
+// stdout (TAP summary anchored after the LAST plan line, same contract
+// cli/check-test-summary.cjs parseSummary uses; when no TAP summary exists — the custom
+// non-node:test targets — fall back to counting `ok ... # SKIP` test-point lines).
+function extractSkipCount (out) {
+  const lines = String(out).split(/\r?\n/)
+  let planIdx = -1
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (/^1\.\.\d+\s*$/.test(lines[i])) { planIdx = i; break }
+  }
+  if (planIdx !== -1) {
+    for (const line of lines.slice(planIdx + 1)) {
+      const m = /^# skip(?:ped)?\s+(\d+)\s*$/.exec(line)
+      if (m) return Number(m[1])
+    }
+  }
+  // no TAP summary line: count skip test points (only `ok`/`not ok` directive lines, so a
+  // diagnostic text mentioning "# SKIP" cannot inflate the count)
+  return lines.reduce((n, l) => n + (/^\s*(?:not )?ok\b.*#\s*(?:SKIP|skip)\b/.test(l) ? 1 : 0), 0)
+}
+
 function runTarget (script) {
   return new Promise(resolve => {
     const t0 = Date.now()
@@ -205,28 +250,50 @@ function runTarget (script) {
     // target's own spawnApp would otherwise boot electron.exe as plain Node (2026-10-27).
     const env = { ...process.env, TODO_CDP: CDP, TODO_SHARED_CDP: CDP }
     delete env.ELECTRON_RUN_AS_NODE
+    // W32 fix(#1): stdout used to be 'inherit' — the pool never saw the target's TAP summary
+    // and skip counts were invisible. stdout is piped now (buffered for skip extraction, still
+    // echoed line-by-line for the live gate log); stderr stays 'inherit'.
     const child2 = spawn(process.execPath, [script], {
       cwd: appCwd,
       env,
-      stdio: 'inherit'
+      stdio: ['ignore', 'pipe', 'inherit']
+    })
+    let out = ''
+    let lineBuf = ''
+    child2.stdout.setEncoding('utf8')
+    child2.stdout.on('data', d => {
+      out += d
+      lineBuf += d
+      const lines = lineBuf.split('\n')
+      lineBuf = lines.pop()
+      for (const l of lines) console.log(l.replace(/\r$/, ''))
     })
     const killer = setTimeout(() => {
       console.error(`[shared-pool] ${script} exceeded ${PER_TARGET_BUDGET_MS / 60000}min — tree-killing`)
       if (process.platform === 'win32') { try { execSync(`taskkill /PID ${child2.pid} /T /F`, { stdio: 'ignore' }) } catch {} }
       else { try { child2.kill('SIGKILL') } catch {} }
     }, PER_TARGET_BUDGET_MS)
-    child2.on('exit', code => { clearTimeout(killer); resolve({ code: code ?? 1, ms: Date.now() - t0 }) })
+    child2.on('exit', code => {
+      if (lineBuf) console.log(lineBuf.replace(/\r$/, ''))
+      clearTimeout(killer)
+      resolve({ code: code ?? 1, ms: Date.now() - t0, skips: extractSkipCount(out) })
+    })
     // W13 2026-10-26: the promise above only ever resolved from 'exit'. A spawn 'error'
     // (EMFILE/EBUSY under the 3-lane pool storm) fires WITHOUT an exit event, so runTarget hung
     // forever and the 8min killer then ran taskkill against an undefined pid. A spawn error now
     // resolves the SAME verdict shape with a named spawnError — the failure is attributed, not
     // silently swallowed, and 'exit' firing afterwards is a no-op (resolve is idempotent).
-    child2.on('error', e => { clearTimeout(killer); resolve({ code: 1, ms: Date.now() - t0, spawnError: e.message }) })
+    child2.on('error', e => { clearTimeout(killer); resolve({ code: 1, ms: Date.now() - t0, skips: 0, spawnError: e.message }) })
   })
 }
 
 const results = []
 let respawns = 0
+// W32 fix(#1): pool-wide skip total — each target's internal t.skip() count rides the verdict
+// into this accumulator and is emitted as a `# skip N` line in the summary below, so consumers
+// (cli/check-test-summary.cjs --live-pool-skip intake) can fold it into the same ratchet as
+// unit skips instead of letting the pool be silently eroded by skips.
+let poolSkips = 0
 // Respawn helper: returns false when the instance is dead AND the respawn budget is spent —
 // every not-yet-run target then gets its own named red (never a silent green).
 async function ensureAlive () {
@@ -258,6 +325,7 @@ try {
     console.log(`[shared-pool] ▶ ${name}`)
     const r = await runTarget(script)
     const stillAlive = !(await instanceDead())
+    poolSkips += r.skips || 0
     // W13 2026-10-26: surface a spawn error (see runTarget) as a named note on the verdict.
     const note = (r.spawnError ? ` [spawn error: ${r.spawnError}]` : '') + (!stillAlive ? ' [instance died during/after this target]' : '')
     results.push({ script, ok: r.code === 0 && stillAlive, ms: r.ms, note })
@@ -271,4 +339,8 @@ console.log('\n[shared-pool] summary:')
 for (const r of results) console.log(` ${r.ok ? '✓' : '✗'} ${(r.ms / 1000).toFixed(0).padStart(4)}s  ${r.script}${r.note ? '  ' + r.note : ''}`)
 const failed = results.filter(r => !r.ok)
 console.log(failed.length ? `[shared-pool] ✗ ${failed.length}/${results.length} target(s) failed` : `[shared-pool] ✓ all ${results.length} target(s) passed`)
+// W32 fix(#1): pool-total skip count in TAP summary-line form. The pool is not itself a TAP
+// stream, so this line stands alone in the summary tail; cli/check-test-summary.cjs folds it
+// into the skip ratchet via its --live-pool-skip intake when wired to this runner's output.
+console.log(`# skip ${poolSkips}`)
 process.exit(failed.length ? 1 : 0)

@@ -6,6 +6,11 @@
  */
 const fs = require('fs')
 const path = require('path')
+// W33 fix(2026-11-03): bare statSync walker was TOCTOU-unsafe (a file/dir vanishing between
+// readdir and stat crashed the whole gate) and did not prune dot-directories. Use the shared
+// walker (lib-filescan.cjs) like check-esm-graph/check-ipc-op-coverage (W28): withFileTypes
+// traversal skips vanished entries, and dot-dirs / dist* / node_modules are pruned centrally.
+const { listFiles: walk } = require('./lib-filescan.cjs')
 
 const ROOT = path.join(__dirname, '..')
 // 2026-09-23 (domain-5): + shared/ — since wave #132 the shared/*.mjs modules are part of the
@@ -35,26 +40,26 @@ const RULES = [
   // \\{1,2}：源码里的 JS 转义形态（"K:\\tmp"，字节为双反斜杠）与原始单反斜杠形态都要抓（复核轮实锤单杠正则漏报）
   // W27 (2026-11-01)：分隔符放宽为 [\\/] —— 旧规则只认反斜杠，正斜杠形态（盘符:/tmp/x）整条逃逸；
   // 前缀类放宽含 / ，file-URL 形态（盘符前是斜杠而非引号）同样逃逸，一并抓。例示一律用占位符禁写真盘符（边界门禁）。
-  [/["'`/]([A-Za-z]):[\\/]{1,2}(?:tmp|temp|Users)[\\/]{1,2}[^"'`]*["'`]/i, '本机绝对路径'],
+  // W33 (2026-11-03)：前缀类整体退役，改用开头 \b 词边界 —— 旧的 ["'`/] 前缀类对
+  // url(<盘符>:/tmp/x.png)、cfg(<盘符>:/tmp)、[<盘符>:/Users/..]、a=<盘符>:/tmp 等
+  // 非引号/斜杠前缀形态整条逃逸（例示一律用占位符禁写真盘符——边界门禁）；
+  // \b 在任意非 word 字符（( [ { : , = 空白…）后均成立，且在标识符中间（如 driveX:）不成立，
+  // 一类覆盖替代前缀枚举。尾部不再要求闭合引号：行尾裸写形态（盘符:/tmp）也纳入。
+  [/\b[A-Za-z]:[\\/]{1,2}(?:tmp|temp|Users)\b[\\/]?[^"'`\s]*/i, '本机绝对路径'],
 ]
 
 const hits = []
-function walk (dir) {
-  for (const f of fs.readdirSync(dir)) {
-    const p = path.join(dir, f)
-    const st = fs.statSync(p)
-    if (st.isDirectory()) { if (f !== 'node_modules' && f !== 'vendor' && f !== 'dist') walk(p); continue }
-    if (!EXT.has(path.extname(f))) continue
-    // Exempt only the gate file itself and SOURCES.md by EXACT basename: the old substring
-    // match (/check-fingerprint|SOURCES\.md/.test(f)) silently skipped ANY file whose name
-    // merely contained those strings (e.g. check-fingerprint-notes.js, SOURCES.md.bak) —
-    // a whole fingerprint blind spot with the gate staying green.
-    if (f === 'check-fingerprint.js' || f === 'SOURCES.md') continue
-    const text = fs.readFileSync(p, 'utf8')
-    for (const [re, label] of RULES) {
-      const m = text.match(re)
-      if (m) hits.push({ file: path.relative(ROOT, p), label, snippet: text.slice(Math.max(0, m.index - 30), m.index + 50).replace(/\n/g, ' ') })
-    }
+function scanFile (p) {
+  const f = path.basename(p)
+  // Exempt only the gate file itself and SOURCES.md by EXACT basename: the old substring
+  // match (/check-fingerprint|SOURCES\.md/.test(f)) silently skipped ANY file whose name
+  // merely contained those strings (e.g. check-fingerprint-notes.js, SOURCES.md.bak) —
+  // a whole fingerprint blind spot with the gate staying green.
+  if (f === 'check-fingerprint.js' || f === 'SOURCES.md') return
+  const text = fs.readFileSync(p, 'utf8')
+  for (const [re, label] of RULES) {
+    const m = text.match(re)
+    if (m) hits.push({ file: path.relative(ROOT, p), label, snippet: text.slice(Math.max(0, m.index - 30), m.index + 50).replace(/\n/g, ' ') })
   }
 }
 // 2026-09-23 (domain-5): fail CLOSED on a missing scan dir — the forEach silently skipped absent
@@ -66,7 +71,7 @@ SCAN_DIRS.forEach(d => {
     console.error(`✗ 指纹扫描面塌缩：扫描目录缺失 "${d}"（${p}）——登记的扫描面必须逐目录存在，拒绝静默跳过`)
     process.exit(1)
   }
-  walk(p)
+  for (const f of walk(p, { exts: [...EXT] })) scanFile(f)
 })
 
 if (hits.length) {

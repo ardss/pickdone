@@ -32,7 +32,10 @@ module.exports = function systemHandlers (ctx) {
     let stamps = senderRateBuckets.get(id)
     if (!stamps) { stamps = []; senderRateBuckets.set(id, stamps) }
     const ok = allowWithinRate(stamps, Date.now(), opts)
-    if (!stamps.length) senderRateBuckets.delete(id) // drained window: drop the map entry immediately
+    // W32 (P3): the old "drained window: drop the map entry" branch here was dead code —
+    // allowWithinRate always pushes on the allow path and a refusal leaves the window non-empty,
+    // so stamps.length was never 0 at this point. Bounded-map cleanup is owned exclusively by
+    // the size>64 sweep below.
     if (senderRateBuckets.size > 64) {
       // Sweep dead senders whose newest stamp is older than the largest window we use here (10s)
       const now = Date.now()
@@ -69,6 +72,21 @@ module.exports = function systemHandlers (ctx) {
       // object — under Electron's unhandled-event policy that can crash the main process.
       // Attach the listener BEFORE show(); the failure is logged, never thrown.
       if (typeof n.on === 'function') n.on('failed', (err) => { try { log.error('[IPC] notification delivery failed:', err && (err.message || err)) } catch { /* logging is best-effort */ } })
+      // W33 (P3, 2026-11-03): the renderer 'notification' channel had NO click route — clicking the
+      // toast did nothing, unlike scheduler.fire's reminder notifications. Route the click through
+      // the scheduler's lock-aware focusMainFromNotification (same lock-safe gate: a locked app is
+      // never revealed); a payload carrying taskId additionally locates the task in the renderer.
+      // Delayed require: scheduler.js pulls handlers/shared.js etc. — keeping it out of the module
+      // top-level avoids require-cycle risk at load time (same inline-require pattern as sanitize
+      // above). Attached BEFORE show() like the 'failed' listener.
+      if (typeof n.on === 'function') {
+        n.on('click', () => {
+          try {
+            const taskId = (o && o.taskId != null && o.taskId !== '') ? String(o.taskId) : undefined
+            require('../scheduler').focusMainFromNotification(taskId)
+          } catch (err) { try { log.warn('[IPC] notification click route failed:', err && (err.message || err)) } catch { /* best-effort */ } }
+        })
+      }
       n.show(); return true
     },
 
@@ -275,6 +293,31 @@ module.exports = function systemHandlers (ctx) {
         // and the copy would read/write through the moved tree (and a pending debounce kick would
         // fire against the closed handle). Re-exported by external-db-watch.js (index.js untouched).
         try { require('../external-db-watch').stopLatestDbWatch() } catch (werr) { log.warn('[IPC] data:relocate stop external db watch failed', werr) }
+        // W32 (P2, mirrors updater.js preInstallSyncSettle's W16 ordering): after dbm.close() the
+        // migration runs for minutes and the exit timer adds a further 400ms window — the LAN sync
+        // server / in-flight rounds / relay poller stayed alive through it and would write
+        // watermarks or cursors against the CLOSED handle. Fire the quit-path stops HERE, while
+        // the DB handle is still open (same trigger set index.js's quit flush uses):
+        //   1. stopSyncForQuit: closes in-flight LAN round sockets and persists pull/push
+        //      watermarks + the security ring before the handle closes.
+        //   2. relay stopForQuit: halts the poller and lets an in-flight round's persist land
+        //      (same await-the-stop contract as the quit chain).
+        // Fire-and-forget: the stops' internal await chains settle by design margin, the same
+        // trade-off updater.js documents for the install window.
+        try {
+          const lanSync = require('../lan-sync-bootstrap')
+          if (typeof lanSync.stopSyncForQuit === 'function') {
+            const p = lanSync.stopSyncForQuit()
+            if (p && typeof p.catch === 'function') p.catch(() => { /* best-effort */ })
+          }
+        } catch (e) { try { log.warn('[IPC] data:relocate LAN sync settle failed:', e && e.message) } catch { /* best-effort */ } }
+        try {
+          const relay = require('../relay-sync-bootstrap')
+          if (typeof relay.stopForQuit === 'function') {
+            const p = relay.stopForQuit()
+            if (p && typeof p.catch === 'function') p.catch(() => { /* best-effort */ })
+          }
+        } catch (e) { try { log.warn('[IPC] data:relocate relay settle failed:', e && e.message) } catch { /* best-effort */ } }
         try { if (ctx.scheduler && ctx.scheduler.flushFiredNow) ctx.scheduler.flushFiredNow() } catch { /* best-effort */ }
         if (ctx.dbm && ctx.dbm.close) ctx.dbm.close()
       } catch (err) {
@@ -348,6 +391,12 @@ module.exports = function systemHandlers (ctx) {
       try { dialog.showMessageBoxSync({ type: 'info', title: i18n.mt('dataLocDoneTitle'), message: i18n.mt('dataLocDoneMsg', { old: ud }) }) } catch { /* best-effort */ }
       setTimeout(() => { try { app.relaunch(); app.exit(0) } catch { /* dying anyway */ } }, 400)
       return { ok: true, target: r.target }
-    }
+    },
+
+    // --- Build fingerprint (W31 P1) — the diagnostic payload for the About section ---
+    // Same shared builder as the About UI (shared/build-fingerprint.mjs): version + git SHA
+    // (build-time injection or live git description) + channel, so a user report and the
+    // diagnostic bundle always carry the identical build string.
+    'app:build-info': () => require('../build-info.cjs').getBuildInfo()
   }
 }

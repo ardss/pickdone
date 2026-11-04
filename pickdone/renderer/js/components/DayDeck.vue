@@ -124,10 +124,15 @@ const DECK_CSS = '.pd-day-deck__card{width:min(40%,460px)}.pd-day-deck{isolation
   '.pd-day-deck__chk{width:18px;height:18px;border-radius:var(--radius-sm,6px);background:var(--panel,#fff)}' +
   '.pd-day-deck__list li.done .pd-day-deck__chk::after{content:none}'
 try {
-  const el = document.createElement('style')
-  el.setAttribute('data-deck-css', '1')
-  el.textContent = DECK_CSS
-  document.head.appendChild(el)
+  // [w33 P3] dedupe: this module-level injection ran on every module (re)evaluation (dev HMR,
+  // test re-imports), piling identical <style data-deck-css> nodes into <head>. The content is
+  // static, so one node is enough — guard on the marker attribute.
+  if (!document.querySelector('style[data-deck-css]')) {
+    const el = document.createElement('style')
+    el.setAttribute('data-deck-css', '1')
+    el.textContent = DECK_CSS
+    document.head.appendChild(el)
+  }
 } catch (e) { /* non-browser env */ }
 
 export default {

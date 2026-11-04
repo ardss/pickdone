@@ -138,6 +138,47 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       }
       return true
     } },
+    { v: 11, fn: d => {
+      // S1 vertical slice (2026-11-03): work_episodes / source_refs / task_source_links row
+      // storage. Pure IF NOT EXISTS DDL — on an upgraded library db.exec(SCHEMA) already created
+      // these tables this boot, so this step is a storage-level no-op whose real effect is the
+      // schemaVersion 10→11 advance (and it self-heals a library whose SCHEMA exec was skipped,
+      // e.g. a fixture created outside db.js). Column-identical twin of the db-schema.js block;
+      // the parity is asserted by db-migrations-episode-tables.test.mjs.
+      d.exec(`CREATE TABLE IF NOT EXISTS work_episodes (
+        id        TEXT PRIMARY KEY,
+        taskId    TEXT NOT NULL,
+        startedAt INTEGER NOT NULL DEFAULT 0,
+        endedAt   INTEGER NOT NULL DEFAULT 0,
+        note      TEXT,
+        deleted   INTEGER NOT NULL DEFAULT 0,
+        deletedAt INTEGER NOT NULL DEFAULT 0,
+        updatedAt INTEGER NOT NULL DEFAULT 0
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_work_episodes_task ON work_episodes (taskId, startedAt)')
+      d.exec(`CREATE TABLE IF NOT EXISTS source_refs (
+        id         TEXT PRIMARY KEY,
+        providerId TEXT NOT NULL,
+        externalId TEXT NOT NULL,
+        title      TEXT,
+        deleted    INTEGER NOT NULL DEFAULT 0,
+        deletedAt  INTEGER NOT NULL DEFAULT 0,
+        updatedAt  INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (providerId, externalId)
+      )`)
+      d.exec(`CREATE TABLE IF NOT EXISTS task_source_links (
+        id          TEXT PRIMARY KEY,
+        taskId      TEXT NOT NULL,
+        sourceRefId TEXT NOT NULL,
+        deleted     INTEGER NOT NULL DEFAULT 0,
+        deletedAt   INTEGER NOT NULL DEFAULT 0,
+        updatedAt   INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (taskId, sourceRefId)
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_task_source_links_task ON task_source_links (taskId)')
+      d.exec('CREATE INDEX IF NOT EXISTS idx_task_source_links_ref ON task_source_links (sourceRefId)')
+      return true
+    } },
     ]
   buildMigrations.ensureRepeatDayUniqueness = ensureRepeatDayUniqueness
   return migrationsOverride || BUILT_IN

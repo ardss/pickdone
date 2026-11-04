@@ -5,8 +5,8 @@
       "net": null
     },
     "renderer/js/store/category.js": {
-      "lines": 763,
-      "net": null
+      "lines": 741,
+      "net": 23946
     },
     "renderer/js/store/habits.js": {
       "lines": 709,
@@ -28,21 +28,17 @@
       "lines": 816,
       "net": null
     },
-    "src/main/index.js": {
-      "lines": 860,
-      "net": null
+    "src/main/db.js": {
+      "lines": 801,
+      "net": 27196
     },
     "src/main/lan-sync/transport.js": {
-      "lines": 855,
-      "net": 22348
+      "lines": 849,
+      "net": 22219
     },
     "src/main/lan-sync-bootstrap.js": {
-      "lines": 844,
-      "net": null
-    },
-    "src/main/sync-apply.js": {
-      "lines": 841,
-      "net": null
+      "lines": 815,
+      "net": 22437
     }
   },
   "commitments": {}

@@ -94,10 +94,15 @@ if (hits.length) {
   console.error('确属功能本意白色的（如滑块圆点），往本文件 WHITELIST 登记并注释原因。')
   process.exit(1)
 }
-console.log('✓ token 纪律检查通过（0 处写死浅色背景/文字灰散值）')
 
 // —— 负向自检(与 check-hover-contrast 同款):对 RULES 本体注入坏样本,证明"拆掉护栏必红",防正则腐烂恒绿 ——
-if (process.env.TOKEN_SELFTEST === '1') {
+// W33 fix(2026-11-03): trigger moved from the TOKEN_SELFTEST env switch to the --selftest CLI
+// flag (W21 fail-closed doctrine: an ambient env var can leak into unrelated gate invocations
+// and silently change a gate's verdict) — the env var stays as a legacy alias only because
+// tests/unit/cli/gate-must-fail-golden.test.mjs invokes the gate via env (file is outside this
+// fix's territory). Order also fixed: the self-test now runs BEFORE the green pass line — the
+// old order printed "✓ 通过" first, so a red self-test was preceded by a green ✓ in the output.
+if (process.argv.includes('--selftest') || process.env.TOKEN_SELFTEST === '1') {
   const samples = [
     ['R1 面板白底硬编码 → var(--panel, #fff)', 'background: #fff;'],
     ['R1 面板白底硬编码 → var(--panel, #fff)', 'background: #ffffff;'],

@@ -62,6 +62,9 @@ const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-vis
   // e2e.test.mjs, never in the quick/pre-commit regression (boots + dev-host state).
   'j-todo-core.test.mjs', 'j-habit-moment.test.mjs', 'j-rail-stats-settings.test.mjs',
   'j-attachment-image.test.mjs', // W29 (2026-11-01) paste-image live journey — same live-Electron pool class
+  'j-pd20-episode.test.mjs', // pd20 (2026-11-03) work-episode live journey — same live-pool class (run-interactions-shared target)
+  'j-pd20-extension.test.mjs', // pd20 (2026-11-04) MV3 capture live journey (real Chrome + unpacked extension) — same live class
+  'j-win-snippet-live.test.mjs', // pd20 (2026-11-04) MANUAL live stage (TODO_WIN_SNIPPET_LIVE=1): real Win+Shift+S SendInput — never in pools (drives the real mouse/keyboard)
   // 2026-09-28 un-excluded: the --test-force-exit + 2min-ceiling harness added after that wave
   // contains exactly the runaway-test scenario the flake feared, so the file re-joins the
   // default pool — an orphaned integration spec is a regression nobody sees.
@@ -113,7 +116,12 @@ const DEEP_FILES = new Set([
 // passed to the SIBLING_DIR discover() call — they ran on manual discipline alone (2026-09-28).
 // The root-level discover() now takes both extensions too, so *.test.js anywhere under tests/
 // is discovered; suite classification is unchanged (tests/ root = integration).
-const TEST_EXTS = ['.test.mjs', '.test.js']
+// W31 fix (2026-11-01): '.test.cjs' joins the family — three real suites
+// (tests/unit/cli/relay-round-evidence-maintenance-20261015.test.cjs,
+// tests/unit/main/multi-instance-lock.test.cjs, tests/unit/main/multi-instance-port.test.cjs)
+// were silently dropped by the exts filter; node --test runs plain-CJS specs fine, so the
+// extension list — not the runner — was the gap.
+const TEST_EXTS = ['.test.mjs', '.test.js', '.test.cjs']
 const SIBLING_DIR = path.join(dir, '..', 'test')
 const isSiblingSpec = file => file.startsWith(SIBLING_DIR + path.sep)
 
@@ -592,6 +600,9 @@ if (r.status !== 0 && !r.error && r.stdout) {
         // fire: fake green on cancelled tests in absorbed runs. Scanning per line is fail-loud
         // by construction (any cancelled line anywhere in the tail is counted).
         const countCancelled = tail => tail.reduce((n, l) => { const m = /^# cancelled\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
+        // W32 fix(#2) 2026-11-03: same per-line anchoring for skip counts, used by the
+        // low-confidence branch below to merge pass1+retry skips into the stream the gate sees.
+        const countSkips = tail => tail.reduce((n, l) => { const m = /^# skip(?:ped)?\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
         const cancelled1 = countCancelled(p1.tail)
         const cancelled2 = countCancelled(rt.tail)
         if (planOk && keptNotOk === 0 && notOkInRetry === 0 && cancelled1 === 0 && cancelled2 === 0 && rt.blocks.length > 0) {
@@ -702,7 +713,18 @@ if (r.status !== 0 && !r.error && r.stdout) {
             // emitting Buffer.concat([r.stdout, retry.stdout]) again would double-plan. Only the
             // retry tail is appended after a separator, so the LAST plan (the retry's) stays
             // what parseSummary anchors.
-            r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + (retry.stdout || ''), stderr: r.stderr, streamed: false }
+            // W32 fix(#2) 2026-11-03: that LAST-plan anchoring is exactly why pass1's skips
+            // escaped the ratchet here — the gate anchored the RETRY's plan and its `# skip`
+            // counts only the retried files' retry pass; every pass1 skip was invisible and the
+            // live pool could be eroded by skips through this branch with the gate green. A
+            // merged `# skip pass1+retry` line is appended AFTER the retry summary so the
+            // gate's last-match parsing sees the whole corpus's skip count (the stream is not
+            // COMPOSED-marked, so plan-vs-summary drift stays a warning, not a red).
+            const pass1Skips = countSkips(p1.tail)
+            const retrySkips = countSkips(rt.tail)
+            const retryOut = retry.stdout || ''
+            const nl = retryOut.endsWith('\n') || retryOut === '' ? '' : '\n'
+            r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + retryOut + nl + `# skip ${pass1Skips + retrySkips}\n`, stderr: r.stderr, streamed: false }
           } else {
             console.error(`[run-all] ⚑FLAKY absorption REFUSED: parse low-confidence AND no clean-retry corroboration (retry exit=${retry.status}, plan-line=${/^1\.\.\d+/m.test(retryTap)}, not-ok-in-retry=${!/^\s*not ok\b/m.test(retryTap) ? 0 : 'present'}) — pass1's RED stands, retry TAP below is evidence only`)
             await recordFlake([{

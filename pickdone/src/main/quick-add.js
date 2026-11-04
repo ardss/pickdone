@@ -23,8 +23,12 @@ let lockProbe = null // lock-screen probe, injected by index.js (setLockProbe): 
  *  contract (upper-center of the work area), just the right screen. */
 function boundsForDisplay (display) {
   const d = display || null
-  const width = d && d.bounds ? d.bounds.width : 0
-  const workArea = (d && d.workArea) || { x: 0, y: 0, width: d && d.bounds ? d.bounds.width : 0, height: 0 }
+  // W33 fix (P3, 2026-11-03): with EVERY display probe failed (d === null) the old math produced
+  // x = Math.round((0 - W) / 2) = -240 — the bar landed off-screen and was unreachable. A null
+  // display falls back to a fixed positive coordinate near the primary-screen origin instead.
+  if (!d) return { x: 40, y: 40, width: W, height: H }
+  const width = d.bounds ? d.bounds.width : 0
+  const workArea = d.workArea || { x: 0, y: 0, width: d.bounds ? d.bounds.width : 0, height: 0 }
   return {
     x: (workArea.x || 0) + Math.round(((workArea.width || width) - W) / 2),
     y: (workArea.y || 0) + Math.round((workArea.height || 0) * 0.18),

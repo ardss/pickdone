@@ -415,7 +415,13 @@ if (FAST) {
   const fastStages = GROUPS[1].stages
     .filter(([name]) => !name.startsWith('覆盖率棘轮'))
     .map(([name, cmd, args, env, budget]) =>
-      (name.startsWith('单元测试') ? [name, cmd, [...(args || []), '--core'], env, budget] : [name, cmd, args, env, budget]))
+      // --core must drop --with-coverage: the coverage ratchet's baseline is calibrated on the
+      // FULL unit pool, a unit∩core summary is a different instrument (check-test-summary
+      // rejects the combination fail-loud). Core-tier discipline stays enforced, just without
+      // the ratchet — same doctrine as skipping the 覆盖率棘轮 stage above.
+      (name.startsWith('单元测试')
+        ? [name, cmd, (args || []).filter(a => a !== '--with-coverage').concat('--core'), env, budget]
+        : [name, cmd, args, env, budget]))
   console.log('\n===== [check:fast] 静态门禁+类型+core 层单元（深潜层套件与覆盖棘轮归全量 check:all） =====')
   results.push(...await runPool(fastStages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }))
 } else if (ON_CI) {

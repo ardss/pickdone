@@ -245,22 +245,40 @@ export function createSaveQueue (store, opts) {
  *  "保存未确认" hint (the authoritative persist-result signal lives in the territory-frozen
  *  store/todo.js — the complete fix needs that ban lifted; the w30 report documents the gap).
  *  `pendingEntries` is the seam getter (pendingUpserts); `delayMs` defaults to 2000 — one settle
- *  window for the in-flight command-bus commit that safeUpsert fired. */
-export function createPersistProbe (pendingEntries, { delayMs = 2000 } = {}) {
+ *  window for the in-flight command-bus commit that safeUpsert fired.
+ *  [w31 P1] `flush` (optional) upgrades the probe from hint-only to auto-retry: a stillQueued
+ *  verdict schedules a re-dispatch after a backoff interval (backoffBaseMs x2 per consecutive
+ *  unconfirmed verdict, backoffMaxMs cap) and re-probes after each attempt — the unconfirmed save
+ *  recovers without user action. Terminal failures (classifyReplayFailure) drop the queued entry,
+ *  so the loop stops on its own; a transient failure stays queued and keeps the backoff growing. */
+export function createPersistProbe (pendingEntries, { delayMs = 2000, backoffBaseMs = 2000, backoffMaxMs = 30000, flush = null } = {}) {
   let timer = null
-  return {
-    /** Cancel a pending probe (panel unmount / a newer save supersedes it). */
-    cancel () { if (timer) { clearTimeout(timer); timer = null } },
-    /** Schedule the probe for `taskId`; `onVerdict(stillQueued, taskId)` fires once. */
-    schedule (taskId, onVerdict) {
-      this.cancel()
+  let unconfirmedStreak = 0
+  const reprobe = (taskId, onVerdict) => {
+    if (timer) { clearTimeout(timer); timer = null }
+    const queued = pendingEntries()
+    const stillQueued = taskId != null && queued.some(en => en && en.params && en.params.taskId === taskId)
+    if (!stillQueued) unconfirmedStreak = 0
+    if (stillQueued) console.warn('[edit-panel] save unconfirmed: row still in safeUpsert pending queue, taskId=' + taskId)
+    onVerdict(!!stillQueued, taskId)
+    if (stillQueued && flush) {
+      const wait = Math.min(backoffBaseMs * Math.pow(2, unconfirmedStreak), backoffMaxMs)
+      unconfirmedStreak += 1
       timer = setTimeout(() => {
         timer = null
-        const queued = pendingEntries()
-        const stillQueued = taskId != null && queued.some(en => en && en.params && en.params.taskId === taskId)
-        if (stillQueued) console.warn('[edit-panel] save unconfirmed: row still in safeUpsert pending queue, taskId=' + taskId)
-        onVerdict(!!stillQueued, taskId)
-      }, delayMs)
+        let r = null
+        try { r = flush() } catch (e) { console.error('[edit-panel] persist auto-retry flush threw:', e) }
+        Promise.resolve(r).catch(() => {}).then(() => { reprobe(taskId, onVerdict) })
+      }, wait)
+    }
+  }
+  return {
+    /** Cancel a pending probe / retry (panel unmount / a newer save supersedes it). */
+    cancel () { if (timer) { clearTimeout(timer); timer = null } },
+    /** Schedule the probe for `taskId`; `onVerdict(stillQueued, taskId)` fires per probe round. */
+    schedule (taskId, onVerdict) {
+      this.cancel()
+      timer = setTimeout(() => { timer = null; reprobe(taskId, onVerdict) }, delayMs)
     }
   }
 }

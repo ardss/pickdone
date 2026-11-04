@@ -61,6 +61,12 @@ Round kinds are the syncable entity names emitted by the main apply pipeline
 `setting`/`tomato` have their own channels. Renderer-side, `externalReload.js` parses these kinds
 to decide which stores to reload (estimates ride `meta`, filters ride `filter`).
 
+The write-surface op census — every op dispatched by a `sync:'full'` row of
+`src/main/command-manifest.js` (gate: `cli/check-sync-matrix.cjs`, checked in both directions;
+update this line in the same commit that renames, adds or removes a sync op):
+
+`SYNC_OPS = ['bumpSnow', 'commitSyncBatch', 'deleteMeta', 'filterDelete', 'filterUpsert', 'filterUpsertMany', 'hardDelete', 'hardDeleteMany', 'planAddMany', 'planDeleteTask', 'planDeleteTaskDay', 'planMoveTask', 'planRemoveIds', 'planUpdateChip', 'purgeRecycleBin', 'purgeSeedTodos', 'setMeta', 'setMetaMany', 'settingsRowDelete', 'settingsRowPut', 'settingsRowPutMany', 'tomatoAppendMany', 'tomatoRemoveByIds', 'tomatoUpdateById', 'upsert', 'upsertCategory', 'upsertCategoryMany', 'upsertMany']`
+
 ## 4. Hard rules for every sync review
 
 1. **Any new user-data meta key must NOT enter `isMachineLocalMetaKey`** — machine-local status is

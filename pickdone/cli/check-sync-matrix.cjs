@@ -72,6 +72,18 @@ const docKindsList = docKinds
   : []
 if (!docKindsList.length) fail('doc: cannot parse the §3 DATA_CHANNEL_KINDS declaration')
 
+// §3 op census: `SYNC_OPS = ['upsert', ...]` — every op dispatched by a sync:'full'
+// command-manifest.js row (the sync write surface). Same backtick-span tolerance as the
+// kinds declaration.
+const docOpsLine = docLines.find(l => /SYNC_OPS\s*=/.test(l))
+const docOpsRaw = docOpsLine
+  ? (docOpsLine.replace(/`/g, '').match(/SYNC_OPS\s*=\s*\[([^\]]*)\]/) || [])[1]
+  : null
+const docOpsList = docOpsRaw
+  ? [...docOpsRaw.matchAll(/['"`]([A-Za-z][A-Za-z0-9]*)['"`]/g)].map(m => m[1])
+  : []
+if (!docOpsList.length) fail('doc: cannot parse the §3 SYNC_OPS op census (expected a `SYNC_OPS = [...]` line)')
+
 // ── code side ───────────────────────────────────────────────────────────────
 // SYNCABLE_ENTITIES from src/main/sync-apply-hydrate.js (source parse — the module pulls electron-log).
 const applySrc = fs.readFileSync(path.join(ROOT, 'src', 'main', 'sync-apply-hydrate.js'), 'utf8')
@@ -125,6 +137,18 @@ for (const e of codeEntities) {
 for (const e of localEntities) {
   if (codeEntities.includes(e)) fail(`manifest→code: entity "${e}" is sync:'local' (machine-local) in command-manifest.js but IS in SYNCABLE_ENTITIES — a machine-local entity must never be syncable`)
 }
+// 5. op census: doc §3 SYNC_OPS must equal the ops dispatched by the manifest's sync:'full'
+// rows, both directions — a renamed/dropped db.js op silently breaks the sync write surface.
+const manifestOps = new Set()
+for (const row of Object.values(manifest.COMMANDS)) {
+  if (row.sync === 'full' && row.op) manifestOps.add(row.op)
+}
+for (const op of docOpsList) {
+  if (!manifestOps.has(op)) fail(`doc→code: op "${op}" declared in the matrix doc §3 SYNC_OPS census is not dispatched by any sync:'full' command-manifest.js row — the op was renamed or removed without updating the contract`)
+}
+for (const op of manifestOps) {
+  if (!docOpsList.includes(op)) fail(`code→doc: op "${op}" (dispatched by a sync:'full' command-manifest.js row) is missing from docs/sync-matrix.md §3 SYNC_OPS — update the matrix doc in the same commit`)
+}
 // 4. DATA_CHANNEL_KINDS: doc declaration must match code, and stay syncable.
 for (const k of docKindsList) {
   if (!codeKindsList.includes(k)) fail(`doc→code: DATA_CHANNEL_KINDS member "${k}" declared in the matrix doc is absent from lan-sync-bootstrap.js`)
@@ -141,9 +165,10 @@ console.log(`[check-sync-matrix] doc entities: [${docEntities.join(', ')}]`)
 console.log(`[check-sync-matrix] code SYNCABLE_ENTITIES: [${codeEntities.join(', ')}]`)
 console.log(`[check-sync-matrix] manifest full-sync entities: [${[...fullEntities].sort().join(', ')}]; local entities: [${[...localEntities].sort().join(', ')}]`)
 console.log(`[check-sync-matrix] DATA_CHANNEL_KINDS doc=[${docKindsList.join(', ')}] code=[${codeKindsList.join(', ')}]`)
+console.log(`[check-sync-matrix] op census doc=[${docOpsList.join(', ')}] manifest sync:'full' ops=[${[...manifestOps].sort().join(', ')}]`)
 if (errors.length) {
   for (const e of errors) console.error('[check-sync-matrix] ✗ ' + e)
   console.error(`[check-sync-matrix] ${errors.length} drift finding(s) — docs/sync-matrix.md and the code sync surface disagree`)
   process.exit(1)
 }
-console.log('[check-sync-matrix] ✓ matrix doc and code sync surface agree (' + docEntities.length + ' entities, ' + codeKindsList.length + ' channel kinds)')
+console.log('[check-sync-matrix] ✓ matrix doc and code sync surface agree (' + docEntities.length + ' entities, ' + codeKindsList.length + ' channel kinds, ' + docOpsList.length + ' ops)')

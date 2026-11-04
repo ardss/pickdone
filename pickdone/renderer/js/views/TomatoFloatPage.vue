@@ -141,7 +141,7 @@ export default {
   watch: {
     menuOpen () { this.syncPanel() },
     noiseOpen () { this.syncPanel() },
-    abandoning () { this.syncPanel(); setTimeout(() => this.flushGhost(), 260) } // erase after the tf-pop 0.18s transition finishes
+    abandoning () { this.syncPanel(); if (this._ghostTimer) { clearTimeout(this._ghostTimer); this._ghostTimer = null } this._ghostTimer = setTimeout(() => { this._ghostTimer = null; this.flushGhost() }, 260) } // [w33 P3] handle stored (d21-A15): re-entry inside the window clears the previous timer, unmount teardown clears it — erase after the tf-pop 0.18s transition finishes
   },
   computed: {
     working () { return !!(this.st && this.st.status === 'startTomatoTime') },
@@ -418,7 +418,7 @@ export default {
     this._routeGuard()
   },
   beforeUnmount () {
-    clearInterval(this._iv)
+    clearInterval(this._iv); if (this._ghostTimer) { clearTimeout(this._ghostTimer); this._ghostTimer = null } // [w33 P3] abandoning watcher's deferred flushGhost
     if (this._onStorage) window.removeEventListener('storage', this._onStorage)
     if (this._onKey) window.removeEventListener('keydown', this._onKey)
     if (this._unAfterEach) this._unAfterEach()
