@@ -37,6 +37,10 @@
 - 主进程（W27）：data:relocate 迁移进度 IPC 永远到不了渲染端（webContents 被二次包裹，TypeError 被吞）；updater 终态守卫放任并发 check 把进行中的自动下载标成已是最新；quit-ack 的 onDone 回调在退出拆除 tick 里裸奔；审计日志轮转的 existsSync→rename 探测可被双进程竞态（POSIX 静默覆盖）——改 ms+pid+seq 唯一目标。
 - 门禁/测试（W27）：check-file-size 的 ls-files 钉 core.quotePath=false（非 ASCII 跟踪文件曾被误判新文件）；lint-staged 的 W25 staged-blob 抽取按原目录镜像（摊平临时路径丢 .eslintrc 目录 overrides——错 env linting）；journey-relay 暂存文件 pid 唯一化、jrelay- 家族进 tmp 清扫器；check-media-lang 可见含空格/尖括号的 markdown 引用（fail-open 封堵）；check-fingerprint 抓正斜杠与 file-URL 形态本机路径；check-i18n 的 bracketDelta 跳过字符串/注释字面量；j-todo-core 的 J1 日期条导航对 ±7 天箭头步进稳健（0.1.0 起的行为）。
 
+## [0.4.0-beta.25] - 2026-11-04
+
+- 打包门禁：`npm run dist` 末尾接入 verify-packaged（fail-closed）——坏包产物（如 beta.24 那次符号链接事故：代码门禁全绿、app.asar 却静默丢了约 60 个 Electron 运行时包）不再能作为"成功构建"流出流水线；内部验收候选版本升至本版，装机的机器一眼区分新构建与 beta.24。
+
 ## [0.4.0-beta.24] - 2026-11-01
 
 - 门禁基础设施竞态（P0×2，10-31 release 门禁 5 连红的真凶——不是 runner 抖动）：child-registry 仍是读改写且 writeAll 会 prune 整个目录，并行车道互删注册（子进程变不可收割孤儿）；meta#2 对共享的真实 runner-children 目录做前后 diff（任何并发注册=假 leftover）；meta#5 直接改写真实 coverage-summary.json（10/10/10 假摘要）被并行覆盖率棘轮车道读到。child-registry 重写为每 pid 只写/删自己的文件（兼容旧格式残留）；新增 PICKDONE_CHILD_REGISTRY_DIR 覆盖让 meta#2/meta#5 全部 sandbox 化（泄漏仍红语义保留）；meta#9 重写为真实行使 live 池端口分配器。交错复现测试钉 12/12 存活（修前 0/12）。

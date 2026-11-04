@@ -1,6 +1,6 @@
 {
   "name": "pickdone",
-  "version": "0.4.0-beta.24",
+  "version": "0.4.0-beta.25",
   "private": true,
   "description": "PickDone — local-first todos, schedule and pomodoro focus desktop app",
   "productName": "PickDone",
@@ -33,7 +33,7 @@
     "setup:hooks": "git config core.hooksPath pickdone/.githooks",
     "prepare": "git config core.hooksPath pickdone/.githooks",
     "pack": "npm run build:renderer && electron-builder --dir",
-    "dist": "npm run build:renderer && electron-builder --win nsis portable",
+    "dist": "npm run build:renderer && electron-builder --win nsis portable && node scripts/verify-packaged.cjs --require-installer",
     "bump": "node scripts/bump-cache.mjs",
     "verify:packaged": "node scripts/verify-packaged.cjs",
     "build:renderer": "node scripts/clean-renderer-dist.mjs && vite build",
