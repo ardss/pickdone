@@ -46,6 +46,13 @@ function loadContext (lib, taskIdRef) {
   const db = lib.open()
   const episodes = db.call('queryEpisodesByTask', t.taskId) || []
   const sources = db.call('querySourcesByTask', t.taskId) || []
+  // pd20 P0-6 (2026-11-05): the hierarchy composes — phases/subtasks stay the existing
+  // todos.subtasks JSON (read via lib.parseSubs, the same parser the CLI subtask commands use);
+  // the context shows them read-only alongside the execution record (episodes) so an agent
+  // sees 大任务 → 子任务 → 执行记录 in ONE same-source view. No write-back path here: subtask
+  // writes stay in the existing authorized subtask commands (add/check/rm).
+  let subtasks = []
+  try { subtasks = lib.parseSubs(t) || [] } catch { /* legacy/unparsable subtask JSON: present as empty, never block the context */ }
   const handoffEpisodes = episodes.map(ep => {
     const f = parseNote(ep.summary)
     return {
@@ -57,7 +64,7 @@ function loadContext (lib, taskIdRef) {
     }
   })
   const handoff = buildHandoff(handoffEpisodes, sources, { id: t.taskId, title: t.taskContent || t.content || '' })
-  return { task: t, episodes, sources, handoff }
+  return { task: t, subtasks, episodes, sources, handoff }
 }
 
 function runWork ({ opts, lib, emit }) {
@@ -69,11 +76,11 @@ function runWork ({ opts, lib, emit }) {
     // get_task_context: everything a fresh agent needs to take the task over WITHOUT reading
     // the chat history: the task row, the full work history, linked provenance, and the
     // ready-to-paste handoff (both formats).
-    const { task, episodes, sources, handoff } = loadContext(lib, taskIdRef)
+    const { task, subtasks, episodes, sources, handoff } = loadContext(lib, taskIdRef)
     if (opts.json) {
-      return emit({ task, episodes, sources, handoff: handoff.json, handoffMarkdown: handoff.text })
+      return emit({ task, subtasks, episodes, sources, handoff: handoff.json, handoffMarkdown: handoff.text })
     }
-    console.log(JSON.stringify({ task, episodes, sources, handoff: handoff.json, handoffMarkdown: handoff.text }, null, 2))
+    console.log(JSON.stringify({ task, subtasks, episodes, sources, handoff: handoff.json, handoffMarkdown: handoff.text }, null, 2))
     return
   }
 
