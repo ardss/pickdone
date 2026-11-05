@@ -5,7 +5,7 @@
  *
  *   Session A (fresh isolated userData):
  *   T1 boot: dedicated spawnApp instance, en-US locale, onboarding dismissed (real store).
- *   T2 gate: workEpisode section absent (default OFF) → settings/update ON → section visible
+ *   T2 gate: workEpisode section visible BY DEFAULT (default ON, pd20 2026-11-05) → explicit OFF hides → ON restores
  *      on the real EditPanel of a UI-created task.
  *   T3 episode CRUD through the REAL form (EditPanelWork): type goal/outcome/nextAction →
  *      click Save → the persisted state line shows only after the commit resolves → dbCall
@@ -159,18 +159,26 @@ test('T1 boot: dedicated isolated instance, en-US, onboarding dismissed', async 
   await boot()
 })
 
-test('T2 gate: section absent (default OFF) → settings ON (store chain + LS persist) → section visible', async () => {
+test('T2 gate: section visible by DEFAULT (default ON since pd20 2026-11-05) → explicit OFF hides it → ON restores (LS persist)', async () => {
   const name = 'pd20 T2 gate journey ' + Math.random().toString(36).slice(2, 6)
   await quickAdd(name)
   await openEditPanel(name)
-  assert.ok(!await evalJson(ctx, `!!document.querySelector('${section('')}')`),
-    'the work-episode section rendered while workEpisode.enabled is unset (the experiment gate is broken open)')
-  const upd = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s ? s.dispatch('settings/update', { workEpisode: { enabled: true } }) : null })()`)
-  assert.ok(upd && upd.ok !== false, 'settings/update dispatch failed: ' + JSON.stringify(upd))
-  assert.ok(await untilJson(`(() => { try { const v = JSON.parse(localStorage.getItem('settingsState') || '{}'); return !!(v.workEpisode && v.workEpisode.enabled) } catch { return false } })()`, 12, 500),
-    'the switch did not persist to localStorage settingsState (it would die on the next boot)')
+  // DEFAULT-ON doctrine (P0-2): the declared default (settings-schema workEpisode.enabled=true)
+  // means a fresh user SEES the work-handoff section — the old undeclared-key default (unset →
+  // OFF) hid the whole surface from non-developers. A fresh isolated instance has no stored
+  // settingsState, so what renders here IS the default.
   assert.ok(await untilJson(`!!document.querySelector('${section('')}')`, 8, 500),
-    'the work-episode section did not appear after workEpisode.enabled=true')
+    'the work-episode section did not render by default (default-ON doctrine broken)')
+  const updOff = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s ? s.dispatch('settings/update', { workEpisode: { enabled: false } }) : null })()`)
+  assert.ok(updOff && updOff.ok !== false, 'settings/update(false) dispatch failed: ' + JSON.stringify(updOff))
+  assert.ok(await untilJson(`(() => { try { const v = JSON.parse(localStorage.getItem('settingsState') || '{}'); return !!(v.workEpisode && v.workEpisode.enabled === false) } catch { return false } })()`, 12, 500),
+    'the explicit OFF did not persist to localStorage settingsState (it would die on the next boot)')
+  assert.ok(await untilJson(`!document.querySelector('${section('')}')`, 8, 500),
+    'the work-episode section did not hide after workEpisode.enabled=false')
+  const updOn = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s ? s.dispatch('settings/update', { workEpisode: { enabled: true } }) : null })()`)
+  assert.ok(updOn && updOn.ok !== false, 'settings/update(true) dispatch failed: ' + JSON.stringify(updOn))
+  assert.ok(await untilJson(`!!document.querySelector('${section('')}')`, 8, 500),
+    'the work-episode section did not re-appear after workEpisode.enabled=true')
 })
 
 test('T3 episode CRUD through the REAL form: create → state line → read-back → edit keeps id/startedAt → delete', async () => {
