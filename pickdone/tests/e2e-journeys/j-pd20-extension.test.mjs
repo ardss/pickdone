@@ -497,9 +497,36 @@ async function pageReloadPopup () {
 }
 
 after(async () => {
+  console.error('[j-pd20-extension] after() start')
   try { if (app && app.ctx) await stopApp(app.ctx) } catch {}
+  console.error('[j-pd20-extension] after() app stopped')
   try { chromeWs?.ws?.close?.() } catch {}
   try { pageWs?.ws?.close?.() } catch {}
-  try { if (chromeProc) chromeProc.kill() } catch {}
-  try { if (httpServer) httpServer.close() } catch {}
+  // E6-hang root fix (2026-11-05): chromeProc.kill() on Windows terminates only the browser's
+  // MAIN process — renderer/GPU children survive and hold the page-server's keep-alive sockets,
+  // and httpServer.close() (which only releases the LISTEN handle) then leaves open sockets
+  // referencing the event loop: every test already printed ✔ yet the suite process never
+  // drained (the observed 20-min "hangs after all-green"). Tree-kill chrome by pid, and
+  // force-close the page server's live connections before close().
+  try {
+    if (chromeProc && chromeProc.pid) {
+      const { execSync } = await import('node:child_process')
+      if (process.platform === 'win32') execSync(`taskkill /T /F /PID ${chromeProc.pid}`, { stdio: 'ignore' })
+      else chromeProc.kill('SIGKILL')
+    }
+  } catch {}
+  try { if (httpServer) { httpServer.closeAllConnections(); httpServer.close() } } catch {}
+  console.error('[j-pd20-extension] after() end')
+  // E6-hang failsafe (2026-11-05, root-caused): every test green AND after() fully complete,
+  // yet the suite process stayed alive indefinitely — a lingering socket handle (observed as
+  // a CONNECTING-state CDP WebSocket toward an already-dead target; browsers/electron leave
+  // transient targets whose ws connect attempt never settles) keeps the event loop referenced
+  // forever. This is NOT a test verdict: node:test has already recorded every result and set
+  // process.exitCode by now, so the failsafe preserves red-red / green-green — it only bounds
+  // the post-summary hang. Fail-loud in the log either way.
+  setTimeout(() => {
+    const code = process.exitCode === 1 ? 1 : 0
+    console.error('[j-pd20-extension] force-exit failsafe firing, exitCode=' + code)
+    process.exit(code)
+  }, 8000)
 })
