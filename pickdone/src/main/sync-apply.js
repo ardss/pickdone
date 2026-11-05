@@ -68,6 +68,9 @@ const { rowContentDiffers } = require('./sync-apply-content')
 // silently swallowed the loser's entries. Entry-level union merge in shared/blob-union-merge.mjs;
 // D2: isUnionMergeContentNoOp — a legacy local serialization no longer echoes a per-round write.
 const { isUnionMergeMetaKey, mergeBlobMetaValue, isUnionMergeContentNoOp } = require('../../shared/blob-union-merge.mjs')
+// PD20 (2026-11-05): the `file`-provider source-ref gate — a local absolute path never egresses
+// (hydrate) and is refused on ingress by the same shared predicate (single source).
+const { isMachineLocalSourceRef } = require('../../shared/machine-local-keys.mjs')
 
 /**
  * Local account id (round-3 review, item: userId passthrough). Inbound rows carry the PEER's
@@ -209,6 +212,10 @@ function applyRowInner (state, incoming) {
   // Defensive: a '*gc*' oplog marker must never surface as an appliable row id (see hydrateRow).
   if (String(incoming.id) === '*gc*') return false
   incoming = clampSkew(incoming)
+  // PD20 (2026-11-05) ingress mirror of the egress gate: a `file`-provider source ref (local
+  // absolute path) never egresses, and a legacy/crafted peer row carrying one is refused here —
+  // machine-local content must not be writable by a peer either (round-3 review doctrine).
+  if (incoming.entity === 'source' && incoming.data && isMachineLocalSourceRef(incoming.data.providerId, incoming.data.externalId)) return false
   const entity = incoming.entity
   // Locate the local counterpart for LWW comparison (cached: one entity-list read per ingest pass)
   const cache = state.applyCache || createHydrationCache(state)
@@ -253,6 +260,13 @@ function applyRowInner (state, incoming) {
     } else {
       localRow = { updatedAt: tsMap.get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
     }
+  } else if (entity === 'episode' || entity === 'source' || entity === 'tasksource') {
+    // PD20 (2026-11-05): category-doctrine local lookup — the raw row tables carry real
+    // updatedAt/deleted/deletedAt columns (episodeAllRows/sourceAllRows/taskSourceAllRows), so
+    // a live row AND a locally tombstoned row both take part in LWW with their honest ages.
+    const r = cache[entity](incoming.id)
+    if (r && !r.deleted) localRow = { updatedAt: r.updatedAt || 0, deleted: false, deletedAt: 0, data: r }
+    else if (r) localRow = { updatedAt: r.updatedAt || 0, deleted: true, deletedAt: r.deletedAt || 0, data: null }
   } else if (entity === 'tomato' || entity === 'plan' || entity === 'filter') {
     // Manifest-documented tombstone-fallback shape (TOMB_FALLBACK_LOOKUP): live row first, then
     // the entity's tombstone read. Per-entity history that forced this shape:
@@ -292,7 +306,7 @@ function applyRowInner (state, incoming) {
   // tombstone instead of resurrecting.
   // S4: this keep used to be completely silent — record the explicit ruling + surface it
   // (flag-gated; flag off → byte-identical silence).
-  if ((entity === 'plan' || entity === 'filter') && localRow && localRow.deleted &&
+  if ((entity === 'plan' || entity === 'filter' || entity === 'episode' || entity === 'source' || entity === 'tasksource') && localRow && localRow.deleted &&
       incoming && !incoming.deleted && stampNum(localRow.deletedAt) >= stampNum(incoming.updatedAt)) {
     // W8 fix (2026-10-25): the guard was strict `>`, so an EXACT-STAMP tie (deletedAt ==
     // updatedAt — the peer edited at the same millisecond it (or a peer) deleted) fell through to
@@ -618,6 +632,42 @@ function applyRowInner (state, incoming) {
       if (localRow) busWrite(state, 'filterDelete', [Number(incoming.id), { deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
     } else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
+  } else if (entity === 'episode' || entity === 'source' || entity === 'tasksource') {
+    // PD20 (2026-11-05): cross-device handoff rows land through their regular bus commands
+    // (episode.put / source.put / tasksource.put + the tombstone removes). Volume is low
+    // (handoff history per task), so direct per-row writes — no bulk buffer needed. The put
+    // ops preserve an explicit updatedAt verbatim (wire-carried LWW age survives the hop),
+    // and the tombstone removes accept {id, deletedAt, updatedAt} stamps (R7 P1-2 doctrine:
+    // no local re-stamp, no echo bounce).
+    const putCmd = entity === 'episode' ? 'episodePut' : entity === 'source' ? 'sourcePut' : 'taskSourcePut'
+    const removeCmd = entity === 'episode' ? 'episodeRemoveIds' : entity === 'source' ? 'sourceRemoveByIds' : 'taskSourceRemove'
+    if (winner.deleted && !winner.data) {
+      // Ghost-tombstone guard (plan doctrine): a peer deletion of a row we never had applies
+      // as a no-op (watermark advances) without materializing a content-empty junk row.
+      if (!localRow) return true
+      busWrite(state, removeCmd, [{ id: incoming.id, deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
+      return true
+    }
+    if (!winner.data) return false
+    // Pair-collapse rule (source/tasksource only — both tables carry a UNIQUE pair index):
+    // a peer row whose (providerId, externalId) / (taskId, sourceRefId) pair already exists
+    // locally under a DIFFERENT id (both devices captured the same source independently)
+    // cannot land as a second row. Merge onto the LOCAL pair id when the peer's content stamp
+    // is strictly newer; otherwise the local row stands. The peer's id pointer is applied as a
+    // no-op either way — minting a tombstone for it would echo-fight the peer's live row
+    // forever (the peer still holds that id live). Consequence (documented, not silent): each
+    // device keeps exactly one live row per pair, under its own id; deletes of a
+    // foreign-captured duplicate do not propagate across the id split.
+    if (entity === 'source' || entity === 'tasksource') {
+      const pair = state.db.call(entity === 'source' ? 'sourceFindPair' : 'taskSourceFindPair', winner.data)
+      if (pair && pair.id !== String(incoming.id)) {
+        if (stampNum(winner.updatedAt) > stampNum(pair.updatedAt)) {
+          busWrite(state, putCmd, { ...winner.data, id: pair.id, updatedAt: winner.updatedAt })
+        }
+        return true
+      }
+    }
+    busWrite(state, putCmd, { ...winner.data, updatedAt: winner.updatedAt })
   } else if (entity === 'meta') {
     // GAP-A fix (2026-09-19): meta lands through the regular setMeta/deleteMeta ops (re-captured
     // into the local oplog, which is what acknowledges the state back to the peer). LWW-newer-wins
@@ -707,57 +757,10 @@ function consumeAppliedRound (state) {
   return { kinds: [...a.kinds], settingsPatch: a.settingsPatch, conflicts: a.conflicts, adjudicationFailed: a.adjudicationFailed || 0 }
 }
 
-// Flush/quarantine layer (busFor/busWrite/flushPendingWrites) moved verbatim to ./sync-apply-flush.js (size ratchet).
-/**
- * Local max oplog seq — reported to peers as `ack.appliedToSeq` so their per-peer push watermarks
- * can advance and rounds ship deltas instead of re-pushing the full backlog every time.
- * syncOplogSince is ascending-only with a clamped limit, so page forward; the ring buffer keeps
- * ~10k rows, so this is one query in practice (two at most right after a trim boundary).
- */
-function readMaxOplogSeq (state) {
-  let since = 0
-  for (let i = 0; i < SYNC_OPLOG_KEEP; i++) {
-    const rows = state.db.call('syncOplogSince', { sinceSeq: since, limit: oplogKeepLimit(SYNC_OPLOG_KEEP) }) || []
-    if (rows.length < SYNC_OPLOG_KEEP) return rows.length ? rows[rows.length - 1].seq : since
-    since = rows[rows.length - 1].seq
-  }
-  return since
-}
-
-/**
- * D11 finding 4 (egress meta reconciliation): snapshot meta rows used to be enumerated ONLY from
- * retained oplog pointers — a live key whose pointers trimmed out of the ring was unsyncable in
- * BOTH directions. Enumerate from the meta TABLE instead (listMetaKeys), aged by the retained
- * pointer ts with the ring's floor ts as the honest BOUND for a trimmed key (paired with the
- * ingress bound rule in applyRowInner — closes the permanent-starvation class). Excluded:
- * machine-local meta + the settings/habits blobs. D13 finding 5: absent-valued keys with a
- * retained pointer are enumerated as TOMBSTONE rows (aged pointer ts / floor) so a local delete
- * invisible to snapshots cannot be LWW-resurrected by a stale peer copy. Residual: deletions
- * whose pointers trimmed entirely stay unresolvable by snapshot (documented).
- */
-function metaSnapshotRows (state) {
-  const cache = createHydrationCache(state)
-  const tsMap = cache.metaTs()
-  const floor = cache.metaFloorTs()
-  const out = []
-  for (const key of state.db.call('listMetaKeys') || []) {
-    if (isMachineLocalMetaKey(key) || isSyncBlobMetaKey(key)) continue
-    const v = cache.meta(key)
-    if (v == null) continue // live enumeration only; deletions come from the pointer scan below
-    out.push({ entity: 'meta', id: key, updatedAt: tsMap.get(key) || floor, deleted: false, deletedAt: 0, data: { key, value: v } })
-  }
-  // D13 finding 5: retained pointers for keys that no longer exist = locally deleted meta keys
-  // (deleteMeta is the only way a meta key disappears). Emit each as a tombstone row aged by its
-  // latest pointer ts (meta has no stamp column) so the deletion survives increment trimming.
-  const live = new Set((state.db.call('listMetaKeys') || []).map(String))
-  for (const [key, ts] of tsMap) {
-    if (live.has(key)) continue
-    if (isMachineLocalMetaKey(key) || isSyncBlobMetaKey(key)) continue
-    out.push({ entity: 'meta', id: key, updatedAt: ts || floor, deleted: true, deletedAt: ts || floor, data: null })
-  }
-  return out
-}
-
+// Flush/quarantine layer (busFor/busWrite/flushPendingWrites) moved to ./sync-apply-flush.js; readMaxOplogSeq/metaSnapshotRows to ./sync-apply-snapshot.cjs (size ratchet, re-exported bound below).
+const snapshotImpl = require('./sync-apply-snapshot.cjs')
+const metaSnapshotRows = state => snapshotImpl.metaSnapshotRows(state, createHydrationCache, isMachineLocalMetaKey, isSyncBlobMetaKey)
+const readMaxOplogSeq = state => snapshotImpl.readMaxOplogSeq(state, SYNC_OPLOG_KEEP, oplogKeepLimit)
 // S2 causal receive seam: moved verbatim to ./sync-adjudicate.js (size ratchet) — re-exported
 // below so the bootstrap/test import surface is unchanged.
 

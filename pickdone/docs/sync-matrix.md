@@ -54,7 +54,15 @@ syncable anywhere in the renderer:
 Round kinds are the syncable entity names emitted by the main apply pipeline
 (`src/main/sync-apply.js`, `SYNCABLE_ENTITIES`):
 
-`todo`, `setting`, `tomato`, `category`, `plan`, `filter`, `meta`
+`todo`, `setting`, `tomato`, `category`, `plan`, `filter`, `meta`, `episode`, `source`, `tasksource`
+
+PD20 (2026-11-05): `episode` (work_episodes), `source` (source_refs) and `tasksource`
+(task_source_links) sync for cross-device work handoff — raw-row LWW with tombstone columns
+(category doctrine). Safety boundary: `file`-provider source refs (local absolute paths) are
+machine-local and filtered at egress (hydrate/allRows via `isMachineLocalSourceRef`,
+shared/machine-local-keys.mjs) and refused on ingress; portable http(s)/capture refs sync
+normally. Pair-unique dedupe on ingress follows the sync-apply pair-collapse rule (merge onto
+the local pair id; see sync-apply.js).
 
 `DATA_CHANNEL_KINDS = ['todo', 'category', 'plan', 'filter', 'meta']` ride the
 `todos-changed` broadcast (`op` = comma-joined kinds) so the renderer re-reads external writes;
@@ -65,7 +73,7 @@ The write-surface op census — every op dispatched by a `sync:'full'` row of
 `src/main/command-manifest.js` (gate: `cli/check-sync-matrix.cjs`, checked in both directions;
 update this line in the same commit that renames, adds or removes a sync op):
 
-`SYNC_OPS = ['bumpSnow', 'commitSyncBatch', 'deleteMeta', 'filterDelete', 'filterUpsert', 'filterUpsertMany', 'hardDelete', 'hardDeleteMany', 'planAddMany', 'planDeleteTask', 'planDeleteTaskDay', 'planMoveTask', 'planRemoveIds', 'planUpdateChip', 'purgeRecycleBin', 'purgeSeedTodos', 'setMeta', 'setMetaMany', 'settingsRowDelete', 'settingsRowPut', 'settingsRowPutMany', 'tomatoAppendMany', 'tomatoRemoveByIds', 'tomatoUpdateById', 'upsert', 'upsertCategory', 'upsertCategoryMany', 'upsertMany']`
+`SYNC_OPS = ['bumpSnow', 'commitSyncBatch', 'deleteMeta', 'episodePut', 'episodeRemoveIds', 'filterDelete', 'filterUpsert', 'filterUpsertMany', 'hardDelete', 'hardDeleteMany', 'planAddMany', 'planDeleteTask', 'planDeleteTaskDay', 'planMoveTask', 'planRemoveIds', 'planUpdateChip', 'purgeRecycleBin', 'purgeSeedTodos', 'setMeta', 'setMetaMany', 'settingsRowDelete', 'settingsRowPut', 'settingsRowPutMany', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove', 'tomatoAppendMany', 'tomatoRemoveByIds', 'tomatoUpdateById', 'upsert', 'upsertCategory', 'upsertCategoryMany', 'upsertMany']`
 
 ## 4. Hard rules for every sync review
 

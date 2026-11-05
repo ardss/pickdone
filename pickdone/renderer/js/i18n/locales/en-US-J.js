@@ -160,6 +160,7 @@ export default {
   'statsJ.EditPanel.workEpisodeResources': 'Linked resources',
   'statsJ.EditPanel.workEpisodeHandoff': 'Handoff',
   'statsJ.EditPanel.workEpisodeCopyHandoff': 'Copy Handoff',
+  'statsJ.EditPanel.workEpisodeCopyHandoffJson': 'Copy Handoff (JSON)',
   'statsJ.EditPanel.workEpisodeCopyOk': 'Copied to clipboard',
   'statsJ.EditPanel.workEpisodeCopyFail': 'Copy failed',
   'statsJ.EditPanel.workEpisodeEmpty': 'No episode records yet',

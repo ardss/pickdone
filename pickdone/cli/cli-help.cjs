@@ -35,6 +35,12 @@ Read commands:
   stats  [--from YYYY-MM-DD --to YYYY-MM-DD]  daily done/focus stats (default: last 7 days)
   recycle                         list recycle bin
   plan   [list] [date]            show schedule chips for a day (default: today)
+  work  <taskId|keyword> [context|episodes|handoff|add-episode|add-source]
+                                  work-handoff state (pd20): context = task + episodes + sources +
+                                  handoff JSON (get_task_context); handoff --out <dir> writes
+                                  handoff.md + handoff.json (export_handoff); add-episode records a
+                                  work round (--goal required, --outcome/--next optional); add-source
+                                  links provenance (--uri required, --provider/--title optional)
   plan set <taskId|keyword> <HH:mm> [--date D] [--replace]   put a task on the day timeline at HH:mm
   plan rm <taskId|keyword> [--at HH:mm] [--date D]           remove a chip (--at targets one chip; default clears the task's chips that day)
   settings [list|get <key>]       list all known settings with current values

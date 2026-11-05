@@ -133,20 +133,24 @@ const COMMANDS = {
   'sync.conflictBackupRestore': { entity: 'sync', verb: 'conflictBackupRestore', sync: 'local', lwwField: null, tombstone: null, op: 'syncConflictBackupRestore' },
 
   // ---- work episodes / source refs / task-source links (S1 vertical slice, migration v11) ----
-  // Machine-local domain storage (sync:'local'): never egresses. pd20 (2026-11-03): no longer
-  // internal — the EditPanelWork 'continue work' section writes episodes and source links from
-  // the renderer through the SAME bus door (commandBus.js facade rows mirror these keys).
+  // pd20 (2026-11-03): renderer-writable via the SAME bus door (commandBus.js facade rows mirror
+  // these keys). pd20 (2026-11-05): sync:'full' — work handoff history must follow the task to
+  // the paired device (P0-3 cross-device takeover). Safety boundary: `file`-provider source refs
+  // (local absolute paths) are machine-local and filtered at BOTH egress (hydrate/allRows) and
+  // ingress (sync-apply) via shared isMachineLocalSourceRef — a portable http(s)/capture ref
+  // syncs, a filesystem path never leaves the device. Pair-unique dedupe is enforced on ingress
+  // by the sync-apply pair-collapse rule (merge onto the local pair id; see sync-apply.js).
   // lwwField 'updatedAt': the bus stamps the age local callers omit; the domain ops preserve an
   // explicit age (sync-apply parity).
-  'episode.put':        { entity: 'episode', verb: 'put', sync: 'local', lwwField: 'updatedAt', tombstone: null, op: 'episodePut' },
-  'episode.removeIds':  { entity: 'episode', verb: 'removeIds', sync: 'local', lwwField: 'updatedAt', tombstone: 'pointer', op: 'episodeRemoveIds' },
-  'source.put':         { entity: 'source', verb: 'put', sync: 'local', lwwField: 'updatedAt', tombstone: null, op: 'sourcePut' },
-  'source.removeByIds': { entity: 'source', verb: 'removeByIds', sync: 'local', lwwField: 'updatedAt', tombstone: 'pointer', op: 'sourceRemoveByIds' },
+  'episode.put':        { entity: 'episode', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'episodePut' },
+  'episode.removeIds':  { entity: 'episode', verb: 'removeIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'episodeRemoveIds' },
+  'source.put':         { entity: 'source', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'sourcePut' },
+  'source.removeByIds': { entity: 'source', verb: 'removeByIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'sourceRemoveByIds' },
   // Note: the task-source entity key is ALL-LOWERCASE (`tasksource.*`) per the manifest's
   // existing naming convention (every entity is lowercase; the row-hygiene gate enforces it) —
   // only the op names are camelCase.
-  'tasksource.put':     { entity: 'tasksource', verb: 'put', sync: 'local', lwwField: 'updatedAt', tombstone: null, op: 'taskSourcePut' },
-  'tasksource.remove':  { entity: 'tasksource', verb: 'remove', sync: 'local', lwwField: 'updatedAt', tombstone: 'pointer', op: 'taskSourceRemove' },
+  'tasksource.put':     { entity: 'tasksource', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'taskSourcePut' },
+  'tasksource.remove':  { entity: 'tasksource', verb: 'remove', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'taskSourceRemove' },
 
   // ---- Phase 2: internal (non-renderer-surface) commands ----
   // Dangerous purge channels (db:purge-recycle-bin / db:purge-seed-todos): main-window-only IPC

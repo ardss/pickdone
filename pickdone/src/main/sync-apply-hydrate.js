@@ -13,7 +13,7 @@
 const { SYNC_OPLOG_KEEP, oplogKeepLimit } = require('./db-oplog') // D3 2026-09-24: oplog page size derives from the ring retention (was bare 10000s)
 // Domain-1 F-A1 (2026-09-23): the machine-local setting predicate lives in
 // shared/machine-local-keys.mjs — single source; the manifest imports the same module.
-const { isMachineLocalSettingKey } = require('../../shared/machine-local-keys.mjs')
+const { isMachineLocalSettingKey, isMachineLocalSourceRef } = require('../../shared/machine-local-keys.mjs')
 const mergeCore = require('../../shared/sync-core/merge.mjs') // 2026-10-08: isSameTodoContent payload fingerprints
 
 // Entities whose local-counterpart lookup shares the live-row-then-tombstone-fallback shape
@@ -26,7 +26,11 @@ const TOMB_FALLBACK_LOOKUP = {
   filter: { live: 'filter', tomb: 'filterTomb' }
 }
 
-const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'plan', 'filter', 'meta'])
+const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'plan', 'filter', 'meta',
+  // PD20 (2026-11-05): work-episode / source-ref / task-source-link rows sync (cross-device
+  // handoff; manifest rows carry the full-sync flag). `file`-provider source refs stay
+  // machine-local (isMachineLocalSourceRef gate below and in sync-apply.js).
+  'episode', 'source', 'tasksource'])
 // settings_rows keys holding password/question CIPHERTEXT — never egress, never ingress (round-3).
 const SECURITY_LOCK_KEY = /^securityLock/
 
@@ -74,6 +78,12 @@ function createHydrationCache (state) {
     // upsertCategoryMany threw "Invalid value" in better-sqlite3 and flushOne dropped the whole
     // categories buffer (category sync never landed); it also had no updatedAt (snapshot age 0).
     category: id => load('category', 'categoriesAllRows', r => String(r.id)).get(String(id)),
+    // PD20 (2026-11-05): episode/source/tasksource read the RAW ROW tables (tombstones included,
+    // category doctrine) — the sync merge needs the real updatedAt/deleted/deletedAt columns and
+    // the apply path pushes the raw row straight through episodePut/sourcePut/taskSourcePut.
+    episode: id => load('episode', 'episodeAllRows', r => String(r.id)).get(String(id)),
+    source: id => load('source', 'sourceAllRows', r => String(r.id)).get(String(id)),
+    tasksource: id => load('tasksource', 'taskSourceAllRows', r => String(r.id)).get(String(id)),
     plan: id => load('plan', 'planAll', r => String(r.id)).get(String(id)),
     filter: id => load('filter', 'filterList', r => String(r.id)).get(String(id)),
     // M3 (2026-09-20): tombstone reads — a LOCALLY deleted plan/filter must take part in inbound
@@ -183,6 +193,18 @@ function hydrateRow (state, ptr, cache) {
     // Tomb reads carry no `deleted` col (only deletedAt) — `p.deleted` never fired, so locally deleted chips hydrated LIVE (deletion never propagated).
     if (p.deleted || p.deletedAt) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
     return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
+  }
+    if (ptr.entity === 'episode' || ptr.entity === 'source' || ptr.entity === 'tasksource') {
+    // PD20 (2026-11-05): category-doctrine hydration on the raw row tables (tombstones included).
+    // A pointer whose row is gone locally hydrates as a ptr.ts-age tombstone (peer deletion of a
+    // row we purged); a row-PRESENT tombstone carries its honest deletedAt/updatedAt (D13 rule).
+    // Machine-local gate: a `file`-provider source ref (local absolute path) NEVER egresses —
+    // return null, a legitimate skip like the machine-local setting/meta keys.
+    const r = c[ptr.entity](ptr.entityId)
+    if (!r) return { ...base, updatedAt: ptr.ts, deleted: true, deletedAt: ptr.ts, data: null }
+    if (r.deleted) return { ...base, updatedAt: r.updatedAt || ptr.ts, deleted: true, deletedAt: r.deletedAt || 0, data: null }
+    if (ptr.entity === 'source' && isMachineLocalSourceRef(r.providerId, r.externalId)) return null
+    return { ...base, updatedAt: r.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: r }
   }
   } catch (e) {
     // r2 2026-09-28: a DB read failure is NOT the same as "not syncable". The old catch-all

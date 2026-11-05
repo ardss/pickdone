@@ -135,6 +135,30 @@ exports.taskSourcePut = (db, row = {}) => {
 
 exports.taskSourceRemove = (db, ids, opts = {}) => removeByIds(db, 'task_source_links', ids, opts)
 
+// ---- raw row reads (pd20 LAN sync, 2026-11-05) ----
+// The sync engine's snapshot/seed enumeration (lan-sync-egress allRows) needs the RAW row
+// shapes (storage columns, tombstones included) — NOT the renderer view models above. Same
+// doctrine as categoriesAllRows/planTombstones: the egress side pushes `data: null` for
+// tombstones and the raw row for live rows; sync-apply lands peers' rows back through
+// episodePut/sourcePut/taskSourcePut with the wire-carried stamps (those ops preserve an
+// explicit updatedAt verbatim, so LWW ordering survives the hop).
+const rowAll = (db, table) => db.prepare(`SELECT * FROM ${table} ORDER BY id ASC`).all()
+const rowTombstones = (db, table) => db.prepare(`SELECT id, updatedAt, deletedAt FROM ${table} WHERE deleted = 1 ORDER BY id ASC`).all()
+
+exports.episodeAllRows = db => rowAll(db, 'work_episodes')
+exports.episodeTombstones = db => rowTombstones(db, 'work_episodes')
+exports.sourceAllRows = db => rowAll(db, 'source_refs')
+exports.sourceTombstones = db => rowTombstones(db, 'source_refs')
+exports.taskSourceAllRows = db => rowAll(db, 'task_source_links')
+exports.taskSourceTombstones = db => rowTombstones(db, 'task_source_links')
+
+// Pair lookups for the sync-apply pair-collapse rule (see sync-apply.js): a peer source/link
+// row whose (providerId, externalId) / (taskId, sourceRefId) pair already exists locally under
+// a DIFFERENT id must merge onto the local row — UNIQUE(pair) makes a second id impossible.
+// Used only by the sync ingress path; the renderer never sees these.
+exports.sourceFindPair = (db, row) => db.prepare('SELECT id, updatedAt, deleted FROM source_refs WHERE providerId = ? AND externalId = ?').get(String(row && row.providerId), String(row && row.externalId)) || null
+exports.taskSourceFindPair = (db, row) => db.prepare('SELECT id, updatedAt, deleted FROM task_source_links WHERE taskId = ? AND sourceRefId = ?').get(String(row && row.taskId), String(row && row.sourceRefId)) || null
+
 // Shared tombstone core (planRemoveIds shape): row-granular changed-id list, stamp opts honored.
 function removeByIds (db, table, ids, opts = {}) {
   const list = Array.isArray(ids) ? ids : [ids]

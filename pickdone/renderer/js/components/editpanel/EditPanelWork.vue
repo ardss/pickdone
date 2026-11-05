@@ -109,6 +109,8 @@
         <div class="ep-work-text">{{ episodes.length ? taskTitle : '' }}</div>
         <button v-if="hasHandoff" class="mini ep-work-copy" @click="copyHandoff">
           {{ $t('statsJ.EditPanel.workEpisodeCopyHandoff') }}</button>
+        <button v-if="hasHandoff" class="mini ep-work-copy-json" data-action="copy-handoff-json" @click="copyHandoffJson">
+          {{ $t('statsJ.EditPanel.workEpisodeCopyHandoffJson') }}</button>
         <span v-if="copyState" class="ep-work-copy-state" role="status">{{ copyState }}</span>
       </div>
     </div>
@@ -327,6 +329,24 @@ export default {
         const result = this.buildHandoff(this.handoffEpisodes(), this.sources || [], { id: this.taskId, title: this.taskTitle })
         const text = (result && typeof result.text === 'string') ? result.text : ''
         if (!text) throw new Error('empty handoff text')
+        await navigator.clipboard.writeText(text)
+        this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyOk')
+      } catch (e) {
+        this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyFail')
+      }
+    },
+    // pd20 (2026-11-05) P0-2: the handoff JSON — the structured contract an external agent can
+    // consume directly (task id + episodes + sources) — previously had NO export path (result.json
+    // was built and dropped). Same clipboard door + feedback line as the markdown copy; the
+    // canonicalUri set is exactly what buildHandoff emits (file-provider absolute paths stay out
+    // of anything the user did not link deliberately, and the JSON never carries secrets — the
+    // capture dedupe keys and machine meta never enter buildHandoff's inputs).
+    async copyHandoffJson () {
+      if (typeof this.buildHandoff !== 'function') { this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyFail'); return }
+      try {
+        const result = this.buildHandoff(this.handoffEpisodes(), this.sources || [], { id: this.taskId, title: this.taskTitle })
+        const text = result && result.json ? JSON.stringify(result.json, null, 2) : ''
+        if (!text || text === '{}') throw new Error('empty handoff json')
         await navigator.clipboard.writeText(text)
         this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyOk')
       } catch (e) {

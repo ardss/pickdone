@@ -159,6 +159,7 @@ export default {
   'statsJ.EditPanel.workEpisodeResources': '关联资源',
   'statsJ.EditPanel.workEpisodeHandoff': '继续工作',
   'statsJ.EditPanel.workEpisodeCopyHandoff': '复制 Handoff',
+  'statsJ.EditPanel.workEpisodeCopyHandoffJson': '复制 Handoff（JSON）',
   'statsJ.EditPanel.workEpisodeCopyOk': '已复制到剪贴板',
   'statsJ.EditPanel.workEpisodeCopyFail': '复制失败',
   'statsJ.EditPanel.workEpisodeEmpty': '暂无工作记录',

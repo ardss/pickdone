@@ -40,6 +40,7 @@ test('P3-5 gate: every DEFAULT_SETTINGS syncable key is manifest-exposed with th
     'shortcutKeySettings',   // complex object (config.json-backed, shared/shortcut-defaults.mjs)
     'repeatDefaultSettings', // complex object (repeat-modal defaults, managed by the App's repeat UI)
     'onboardingToursSeen',   // complex object (onboarding tour completion state, App-managed)
+    'workEpisode',           // complex object {enabled} (pd20 P0-2 EditPanel work section, EditPanel-managed)
     '_lsAt',                 // internal LS write stamp
     'tomatoTimeDefault', 'restTimeDefault' // legacy dead keys, migrated away on load
   ])

@@ -10,6 +10,9 @@
  *          oplogKeepLimit, SYNC_OPLOG_KEEP, CURSOR_META_KEY, SYNC_SCHEMA_VERSION } */
 function createEgressSurface (ctx) {
   const { log, emitSyncEvent, syncApply, busWrite, flushPendingWrites, finalizeIngest, oplogKeepLimit, SYNC_OPLOG_KEEP, CURSOR_META_KEY, SYNC_SCHEMA_VERSION } = ctx
+  // PD20 (2026-11-05): `file`-provider source refs (local absolute paths) never egress — the
+  // shared predicate is the single source for the allRows snapshot filter (hydrate/ingress gate).
+  const { isMachineLocalSourceRef } = require('../../shared/machine-local-keys.mjs')
   const state = () => ctx.getState()
   const createHydrationCache = () => syncApply.createHydrationCache(state())
   const hydrateRow = (ptr, cache) => syncApply.hydrateRow(state(), ptr, cache)
@@ -83,6 +86,18 @@ function createEgressSurface (ctx) {
         for (const t of state().db.call('planTombstones', {}) || []) out.push({ entity: 'plan', id: t.id, updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null })
         for (const f of state().db.call('filterList', {}) || []) out.push({ entity: 'filter', id: String(f.id), updatedAt: f.updatedAt || 0, deleted: false, deletedAt: 0, data: f })
         for (const t of state().db.call('filterTombstones', {}) || []) out.push({ entity: 'filter', id: String(t.id), updatedAt: t.updatedAt || 0, deleted: true, deletedAt: t.deletedAt || 0, data: null })
+        // PD20 (2026-11-05): work-episode / source-ref / task-source-link rows — cross-device
+        // handoff (manifest sync:'full'). Raw row tables carry their own tombstone columns
+        // (category doctrine: data null for tombstones, raw row for live rows). Machine-local
+        // gate: a `file`-provider source ref (local absolute path) NEVER egresses — its
+        // task_source_links row still syncs, and the peer's episode view JOIN simply hides the
+        // missing ref (shared isMachineLocalSourceRef, same predicate as hydrate/ingress).
+        for (const r of state().db.call('episodeAllRows', {}) || []) out.push({ entity: 'episode', id: String(r.id), updatedAt: r.updatedAt || 0, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: r.deleted ? null : r })
+        for (const r of state().db.call('sourceAllRows', {}) || []) {
+          if (isMachineLocalSourceRef(r.providerId, r.externalId)) continue
+          out.push({ entity: 'source', id: String(r.id), updatedAt: r.updatedAt || 0, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: r.deleted ? null : r })
+        }
+        for (const r of state().db.call('taskSourceAllRows', {}) || []) out.push({ entity: 'tasksource', id: String(r.id), updatedAt: r.updatedAt || 0, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: r.deleted ? null : r })
         // Meta entity (GAP-A fix 2026-09-19): meta has no list-read op (db.js is size-ratcheted), so
         // syncable meta keys used to be enumerated from their oplog pointers only — a live key whose
         // pointers fell out of the ring never appeared in a snapshot AND was refused on ingress

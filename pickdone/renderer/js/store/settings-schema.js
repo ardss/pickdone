@@ -27,6 +27,12 @@ export const DEFAULT_SETTINGS = {
   showHabitModule: false, // habit check-in module (two-layer gate: developerMode && this)
   showProjectsModule: false, // projects module (two-layer gate: developerMode && this — still experimental, not graduated)
   showDepsModule: false, // dependency view (two-layer gate: developerMode && this; today deps mode + project deps tab)
+  // pd20 (2026-11-05) P0-2: the EditPanel 'continue work' section (work episodes + source refs +
+  // handoff copy) is DEFAULT-ON. The old undeclared key read undefined → OFF, which hid the whole
+  // work-handoff surface from every non-developer; an undeclared key is also outside the F-C2
+  // DEFAULT_SETTINGS whitelist, so the toggle could not even survive an inbound settings patch.
+  // Declaring it makes it a real setting: visible, persistable, syncable, user-toggleable.
+  workEpisode: { enabled: true },
   calendarBackground: 'list', // list|theme|system
   isCalendarBackgroundUserSelected: false,
   enableSecurityLock: false,

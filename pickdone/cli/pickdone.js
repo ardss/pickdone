@@ -14,6 +14,7 @@ const runTomato = require('./lib-tomato.cjs')
 const runSync = require('./lib-sync.cjs')
 const { runCategory, runTag, runProjects, runProject, runMilestone, runView } = require('./lib-taxonomy.cjs')
 const { runSubtask, runAttachment, runSettings, runPlan, runRepeat } = require('./lib-schedule.cjs')
+const { runWork } = require('./lib-work.cjs') // pd20 P0-4: agent same-source work interface (context/episodes/handoff/add-episode/add-source)
 const dayjs = require('dayjs')
 const fs = require('fs')
 const path = require('path')
@@ -136,7 +137,10 @@ async function main () {
     attachment: ['add', 'rm', 'remove'],
     milestone: ['add', 'rm', 'link', 'unlink'],
     settings: ['set'],
-    tomato: ['start', 'stop', 'attach', 'backfill']
+    tomato: ['start', 'stop', 'attach', 'backfill'],
+    // pd20 (2026-11-05) P0-4: the work sub-commands that WRITE (episode/source recording) —
+    // reads (context/episodes/handoff) stay ungated.
+    work: ['add-episode', 'add-source']
     // (sync not listed here: gated whole-command above — every sub-op writes a cliSyncCmd row)
   }
   const isGatedWrite = (cmd, opts) => {
@@ -308,6 +312,7 @@ async function main () {
       return
     }
     case 'view': return runView({ opts, lib, emit, emitNext })
+    case 'work': return runWork({ opts, lib, emit })
     case 'log': {
       const entries = lib.readAuditLog({ n: Math.min(parseInt(opts.n, 10) || 20, 200), action: opts.action })
       if (opts.json) return emit(entries)

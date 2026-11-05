@@ -70,7 +70,10 @@ export const SETTINGS_MANIFEST = {
   // managed by App UIs (repeat-defaults modal, onboarding tours) — not CLI-settable primitives, so
   // they deliberately have no boolean/number/enum/string entry. settingsSet's blob write-back
   // whitelist (cli/lib.js) still carries them, or every CLI write would strip them from the blob.
-  blobOnly: ['repeatDefaultSettings', 'onboardingToursSeen'],
+  // pd20 (2026-11-05): workEpisode ({enabled:boolean}) is an App-UI-managed OBJECT map (the
+  // EditPanel 'continue work' switch) — blobOnly like repeatDefaultSettings, so the CLI's
+  // settings write-back whitelist carries it instead of stripping it from the blob.
+  blobOnly: ['repeatDefaultSettings', 'onboardingToursSeen', 'workEpisode'],
   // D19-DOM2 (#5): keys whose LEGAL domain includes -1 — the blanket >= 0 gate in cli/lib-settings
   // settingsSet rejected them, but todoBoxCategoryId's shipped default IS -1 (all-categories;
   // renderer DEFAULT_SETTINGS todoBoxCategoryId: -1, and store/todo.js filters on !== -1).

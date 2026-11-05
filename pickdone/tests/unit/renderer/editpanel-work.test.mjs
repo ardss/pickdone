@@ -38,6 +38,9 @@ const I18N = {
   'statsJ.EditPanel.workEpisodeResources': '关联资源',
   'statsJ.EditPanel.workEpisodeHandoff': '继续工作',
   'statsJ.EditPanel.workEpisodeCopyHandoff': '复制 Handoff',
+  'statsJ.EditPanel.workEpisodeCopyHandoffJson': '复制 Handoff（JSON）',
+  'statsJ.EditPanel.workEpisodeCopyOk': '已复制到剪贴板',
+  'statsJ.EditPanel.workEpisodeCopyFail': '复制失败',
   'statsJ.EditPanel.workEpisodeEmpty': '暂无工作记录',
   'statsJ.EditPanel.workEpisodeRecordTitle': '记录工作轮次',
   'statsJ.EditPanel.workEpisodeGoal': '目标',
@@ -163,7 +166,7 @@ function mountPanel ({ settings = {}, episodes = EPISODES, sources = [], commitI
   const handoffCalls = []
   const buildHandoff = (eps, srcs, task) => {
     handoffCalls.push({ episodes: eps, sources: srcs, task })
-    return { text: 'HANDOFF:' + task.title + ':' + eps.length, json: {} }
+    return { text: 'HANDOFF:' + task.title + ':' + eps.length, json: { task: { id: task.id, title: task.title }, episodes: [], sources: [] } }
   }
   const dbCalls = []
   let liveEpisodes = episodes
@@ -438,4 +441,20 @@ test('pd20 failure: a rejected commit surfaces the failure state line and does N
   assert.ok(state.textContent.includes('db locked'), 'the failure message carries the cause')
   assert.equal(h.root.querySelector('[data-input="edit-goal"]') ? 1 : h.root.querySelector('[data-input="new-goal"]').value, 'Will fail',
     'the form is NOT reset on failure (the user keeps their input)')
+})
+
+test('pd20 P0-2 (2026-11-05): the section defaults ON via DEFAULT_SETTINGS.workEpisode and a Copy-Handoff(JSON) button exports the structured contract', async () => {
+  // default-on: the declared setting flips the old silent default (undeclared key → undefined → OFF)
+  const { DEFAULT_SETTINGS } = require('../../../renderer/js/store/settings-schema.js')
+  assert.equal(DEFAULT_SETTINGS.workEpisode && DEFAULT_SETTINGS.workEpisode.enabled, true,
+    'DEFAULT_SETTINGS.workEpisode.enabled must be true (discoverable work-handoff surface)')
+  // JSON export: the second copy button writes buildHandoff's .json (previously built and dropped)
+  const h = await mountPanel({ settings: { workEpisode: { enabled: true } } })
+  assert.ok(h.root.querySelector('.ep-work-copy-json'), 'the JSON copy button renders alongside the markdown one')
+  await h.click('.ep-work-copy-json')
+  await h.flushAsync()
+  assert.equal(h.clipboardWrites.length, 1, 'one clipboard write')
+  const parsed = JSON.parse(h.clipboardWrites[0])
+  assert.ok(parsed.task && parsed.episodes && Array.isArray(parsed.sources), 'the clipboard payload is the structured handoff JSON (task/episodes/sources)')
+  assert.equal(h.root.querySelector('.ep-work-copy-state').textContent.includes('已复制'), true, 'success feedback shown')
 })

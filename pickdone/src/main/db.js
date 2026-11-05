@@ -60,58 +60,12 @@ function stmtsClearAll () { for (const k of Object.keys(stmts)) delete stmts[k];
  *  encrypts at USER scope — any same-user process (the audit's actual threat: same-user malware) decrypts
  *  it just as easily; (b) the headless CLI runs plain node and cannot call Electron safeStorage, so a
  *  wrapped key breaks the entire CLI surface for zero real gain. Re-evaluate only if the threat model changes (multi-user hosts / documented stolen-disk incident). */
-/** One-time migration of an existing plaintext DB to an encrypted DB: ATTACH the encrypted target + create tables per the existing SCHEMA + copy rows table by table,
- *  keeping the original file as a .plain-bak fallback (the driver lacks sqlcipher_export, so migration is manual) */
+/** One-time migration of an existing plaintext DB to an encrypted DB (real body extracted to
+ *  db-enc-migrate.cjs for the size ratchet — this wrapper binds the module-owned state). */
 function migratePlainToEncrypted (dir, file, key) {
-  const encFile = path.join(dir, 'todos-encrypted.tmp')
-  try {
-    fs.rmSync(encFile, { force: true })
-    // Test-only seam (2026-09-24 C12): a hook returning true simulates a crash mid-rename — // the hook stages the on-disk state itself, then the REAL catch/restore path runs.
-    if (migrateFailHook && migrateFailHook({ dir, file, encFile })) {
-      throw new Error('[TodoDB] injected migration failure (test seam)')
-    }
-    // ATTACH 的 KEY 是 SQL 字面量(参数化不支持),必须双写单引号——加密 key 是唯一触碰 SQL 字符串的敏感值
-    const keyLiteral = String(key).replace(/'/g, "''")
-    db.exec(`ATTACH DATABASE '${encFile.replace(/'/g, "''")}' AS enc KEY '${keyLiteral}'`)
-    // 2026-10-10: line-anchored rewrite (an unanchored replace mangled comments containing the substring).
-    const encSchema = SCHEMA
-      .replace(/^[ \t]*CREATE TABLE IF NOT EXISTS /gm, 'CREATE TABLE IF NOT EXISTS enc.')
-      .replace(/^[ \t]*CREATE INDEX IF NOT EXISTS /gm, 'CREATE INDEX IF NOT EXISTS enc.')
-    db.exec(encSchema)
-    // 表清单动态枚举,禁手工维护:2026-09-04 深审实锤硬编码四表漏了 plan_chips/tomato_records,行表化用户的账本会在迁移中被清空(P0)
-    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(r => r.name)
-    for (const table of tables) {
-      // Copy by NAME (see db-enc-copy.js): positional SELECT * shifted ALTER-appended columns on legacy DBs.
-      require('./db-enc-copy')(db, table)    }
-    db.exec('DETACH DATABASE enc')
-    // Explicit wal_checkpoint(TRUNCATE) before closing: ensure the plaintext WAL tail writes have landed in the main file before the WAL can be safely deleted (otherwise .plain-bak may miss tail data)
-    db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
-    db.close()
-    // main-ipc-2 fsync fix (2026-09-22): the key must be PERSISTENTLY on disk before the renames // below. The old writeFileSync (at the caller, after these renames) without fsync let a power // cut persist the encrypted-DB rename while the key was still OS-cached-only — encrypted DB
-    // on disk, key lost, library unrecoverable. Durable write here closes that window; the // caller's key write afterwards becomes an idempotent confirmation.
-    require('./durable-fs').writeFileDurable(path.join(path.dirname(file), 'db.key'), key)
-    fs.renameSync(file, file + '.plain-bak')
-    fs.renameSync(encFile, file)
-    for (const suffix of ['-wal', '-shm']) { try { fs.rmSync(file + suffix, { force: true }) } catch {} }
-    log.info('[TodoDB] 已将存量明文库迁移为加密库（原文件保留 .plain-bak）')
-    return true
-  } catch (e) {
-    log.error('[TodoDB] 明文→加密迁移失败，回退明文打开', e)
-    // [H5 2026-10-25, rootcause audit] silent-plaintext degradation: the session now runs
-    // UNENCRYPTED while the user believes their data is encrypted at rest. Flag it so the
-    // whenReady chain surfaces ONE visible notice (quarantine-notice contract).
-    encMigrationDegraded = true
-    try { db.close() } catch {}
-    try { fs.rmSync(encFile, { force: true }) } catch {}
-    // 两步 rename 中途失败的自愈:第一步(file→plain-bak)已成功而第二步(enc→file)失败时, // todos.db 缺位,init 随后的无驱动重开会让 better-sqlite3 静默新建空库——本次会话跑在空库上, // 且下次启动"无 todos.db 才恢复"的预检被跳过,旧数据永不自愈(2026-09-05 终审 P1)。把明文库放回
-    try {
-      if (!fs.existsSync(file) && fs.existsSync(file + '.plain-bak')) {
-        fs.renameSync(file + '.plain-bak', file)
-        log.warn('[TodoDB] 迁移中断:已将 .plain-bak 还原为 todos.db')
-      }
-    } catch (e2) { log.error('[TodoDB] plain-bak 还原失败', e2) }
-    return false
-  }
+  return require('./db-enc-migrate.cjs').migratePlainToEncrypted(
+    { db, SCHEMA, log, migrateFailHook, onDegraded: () => { encMigrationDegraded = true } },
+    dir, file, key)
 }
 
 /** Test-only migration failure injection (C12, 2026-09-24): never set in production. */
@@ -687,6 +641,17 @@ const OPS = {
   taskSourceRemove: (...a) => require('./db-episode-ops.cjs').taskSourceRemove(db, ...a),
   queryEpisodesByTask: (...a) => require('./db-episode-ops.cjs').queryEpisodesByTask(db, ...a),
   querySourcesByTask: (...a) => require('./db-episode-ops.cjs').querySourcesByTask(db, ...a), // pd20 handoff copy: read-only source-ref read (canonicalUri composed in db-episode-ops.cjs) — whitelisted with queryEpisodesByTask, no manifest row (read-only class)
+  // pd20 LAN sync (2026-11-05): raw row reads for the sync engine's snapshot/seed enumeration and
+  // the pair-collapse lookups (sync-apply ingress). Main-internal only — NOT in handlers/todo.js
+  // read whitelist, so the renderer cannot reach them (same class as appendOplogPointers).
+  episodeAllRows: (...a) => require('./db-episode-ops.cjs').episodeAllRows(db, ...a),
+  episodeTombstones: (...a) => require('./db-episode-ops.cjs').episodeTombstones(db, ...a),
+  sourceAllRows: (...a) => require('./db-episode-ops.cjs').sourceAllRows(db, ...a),
+  sourceTombstones: (...a) => require('./db-episode-ops.cjs').sourceTombstones(db, ...a),
+  taskSourceAllRows: (...a) => require('./db-episode-ops.cjs').taskSourceAllRows(db, ...a),
+  taskSourceTombstones: (...a) => require('./db-episode-ops.cjs').taskSourceTombstones(db, ...a),
+  sourceFindPair: (...a) => require('./db-episode-ops.cjs').sourceFindPair(db, ...a),
+  taskSourceFindPair: (...a) => require('./db-episode-ops.cjs').taskSourceFindPair(db, ...a),
   captureIngest: (...a) => OPS.setMetaMany(...a), // S4 capture door dedupe-index pair — same setMetaMany impl, distinct op so manifest one-op-one-command holds alongside meta.putMany
   // Delta read for the (future) sync engine and tests: oplog rows strictly after sinceSeq, oldest first.
   // limit guards the first pull on a large existing log; callers page through via the returned max seq.

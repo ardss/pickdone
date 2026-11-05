@@ -41,6 +41,19 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 - Main process (W27): data:relocate progress IPC never reached the renderer (webContents double-wrapped, TypeError swallowed); updater terminal-state guards let a concurrent check relabel an in-flight auto-download as up-to-date; quit-ack's onDone callback ran uncontained inside the teardown poll tick; audit-log rotation used an existsSync→rename probe that two processes can race (POSIX silent overwrite) — unique ms+pid+seq targets.
 - Gates/tests (W27): check-file-size ls-files pins core.quotePath=false (non-ASCII tracked files falsely treated as new); lint-staged's W25 staged-blob extraction mirrors original directories (flat temp paths lost .eslintrc directory overrides — wrong env linting); journey-relay staging files are pid-unique and the jrelay- family joins the tmp sweeper; check-media-lang sees spaced/angle-bracket markdown refs (fail-open closed); check-fingerprint catches forward-slash and file-URL local paths; check-i18n's bracketDelta skips string/comment literals; j-todo-core's J1 strip navigation is robust to the ±7-day arrow shift (behavior since 0.1.0).
 
+## [0.4.0-beta.28] - 2026-11-05
+
+- Managed-upgrade recovery (internal A/B installer, scripts/windows): deploy-in-place preflight verifies the installer hash, previous version, running executable roots, startup tasks and the live encrypted database/key before stopping anything; the whole old program + database/WAL/SHM + db.key + config + attachments are backed up first; a failed or wrong NSIS run quarantines the failed build and restores the prior program via restore-program.ps1; user data is never auto-overwritten during rollback (automatic reopen withheld when the database hash changed).
+- Updater feed classification: a missing release feed (HTTP 404 / ENOTFOUND / no published release) is classified FEED_MISSING and never re-armed on the 30s backoff; DNS/network failures stay transient with a bounded retry budget; the status exposes lastCheckError {kind, at} so "this tag has no public release assets" is distinguishable from a network failure.
+
+## [0.4.0-beta.27] - 2026-11-04
+
+- LAN sync: peer liveness is now matched to periodic LAN rounds (a peer that answered a recent round is not evicted as dead); the sync status surface reflects the actual LAN node state instead of stale planned copy.
+
+## [0.4.0-beta.26] - 2026-11-04
+
+- Update install consent: quitting into an update requires explicit user consent and a version-aware A/B upgrade gate (a candidate older than or equal to the running build is refused before anything is stopped).
+
 ## [0.4.0-beta.25] - 2026-11-04
 
 - Packaging gate: `npm run dist` now ends with verify-packaged in fail-closed mode — a broken packaged artifact (e.g. the beta.24 symlink incident that silently dropped ~60 runtime Electron packages from app.asar while every code gate stayed green) can no longer leave the pipeline as a "successful" build; internal acceptance candidate bumped to this version so installed machines can tell the new build apart from beta.24 at a glance.

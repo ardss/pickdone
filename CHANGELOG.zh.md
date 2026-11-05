@@ -37,6 +37,19 @@
 - 主进程（W27）：data:relocate 迁移进度 IPC 永远到不了渲染端（webContents 被二次包裹，TypeError 被吞）；updater 终态守卫放任并发 check 把进行中的自动下载标成已是最新；quit-ack 的 onDone 回调在退出拆除 tick 里裸奔；审计日志轮转的 existsSync→rename 探测可被双进程竞态（POSIX 静默覆盖）——改 ms+pid+seq 唯一目标。
 - 门禁/测试（W27）：check-file-size 的 ls-files 钉 core.quotePath=false（非 ASCII 跟踪文件曾被误判新文件）；lint-staged 的 W25 staged-blob 抽取按原目录镜像（摊平临时路径丢 .eslintrc 目录 overrides——错 env linting）；journey-relay 暂存文件 pid 唯一化、jrelay- 家族进 tmp 清扫器；check-media-lang 可见含空格/尖括号的 markdown 引用（fail-open 封堵）；check-fingerprint 抓正斜杠与 file-URL 形态本机路径；check-i18n 的 bracketDelta 跳过字符串/注释字面量；j-todo-core 的 J1 日期条导航对 ±7 天箭头步进稳健（0.1.0 起的行为）。
 
+## [0.4.0-beta.28] - 2026-11-05
+
+- 托管升级恢复（内部 A/B 安装脚本，scripts/windows）：deploy-in-place 预检在任何进程停止之前校验安装包哈希、旧版本、运行中程序根、自启任务与现用加密数据库/密钥；先完整备份旧程序 + 数据库/WAL/SHM + db.key + 配置 + 附件；NSIS 安装失败或装错构建时隔离失败包并用 restore-program.ps1 还原旧程序；回滚永不自动覆盖用户数据（数据库哈希变化时收回自动重开）。
+- 更新源错误分类：缺失的发布源（HTTP 404 / ENOTFOUND / 无已发布 release）归类为 FEED_MISSING 且不再挂在 30 秒退避上反复重试；DNS/网络故障保持瞬态并有界重试；状态暴露 lastCheckError {kind, at}，"该 tag 无公开 release 资产"与网络故障可区分。
+
+## [0.4.0-beta.27] - 2026-11-04
+
+- LAN 同步：对端存活判定改为跟随周期性 LAN 轮次（刚应答过轮次的对端不再被误判下线）；同步状态页反映真实 LAN 节点状态而非过期计划文案。
+
+## [0.4.0-beta.26] - 2026-11-04
+
+- 更新安装确认：进入更新重启需用户显式确认，并加版本感知的 A/B 升级门（候选版本不高于运行中构建时在停止任何进程前拒绝）。
+
 ## [0.4.0-beta.25] - 2026-11-04
 
 - 打包门禁：`npm run dist` 末尾接入 verify-packaged（fail-closed）——坏包产物（如 beta.24 那次符号链接事故：代码门禁全绿、app.asar 却静默丢了约 60 个 Electron 运行时包）不再能作为"成功构建"流出流水线；内部验收候选版本升至本版，装机的机器一眼区分新构建与 beta.24。
