@@ -203,4 +203,11 @@ export default {
   'statsJ.winbind.unbindMenu': '解除窗口绑定',
   'statsJ.winbind.badgeTip': '已绑定窗口：{name}，点击找回',
   'statsJ.winbind.unbindTip': '解除窗口绑定',
+  'statsJ.ProjectView.handoffTitle': '工作交接',
+  'statsJ.ProjectView.handoffEpCount': '{n} 条记录',
+  'statsJ.ProjectView.handoffEpisodesOnly': '仅显示有记录的任务',
+  'statsJ.ProjectView.handoffNoRecord': '暂无记录',
+  'statsJ.ProjectView.handoffRecentTitle': '最近工作',
+  'statsJ.ProjectView.handoffEmpty': '该项目暂无工作记录。',
+  'statsJ.ProjectView.handoffOpenTaskAria': '打开任务：{t}'
 }

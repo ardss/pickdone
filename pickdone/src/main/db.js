@@ -641,6 +641,7 @@ const OPS = {
   taskSourceRemove: (...a) => require('./db-episode-ops.cjs').taskSourceRemove(db, ...a),
   queryEpisodesByTask: (...a) => require('./db-episode-ops.cjs').queryEpisodesByTask(db, ...a),
   querySourcesByTask: (...a) => require('./db-episode-ops.cjs').querySourcesByTask(db, ...a), // pd20 handoff copy: read-only source-ref read (canonicalUri composed in db-episode-ops.cjs) — whitelisted with queryEpisodesByTask, no manifest row (read-only class)
+  queryEpisodesByCategory: (...a) => require('./db-episode-ops.cjs').queryEpisodesByCategory(db, ...a), // pd20 P1-01 project work-handoff: per-task episode rollup for a category's live todos (impl db-episode-ops.cjs; read-only → whitelisted with queryEpisodesByTask in handlers/todo.js, no manifest row)
   // pd20 LAN sync (2026-11-05): raw row reads for the sync engine's snapshot/seed enumeration and
   // the pair-collapse lookups (sync-apply ingress). Main-internal only — NOT in handlers/todo.js
   // read whitelist, so the renderer cannot reach them (same class as appendOplogPointers).

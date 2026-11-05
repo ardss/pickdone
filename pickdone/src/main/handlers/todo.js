@@ -99,6 +99,10 @@ module.exports = function todoHandlers (ctx) {
     // querySourcesByTask (pd20 handoff copy): read-only source-ref read feeding the Copy-Handoff
     // button's buildHandoff(sources) input (impl db-episode-ops.cjs; same read-only class as above)
     'querySourcesByTask',
+    // queryEpisodesByCategory (pd20 P1-01): read-only per-task episode rollup for the ProjectView
+    // 'work handoff' section (impl db-episode-ops.cjs; same read-only class as queryEpisodesByTask
+    // — any window, no manifest row)
+    'queryEpisodesByCategory',
     // pd20 (2026-11-03): the EditPanelWork 'continue work' forms write episodes + source links
     // through the SAME bus door — the six domain writes are non-internal manifest rows now.
     'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove'

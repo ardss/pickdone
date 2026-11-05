@@ -82,6 +82,74 @@ exports.querySourcesByTask = (db, taskId) => {
   }))
 }
 
+// Read-side (pd20 P1-01 project overview work-handoff): per-task episode rollup for every LIVE,
+// non-deleted todo of a category (Project = folder-category). One JOIN/GROUP BY for the counts +
+// one batched episode fetch for the latest-note fields — no N+1 per task. The last goal/outcome/
+// nextAction are parsed from the latest episode's single `note` column with the SAME round-trip
+// doctrine as the EditPanelWork form (plain notes with no recognized field lines → the whole
+// note IS the goal; outcome/nextAction stay ''). Returns { tasks, recent }: `tasks` is the
+// per-task rollup array (tasks without episodes come back with episodeCount 0 / 0 timestamps /
+// '' fields, INCLUDED — filtering them out is the RENDERER's toggle, never the storage layer's);
+// `recent` is the project-level last-8 episodes (startedAt desc, time + goal one-liner).
+// Read-only → no manifest row; whitelisted alongside
+// queryEpisodesByTask in handlers/todo.js.
+const parseNoteFields = note => {
+  const s = String(note || '')
+  const grab = re => { const m = s.match(re); return m ? m[1].trim() : '' }
+  const goal = grab(/(?:^|\n)goal:[ \t]*([\s\S]*?)(?=\noutcome:|\nnextAction:|$)/)
+  if (!goal) return { goal: s.trim(), outcome: '', nextAction: '' }
+  return {
+    goal,
+    outcome: grab(/(?:^|\n)outcome:[ \t]*([\s\S]*?)(?=\noutcome:|\nnextAction:|$)/),
+    nextAction: grab(/(?:^|\n)nextAction:[ \t]*([\s\S]*?)(?=\noutcome:|\nnextAction:|$)/)
+  }
+}
+
+exports.queryEpisodesByCategory = (db, categoryId) => {
+  if (categoryId == null || categoryId === '' || !isFinite(Number(categoryId))) return { tasks: [], recent: [] }
+  const catId = Number(categoryId)
+  const rollup = db.prepare(
+    'SELECT t.id AS taskId, t.content AS taskContent, COUNT(e.id) AS episodeCount,' +
+    ' MAX(e.startedAt) AS lastEpisodeAt' +
+    ' FROM todos t LEFT JOIN work_episodes e ON e.taskId = t.id AND e.deleted = 0' +
+    ' WHERE t.categoryId = @catId AND t.deleted = 0' +
+    ' GROUP BY t.id ORDER BY lastEpisodeAt DESC, t.id ASC'
+  ).all({ catId })
+  if (!rollup.length) return { tasks: [], recent: [] }
+  // Batched second pass: every live episode of these tasks (newest first) — the first hit per
+  // taskId in JS is that task's latest episode, and the same list yields the project-level
+  // recent-8. Two prepared statements total, no N+1 per task.
+  const ids = rollup.map(r => r.taskId)
+  const notes = db.prepare(
+    'SELECT id, taskId, startedAt, note FROM work_episodes' +
+    ' WHERE deleted = 0 AND taskId IN (' + ids.map(() => '?').join(',') + ')' +
+    ' ORDER BY startedAt DESC, id DESC'
+  ).all(...ids)
+  const latest = new Map()
+  const recent = []
+  for (const row of notes) {
+    if (!latest.has(row.taskId)) latest.set(row.taskId, row)
+    if (recent.length < 8) {
+      const f = parseNoteFields(row.note)
+      recent.push({ episodeId: row.id, taskId: row.taskId, startedAt: row.startedAt || 0, goal: f.goal })
+    }
+  }
+  const tasks = rollup.map(r => {
+    const hit = latest.get(String(r.taskId))
+    const f = hit ? parseNoteFields(hit.note) : { goal: '', outcome: '', nextAction: '' }
+    return {
+      taskId: r.taskId,
+      taskContent: r.taskContent || '',
+      episodeCount: Number(r.episodeCount) || 0,
+      lastEpisodeAt: r.lastEpisodeAt || 0,
+      lastGoal: f.goal,
+      lastOutcome: f.outcome,
+      lastNextAction: f.nextAction
+    }
+  })
+  return { tasks, recent }
+}
+
 // ---- source_refs ----
 exports.sourcePut = (db, row = {}) => {
   if (!row || row.providerId == null || row.providerId === '' || row.externalId == null || row.externalId === '') {

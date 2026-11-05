@@ -204,4 +204,11 @@ export default {
   'statsJ.winbind.unbindMenu': 'Unbind window',
   'statsJ.winbind.badgeTip': 'Bound to {name} — click to bring it back',
   'statsJ.winbind.unbindTip': 'Unbind window',
+  'statsJ.ProjectView.handoffTitle': 'Work handoff',
+  'statsJ.ProjectView.handoffEpCount': '{n} episodes',
+  'statsJ.ProjectView.handoffEpisodesOnly': 'Tasks with episodes only',
+  'statsJ.ProjectView.handoffNoRecord': 'No record yet',
+  'statsJ.ProjectView.handoffRecentTitle': 'Recent work',
+  'statsJ.ProjectView.handoffEmpty': 'No work episodes recorded for this project yet.',
+  'statsJ.ProjectView.handoffOpenTaskAria': 'Open task: {t}',
 }

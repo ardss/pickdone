@@ -125,6 +125,9 @@
         <project-docs :cat-id="catId"/>
       </div>
       <div v-else class="proj-body">
+        <!-- pd20 P1-01 work-handoff overview: collapsible same-source section (component owns
+             its read op + filter toggle; keeps this view under the size ratchet) -->
+        <project-handoff :cat-id="catId"/>
         <empty-state v-if="!groups.length"><template #text>{{ $t('statsB.ProjectView.empty') }}</template></empty-state>
         <div v-else class="todo-list-item-group-list">
           <group-block v-for="g in groups" :key="g.key"
@@ -160,6 +163,7 @@ import DepView from '../components/DepView.vue'
 import ProjectDocs from '../components/ProjectDocs.vue'
 import EmptyState from '../components/EmptyState.vue'
 import MilestoneEditModal from '../components/MilestoneEditModal.vue'
+import ProjectHandoff from '../components/ProjectHandoff.vue'
 import { commit as commitCommand } from "../utils/commandBus.js"
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
@@ -173,7 +177,7 @@ function resolveMsNewId (entryId, saved) {
 
 export default {
   name: 'ProjectView',
-  components: { GroupBlock: TodoGroupBlock, PdDepView: DepView, ProjectDocs, EmptyState, MilestoneEditModal },
+  components: { GroupBlock: TodoGroupBlock, PdDepView: DepView, ProjectDocs, EmptyState, MilestoneEditModal, ProjectHandoff },
   data () {
     return {
       tab: 'overview',
