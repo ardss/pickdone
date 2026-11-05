@@ -102,8 +102,16 @@ export default {
         this.recent = []
       }
     },
-    openTask (r) {
-      const raw = this.$store.getters['todo/byCategory'](this.catId).find(t => t.taskId === r.taskId)
+    async openTask (r) {
+      let raw = this.$store.getters['todo/byCategory'](this.catId).find(t => t.taskId === r.taskId)
+      if (!raw) {
+        // pd20 (2026-11-06) UI-acceptance fix: a freshly synced row can reach the handoff query
+        // before the byCategory cache catches up (external writes ride todos-changed -> async
+        // refresh). The click used to be a SILENT no-op; now it refreshes the store once
+        // (the canonical todo/init path) and retries, so the row is always openable.
+        try { await this.$store.dispatch('todo/init') } catch { /* keep the cache verdict */ }
+        raw = this.$store.getters['todo/byCategory'](this.catId).find(t => t.taskId === r.taskId)
+      }
       if (raw) this.$store.commit('ui/openEdit', raw)
     },
     fmtDateTime (ts) { return ts ? dayjs(ts).format(FMT.dateTime) : '—' }
