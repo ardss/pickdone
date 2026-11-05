@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { buildHandoff } from '../../../renderer/js/utils/handoff.js'
+import { buildHandoff } from '../../../shared/handoff.mjs'
 
 const EP_LATER = {
   startedAt: '2026-11-02T10:00:00Z',

@@ -183,7 +183,7 @@ import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recyc
 import EpSaveHint from './editpanel/EditPanelSaveHint.vue'; import EpWork from './editpanel/EditPanelWork.vue' // [w30 P0] hint markup; pd20 S3 'continue work' section (gated by the workEpisode switch)
 import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
 import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
-import * as reminderOps from './editpanel/reminderOps.js'; import { buildHandoff } from '../utils/handoff.js' // pd20 fix: the REAL S2 formatter provided down to EpWork (inject chain previously broken)
+import * as reminderOps from './editpanel/reminderOps.js'; import { buildHandoff } from '../../../shared/handoff.mjs' // pd20 fix: the REAL S2 formatter provided down to EpWork (inject chain previously broken); single source with the CLI (shared/)
 
 // Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]

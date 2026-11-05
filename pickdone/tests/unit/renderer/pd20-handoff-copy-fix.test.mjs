@@ -102,7 +102,7 @@ function templateOf (sfcPath) {
 }
 
 async function mountWork ({ withProvider = true } = {}) {
-  const { buildHandoff } = await import('../../../renderer/js/utils/handoff.js')
+  const { buildHandoff } = await import('../../../shared/handoff.mjs')
   const Comp = loadScript(WORK_SFC, {})
   Comp.template = templateOf(WORK_SFC) // loadScript yields a template-less option — attach the real SFC template
   const Vue = require('vue')
@@ -152,7 +152,7 @@ async function mountWork ({ withProvider = true } = {}) {
 }
 
 test('[pd20][UI] clicking 复制 Handoff writes the REAL buildHandoff(episodes, sources, task).text to the clipboard — not "[object Object]"', async () => {
-  const { buildHandoff } = await import('../../../renderer/js/utils/handoff.js')
+  const { buildHandoff } = await import('../../../shared/handoff.mjs')
   const h = await mountWork({ withProvider: true })
   try {
     const btn = h.copyBtn()

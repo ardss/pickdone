@@ -7,7 +7,7 @@
  *     read-only whitelisted ops the renderer's EditPanel uses (single source, same view models);
  *   - writes go through the command bus (episode.put / source.put / tasksource.put — the ONE
  *     mutation door, manifest-validated, oplog-captured, LAN-synced since P0-3);
- *   - the handoff format is renderer/js/utils/handoff.js buildHandoff — the SAME pure function
+ *   - the handoff format is shared/handoff.mjs buildHandoff — the SAME pure function
  *     the EditPanel's Copy-Handoff buttons use (no second protocol; required via require(esm)).
  *
  * Contracts (mission P0-4):
@@ -21,7 +21,7 @@
  */
 const fs = require('fs')
 const path = require('path')
-const { buildHandoff } = require('../renderer/js/utils/handoff.js') // require(esm), Node >= 22 — same pattern as limits.mjs
+const { buildHandoff } = require('../shared/handoff.mjs') // require(esm), Node >= 22 — single source with the renderer (packaged extraResources ships shared/, NOT renderer/ source)
 
 // The note field serializes the three form fields with the SAME round-trip the EditPanel uses
 // (renderer EditPanelWork.noteFromForm) — plain notes stay legible as the goal line.
