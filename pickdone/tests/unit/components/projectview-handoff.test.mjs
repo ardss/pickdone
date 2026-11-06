@@ -58,8 +58,14 @@ test('no fabricated status: empty nextAction renders the no-record placeholder; 
 })
 
 test('task-row click opens the existing EditPanel via ui/openEdit; unknown task stays inert', () => {
-  assert.match(compSrc, /commit\('ui\/openEdit', raw\)/, 'same door as the list views')
-  assert.match(compSrc, /if \(raw\) this\.\$store\.commit\('ui\/openEdit'/, 'guard: no raw todo → inert click')
+  // pd20 P1 multi-view: the open path moved to utils/projectOpenTask.js (shared with the
+  // board/timeline views) — the component must delegate, and the util keeps the SAME door
+  // (ui/openEdit) with the inert-click guard and the todo/init cache-miss retry.
+  assert.match(compSrc, /openProjectTask\(this\.\$store, this\.catId, r\.taskId\)/, 'component delegates to the shared project open path')
+  const utilSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'renderer', 'js', 'utils', 'projectOpenTask.js'), 'utf8')
+  assert.match(utilSrc, /commit\('ui\/openEdit', raw\)/, 'same door as the list views')
+  assert.match(utilSrc, /if \(raw\) store\.commit\('ui\/openEdit'/, 'guard: no raw todo → inert click')
+  assert.match(utilSrc, /dispatch\('todo\/init'\)/, 'cache-miss retry rides the canonical store refresh')
 })
 
 test('styles stay in the SFC block (never scoped — global cascade contract), unique proj-ho prefix', () => {

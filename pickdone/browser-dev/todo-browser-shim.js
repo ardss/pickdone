@@ -592,9 +592,10 @@
         // the web demo serves one static sample episode so the folded section has something to show.
         return [{ episodeId: 'ep-demo-1', startedAt: 0, endedAt: 0, summary: 'demo episode', resources: [] }]
       case 'queryEpisodesByCategory':
-        // pd20 P1-01 project work-handoff rollup (envelope {tasks, recent}); the web demo serves
-        // an empty envelope — the ProjectHandoff section renders its 'no record' placeholders.
-        return { tasks: [], recent: [] }
+        // pd20 P1-01 project work-handoff rollup (envelope {tasks, recent, timeline}); the web
+        // demo serves an empty envelope — the ProjectHandoff section renders its 'no record'
+        // placeholders and the timeline view its empty state.
+        return { tasks: [], recent: [], timeline: [] }
       case 'querySourcesByTask':
         // pd20 handoff copy: read-only source-ref read ({level, canonicalUri, title} view model);
         // the web demo serves one static sample source so Copy-Handoff has provenance to assemble.

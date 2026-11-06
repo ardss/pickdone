@@ -106,7 +106,7 @@ const parseNoteFields = note => {
 }
 
 exports.queryEpisodesByCategory = (db, categoryId) => {
-  if (categoryId == null || categoryId === '' || !isFinite(Number(categoryId))) return { tasks: [], recent: [] }
+  if (categoryId == null || categoryId === '' || !isFinite(Number(categoryId))) return { tasks: [], recent: [], timeline: [] }
   const catId = Number(categoryId)
   const rollup = db.prepare(
     'SELECT t.id AS taskId, t.content AS taskContent, COUNT(e.id) AS episodeCount,' +
@@ -115,7 +115,7 @@ exports.queryEpisodesByCategory = (db, categoryId) => {
     ' WHERE t.categoryId = @catId AND t.deleted = 0' +
     ' GROUP BY t.id ORDER BY lastEpisodeAt DESC, t.id ASC'
   ).all({ catId })
-  if (!rollup.length) return { tasks: [], recent: [] }
+  if (!rollup.length) return { tasks: [], recent: [], timeline: [] }
   // Batched second pass: every live episode of these tasks (newest first) — the first hit per
   // taskId in JS is that task's latest episode, and the same list yields the project-level
   // recent-8. Two prepared statements total, no N+1 per task.
@@ -127,11 +127,18 @@ exports.queryEpisodesByCategory = (db, categoryId) => {
   ).all(...ids)
   const latest = new Map()
   const recent = []
+  const timeline = []
+  // pd20 P1 (2026-11-06): the full per-project episode stream (beyond the recent-8 rollup)
+  // feeds the lightweight timeline view. The rows were already fetched; the cap only bounds
+  // the wire shape of a pathological project, it is not a pagination contract.
   for (const row of notes) {
     if (!latest.has(row.taskId)) latest.set(row.taskId, row)
+    const f = parseNoteFields(row.note)
     if (recent.length < 8) {
-      const f = parseNoteFields(row.note)
       recent.push({ episodeId: row.id, taskId: row.taskId, startedAt: row.startedAt || 0, goal: f.goal })
+    }
+    if (timeline.length < 300) {
+      timeline.push({ episodeId: row.id, taskId: row.taskId, startedAt: row.startedAt || 0, goal: f.goal })
     }
   }
   const tasks = rollup.map(r => {
@@ -147,7 +154,7 @@ exports.queryEpisodesByCategory = (db, categoryId) => {
       lastNextAction: f.nextAction
     }
   })
-  return { tasks, recent }
+  return { tasks, recent, timeline }
 }
 
 // ---- source_refs ----

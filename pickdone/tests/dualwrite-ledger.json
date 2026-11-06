@@ -1,222 +1,226 @@
 {
-  "renderer/js/components/DayRail.vue::dayRailCollapsed": {
-    "authority": "local-only",
-    "note": "DayRail折叠态UI偏好,无跨端同步义务"
-  },
-  "renderer/js/components/FeedbackModal.vue::feedbackPending": {
-    "authority": "local-only",
-    "note": "反馈弹窗待提交标记,单机运行时状态"
-  },
-  "renderer/js/components/Onboarding.vue::onboardingDone": {
-    "authority": "sqlite",
-    "note": "首启向导完成标记;DB由markDoneInDb落meta,LS为免重放缓存"
-  },
-  "renderer/js/components/SettingsModal.vue::settingsTab": {
-    "authority": "local-only",
-    "note": "设置页签记忆,单机UI偏好"
-  },
-  "renderer/js/components/SideNav.vue::sidebarCollapsed": {
-    "authority": "local-only",
-    "note": "侧栏折叠UI偏好"
-  },
-  "renderer/js/components/WeatherWidget.vue::geoShape-v2-": {
-    "authority": "local-only",
-    "note": "城市轮廓离线缓存(c2d8320),带版本后缀,无同步语义"
-  },
-  "renderer/js/components/WeatherWidget.vue::weatherCache": {
-    "authority": "local-only",
-    "note": "天气API响应缓存,带at时间戳"
-  },
-  "renderer/js/demo-data.js::demoSeedV3": {
-    "authority": "local-only",
-    "note": "5175演示数据注册表(仅调试宿主),seed/purge幂等用"
-  },
-  "renderer/js/demo-data.js::demoTomatoSeededV4": {
-    "authority": "local-only",
-    "note": "5175演示番茄灌点标记V4(仅调试宿主;seed/purge幂等用,V3改名升级)"
-  },
-  "renderer/js/i18n/index.js::appLocale": {
-    "authority": "local-only",
-    "note": "语言选择;显示层实时翻译,持久化偏好"
-  },
-  "renderer/js/store/auth.js::lastLoginRecord": {
-    "authority": "local-only",
-    "note": "上次登录账号提示,无DB通道"
-  },
-  "renderer/js/store/auth.js::user": {
-    "authority": "local-only",
-    "note": "登录用户缓存(离线单机产品,无远端);genTaskId依赖其userId"
-  },
-  "renderer/js/store/category.js::categoryState": {
-    "authority": "sqlite",
-    "note": "分类;权威=SQLite categories表(init从getAllCategories回填),LS为缓存/灾备(category.js:37)"
-  },
-  "renderer/js/store/habits.js::habitsState": {
-    "authority": "sqlite",
-    "note": "习惯+打卡;权威=meta habitsState(initFromDb),LS为同步回退;双写persist()统一出口"
-  },
-  "renderer/js/store/repeatSettings.js::repeatSettingsV2State": {
-    "authority": "local-only",
-    "note": "重复默认值偏好;无DB镜像,若需跨端收编须先建meta键"
-  },
-  "renderer/js/store/helpers/runtimeState.js::runtimeState": {
-    "authority": "local-only",
-    "note": "运行时状态(窗口/视图瞬时),重启即弃"
-  },
-  "renderer/js/store/settings.js::settingsMirrorAt": {
-    "authority": "sqlite",
-    "note": "settings镜像时间戳;伴随settingsState的meta镜像写入,用于漂移诊断"
-  },
-  "renderer/js/store/settings.js::settingsState": {
-    "authority": "sqlite",
-    "note": "设置;权威=config.json(IPC get-settings),LS为缓存+2s去抖镜像(settings.js:146),冲突时config反向覆盖"
-  },
-  "renderer/js/store/todo.js::recycleLastPurgeAt": {
-    "authority": "local-only",
-    "note": "回收站过期清理当日标记(防重复执行)"
-  },
-  "renderer/js/store/tomato.js::tomatoLastPhaseDone": {
-    "authority": "local-only",
-    "note": "相位完成防重放令牌(跨窗口tick协调),单会话生命周期"
-  },
-  "renderer/js/store/tomato.js::tomatoDeviceSalt": {
-    "authority": "local-only",
-    "note": "Device-stable random salt mixed into freshly minted tomato ids (D22 P2 same-ms cross-device collision fix); never synced, idempotent per device, regenerated only if the user clears LS"
-  },
-  "renderer/js/store/tomato.js::tomatoState": {
-    "authority": "sqlite",
-    "note": "番茄计时瞬态+偏好;账本(专注记录)权威=SQLite tomato_records 行表(2026-09-04根修),LS blob 已剔除记录只存计时瞬态,跨窗口同步层"
-  },
-  "renderer/js/store/tomato.js::tomatoSyncPing": {
-    "authority": "local-only",
-    "note": "跨窗口同步ping(同源storage事件),单会话生命周期"
-  },
-  "renderer/js/utils/corrupt-quarantine.js::#qKey": {
-    "authority": "local-only",
-    "note": "Shared TQ-5 quarantine primitive (qKey = 'corruptQuarantine.' + scope, plus the qKey+'.bad' raw sibling): RAW bytes of corrupt payloads parked before destructive degradation, bounded (newest 10 kept per scope). No sync obligation and no DB mirror by design - raw-bytes preservation surface; calibration = manual recovery via localStorage['corruptQuarantine.'+scope]."
-  },
-  "renderer/js/utils/core.js::#key": {
-    "authority": "local-only",
-    "note": "safeSet包装函数定义本体(透传key),非独立数据键;全部经safeSet的写点各自登记"
-  },
-  "renderer/js/utils/core.js::user": {
-    "authority": "local-only",
-    "note": "safeSet(LS_USER)包装调用点;auth.js::user 已登记,此为同文件工具函数透传"
-  },
-  "renderer/js/utils/leftovers.js::leftoverAskDate": {
-    "authority": "local-only",
-    "note": "昨日剩余弹窗当日已问标记(防重弹),当日失效"
-  },
-  "renderer/js/utils/onboardingTours.js::onboardingToursSeen": {
-    "authority": "local-only",
-    "note": "微引导已看标记;config侧另有持久化副本则以其为准,此处为展示层去抖"
-  },
-  "renderer/js/utils/tomatoEstimate.js::tomatoEstimateState": {
-    "authority": "sqlite",
-    "note": "预计番茄估算;权威=meta tomatoEstimateState(CLI setEstimate 同键同账),LS为首屏缓存;2026-09-03 补 initFromDb 时间戳回填根治 CLI 写入被 LS 反吞"
-  },
-  "renderer/js/utils/tomatoEstimate.js::tomatoEstimateStateAt": {
-    "authority": "sqlite",
-    "note": "估算时间戳(meta 同名At键);渲染端与 CLI 共用的谁新用谁判据,与 tomatoEstimateState 成对写"
-  },
-  "renderer/js/views/CalendarView.vue::mainCalendarView": {
-    "authority": "local-only",
-    "note": "日历月/周视图偏好"
-  },
-  "renderer/js/views/StatisticsView.vue::tlHoverGrid": {
-    "authority": "local-only",
-    "note": "24h时间轴悬停网格开关偏好"
-  },
-  "renderer/js/views/TodayView.vue::todayViewMode": {
-    "authority": "local-only",
-    "note": "今日页视图模式偏好"
-  },
-  "renderer/js/views/TomatoFloatPage.vue::tomatoFloatVisPing": {
-    "authority": "local-only",
-    "note": "J2 float-close signal token: value is a write timestamp, never read as state; TomatoBar's storage listener re-queries real visibility over IPC. Cross-window trigger only, no DB channel or sync semantics"
-  },
-  "renderer/js/utils/dayPlans.js::dayPlanState": {
-    "authority": "sqlite",
-    "note": "排程芯片根修(2026-09-03):唯一权威=SQLite plan_chips 行;LS 仅一次性兜底导入后删除,永不回写"
-  },
-  "renderer/js/store/habits.js::habitsSyncPing": {
-    "authority": "local-only",
-    "note": "Aux-window relay ping key (timestamp:rand), not data: signals the main window to re-read the habits LS blob and persist it to DB meta (durable authority = sqlite meta via main window). Writer never relays itself (storage events fire only in other windows)."
-  },
-  "renderer/js/store/auth.js::gamification.indexNullSeen": {
-    "authority": "sqlite",
-    "note": "Own compaction protocol for the gamification delta index: meta INDEX_KEY (db setMeta) is authoritative for the live key list; this LS seen-map is GC bookkeeping (first-seen timestamps driving null-entry pruning). A dropped/rotted seen-map only restarts the grace window - the index itself is rebuilt from meta at init."
-  },
-  "renderer/js/store/helpers/todoPendingUpserts.js::todoPendingUpserts": {
-    "authority": "sqlite",
-    "note": "Pending upsert queue for failed renderer DB writes: authority = SQLite todos (each entry replays through the normal upsert path at boot drain, then the whole blob re-persists). LS blob is the pending-replay mirror hydrated at module load; a lost blob loses only not-yet-DB'd entries at the same trust level as every renderer write."
-  },
-  "renderer/js/store/auth.js::gamification.deviceId": {
-    "authority": "local-only",
-    "note": "Per-device namespace id for the gamification delta log; must differ across devices by design"
-  },
-  "renderer/js/store/auth.js::gamification.seq": {
-    "authority": "local-only",
-    "note": "Monotonic per-device delta sequence number; local-only bookkeeping"
-  },
-  "renderer/js/store/auth.js::gamification.folded": {
-    "authority": "local-only",
-    "note": "In-memory fold cache of applied delta log entries; rebuilt from meta on init"
-  },
-  "renderer/js/store/index.js::onboardingToursSeen": {
-    "authority": "sqlite",
-    "note": "Synced via settingsState blob field mirrored to settings_rows; LS is write-through cache calibrated on inbound rounds"
-  },
-  "renderer/js/store/settings.js::appLocale": {
-    "authority": "sqlite",
-    "note": "Synced via settingsState blob field mirrored to settings_rows; LS is write-through cache calibrated on inbound rounds"
-  },
-  "renderer/js/store/auth.js::gamification.lastDeltaKey": {
-    "authority": "local-only",
-    "note": "Own last delta key for index self-heal; local bookkeeping recalculated from own meta keys at init"
-  },
-  "renderer/js/store/auth.js::gamification.ownKeys": {
-    "authority": "local-only",
-    "note": "Bounded (200) LS registry of every own emitted delta key for full index self-heal at init; append-only local bookkeeping, recalibrated against the shared index each init"
-  },
-  "renderer/js/views/QuickAddPage.vue::quickAddDraft": {
-    "authority": "local-only",
-    "note": "D6-F12: standalone quick-add draft persistence; LS is the authority for the ephemeral draft (never synced, consumed on create)"
-  },
-  "renderer/js/views/QuickAddPage.vue::quickAddPending": {
-    "authority": "local-only",
-    "note": "W32 F1: mirror of the in-memory QuickAdd _pendingLines queue so queued multi-line pastes survive window hide/destroy; restored on mount/focus, cleared on drain and explicit Esc cancel (never synced)"
-  },
-  "renderer/js/components/WeatherWidget.vue::geoShapeMiss-": {
-    "authority": "local-only",
-    "note": "negative geo-shape cache (1h TTL), self-healing: a later successful fetch overwrites the miss entry"
-  },
-  "renderer/js/store/auth.js::gamification.gainDedup": {
-    "authority": "local-only",
-    "note": "snow-gain replay dedup keys (startedAt) - mirrors gains already booked via db bumpSnow dedupKey; stale entries are harmless"
-  },
-  "renderer/js/utils/dbMirror.js::#unflushedKey": {
-    "authority": "sqlite",
-    "note": "D13 #12 durable parking for failed setMeta blobs - DB (meta) stays authoritative; LS blob is a retry buffer consumed by consumeUnflushed() at startup, which re-queues mirrorToDb and clears the marker (calibration: startup consume)"
-  },
-  "renderer/js/store/helpers/tomatoPendingQueue.js::#prefix": {
-    "authority": "sqlite",
-    "note": "maint/d11-r3 per-entry refactor: pending queue keys = prefix + entry.uid (ledger queue AND snow queue share this identifier). Authority = SQLite tomato_records rows / meta snow: replay-then-delete settlement (op lands in DB, removePendingEntry clears the key), module-load hydrate re-queues survivors. One identifier entry covers every dynamic key in the family; a new write shape on the same identifier stays covered."
-  },
-  "renderer/js/store/helpers/tomatoPendingQueue.js::#k": {
-    "authority": "sqlite",
-    "note": "maint/d11-r3 per-entry refactor: settlement removeItem of a single queue key (k = prefix + entry.uid). Authority = SQLite (tomato_records rows / meta snow); removal is the post-replay cleanup, orphan blobs converge because every ledger/snow op is idempotent (deterministic tomatoId / dedupKey). Same key family as ::#prefix."
-  },
-  "renderer/js/store/helpers/tomatoPendingQueue.js::#key": {
-    "authority": "local-only",
-    "note": "TQ-5 quarantine surface (key param = prefix + 'corrupt'): RAW bytes of corrupt queue entries / corrupt legacy blobs parked before degradation, capped at 10 (newest kept). No sync obligation and no DB mirror by design - this is the raw-bytes preservation surface; calibration = manual recovery via prefix+'corrupt' (absorbs the retired tomatoRejectedLedgerRows diagnostic surface)."
-  },
-  "renderer/js/store/helpers/tomatoPendingQueue.js::#legacyKey": {
-    "authority": "sqlite",
-    "note": "One-time migration of the legacy whole-blob queue mirrors (tomatoPendingLedger / tomatoPendingSnow, authority migrated with them = SQLite): read blob, split into per-entry keys under prefix, then removeItem the blob key. Idempotent (absent key = already migrated); corrupt blob quarantined under ::#key before the degrade."
-  },
-  "renderer/js/utils/onboardingTours.js::onboardingJourneySeedTaskId": {
-    "authority": "sqlite",
-    "note": "旅程示例任务清理指针;权威源是sqlite里的todo行(taskContent===种子文本),LS只存taskId指针,finishAll时校验内容/完成态/回收站后软删并消费,不跨端同步"
-  }
+ "renderer/js/components/DayRail.vue::dayRailCollapsed": {
+  "authority": "local-only",
+  "note": "DayRail折叠态UI偏好,无跨端同步义务"
+ },
+ "renderer/js/components/FeedbackModal.vue::feedbackPending": {
+  "authority": "local-only",
+  "note": "反馈弹窗待提交标记,单机运行时状态"
+ },
+ "renderer/js/components/Onboarding.vue::onboardingDone": {
+  "authority": "sqlite",
+  "note": "首启向导完成标记;DB由markDoneInDb落meta,LS为免重放缓存"
+ },
+ "renderer/js/components/SettingsModal.vue::settingsTab": {
+  "authority": "local-only",
+  "note": "设置页签记忆,单机UI偏好"
+ },
+ "renderer/js/components/SideNav.vue::sidebarCollapsed": {
+  "authority": "local-only",
+  "note": "侧栏折叠UI偏好"
+ },
+ "renderer/js/components/WeatherWidget.vue::geoShape-v2-": {
+  "authority": "local-only",
+  "note": "城市轮廓离线缓存(c2d8320),带版本后缀,无同步语义"
+ },
+ "renderer/js/components/WeatherWidget.vue::weatherCache": {
+  "authority": "local-only",
+  "note": "天气API响应缓存,带at时间戳"
+ },
+ "renderer/js/demo-data.js::demoSeedV3": {
+  "authority": "local-only",
+  "note": "5175演示数据注册表(仅调试宿主),seed/purge幂等用"
+ },
+ "renderer/js/demo-data.js::demoTomatoSeededV4": {
+  "authority": "local-only",
+  "note": "5175演示番茄灌点标记V4(仅调试宿主;seed/purge幂等用,V3改名升级)"
+ },
+ "renderer/js/i18n/index.js::appLocale": {
+  "authority": "local-only",
+  "note": "语言选择;显示层实时翻译,持久化偏好"
+ },
+ "renderer/js/store/auth.js::lastLoginRecord": {
+  "authority": "local-only",
+  "note": "上次登录账号提示,无DB通道"
+ },
+ "renderer/js/store/auth.js::user": {
+  "authority": "local-only",
+  "note": "登录用户缓存(离线单机产品,无远端);genTaskId依赖其userId"
+ },
+ "renderer/js/store/category.js::categoryState": {
+  "authority": "sqlite",
+  "note": "分类;权威=SQLite categories表(init从getAllCategories回填),LS为缓存/灾备(category.js:37)"
+ },
+ "renderer/js/store/habits.js::habitsState": {
+  "authority": "sqlite",
+  "note": "习惯+打卡;权威=meta habitsState(initFromDb),LS为同步回退;双写persist()统一出口"
+ },
+ "renderer/js/store/repeatSettings.js::repeatSettingsV2State": {
+  "authority": "local-only",
+  "note": "重复默认值偏好;无DB镜像,若需跨端收编须先建meta键"
+ },
+ "renderer/js/store/helpers/runtimeState.js::runtimeState": {
+  "authority": "local-only",
+  "note": "运行时状态(窗口/视图瞬时),重启即弃"
+ },
+ "renderer/js/store/settings.js::settingsMirrorAt": {
+  "authority": "sqlite",
+  "note": "settings镜像时间戳;伴随settingsState的meta镜像写入,用于漂移诊断"
+ },
+ "renderer/js/store/settings.js::settingsState": {
+  "authority": "sqlite",
+  "note": "设置;权威=config.json(IPC get-settings),LS为缓存+2s去抖镜像(settings.js:146),冲突时config反向覆盖"
+ },
+ "renderer/js/store/todo.js::recycleLastPurgeAt": {
+  "authority": "local-only",
+  "note": "回收站过期清理当日标记(防重复执行)"
+ },
+ "renderer/js/store/tomato.js::tomatoLastPhaseDone": {
+  "authority": "local-only",
+  "note": "相位完成防重放令牌(跨窗口tick协调),单会话生命周期"
+ },
+ "renderer/js/store/tomato.js::tomatoDeviceSalt": {
+  "authority": "local-only",
+  "note": "Device-stable random salt mixed into freshly minted tomato ids (D22 P2 same-ms cross-device collision fix); never synced, idempotent per device, regenerated only if the user clears LS"
+ },
+ "renderer/js/store/tomato.js::tomatoState": {
+  "authority": "sqlite",
+  "note": "番茄计时瞬态+偏好;账本(专注记录)权威=SQLite tomato_records 行表(2026-09-04根修),LS blob 已剔除记录只存计时瞬态,跨窗口同步层"
+ },
+ "renderer/js/store/tomato.js::tomatoSyncPing": {
+  "authority": "local-only",
+  "note": "跨窗口同步ping(同源storage事件),单会话生命周期"
+ },
+ "renderer/js/utils/corrupt-quarantine.js::#qKey": {
+  "authority": "local-only",
+  "note": "Shared TQ-5 quarantine primitive (qKey = 'corruptQuarantine.' + scope, plus the qKey+'.bad' raw sibling): RAW bytes of corrupt payloads parked before destructive degradation, bounded (newest 10 kept per scope). No sync obligation and no DB mirror by design - raw-bytes preservation surface; calibration = manual recovery via localStorage['corruptQuarantine.'+scope]."
+ },
+ "renderer/js/utils/core.js::#key": {
+  "authority": "local-only",
+  "note": "safeSet包装函数定义本体(透传key),非独立数据键;全部经safeSet的写点各自登记"
+ },
+ "renderer/js/utils/core.js::user": {
+  "authority": "local-only",
+  "note": "safeSet(LS_USER)包装调用点;auth.js::user 已登记,此为同文件工具函数透传"
+ },
+ "renderer/js/utils/leftovers.js::leftoverAskDate": {
+  "authority": "local-only",
+  "note": "昨日剩余弹窗当日已问标记(防重弹),当日失效"
+ },
+ "renderer/js/utils/onboardingTours.js::onboardingToursSeen": {
+  "authority": "local-only",
+  "note": "微引导已看标记;config侧另有持久化副本则以其为准,此处为展示层去抖"
+ },
+ "renderer/js/utils/tomatoEstimate.js::tomatoEstimateState": {
+  "authority": "sqlite",
+  "note": "预计番茄估算;权威=meta tomatoEstimateState(CLI setEstimate 同键同账),LS为首屏缓存;2026-09-03 补 initFromDb 时间戳回填根治 CLI 写入被 LS 反吞"
+ },
+ "renderer/js/utils/tomatoEstimate.js::tomatoEstimateStateAt": {
+  "authority": "sqlite",
+  "note": "估算时间戳(meta 同名At键);渲染端与 CLI 共用的谁新用谁判据,与 tomatoEstimateState 成对写"
+ },
+ "renderer/js/views/CalendarView.vue::mainCalendarView": {
+  "authority": "local-only",
+  "note": "日历月/周视图偏好"
+ },
+ "renderer/js/views/StatisticsView.vue::tlHoverGrid": {
+  "authority": "local-only",
+  "note": "24h时间轴悬停网格开关偏好"
+ },
+ "renderer/js/views/TodayView.vue::todayViewMode": {
+  "authority": "local-only",
+  "note": "今日页视图模式偏好"
+ },
+ "renderer/js/views/TomatoFloatPage.vue::tomatoFloatVisPing": {
+  "authority": "local-only",
+  "note": "J2 float-close signal token: value is a write timestamp, never read as state; TomatoBar's storage listener re-queries real visibility over IPC. Cross-window trigger only, no DB channel or sync semantics"
+ },
+ "renderer/js/utils/dayPlans.js::dayPlanState": {
+  "authority": "sqlite",
+  "note": "排程芯片根修(2026-09-03):唯一权威=SQLite plan_chips 行;LS 仅一次性兜底导入后删除,永不回写"
+ },
+ "renderer/js/store/habits.js::habitsSyncPing": {
+  "authority": "local-only",
+  "note": "Aux-window relay ping key (timestamp:rand), not data: signals the main window to re-read the habits LS blob and persist it to DB meta (durable authority = sqlite meta via main window). Writer never relays itself (storage events fire only in other windows)."
+ },
+ "renderer/js/store/auth.js::gamification.indexNullSeen": {
+  "authority": "sqlite",
+  "note": "Own compaction protocol for the gamification delta index: meta INDEX_KEY (db setMeta) is authoritative for the live key list; this LS seen-map is GC bookkeeping (first-seen timestamps driving null-entry pruning). A dropped/rotted seen-map only restarts the grace window - the index itself is rebuilt from meta at init."
+ },
+ "renderer/js/store/helpers/todoPendingUpserts.js::todoPendingUpserts": {
+  "authority": "sqlite",
+  "note": "Pending upsert queue for failed renderer DB writes: authority = SQLite todos (each entry replays through the normal upsert path at boot drain, then the whole blob re-persists). LS blob is the pending-replay mirror hydrated at module load; a lost blob loses only not-yet-DB'd entries at the same trust level as every renderer write."
+ },
+ "renderer/js/store/auth.js::gamification.deviceId": {
+  "authority": "local-only",
+  "note": "Per-device namespace id for the gamification delta log; must differ across devices by design"
+ },
+ "renderer/js/store/auth.js::gamification.seq": {
+  "authority": "local-only",
+  "note": "Monotonic per-device delta sequence number; local-only bookkeeping"
+ },
+ "renderer/js/store/auth.js::gamification.folded": {
+  "authority": "local-only",
+  "note": "In-memory fold cache of applied delta log entries; rebuilt from meta on init"
+ },
+ "renderer/js/store/index.js::onboardingToursSeen": {
+  "authority": "sqlite",
+  "note": "Synced via settingsState blob field mirrored to settings_rows; LS is write-through cache calibrated on inbound rounds"
+ },
+ "renderer/js/store/settings.js::appLocale": {
+  "authority": "sqlite",
+  "note": "Synced via settingsState blob field mirrored to settings_rows; LS is write-through cache calibrated on inbound rounds"
+ },
+ "renderer/js/store/auth.js::gamification.lastDeltaKey": {
+  "authority": "local-only",
+  "note": "Own last delta key for index self-heal; local bookkeeping recalculated from own meta keys at init"
+ },
+ "renderer/js/store/auth.js::gamification.ownKeys": {
+  "authority": "local-only",
+  "note": "Bounded (200) LS registry of every own emitted delta key for full index self-heal at init; append-only local bookkeeping, recalibrated against the shared index each init"
+ },
+ "renderer/js/views/QuickAddPage.vue::quickAddDraft": {
+  "authority": "local-only",
+  "note": "D6-F12: standalone quick-add draft persistence; LS is the authority for the ephemeral draft (never synced, consumed on create)"
+ },
+ "renderer/js/views/QuickAddPage.vue::quickAddPending": {
+  "authority": "local-only",
+  "note": "W32 F1: mirror of the in-memory QuickAdd _pendingLines queue so queued multi-line pastes survive window hide/destroy; restored on mount/focus, cleared on drain and explicit Esc cancel (never synced)"
+ },
+ "renderer/js/components/WeatherWidget.vue::geoShapeMiss-": {
+  "authority": "local-only",
+  "note": "negative geo-shape cache (1h TTL), self-healing: a later successful fetch overwrites the miss entry"
+ },
+ "renderer/js/store/auth.js::gamification.gainDedup": {
+  "authority": "local-only",
+  "note": "snow-gain replay dedup keys (startedAt) - mirrors gains already booked via db bumpSnow dedupKey; stale entries are harmless"
+ },
+ "renderer/js/utils/dbMirror.js::#unflushedKey": {
+  "authority": "sqlite",
+  "note": "D13 #12 durable parking for failed setMeta blobs - DB (meta) stays authoritative; LS blob is a retry buffer consumed by consumeUnflushed() at startup, which re-queues mirrorToDb and clears the marker (calibration: startup consume)"
+ },
+ "renderer/js/store/helpers/tomatoPendingQueue.js::#prefix": {
+  "authority": "sqlite",
+  "note": "maint/d11-r3 per-entry refactor: pending queue keys = prefix + entry.uid (ledger queue AND snow queue share this identifier). Authority = SQLite tomato_records rows / meta snow: replay-then-delete settlement (op lands in DB, removePendingEntry clears the key), module-load hydrate re-queues survivors. One identifier entry covers every dynamic key in the family; a new write shape on the same identifier stays covered."
+ },
+ "renderer/js/store/helpers/tomatoPendingQueue.js::#k": {
+  "authority": "sqlite",
+  "note": "maint/d11-r3 per-entry refactor: settlement removeItem of a single queue key (k = prefix + entry.uid). Authority = SQLite (tomato_records rows / meta snow); removal is the post-replay cleanup, orphan blobs converge because every ledger/snow op is idempotent (deterministic tomatoId / dedupKey). Same key family as ::#prefix."
+ },
+ "renderer/js/store/helpers/tomatoPendingQueue.js::#key": {
+  "authority": "local-only",
+  "note": "TQ-5 quarantine surface (key param = prefix + 'corrupt'): RAW bytes of corrupt queue entries / corrupt legacy blobs parked before degradation, capped at 10 (newest kept). No sync obligation and no DB mirror by design - this is the raw-bytes preservation surface; calibration = manual recovery via prefix+'corrupt' (absorbs the retired tomatoRejectedLedgerRows diagnostic surface)."
+ },
+ "renderer/js/store/helpers/tomatoPendingQueue.js::#legacyKey": {
+  "authority": "sqlite",
+  "note": "One-time migration of the legacy whole-blob queue mirrors (tomatoPendingLedger / tomatoPendingSnow, authority migrated with them = SQLite): read blob, split into per-entry keys under prefix, then removeItem the blob key. Idempotent (absent key = already migrated); corrupt blob quarantined under ::#key before the degrade."
+ },
+ "renderer/js/utils/onboardingTours.js::onboardingJourneySeedTaskId": {
+  "authority": "sqlite",
+  "note": "旅程示例任务清理指针;权威源是sqlite里的todo行(taskContent===种子文本),LS只存taskId指针,finishAll时校验内容/完成态/回收站后软删并消费,不跨端同步"
+ },
+ "renderer/js/views/ProjectView.vue::pd20-project-taskview": {
+  "authority": "local-only",
+  "note": "pd20 P1 multi-view: task-area view choice (list/board/timeline), a per-profile UI preference with no cross-device sync obligation - same class as the DayRail collapsed state"
+ }
 }

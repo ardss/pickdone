@@ -41,6 +41,20 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 - Main process (W27): data:relocate progress IPC never reached the renderer (webContents double-wrapped, TypeError swallowed); updater terminal-state guards let a concurrent check relabel an in-flight auto-download as up-to-date; quit-ack's onDone callback ran uncontained inside the teardown poll tick; audit-log rotation used an existsSync→rename probe that two processes can race (POSIX silent overwrite) — unique ms+pid+seq targets.
 - Gates/tests (W27): check-file-size ls-files pins core.quotePath=false (non-ASCII tracked files falsely treated as new); lint-staged's W25 staged-blob extraction mirrors original directories (flat temp paths lost .eslintrc directory overrides — wrong env linting); journey-relay staging files are pid-unique and the jrelay- family joins the tmp sweeper; check-media-lang sees spaced/angle-bracket markdown refs (fail-open closed); check-fingerprint catches forward-slash and file-URL local paths; check-i18n's bracketDelta skips string/comment literals; j-todo-core's J1 strip navigation is robust to the ±7-day arrow shift (behavior since 0.1.0).
 
+## [0.4.0-beta.29-ui2] - 2026-11-06
+
+### Added
+- Project page multi-view (P1): user-selectable list / board / lightweight timeline for the task area; the choice persists across restarts.
+- Board: simple two-column board by real completion state; cards open the task detail.
+- Timeline: every work episode of the project, day-grouped, beyond the recent-8 rollup.
+
+### Fixed
+- EditPanel work section had no layout rules (fields overlapped in narrow windows); now a clean vertical stack.
+- Project handoff/board/timeline rows always open on click, even before the task cache catches up with a fresh sync.
+
+### Changed
+- Internal candidate id 0.4.0-beta.29-ui2 (unreleased build for acceptance only).
+
 ## [0.4.0-beta.28] - 2026-11-05
 
 - Managed-upgrade recovery (internal A/B installer, scripts/windows): deploy-in-place preflight verifies the installer hash, previous version, running executable roots, startup tasks and the live encrypted database/key before stopping anything; the whole old program + database/WAL/SHM + db.key + config + attachments are backed up first; a failed or wrong NSIS run quarantines the failed build and restores the prior program via restore-program.ps1; user data is never auto-overwritten during rollback (automatic reopen withheld when the database hash changed).

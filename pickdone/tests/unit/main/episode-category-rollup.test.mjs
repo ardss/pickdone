@@ -8,7 +8,9 @@
  *       the 'tasks with episodes only' filter is the renderer's toggle, never the op's;
  *   (c) tombstoned episodes and tombstoned task/source links are invisible (counts and the
  *       project-level recent list never see them);
- *   (d) the project-recent list is the last 8 live episodes across the category, startedAt desc.
+ *   (d) the project-recent list is the last 8 live episodes across the category, startedAt desc;
+ *   (e) the pd20-P1 timeline array carries EVERY live episode (capped only as a wire-shape
+ *       bound at 300), the same rows the recent list is sliced from.
  * Run: node --test tests/unit/main/episode-category-rollup.test.mjs
  */
 import { test } from 'node:test'
@@ -63,6 +65,7 @@ test('rollup correctness across multiple tasks: counts, latest-note fields, newe
   assert.equal(byId.tB.lastGoal, '白天写了渲染层', 'plain note round-trips as the goal')
   assert.deepEqual(res.recent.map(e => e.episodeId), ['a2', 'b1', 'a1'], 'project-recent is live episodes startedAt desc')
   assert.equal(res.recent[0].goal, 'fix rollup')
+  assert.deepEqual(res.timeline.map(e => e.episodeId), ['a2', 'b1', 'a1'], 'timeline carries ALL live episodes (same order), not capped at 8')
   d.close()
 })
 
@@ -83,7 +86,7 @@ test('tasks without episodes are INCLUDED (episodeCount 0) — filtering is the 
   // deleted todos are invisible entirely
   d.prepare('UPDATE todos SET deleted = 1 WHERE id = ?').run('tIdle')
   assert.deepEqual(episodeOps.queryEpisodesByCategory(d, 3).tasks.map(r => r.taskId), ['tWork'], 'tombstoned todos excluded')
-  assert.deepEqual(episodeOps.queryEpisodesByCategory(d, 999), { tasks: [], recent: [] }, 'unknown category reads back the empty envelope')
+  assert.deepEqual(episodeOps.queryEpisodesByCategory(d, 999), { tasks: [], recent: [], timeline: [] }, 'unknown category reads back the empty envelope')
   d.close()
 })
 
@@ -118,6 +121,6 @@ test('recent caps at 8 live episodes across tasks, startedAt desc; guard rails f
   assert.equal(res.recent.length, 8, 'recent is capped at 8')
   assert.deepEqual(res.recent.map(e => e.episodeId), ['e10', 'e9', 'e8', 'e7', 'e6', 'e5', 'e4', 'e3'], 'newest first across tasks')
   assert.equal(res.tasks.length, 2, 'task rows are not capped by the recent cap')
-  assert.deepEqual(episodeOps.queryEpisodesByCategory(d, ''), { tasks: [], recent: [] }, 'empty categoryId reads back the empty envelope')
+  assert.deepEqual(episodeOps.queryEpisodesByCategory(d, ''), { tasks: [], recent: [], timeline: [] }, 'empty categoryId reads back the empty envelope')
   d.close()
 })

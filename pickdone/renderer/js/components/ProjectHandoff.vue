@@ -49,6 +49,7 @@
  * unknown task id stays inert. A read failure degrades to the empty state, never breaks the page.
  */
 import { dayjs, FMT } from '../utils/core.js'
+import { openProjectTask } from '../utils/projectOpenTask.js'
 import EmptyState from './EmptyState.vue'
 
 export default {
@@ -103,16 +104,9 @@ export default {
       }
     },
     async openTask (r) {
-      let raw = this.$store.getters['todo/byCategory'](this.catId).find(t => t.taskId === r.taskId)
-      if (!raw) {
-        // pd20 (2026-11-06) UI-acceptance fix: a freshly synced row can reach the handoff query
-        // before the byCategory cache catches up (external writes ride todos-changed -> async
-        // refresh). The click used to be a SILENT no-op; now it refreshes the store once
-        // (the canonical todo/init path) and retries, so the row is always openable.
-        try { await this.$store.dispatch('todo/init') } catch { /* keep the cache verdict */ }
-        raw = this.$store.getters['todo/byCategory'](this.catId).find(t => t.taskId === r.taskId)
-      }
-      if (raw) this.$store.commit('ui/openEdit', raw)
+      // pd20 P1 multi-view: the shared project-page open path (cache-miss → todo/init retry),
+      // now also used by the board/timeline views.
+      await openProjectTask(this.$store, this.catId, r.taskId)
     },
     fmtDateTime (ts) { return ts ? dayjs(ts).format(FMT.dateTime) : '—' }
   }

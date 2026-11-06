@@ -37,6 +37,20 @@
 - 主进程（W27）：data:relocate 迁移进度 IPC 永远到不了渲染端（webContents 被二次包裹，TypeError 被吞）；updater 终态守卫放任并发 check 把进行中的自动下载标成已是最新；quit-ack 的 onDone 回调在退出拆除 tick 里裸奔；审计日志轮转的 existsSync→rename 探测可被双进程竞态（POSIX 静默覆盖）——改 ms+pid+seq 唯一目标。
 - 门禁/测试（W27）：check-file-size 的 ls-files 钉 core.quotePath=false（非 ASCII 跟踪文件曾被误判新文件）；lint-staged 的 W25 staged-blob 抽取按原目录镜像（摊平临时路径丢 .eslintrc 目录 overrides——错 env linting）；journey-relay 暂存文件 pid 唯一化、jrelay- 家族进 tmp 清扫器；check-media-lang 可见含空格/尖括号的 markdown 引用（fail-open 封堵）；check-fingerprint 抓正斜杠与 file-URL 形态本机路径；check-i18n 的 bracketDelta 跳过字符串/注释字面量；j-todo-core 的 J1 日期条导航对 ±7 天箭头步进稳健（0.1.0 起的行为）。
 
+## [0.4.0-beta.29-ui2] - 2026-11-06
+
+### 新增
+- 项目页多视图（P1）：任务区可切换 列表 / 看板 / 轻时间线，选择跨重启保留。
+- 看板：按真实完成状态的两列简单看板；卡片点击打开任务详情。
+- 时间线：项目全部工作历程按日分组，突破 recent-8 汇总上限。
+
+### 修复
+- 编辑面板"继续工作"区此前没有任何布局规则（窄窗口字段重叠）；现为清晰纵排。
+- 项目页交接/看板/时间线行点击必开，不再因任务缓存未跟上静默失效。
+
+### 变更
+- 内部候选号 0.4.0-beta.29-ui2（仅验收用未发布构建）。
+
 ## [0.4.0-beta.28] - 2026-11-05
 
 - 托管升级恢复（内部 A/B 安装脚本，scripts/windows）：deploy-in-place 预检在任何进程停止之前校验安装包哈希、旧版本、运行中程序根、自启任务与现用加密数据库/密钥；先完整备份旧程序 + 数据库/WAL/SHM + db.key + 配置 + 附件；NSIS 安装失败或装错构建时隔离失败包并用 restore-program.ps1 还原旧程序；回滚永不自动覆盖用户数据（数据库哈希变化时收回自动重开）。

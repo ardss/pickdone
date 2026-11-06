@@ -128,14 +128,26 @@
         <!-- pd20 P1-01 work-handoff overview: collapsible same-source section (component owns
              its read op + filter toggle; keeps this view under the size ratchet) -->
         <project-handoff :cat-id="catId"/>
-        <empty-state v-if="!groups.length"><template #text>{{ $t('statsB.ProjectView.empty') }}</template></empty-state>
-        <div v-else class="todo-list-item-group-list">
-          <group-block v-for="g in groups" :key="g.key"
-             :title="$t(g.titleKey || g.title)" :count="g.todos.length" :todos="g.todos"
-            :color="g.color || ''" :show-date="!!g.showDate"
-            :has-settings="!!g.hasSettings" :has-recomplete="!!g.hasRecomplete"
-            :collapsed="collapsedMap[g.key]" @update:collapsed="v => setCol(g.key, v)" @recomplete="recomplete"/>
+        <!-- pd20 P1 multi-view (2026-11-06): the PRD's user-selectable list/board/timeline.
+             One switcher, persisted per profile; every branch reads the SAME store/op source. -->
+        <div class="proj-taskviews" role="group" :aria-label="$t('statsB.ProjectView.viewsAria')">
+          <button v-for="v in TASK_VIEWS" :key="v" class="proj-tab proj-taskviews__btn" type="button"
+                  :class="{ on: taskView === v }" :aria-pressed="taskView === v"
+                  :data-task-view="v"
+                  @click="setTaskView(v)">{{ $t('statsB.ProjectView.view' + v[0].toUpperCase() + v.slice(1)) }}</button>
         </div>
+        <project-board v-if="taskView === 'board'" :cat-id="catId" :tasks="inCat"/>
+        <project-timeline v-else-if="taskView === 'timeline'" :cat-id="catId"/>
+        <template v-else>
+          <empty-state v-if="!groups.length"><template #text>{{ $t('statsB.ProjectView.empty') }}</template></empty-state>
+          <div v-else class="todo-list-item-group-list">
+            <group-block v-for="g in groups" :key="g.key"
+               :title="$t(g.titleKey || g.title)" :count="g.todos.length" :todos="g.todos"
+              :color="g.color || ''" :show-date="!!g.showDate"
+              :has-settings="!!g.hasSettings" :has-recomplete="!!g.hasRecomplete"
+              :collapsed="collapsedMap[g.key]" @update:collapsed="v => setCol(g.key, v)" @recomplete="recomplete"/>
+          </div>
+        </template>
       </div>
     </div>
     <milestone-edit-modal v-if="msModal" :milestone="msModal.mode === 'edit' ? msModal.ms : null"
@@ -164,6 +176,13 @@ import ProjectDocs from '../components/ProjectDocs.vue'
 import EmptyState from '../components/EmptyState.vue'
 import MilestoneEditModal from '../components/MilestoneEditModal.vue'
 import ProjectHandoff from '../components/ProjectHandoff.vue'
+import ProjectBoard from '../components/ProjectBoard.vue'
+import ProjectTimeline from '../components/ProjectTimeline.vue'
+
+// pd20 P1 multi-view: the persisted task-area view choice (PRD "user-selectable"). localStorage
+// keeps it per profile across restarts without adding a settings-manifest surface.
+const TASK_VIEW_KEY = 'pd20-project-taskview'
+const TASK_VIEWS = ['list', 'board', 'timeline']
 import { commit as commitCommand } from "../utils/commandBus.js"
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
@@ -177,10 +196,12 @@ function resolveMsNewId (entryId, saved) {
 
 export default {
   name: 'ProjectView',
-  components: { GroupBlock: TodoGroupBlock, PdDepView: DepView, ProjectDocs, EmptyState, MilestoneEditModal, ProjectHandoff },
+  components: { GroupBlock: TodoGroupBlock, PdDepView: DepView, ProjectDocs, EmptyState, MilestoneEditModal, ProjectHandoff, ProjectBoard, ProjectTimeline },
   data () {
     return {
       tab: 'overview',
+      taskView: 'list',
+      TASK_VIEWS,
       collapsedMap: { catExpDone: true, catExpUndo: false, catToday: false, catTomorrow: false, catDat: false, catUpcoming: false, catNoDate: false, projDone: true },
       milestones: [] as any,
       deadlineTs: 0,
@@ -190,7 +211,15 @@ export default {
       msModal: null as any // null | {mode:'add'} | {mode:'edit', ms}
     }
   },
-  created () { this.reloadMilestones(); this.reloadDeadline() },
+  created () {
+    this.reloadMilestones()
+    this.reloadDeadline()
+    // pd20 P1 multi-view: restore the persisted task-area view (default list)
+    try {
+      const saved = window.localStorage.getItem(TASK_VIEW_KEY)
+      if (TASK_VIEWS.includes(saved)) this.taskView = saved
+    } catch { /* storage unavailable → keep the default */ }
+  },
   mounted () {
     // Deps board height = measured, not a magic viewport constant (G3 P2): the header is
     // data-driven (milestone strip/cards grow it), so a hardcoded `100vh - 500px` starved the
@@ -372,6 +401,12 @@ export default {
     }
   },
   methods: {
+    // pd20 P1 multi-view: switch + persist the task-area view (PRD user-selectable)
+    setTaskView (v) {
+      if (!TASK_VIEWS.includes(v)) return
+      this.taskView = v
+      try { window.localStorage.setItem(TASK_VIEW_KEY, v) } catch { /* best effort */ }
+    },
     measureBoard () {
       const sc = this.$refs.scrollEl; const bd = this.$refs.boardEl
       if (!sc || !bd || !bd.offsetHeight) return
@@ -744,6 +779,9 @@ html[data-theme="dark"] .proj-ms__mark--focus { color: var(--brand); }
 .title__append .icon-button>i{font-size:20px}
 /* 项目页页签:概览 / 依赖图 / 文档 */
 .proj-tabs { display: flex; gap: 2px; margin-top: 10px; border-bottom: 1px solid var(--line, #e6e8eb); }
+/* pd20 P1 multi-view: the task-area view switcher rides the existing tab look (low chrome,
+   same .proj-tab states) — no new header sizes, single scroll container untouched. */
+.proj-taskviews { display: flex; gap: 2px; margin-top: var(--space-3); }
 .ms-ring { flex-shrink: 0; }
 .ms-ring__track { stroke: var(--track-bg, #eef0f2); stroke-width: 3.5; }
 .ms-ring__bar { stroke: var(--brand); stroke-width: 3.5; stroke-linecap: round; transition: stroke-dashoffset var(--dur-slow) ease; transform: rotate(-90deg); transform-origin: 18px 18px; }
