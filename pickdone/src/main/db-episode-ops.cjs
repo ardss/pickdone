@@ -137,9 +137,7 @@ exports.queryEpisodesByCategory = (db, categoryId) => {
     if (recent.length < 8) {
       recent.push({ episodeId: row.id, taskId: row.taskId, startedAt: row.startedAt || 0, goal: f.goal })
     }
-    if (timeline.length < 300) {
-      timeline.push({ episodeId: row.id, taskId: row.taskId, startedAt: row.startedAt || 0, goal: f.goal })
-    }
+    timeline.push({ episodeId: row.id, taskId: row.taskId, startedAt: row.startedAt || 0, goal: f.goal })
   }
   const tasks = rollup.map(r => {
     const hit = latest.get(String(r.taskId))

@@ -6,7 +6,7 @@ import { readFileSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 
-const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const app = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = rel => readFileSync(path.join(app, rel), 'utf8')
 
 test('legacy project management surfaces remain in ProjectView', () => {
@@ -40,11 +40,13 @@ test('SourceRef retains a machine-local file boundary in LAN egress', () => {
   assert.match(epiOps, /task_source_links/)
 })
 
-test('committed candidate explicitly remains list plus milestone timeline, without task Board/full Timeline views', () => {
+test('integrated candidate includes Board and work-episode Timeline alongside original project sections', () => {
   const view = read('renderer/js/views/ProjectView.vue')
-  assert.doesNotMatch(view, /ProjectBoard|ProjectTimeline/)
-  assert.equal(existsSync(path.join(app, 'renderer/js/components/ProjectBoard.vue')), false)
-  assert.equal(existsSync(path.join(app, 'renderer/js/components/ProjectTimeline.vue')), false)
+  assert.match(view, /ProjectBoard|ProjectTimeline/)
+  assert.equal(existsSync(path.join(app, 'renderer/js/components/ProjectBoard.vue')), true)
+  assert.equal(existsSync(path.join(app, 'renderer/js/components/ProjectTimeline.vue')), true)
+  assert.ok(read('renderer/js/components/ProjectTimeline.vue').includes('this.taskTitles[String(e.taskId)]'), 'task titles are joined to work episodes')
+  assert.ok(!read('src/main/db-episode-ops.cjs').includes('timeline.length < 300'), 'no hidden 300-record truncation')
   // Existing milestone timeline is a separate, pre-existing project feature.
   assert.match(view, /Milestone timeline/)
 })

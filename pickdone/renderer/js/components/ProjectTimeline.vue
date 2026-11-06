@@ -40,7 +40,7 @@ export default {
         const d = e.startedAt ? dayjs(e.startedAt) : null
         const key = d ? d.format('YYYY-MM-DD') : 'none'
         if (!byDay.has(key)) byDay.set(key, { key, label: d ? d.format(FMT.date) : this.$t('statsB.ProjectView.timelineNoDate'), items: [] })
-        byDay.get(key).items.push({ ...e, time: d ? d.format('HH:mm') : '' })
+        byDay.get(key).items.push({ ...e, taskContent: this.taskTitles[String(e.taskId)] || String(e.taskId), time: d ? d.format('HH:mm') : '' })
       }
       return [...byDay.values()]
     }

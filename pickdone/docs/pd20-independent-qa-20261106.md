@@ -62,7 +62,7 @@
 
 | 命令 | 退出码 | 结果 |
 |---|---:|---|
-| `node --test tests/unit/pd20-independent-qa-contract.test.mjs` | 0 | 本轮新增 5 个 source-only 契约断言通过：既有 ProjectView 入口、层级 context 组合、file SourceRef egress 边界、提交 SHA Board/Timeline 缺口、handoff recent/nextAction 字段。 |
+| `node --test tests/unit/components/pd20-independent-qa-contract.test.mjs` | 0 | 本轮新增 5 个 source-only 契约断言通过：既有 ProjectView 入口、层级 context 组合、file SourceRef egress 边界、提交 SHA Board/Timeline 缺口、handoff recent/nextAction 字段。 |
 | `node --test tests/unit/components/projectview-handoff.test.mjs tests/unit/main/episode-category-rollup.test.mjs tests/unit/renderer/handoff.test.mjs` | 0 | 15/15 pass；覆盖 ProjectHandoff 入口/过滤/行点击契约、rollup tombstone/recent-8、Markdown/JSON formatter。 |
 | `node --test tests/unit/components/projectview-handoff.test.mjs tests/unit/main/episode-category-rollup.test.mjs tests/unit/renderer/editpanel-work.test.mjs tests/unit/renderer/handoff.test.mjs tests/unit/main/pd20-episode-sync.test.mjs` | 1 | 15 pass、2 fail。`pd20-episode-sync.test.mjs` 与 `editpanel-work.test.mjs` 在加载阶段 `Cannot find module 'dayjs'`；不是断言失败，动态 SourceRef/sync 与 EditPanel 行为证据因此缺失。 |
 | `node cli/check-boot-order.cjs --staged`（提交钩子步骤） | 1 | QA 工作树未安装 `acorn`，静态门禁在加载阶段失败。提交钩子因此未能继续后续 ESM、lint 和 core 测试步骤；没有为通过钩子而安装依赖或运行全集。 |
@@ -73,6 +73,6 @@
 ## 交付物与 cherry-pick
 
 - 本报告：`pickdone/docs/pd20-independent-qa-20261106.md`
-- 独立契约测试：`pickdone/tests/unit/pd20-independent-qa-contract.test.mjs`
+- 独立契约测试：`pickdone/tests/unit/components/pd20-independent-qa-contract.test.mjs`
 - 报告与测试作为单一 QA-only commit 提交；可安全 cherry-pick 到集成分支（不含产品实现，不含测试依赖变更）。提交 SHA 见审计提交记录/终端回执。
 - cherry-pick 仅带来审计证据；它不会把 P0/P1 状态提升为 Pass，也不代表 ZCode 未提交改动已验收。
