@@ -48,8 +48,11 @@
                   :title="$t('statsB.ProjectsView.deadlineTip', { d: fmtDate(p.deadline) })">{{deadlineText(p.deadline)}}</span>
             <span v-else-if="p.stats.startedAt" class="proj-card__start">{{ $t('statsB.ProjectsView.startedOn', { d: fmtDate(p.stats.startedAt) }) }}</span>
           </div>
-          <div v-if="p.nextMs" class="proj-card__next" :title="$t('statsB.ProjectsView.nextMsTip')">
-            ◆ {{p.nextMs.title}} · {{fmtDate(p.nextMs.date)}}
+          <div class="proj-card__facts">
+            <div><b>{{ $t('statsJ.overview.stage') }}</b> {{ $t(statusKey(p.status)) }}<template v-if="p.facts.nextMilestone"> · {{ $t('statsJ.overview.nextMilestone') }} {{ p.facts.nextMilestone.title }} ({{ fmtDate(p.facts.nextMilestone.date) }})</template></div>
+            <div :class="{'proj-card__risk': p.facts.overdueTasks || p.facts.overdueMilestones}"><b>{{ $t('statsJ.overview.risk') }}</b> {{ p.facts.overdueTasks || p.facts.overdueMilestones ? $t('statsJ.overview.overdueRisk', { tasks: p.facts.overdueTasks, milestones: p.facts.overdueMilestones }) : $t('statsJ.overview.noOverdue') }}</div>
+            <div :title="p.facts.recentWork"><b>{{ $t('statsJ.overview.recent') }}</b> {{ p.facts.recentWork || $t('statsJ.ProjectView.handoffNoRecord') }}<span v-if="p.facts.recentAt"> · {{ fmtDate(p.facts.recentAt) }}</span></div>
+            <div :title="p.facts.nextAction"><b>{{ $t('statsJ.overview.action') }}</b> {{ p.facts.nextAction || $t('statsJ.ProjectView.handoffNoRecord') }}</div>
           </div>
         </div>
       </div>
@@ -74,7 +77,8 @@
  * One progress card per project: name/progress bar/task completion ratio/focus minutes/overdue count; click to open the project detail (ProjectView).
  */
 import { dayjs, FMT } from '../utils/core.js'
-import { dueStateOf } from '../utils/milestones.js'
+import { dueStateOf, loadMilestones } from '../utils/milestones.js'
+import { projectOverviewFacts } from '../utils/projectOverviewFacts.mjs'
 import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { PROJECT_STATUSES, normalizeStatus, statusI18nKey, STATUS_FILTER_I18N_KEYS } from '../utils/projectStatus.js'
@@ -105,7 +109,8 @@ export default {
   components: { EmptyState },
   data () {
     return {
-      filter: 'all' // status filter chip: 'all' | one of PROJECT_STATUSES
+      filter: 'all', // status filter chip: 'all' | one of PROJECT_STATUSES
+      projectEvidence: {} as any
     }
   },
   computed: {
@@ -123,7 +128,8 @@ export default {
           cat: c,
           stats: projectStats(todos, this.$store.state.todo.todayTimestamp),
           deadline: meta.deadline || 0,
-          nextMs: meta.nextMilestone || null,
+          facts: projectOverviewFacts(todos, (this.projectEvidence[c.categoryId] || {}).milestones || (meta.nextMilestone ? [meta.nextMilestone] : []),
+            (this.projectEvidence[c.categoryId] || {}).episodes, today0),
           status: this.$store.getters['category/projectStatus'](c.categoryId),
           load,
           loadWarn: loadLevel(load, threshold) === 'warn'
@@ -134,7 +140,28 @@ export default {
       return this.filter === 'all' ? this.projects : this.projects.filter(p => p.status === this.filter)
     }
   },
+  created () { this.reloadEvidence() },
+  mounted () {
+    if (window.todoAPI && window.todoAPI.onTodosChanged) {
+      this._offTodosChanged = window.todoAPI.onTodosChanged(() => this.reloadEvidence())
+    }
+  },
+  beforeUnmount () { if (this._offTodosChanged) this._offTodosChanged() },
   methods: {
+    async reloadEvidence () {
+      const ids = this.$store.getters['category/projects'].map(c => c.categoryId)
+      const patch = {}
+      await Promise.all(ids.map(async id => {
+        const [milestones, episodes] = await Promise.all([
+          loadMilestones(id),
+          window.todoAPI && window.todoAPI.dbCall
+            ? window.todoAPI.dbCall('queryEpisodesByCategory', id).catch(() => null)
+            : Promise.resolve(null)
+        ])
+        patch[id] = { milestones, episodes }
+      }))
+      this.projectEvidence = patch
+    },
     /* [A9] status pill button: Space joins Enter, stopped so the card's open activation doesn't double-fire */
     /* [D18-DOM3] project card: ARIA button pattern (Space joins Enter); name ships as aria-label */
     onOpenKey (p, e) {
@@ -231,6 +258,7 @@ export default {
           return
         }
         this.$store.commit('category/setProject', { id: created.categoryId, flag: true })
+        this.reloadEvidence()
         this.$message.success(this.$t('statsB.ProjectsView.created', { name }))
       } catch (e) {
         // [A3 fix] real failure: roll the placeholder row back and say so (was: silent swallow)
@@ -312,4 +340,8 @@ html[data-theme="dark"] .proj-card { background: rgba(255, 255, 255, .03); }
   padding: 1px 7px; border-radius: var(--radius-pill);
 }
 .proj-load--warn { color: var(--warn); background: rgba(230, 162, 60, .12); font-weight: 600; }
+.proj-card__facts { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); font-size: var(--fs-xs); color: var(--text-2); line-height: 1.6; }
+.proj-card__facts > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-card__facts b { color: var(--text-3); font-weight: 500; margin-right: 4px; }
+.proj-card__facts .proj-card__risk { color: var(--danger); }
 </style>

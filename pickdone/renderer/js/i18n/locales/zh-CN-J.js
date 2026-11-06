@@ -209,5 +209,12 @@ export default {
   'statsJ.ProjectView.handoffNoRecord': '暂无记录',
   'statsJ.ProjectView.handoffRecentTitle': '最近工作',
   'statsJ.ProjectView.handoffEmpty': '该项目暂无工作记录。',
-  'statsJ.ProjectView.handoffOpenTaskAria': '打开任务：{t}'
+  'statsJ.ProjectView.handoffOpenTaskAria': '打开任务：{t}',
+  'statsJ.overview.stage': '当前阶段',
+  'statsJ.overview.nextMilestone': '下一里程碑',
+  'statsJ.overview.risk': '逾期风险',
+  'statsJ.overview.overdueRisk': '任务 {tasks} · 里程碑 {milestones} 项逾期',
+  'statsJ.overview.noOverdue': '暂无逾期记录',
+  'statsJ.overview.recent': '最近工作',
+  'statsJ.overview.action': '下一动作'
 }

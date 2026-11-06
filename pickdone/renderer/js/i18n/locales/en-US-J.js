@@ -211,4 +211,11 @@ export default {
   'statsJ.ProjectView.handoffRecentTitle': 'Recent work',
   'statsJ.ProjectView.handoffEmpty': 'No work episodes recorded for this project yet.',
   'statsJ.ProjectView.handoffOpenTaskAria': 'Open task: {t}',
+  'statsJ.overview.stage': 'Stage',
+  'statsJ.overview.nextMilestone': 'Next milestone',
+  'statsJ.overview.risk': 'Overdue risk',
+  'statsJ.overview.overdueRisk': '{tasks} tasks · {milestones} milestones overdue',
+  'statsJ.overview.noOverdue': 'None recorded',
+  'statsJ.overview.recent': 'Recent work',
+  'statsJ.overview.action': 'Next action',
 }
