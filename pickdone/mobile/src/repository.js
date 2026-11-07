@@ -55,7 +55,9 @@ export async function openRepository() {
     : browser.all(name)
   const run = async (statement, values) => native.run(statement, values)
   const putBrowser = async (name, row) => browser.put(name, row)
-  const live = rows => rows.filter(row => !row.deleted)
+  const isDeleted = row => Boolean(row?.deleted || row?.delete)
+  const live = rows => rows.filter(row => !isDeleted(row))
+  const nextStamp = row => Math.max(Date.now(), Number(row?.updatedAt || row?.updateTime || 0) + 1, Number(row?.deletedAt || 0) + 1)
 
   return {
     async tasks() { return live(await all('todos')) },
@@ -69,8 +71,9 @@ export async function openRepository() {
     },
     async episodes() { return live(await all('work_episodes')) },
     async saveTask(input) {
-      const now = Date.now()
-      const previous = input.id ? (await this.tasks()).find(row => row.id === input.id) : undefined
+      const previous = input.id ? (await all('todos')).find(row => row.id === input.id) : undefined
+      if (isDeleted(previous)) throw new Error('Deleted task cannot be edited')
+      const now = nextStamp(previous)
       const row = {
         id: input.id || crypto.randomUUID(),
         content: input.content.trim(),
@@ -101,10 +104,12 @@ export async function openRepository() {
       return row
     },
     async saveProject(input) {
-      const now = Date.now()
       const current = await all('categories')
       const id = input.id || Math.max(0, ...current.map(item => Number(item.id))) + 1
       const previous = current.find(item => item.id === id)
+      if (isDeleted(previous)) throw new Error('Deleted project cannot be edited')
+      const now = nextStamp(previous)
+
       const row = { ...previous, id, name: input.name.trim(), color: input.color || '#727f68', isFolder: 0, parentId: 0, createdAt: previous?.createdAt || now, updatedAt: now, deleted: 0, deletedAt: 0 }
       if (!row.name) throw new Error('Project name is required')
       if (native) {
@@ -117,7 +122,9 @@ export async function openRepository() {
       return row
     },
     async saveEpisode(input) {
-      const now = Date.now()
+      const previous = input.id ? (await all('work_episodes')).find(item => item.id === input.id) : undefined
+      if (isDeleted(previous)) throw new Error('Deleted work episode cannot be edited')
+      const now = nextStamp(previous)
       const row = { id: input.id || crypto.randomUUID(), taskId: input.taskId, startedAt: Number(input.startedAt), endedAt: Number(input.endedAt), note: input.note || '', deleted: 0, deletedAt: 0, updatedAt: now }
       if (!row.taskId || !Number.isFinite(row.startedAt) || !Number.isFinite(row.endedAt) || row.endedAt < row.startedAt) throw new Error('Invalid work episode')
       if (native) await run('INSERT INTO work_episodes (id,taskId,startedAt,endedAt,note,deleted,deletedAt,updatedAt) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET startedAt=excluded.startedAt,endedAt=excluded.endedAt,note=excluded.note,updatedAt=excluded.updatedAt', [row.id,row.taskId,row.startedAt,row.endedAt,row.note,row.deleted,row.deletedAt,row.updatedAt])
