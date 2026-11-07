@@ -9,10 +9,7 @@ import { DEFAULT_CAPTURE_ENDPOINT } from './shared/endpoint-contract.js';
 import { createDeliver } from './shared/deliver.js';
 
 const deliver = createDeliver({
-  getEndpoint: async () => {
-    const got = await chrome.storage.local.get('pdEndpoint');
-    return got.pdEndpoint || DEFAULT_CAPTURE_ENDPOINT;
-  },
+  getEndpoint: async () => DEFAULT_CAPTURE_ENDPOINT,
   // the access key the user pasted in the popup — sent as the X-PickDone-Key handshake
   getKey: async () => {
     const got = await chrome.storage.local.get('pdCaptureKey');
@@ -22,7 +19,7 @@ const deliver = createDeliver({
 
 const queue = createQueue({
   storage: chrome.storage.local,
-  alarms: chrome.alarms || null, // no "alarms" permission: retries piggyback on wake events
+  alarms: chrome.alarms || null,
   deliver,
 });
 
@@ -32,12 +29,19 @@ chrome.runtime.onInstalled.addListener(() => {
     title: 'Capture page to PickDone',
     contexts: ['page'],
   });
+  queue.flush();
+});
+
+chrome.alarms?.onAlarm.addListener((alarm) => {
+  if (alarm.name === 'pd-ext-queue-retry') queue.flush();
 });
 
 // The ONE capture body: normalize → fingerprint → enqueue → flush. The context menu and the
 // 'pd-capture-page' message (the headless/testable seam — a page can't drive native menus)
 // both land here, so the journey exercises the exact shipped capture path.
-async function capturePageUrl (rawUrl) {
+async function capturePageUrl (rawUrl, title = '', selection = '') {
+  const parsed = new URL(rawUrl);
+  if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('Unsupported page URL');
   const { canonicalUri } = normalizeUrl(rawUrl);
   const fp = await fingerprint(canonicalUri);
   // Server contract (capture-endpoint/server): {content, dedupeFingerprint?, sourceUrl?,
@@ -46,9 +50,10 @@ async function capturePageUrl (rawUrl) {
   // {canonicalUri, fingerprint} — was rejected 400 by the desktop door: contract break
   // caught by the live Chrome journey j-pd20-extension.)
   await queue.enqueue({
-    payload: { content: canonicalUri, dedupeFingerprint: fp, sourceUrl: canonicalUri },
+    payload: { content: selection.trim() || title.trim() || canonicalUri, dedupeFingerprint: fp, sourceUrl: canonicalUri, ...(title.trim() ? { sourceTitle: title.trim().slice(0, 500) } : {}) },
     canonicalUri,
     fingerprint: fp,
+    title: title.trim(),
   });
   await queue.flush();
   return { canonicalUri, fp };
@@ -56,7 +61,7 @@ async function capturePageUrl (rawUrl) {
 
 chrome.contextMenus.onClicked.addListener(async (info) => {
   if (info.menuItemId !== 'pd-capture-page') return;
-  await capturePageUrl(info.pageUrl);
+  await capturePageUrl(info.pageUrl, info.tab?.title || '', info.selectionText || '');
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -65,7 +70,7 @@ chrome.runtime.onStartup.addListener(() => {
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
   if (msg?.type === 'pd-capture-page') {
-    capturePageUrl(msg.url).then(sendResponse);
+    capturePageUrl(msg.url, msg.title || '', msg.selection || '').then(sendResponse).catch((e) => sendResponse({ error: String(e.message || e) }));
     return true;
   }
   if (msg?.type === 'pd-queue-flush') {

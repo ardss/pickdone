@@ -3,8 +3,8 @@
   "name": "PickDone Capture",
   "version": "0.1.0",
   "description": "Capture page URLs into the local PickDone queue (offline-tolerant persistent queue).",
-  "permissions": ["activeTab", "contextMenus", "storage"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "permissions": ["activeTab", "contextMenus", "storage", "alarms"],
+  "host_permissions": ["http://127.0.0.1:7789/*"],
   "background": { "service_worker": "sw.js" },
   "action": { "default_popup": "popup.html", "default_title": "PickDone queue" }
 }
