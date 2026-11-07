@@ -25,11 +25,12 @@ test('today-x requires BOTH the master gate and its own module switch (two-layer
   assert.ok(nav({ developerMode: true, showTodayXModule: true }).includes('todo-list-today-x'))
 })
 
-test('projects keeps the two-layer gate — graduation was reverted (module still experimental)', () => {
-  assert.ok(!nav({ developerMode: false, showProjectsModule: true }).includes('todo-list-projects'),
-    'projects must NOT survive developerMode=false')
+test('projects rides its own switch alone — graduated off the developer master gate (pd20 lane B 2026-11-07)', () => {
+  assert.ok(nav({ developerMode: false, showProjectsModule: true }).includes('todo-list-projects'),
+    'a non-developer with the module on must see the Project entry')
   assert.ok(nav({ developerMode: true, showProjectsModule: true }).includes('todo-list-projects'))
-  assert.ok(!nav({ developerMode: true, showProjectsModule: false }).includes('todo-list-projects'))
+  assert.ok(!nav({ developerMode: true, showProjectsModule: false }).includes('todo-list-projects'),
+    'an explicitly hidden module stays hidden regardless of developer mode')
 })
 
 test('habit keeps the two-layer gate; missing/undefined switches read as off', () => {
