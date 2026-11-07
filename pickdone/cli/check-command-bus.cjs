@@ -241,7 +241,18 @@ function run () {
   const EXEMPT_FILES = {
     'src/main/db.js': { why: 'the engine itself — the bus and every op implementation dispatch here', ratchet: 0 },
     'src/main/command-bus.js': { why: 'the single write door — commit() is the only caller that maps commands to ops', ratchet: 0 },
-    'src/main/tomato-announce.js': { why: 'sync ingress plumbing — announce meta row written through the init()-injected db surface (tests stub it; same ingress class as lan-sync-bootstrap was)', ratchet: 1 }
+    'src/main/tomato-announce.js': { why: 'sync ingress plumbing — announce meta row written through the init()-injected db surface (tests stub it; same ingress class as lan-sync-bootstrap was)', ratchet: 1 },
+    // pd20 integration (2026-11-07): the cross-platform HTTP bridge persists pairing secret /
+    // session nonce / token revocations through its getDbCall()-injected db surface (unit tests
+    // stub it) — routing through the module bus would bypass the injected contract, same class
+    // as tomato-announce above. The writes ride the SAME todo-db:call door the bus owns at the
+    // handler level. Ratchet = current write-shaped call sites (1 setMeta).
+    'src/main/cross-platform/bridge-bootstrap.js': { why: 'cross-platform bridge security-state persistence over an injected db surface (tests stub it; injected-contract class) — 2 setMeta sites: metaStore.save + enable toggle', ratchet: 2 },
+    // pd20 integration (2026-11-07): the desktop repo adapter maps the bridge's five entities
+    // onto the EXISTING db ops over an injected dbCall (tests inject the same interface on a
+    // temp SQLite). Inbound tombstones go through *RemoveIds with wire-carried stamps — the
+    // same LWW ingress doctrine as sync-apply. Every write still rides the todo-db:call door.
+    'src/main/cross-platform/desktop-repo.js': { why: 'bridge repo adapter over an injected db surface (injected-contract class)', ratchet: 8 }
   }
   const writeUniverse = new Set([...dbWriteOps, ...writeOps])
   // Exact-line anchors for the two import-engine bus-facade literals (h7-1 guard pins them
