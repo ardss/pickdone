@@ -56,7 +56,11 @@ export const META_CONFLICT_BACKUP_PREFIX = 'metaConflictBackup.'
  */
 export function isMachineLocalMetaKey (id) {
   const k = String(id)
-  return k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
+  // 'crossplatform.*' = mobile/web bridge trust root (pairing secret, session nonce, token
+  // revocations, paired-device registry, enabled flags) — Lane A 2026-11-07. Syncing them
+  // would replicate THIS machine's pairing credentials onto peers and let a peer's rows
+  // overwrite the local trust root (every local token would be forged/rejected).
+  return k.startsWith('crossplatform.') || k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
     // 'cliTomato*' = CLI tomato runtime TRANSIENT state (per-device command/status slots);
     // 'cliSync*' = CLI sync command channel slots (cmd/receipt/seq per-machine transport state,
     // never data — syncing them would replay stale commands on the peer).

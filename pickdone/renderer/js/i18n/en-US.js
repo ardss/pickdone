@@ -69,6 +69,33 @@ export default {
     "scNavInbox": "Switch to Todo Box"
   
   },
+"crossPlatform": {
+    "tab": "Mobile / Web sync",
+    "section": "Mobile / Web sync bridge",
+    "enableLabel": "Enable mobile / web sync",
+    "enableTip": "Paired phones and browsers can sync tasks with this desktop over an authenticated local channel; off by default.",
+    "lanLabel": "Allow devices on the LAN",
+    "lanTip": "OFF = this computer only (localhost). ON = phones on the same Wi-Fi can reach the sync port. The port stays closed until you pair a device.",
+    "statusRunning": "Running on port {port} ({bind})",
+    "statusStopped": "Bridge stopped",
+    "pairSection": "Pair a new device",
+    "pairDeviceIdLabel": "Device name shown on this desktop",
+    "pairScopeLabel": "Permission",
+    "pairScopeRead": "View only",
+    "pairScopeWrite": "View and edit",
+    "pairIssueBtn": "Generate pairing code",
+    "pairCodeLabel": "Pairing code",
+    "pairExpiresIn": "Valid for {n}s, usable once",
+    "pairCodeTip": "Enter this code on the phone / web client to pair. The code expires and can be used exactly once.",
+    "devicesSection": "Paired devices",
+    "deviceScope": "{scope}",
+    "devicePairedAt": "Paired {time}",
+    "deviceRevoked": "Revoked",
+    "revokeBtn": "Revoke",
+    "noDevices": "No paired devices yet.",
+    "lastErrorLabel": "Last error",
+    "securityNote": "Every request is authenticated with a short-lived scoped token; revoking a device cuts it off immediately."
+},
 "sync": {
     "tab": "Sync",
     "freeForever": "Local features are free forever.",
