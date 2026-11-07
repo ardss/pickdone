@@ -98,6 +98,11 @@ export class CrossPlatformBridge {
       st.sessionNonce.save(this.sessionNonce)
     }
     this.revocations = new Set(st.revocations.load() || [])
+    // paired-device registry (settings UI surface): {deviceId, scope, pairedAt, revokedAt?}
+    // persisted when the caller supplies a devices store; in-memory otherwise (tests)
+    this.devices = new Map((st.devices && st.devices.load() || []).map(d => [d.deviceId, d]))
+    this._devicesStore = st.devices || null
+    this.bindAddress = deps.bindAddress || '127.0.0.1'
 
     this.pairing = deps.pairing || new PairingChallengeService()
     this.gate = deps.gate || new AuthGate({
@@ -122,7 +127,25 @@ export class CrossPlatformBridge {
   revokeDevice (deviceId) {
     revokeToken(this.revocations, { deviceId })
     this._persistRevocations()
+    const entry = this.devices.get(String(deviceId))
+    if (entry) {
+      entry.revokedAt = this.now()
+      if (this._devicesStore) this._devicesStore.save([...this.devices.values()])
+    }
     this.log('bridge', `device revoked: ${deviceId}`)
+  }
+
+  /** Settings UI: sanitized snapshot - NO secrets, NO user data. */
+  status () {
+    const running = !!(this.server && this.port != null)
+    return {
+      running,
+      port: running ? this.port : null,
+      bindAddress: this.bindAddress,
+      lanReachable: this.bindAddress !== '127.0.0.1',
+      devices: [...this.devices.values()].map(d => ({ deviceId: d.deviceId, scope: d.scope, pairedAt: d.pairedAt, revokedAt: d.revokedAt || null })),
+      lastError: this.lastError || null
+    }
   }
 
   _persistRevocations () {
@@ -137,10 +160,10 @@ export class CrossPlatformBridge {
     return new Promise((resolve, reject) => {
       const server = createServer((req, res) => { this._dispatch(req, res) })
       server.on('error', reject)
-      server.listen(port, '127.0.0.1', () => {
+      server.listen(port, this.bindAddress, () => {
         this.server = server
         this.port = server.address().port
-        this.log('bridge', `listening on 127.0.0.1:${this.port} (loopback only)`)
+        this.log('bridge', `listening on ${this.bindAddress}:${this.port}${this.bindAddress === '127.0.0.1' ? ' (loopback only)' : ' (LAN reachable)'}`)
         resolve({ port: this.port, address: '127.0.0.1' })
       })
     })
@@ -181,8 +204,12 @@ export class CrossPlatformBridge {
 
   async _dispatch (req, res) {
     try {
-      if (req.method !== 'POST') return this._send(res, 405, { error: 'method_not_allowed' })
       const path = (req.url || '').split('?')[0]
+      // discovery beacon: the ONLY unauthenticated route; carries no user data
+      if (req.method === 'GET' && path === '/crossplatform/hello') {
+        return this._send(res, 200, { service: 'pickdone-crossplatform', proto: 1, pairingRequired: true })
+      }
+      if (req.method !== 'POST') return this._send(res, 405, { error: 'method_not_allowed' })
       if (!ROUTES.has(path)) return this._send(res, 404, { error: 'not_found' })
 
       let raw
@@ -205,6 +232,7 @@ export class CrossPlatformBridge {
       if (path === '/crossplatform/pull') return this._handlePull(req, res, body)
       if (path === '/crossplatform/push') return this._handlePush(req, res, body)
     } catch (e) {
+      this.lastError = `${e && e.message}`
       this.log('bridge', `dispatch error: ${e && e.message} :: ${(e && e.stack || '').split('\n').slice(1, 3).join(' | ')}`)
       return this._send(res, 500, { error: 'internal_error' })
     }
@@ -217,6 +245,8 @@ export class CrossPlatformBridge {
       return this._send(res, PAIR_ERROR_STATUS[r.code] || 401, { ok: false, error: r.code })
     }
     this.log('bridge', `paired device ${r.deviceId} scope=${r.scope}`)
+    this.devices.set(r.deviceId, { deviceId: r.deviceId, scope: r.scope, pairedAt: this.now() })
+    if (this._devicesStore) this._devicesStore.save([...this.devices.values()])
     return this._send(res, 200, { ok: true, token: r.token, expiresAt: r.expiresAt, scope: r.scope, deviceId: r.deviceId, csrfHeader: this.sessionNonce })
   }
 
