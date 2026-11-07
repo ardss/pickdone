@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { categoryToDto, episodeToDto, inboundVerdict, taskToDto, VERDICTS } from '../src/sync/desktop-contract.js'
-import { createDesktopSyncClient } from '../src/sync/desktop-client.js'
+import { categoryToDto, episodeToDto, inboundVerdict, taskToDto, VERDICTS } from '../src/sync/pair-contract.js'
+import { createcreatePairClient } from '../src/sync/pair-client.js'
 
 test('mobile DTO aliases and tombstones match desktop Lane A contract', () => {
   const task = taskToDto({ id: 't1', content: 'Title', description: 'Body', version: 9, updatedAt: 123, deleted: 1, deletedAt: 120, fileAttach: 'private/path' })
@@ -21,17 +21,17 @@ test('desktop LWW verdicts retain deletion and surface edit/delete conflicts', (
 test('prepared client requires a live scoped pairing and preserves retry messageId', async () => {
   const sent = []
   const transport = request => { sent.push(request); return Promise.resolve({ ok: true, result: { verdict: VERDICTS.APPLIED } }) }
-  const read = createDesktopSyncClient({ transport, deviceId: 'android-1', credentials: { token: 'test-token', csrfNonce: 'nonce', expiresAt: 101, scope: 'READ' }, now: () => 100 })
+  const read = createcreatePairClient({ transport, deviceId: 'android-1', credentials: { token: 'test-token', csrfNonce: 'nonce', expiresAt: 101, scope: 'READ' }, now: () => 100 })
   await read.pull('pull-1')
   assert.deepEqual(sent[0], { op: 'sync.pull', bearer: 'test-token', csrfHeader: 'nonce', deviceId: 'android-1', messageId: 'pull-1', payload: undefined, entity: undefined })
   assert.throws(() => read.push('todos', { id: 't1', content: 'Task' }), /WRITE scope/)
-  const write = createDesktopSyncClient({ transport, deviceId: 'android-1', credentials: { token: 'test-token', csrfNonce: 'nonce', expiresAt: 101, scope: 'WRITE' }, now: () => 100 })
+  const write = createcreatePairClient({ transport, deviceId: 'android-1', credentials: { token: 'test-token', csrfNonce: 'nonce', expiresAt: 101, scope: 'WRITE' }, now: () => 100 })
   await write.push('todos', { id: 't1', content: 'Task', updatedAt: 90, deleted: 0 }, 'retry-1')
   await write.push('todos', { id: 't1', content: 'Task', updatedAt: 90, deleted: 0 }, 'retry-1')
   assert.equal(sent[1].messageId, sent[2].messageId)
   assert.equal(sent[1].payload.taskId, 't1')
   assert.equal(sent[1].entity, 'todos')
-  const expired = createDesktopSyncClient({ transport, deviceId: 'android-1', credentials: { token: 'test-token', csrfNonce: 'nonce', expiresAt: 100, scope: 'WRITE' }, now: () => 100 })
+  const expired = createcreatePairClient({ transport, deviceId: 'android-1', credentials: { token: 'test-token', csrfNonce: 'nonce', expiresAt: 100, scope: 'WRITE' }, now: () => 100 })
   assert.throws(() => expired.pull(), /expired/)
   assert.equal(sent.length, 3)
 })

@@ -1,10 +1,10 @@
-import { taskToDto, categoryToDto, episodeToDto } from './desktop-contract.js'
+import { taskToDto, categoryToDto, episodeToDto } from './pair-contract.js'
 
 const encoders = { todos: taskToDto, categories: categoryToDto, work_episodes: episodeToDto }
 
 // Transport is injected until the desktop lane publishes an authenticated HTTP route.
 // It receives the AuthGate request shape, with a stable messageId for safe retries.
-export function createDesktopSyncClient({ transport, deviceId, credentials, now = Date.now }) {
+export function createcreatePairClient({ transport, deviceId, credentials, now = Date.now }) {
   if (typeof transport !== 'function') throw new TypeError('transport required')
   if (!deviceId) throw new TypeError('deviceId required')
   function request(op, payload, messageId = crypto.randomUUID(), entity) {
