@@ -13,7 +13,7 @@ test('overview facts use persisted project tasks and work episodes', () => {
   const db = new Database(':memory:')
   try {
     db.exec(SCHEMA)
-    migrations(null, null).find(m => m.v === 11).fn(db)
+    migrations(null, null).filter(m => m.v === 11 || m.v === 12).forEach(m => m.fn(db))
     const put = db.prepare('INSERT INTO todos (id, content, categoryId, deleted, complete, scheduledDay, createdAt) VALUES (?, ?, ?, 0, 0, ?, 1)')
     put.run('late', 'Fix overdue issue', 7, 1000)
     put.run('next', 'Review release notes', 7, 3000)

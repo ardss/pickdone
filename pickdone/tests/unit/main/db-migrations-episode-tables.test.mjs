@@ -75,14 +75,18 @@ test('fresh empty database: v11 alone creates the three tables with the expected
   d.close()
 })
 
-test('dual manifest parity: the static SCHEMA creates the same three tables as migration v11', () => {
+test('dual manifest parity: the static SCHEMA creates the same three tables as migrations v11+v12', () => {
   const viaSchema = new Database(':memory:')
   viaSchema.exec(SCHEMA)
   const viaMigration = new Database(':memory:')
-  v11.fn(viaMigration)
+  for (const v of [11, 12]) migrations.find(m => m.v === v).fn(viaMigration)
+  // Order-INDEPENDENT comparison on purpose: ALTER TABLE appends v12's columns at the end while
+  // the SCHEMA declares them mid-table. Every consumer reads columns BY NAME (db-enc-copy
+  // doctrine: positional SELECT * is what broke legacy DBs), so name:type:default parity is
+  // the real contract, not physical order.
   for (const t of TABLES) {
-    assert.deepEqual(colsOf(viaSchema, t), colsOf(viaMigration, t),
-      `${t}: SCHEMA (fresh install) and migration v11 (upgrade) must define identical columns`)
+    assert.deepEqual([...colsOf(viaSchema, t)].sort(), [...colsOf(viaMigration, t)].sort(),
+      `${t}: SCHEMA (fresh install) and migrations v11+v12 (upgrade) must define identical columns (by name/type/default)`)
   }
   viaSchema.close(); viaMigration.close()
 })

@@ -179,6 +179,16 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       d.exec('CREATE INDEX IF NOT EXISTS idx_task_source_links_ref ON task_source_links (sourceRefId)')
       return true
     } },
+    { v: 12, fn: d => {
+      // pd20 P0 work-continuity (2026-11-07): SourceRef verification state — provenance level
+      // (L0/L1/L2) + last-verified stamp. Probe-style column adds (v2 pattern) so both the
+      // upgraded shape and this boot's SCHEMA-exec'd table converge; NULL level / 0 stamp =
+      // never verified (reads 'unknown'; shared/source-freshness.cjs owns the semantics).
+      const cols = d.prepare('PRAGMA table_info(source_refs)').all().map(c => c.name)
+      if (!cols.includes('level')) d.exec('ALTER TABLE source_refs ADD COLUMN level TEXT')
+      if (!cols.includes('lastVerifiedAt')) d.exec('ALTER TABLE source_refs ADD COLUMN lastVerifiedAt INTEGER NOT NULL DEFAULT 0')
+      return true
+    } },
     ]
   buildMigrations.ensureRepeatDayUniqueness = ensureRepeatDayUniqueness
   return migrationsOverride || BUILT_IN
