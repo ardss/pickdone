@@ -17,10 +17,18 @@ function normalizeEpisode(e) {
   }
 }
 
+import { sourceFreshness } from './source-freshness.mjs'
+
 function normalizeSource(s) {
+  // pd20 P0 (2026-11-07): verification state rides along (single semantics source:
+  // shared/source-freshness.cjs). A handoff consumer must SEE when a ref is unverified
+  // ('unknown') or aged-out ('stale') instead of trusting it silently.
+  const at = Number(s?.lastVerifiedAt) || 0
   return {
     level: s?.level ?? 'L0',
     canonicalUri: s?.canonicalUri ?? '',
+    lastVerifiedAt: at,
+    freshness: s?.freshness ?? sourceFreshness({ lastVerifiedAt: at }, Date.now()),
   }
 }
 
@@ -59,7 +67,8 @@ export function buildHandoff(episodes, sources, task) {
   if (srcs.length > 0) {
     lines.push('Sources:')
     for (const s of srcs) {
-      lines.push(`- [${s.level}] ${s.canonicalUri}`)
+      const state = s.freshness === 'fresh' ? 'verified' : s.freshness
+      lines.push(`- [${s.level}] ${s.canonicalUri} (${state})`)
     }
   }
 

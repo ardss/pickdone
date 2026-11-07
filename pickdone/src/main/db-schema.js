@@ -162,13 +162,18 @@ CREATE INDEX IF NOT EXISTS idx_work_episodes_task ON work_episodes (taskId, star
 -- backstop: sourcePut pre-checks the pair for an explicit error, the index makes the race
 -- impossible at the storage layer.
 CREATE TABLE IF NOT EXISTS source_refs (
-  id         TEXT PRIMARY KEY,
-  providerId TEXT NOT NULL,
-  externalId TEXT NOT NULL,
-  title      TEXT,
-  deleted    INTEGER NOT NULL DEFAULT 0,
-  deletedAt  INTEGER NOT NULL DEFAULT 0,
-  updatedAt  INTEGER NOT NULL DEFAULT 0,
+  id             TEXT PRIMARY KEY,
+  providerId     TEXT NOT NULL,
+  externalId     TEXT NOT NULL,
+  title          TEXT,
+  -- pd20 P0 (2026-11-07): provenance level (L0 statement / L1 observed artifact / L2
+  -- independent QA) + last-verified stamp; NULL/0 = never verified (reads 'unknown',
+  -- aged-out reads 'stale' — shared/source-freshness.cjs is the single semantics source).
+  level          TEXT,
+  lastVerifiedAt INTEGER NOT NULL DEFAULT 0,
+  deleted        INTEGER NOT NULL DEFAULT 0,
+  deletedAt      INTEGER NOT NULL DEFAULT 0,
+  updatedAt      INTEGER NOT NULL DEFAULT 0,
   UNIQUE (providerId, externalId)
 );
 -- Task ↔ source-ref links. A pair-unique link: one task links a given source ref at most once.

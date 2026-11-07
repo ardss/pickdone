@@ -66,10 +66,27 @@ test('json branch maps input fields one-to-one (snapshot-stable)', () => {
   assert.equal(json.episodes.length, 2)
   assert.deepEqual(json.episodes[0], EP_EARLIER, 'first episode sorted first')
   assert.deepEqual(json.episodes[1], EP_LATER)
-  assert.deepEqual(json.sources, [SRC_L0, SRC_L2])
+  // pd20 P0 (2026-11-07): sources carry their verification state — a source with no stamp
+  // reads freshness 'unknown' (never silently trusted as fresh).
+  assert.deepEqual(json.sources, [
+    { level: 'L0', canonicalUri: 'file:///repo/README.md', lastVerifiedAt: 0, freshness: 'unknown' },
+    { level: 'L2', canonicalUri: 'https://example.com/spec#section', lastVerifiedAt: 0, freshness: 'unknown' }
+  ])
   // snapshot stability: identical input -> identical serialization
   const again = buildHandoff([EP_EARLIER, EP_LATER], [SRC_L0, SRC_L2], TASK).json
   assert.equal(JSON.stringify(again), JSON.stringify(json))
+})
+
+test('verification state degrades honestly: fresh vs stale in text + json (pd20 P0)', () => {
+  const now = Date.now()
+  const DAY = 24 * 60 * 60 * 1000
+  const fresh = { level: 'L1', canonicalUri: 'ci://run/42', lastVerifiedAt: now - 2 * DAY }
+  const stale = { level: 'L2', canonicalUri: 'https://example.com/old', lastVerifiedAt: now - 30 * DAY }
+  const { text, json } = buildHandoff([], [fresh, stale], TASK)
+  assert.equal(json.sources[0].freshness, 'fresh')
+  assert.equal(json.sources[1].freshness, 'stale')
+  assert.ok(text.includes('ci://run/42 (verified)'), 'a recently verified ref reads "verified"')
+  assert.ok(text.includes('https://example.com/old (stale)'), 'an aged-out ref is labeled stale in the export')
 })
 
 test('pure function: does not mutate inputs', () => {

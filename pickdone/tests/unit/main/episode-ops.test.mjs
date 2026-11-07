@@ -19,13 +19,16 @@ const episodeOps = require_('../../../src/main/db-episode-ops.cjs')
 const { createBus, USAGE } = require_('../../../src/main/command-bus.js')
 const Database = require_('../../../vendor/better-sqlite3-multiple-ciphers')
 
-const v11 = buildMigrations(null, null).find(m => m.v === 11)
+const migrations = buildMigrations(null, null)
+const v11 = migrations.find(m => m.v === 11)
+const v12 = migrations.find(m => m.v === 12) // pd20 source verification columns (level/lastVerifiedAt)
 
-/** A real SQLite db with the three v11 tables, behind the real command bus — the dbCall
- * seam routes manifest ops to the domain service exactly like db.js's OPS delegates. */
+/** A real SQLite db with the three v11 tables (+v12 verification columns), behind the real
+ * command bus — the dbCall seam routes manifest ops to the domain service exactly like db.js. */
 function wired () {
   const d = new Database(':memory:')
   v11.fn(d)
+  v12.fn(d)
   const routes = {
     episodePut: p => episodeOps.episodePut(d, p),
     episodeRemoveIds: p => episodeOps.episodeRemoveIds(d, p),

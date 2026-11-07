@@ -12,7 +12,7 @@ test('project timeline returns 305 real episodes without a hidden 300-record cap
   const db = new Database(':memory:')
   try {
     db.exec(SCHEMA)
-    migrations(null, null).find(m => m.v === 11).fn(db)
+    migrations(null, null).filter(m => m.v === 11 || m.v === 12).forEach(m => m.fn(db))
     db.prepare('INSERT INTO todos (id, content, categoryId, deleted, complete, createdAt) VALUES (?, ?, ?, 0, 0, 1)')
       .run('history-task', 'Real history', 22)
     for (let i = 1; i <= 305; i++) {

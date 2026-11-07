@@ -15,6 +15,9 @@
  *   so a colliding caller gets an EXPLICIT error naming the pair, not a bare SQLITE message.
  */
 const mintId = prefix => prefix + '_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7)
+// pd20 P0 (2026-11-07): freshness semantics single source (also consumed by handoff export).
+// shared/*.mjs is the repo convention — CJS consumes it via require(esm) (Node >= 22.12).
+const { isKnownLevel, sourceFreshness } = require('../../shared/source-freshness.mjs')
 
 // ---- work_episodes ----
 exports.episodePut = (db, ep = {}) => {
@@ -67,8 +70,9 @@ exports.queryEpisodesByTask = (db, taskId) => {
 // queryEpisodesByTask in handlers/todo.js.
 exports.querySourcesByTask = (db, taskId) => {
   if (taskId == null || taskId === '') return []
+  const now = Date.now()
   return db.prepare(
-    'SELECT sr.id AS refId, sr.providerId, sr.externalId, sr.title, tsl.id AS linkId' +
+    'SELECT sr.id AS refId, sr.providerId, sr.externalId, sr.title, sr.level, sr.lastVerifiedAt, tsl.id AS linkId' +
     ' FROM task_source_links tsl JOIN source_refs sr ON sr.id = tsl.sourceRefId' +
     ' WHERE tsl.taskId = @taskId AND tsl.deleted = 0 AND sr.deleted = 0 ORDER BY sr.id ASC'
   ).all({ taskId: String(taskId) }).map(r => ({
@@ -76,7 +80,11 @@ exports.querySourcesByTask = (db, taskId) => {
     sourceRefId: r.refId,
     providerId: r.providerId,
     externalId: r.externalId,
-    level: 'L0',
+    // Real provenance level + verification state (pd20 P0): NULL legacy level displays as the
+    // L0 baseline; freshness degrades honestly (unknown / stale / fresh — source-freshness.cjs).
+    level: isKnownLevel(r.level) ? String(r.level) : 'L0',
+    lastVerifiedAt: Number(r.lastVerifiedAt) || 0,
+    freshness: sourceFreshness(r, now),
     canonicalUri: String(r.providerId) + '://' + String(r.externalId),
     title: r.title || ''
   }))
@@ -171,13 +179,19 @@ exports.sourcePut = (db, row = {}) => {
   // ordinary unlink→re-link UI round-trip impossible (caught live by j-pd20-episode T4).
   const pair = db.prepare('SELECT id FROM source_refs WHERE providerId = ? AND externalId = ?').get(providerId, externalId)
   const rowId = pair ? pair.id : id
-  db.prepare(`INSERT INTO source_refs (id, providerId, externalId, title, deleted, deletedAt, updatedAt)
-    VALUES (@id,@providerId,@externalId,@title,0,0,@updatedAt)
+  db.prepare(`INSERT INTO source_refs (id, providerId, externalId, title, level, lastVerifiedAt, deleted, deletedAt, updatedAt)
+    VALUES (@id,@providerId,@externalId,@title,@level,@lastVerifiedAt,0,0,@updatedAt)
     ON CONFLICT(id) DO UPDATE SET providerId=excluded.providerId, externalId=excluded.externalId, title=excluded.title,
+      level=excluded.level, lastVerifiedAt=excluded.lastVerifiedAt,
       deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
     .run({
       id: rowId, providerId, externalId,
       title: row.title != null ? String(row.title) : null,
+      // Provenance verification state (pd20 P0, 2026-11-07): an out-of-family level stores as
+      // NULL (never fabricate provenance — 'L9' is a caller bug, not an L9 source); a
+      // non-positive stamp stores 0 (= never verified → reads 'unknown').
+      level: isKnownLevel(row.level) ? String(row.level) : null,
+      lastVerifiedAt: Number(row.lastVerifiedAt) > 0 ? Number(row.lastVerifiedAt) : 0,
       updatedAt: Number(row.updatedAt) > 0 ? Number(row.updatedAt) : now
     })
   return rowId

@@ -23,14 +23,17 @@ const episodeOps = require_('../../../src/main/db-episode-ops.cjs')
 const { SCHEMA } = require_('../../../src/main/db-schema.js')
 const Database = require_('../../../vendor/better-sqlite3-multiple-ciphers')
 
-const v11 = buildMigrations(null, null).find(m => m.v === 11)
+const migrations = buildMigrations(null, null)
+const v11 = migrations.find(m => m.v === 11)
+const v12 = migrations.find(m => m.v === 12) // pd20 source verification columns
 
-/** Real SQLite db with the static todos schema + the three v11 tables. Episodes/links land
- *  through the same domain ops the bus routes to (episodePut/taskSourcePut/...). */
+/** Real SQLite db with the static todos schema + the three v11 tables (+v12 verification
+ *  columns). Episodes/links land through the same domain ops the bus routes to. */
 function wired () {
   const d = new Database(':memory:')
   d.exec(SCHEMA)
   v11.fn(d)
+  v12.fn(d)
   return d
 }
 
