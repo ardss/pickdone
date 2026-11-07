@@ -143,12 +143,13 @@
             </div>
             <!-- Developer mode sinks to the bottom and is de-emphasized (user-finalized): a low-frequency internal switch, one line of hint suffices -->
             <div class="form">
+              <!-- [pd20 lane B 2026-11-07] Projects graduated: always-visible toggle, schema default ON; off keeps the entry hidden -->
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/><span class="tip" style="margin-left:8px">{{ $t('statsE.SettingsModal.sProjectsTip') }}</span></div></div>
               <div class="form-label">{{ $t('statsE.SettingsModal.devSection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDev') }}</span><div class="form-item__control"><el-switch :model-value="st.developerMode === true" @change="v=>set({developerMode:v})"/></div></div>
               <div v-show="st.developerMode === true">
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sTodayX') }}</span><div class="form-item__control"><el-switch :model-value="st.showTodayXModule === true" @change="v=>set({showTodayXModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.habitExperimentalLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showHabitModule !== false" @change="v=>set({showHabitModule:v})"/></div></div>
-                <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDeps') }}</span><div class="form-item__control"><el-switch :model-value="st.showDepsModule === true" @change="v=>set({showDepsModule:v})"/></div></div>
               </div>
               <div class="form-item form-item--bare"><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.devHint') }}</span></div></div>
