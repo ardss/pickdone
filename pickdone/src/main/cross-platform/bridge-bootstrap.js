@@ -32,21 +32,24 @@ function metaStore (dbCall, key, decode, encode) {
   const dec = decode || (v => v)
   const enc = encode || (v => String(v))
   return {
+    // REAL db contract (db.js OPS): getMeta(key) -> string|null; setMeta([key, value]).
+    // (an earlier {key, value} object shape only worked against test stubs — QA R5 follow-up)
     load: () => {
       try {
-        const row = dbCall('getMeta', key)
-        const raw = row && row.value != null ? row.value : (typeof row === 'string' ? row : null)
-        return raw != null ? dec(raw) : null
+        const raw = dbCall('getMeta', key)
+        if (raw == null) return null
+        if (typeof raw === 'string') return dec(raw)
+        return raw && raw.value != null ? dec(raw.value) : null
       } catch { return null }
     },
-    save: v => { dbCall('setMeta', { key, value: enc(v) }) }
+    save: v => { dbCall('setMeta', [key, enc(v)]) }
   }
 }
 
 function readMetaFlag (dbCall, key) {
   try {
-    const row = dbCall('getMeta', key)
-    const v = row && row.value != null ? row.value : (typeof row === 'string' ? row : null)
+    const raw = dbCall('getMeta', key)
+    const v = raw == null ? null : (typeof raw === 'string' ? raw : (raw && raw.value != null ? raw.value : null))
     return v === '1'
   } catch { return false }
 }
@@ -114,14 +117,14 @@ function revokeDevice (deviceId) {
 }
 
 function setBridgeEnabled (dbCall, enabled) {
-  dbCall('setMeta', { key: ENABLED_KEY, value: enabled ? '1' : '0' })
+  dbCall('setMeta', [ENABLED_KEY, enabled ? '1' : '0'])
   // disabling the bridge tears the LAN exposure with it (safer default on re-enable)
-  if (!enabled) dbCall('setMeta', { key: LAN_ENABLED_KEY, value: '0' })
+  if (!enabled) dbCall('setMeta', [LAN_ENABLED_KEY, '0'])
 }
 
 function setLanEnabled (dbCall, enabled) {
   if (!isBridgeEnabled(dbCall)) throw new Error('enable cross-platform sync before enabling LAN access')
-  dbCall('setMeta', { key: LAN_ENABLED_KEY, value: enabled ? '1' : '0' })
+  dbCall('setMeta', [LAN_ENABLED_KEY, enabled ? '1' : '0'])
 }
 
 /** Settings surface: full sanitized snapshot (running, port, bind, devices, lastError). */

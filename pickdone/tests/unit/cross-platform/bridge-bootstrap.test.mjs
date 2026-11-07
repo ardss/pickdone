@@ -13,13 +13,14 @@ const bootstrap = require('../../../src/main/cross-platform/bridge-bootstrap.js'
  */
 
 function fakeDbCall (state = {}) {
+  // canonical REAL db shapes: getMeta(key) -> string|null, setMeta([key, value])
   return (op, params) => {
     if (op === 'getMeta') {
-      const v = state[typeof params === 'string' ? params : params.key]
-      return v != null ? { value: v } : null
+      const v = state[params]
+      return v != null ? v : null
     }
     if (op === 'setMeta') {
-      state[typeof params === 'string' ? params : params.key] = String(params.value != null ? params.value : params)
+      state[params[0]] = String(params[1])
       return true
     }
     // the pull surface reads these five entity ops through the desktop-repo adapter

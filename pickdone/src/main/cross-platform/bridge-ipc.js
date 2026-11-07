@@ -24,16 +24,27 @@ function bridgeIpcHandlers (ctx) {
   const bootstrap = require('./bridge-bootstrap')
   const senderIsMain = makeSenderIsMain(getMainWindow)
 
+  // QA R5 fix (2026-11-07): makeSenderIsMain returns a BOOLEAN — every channel MUST
+  // branch on it and throw BEFORE touching pairing/key/enable/revoke services.
+  // Fail-closed: missing event, missing sender, non-main sender, and any guard error
+  // all reject. (The bare-call form silently let aux windows through.)
+  const assertMainSender = e => {
+    if (!e || !e.sender) throw new Error('forbidden: main window only')
+    let ok = false
+    try { ok = senderIsMain(e) === true } catch { ok = false } // guard errors reject too
+    if (!ok) throw new Error('forbidden: main window only')
+  }
+
   const statusNow = () => bootstrap.getStatus(getDbCall())
 
   return {
     'crossplatform:status': e => {
-      senderIsMain(e)
+      assertMainSender(e)
       return statusNow()
     },
 
     'crossplatform:set-enabled': async (e, { enabled } = {}) => {
-      senderIsMain(e)
+      assertMainSender(e)
       const dbCall = getDbCall()
       const on = !!enabled
       bootstrap.setBridgeEnabled(dbCall, on)
@@ -49,7 +60,7 @@ function bridgeIpcHandlers (ctx) {
     },
 
     'crossplatform:set-lan': async (e, { enabled } = {}) => {
-      senderIsMain(e)
+      assertMainSender(e)
       const dbCall = getDbCall()
       bootstrap.setLanEnabled(dbCall, !!enabled) // throws if the bridge itself is not enabled
       // bind address changes require a rebind: stop, then start with the new flag
@@ -60,7 +71,7 @@ function bridgeIpcHandlers (ctx) {
     },
 
     'crossplatform:pair-issue': (e, { deviceId, scope } = {}) => {
-      senderIsMain(e)
+      assertMainSender(e)
       if (!deviceId || typeof deviceId !== 'string' || deviceId.length > 64) {
         throw new Error('deviceId (string, <=64 chars) required')
       }
@@ -69,14 +80,14 @@ function bridgeIpcHandlers (ctx) {
     },
 
     'crossplatform:revoke': (e, { deviceId } = {}) => {
-      senderIsMain(e)
+      assertMainSender(e)
       if (!deviceId || typeof deviceId !== 'string') throw new Error('deviceId required')
       bootstrap.revokeDevice(deviceId)
       return statusNow()
     },
 
     'crossplatform:port': e => {
-      senderIsMain(e)
+      assertMainSender(e)
       const st = statusNow()
       return st.running ? st.port : null
     }

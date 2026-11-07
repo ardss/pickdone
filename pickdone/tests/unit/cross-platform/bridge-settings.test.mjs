@@ -201,26 +201,47 @@ test('TWO clients: web pairs WRITE, android pairs READ — independent scopes, s
 // ---- IPC channels (stub ctx, real meta store semantics) ----
 
 function stubCtx (state) {
+  // canonical REAL db shapes: getMeta(key) -> string|null, setMeta([key, value])
   const dbCall = (op, params) => {
-    if (op === 'getMeta') { const v = state[params]; return v != null ? { value: v } : null }
-    if (op === 'setMeta') { state[params.key] = String(params.value); return true }
+    if (op === 'getMeta') { const v = state[params]; return v != null ? v : null }
+    if (op === 'setMeta') { state[params[0]] = String(params[1]); return true }
     if (['getAll', 'getAllCategories', 'episodeAllRows', 'sourceAllRows', 'taskSourceAllRows'].includes(op)) return []
     throw new Error('stub ctx dbCall: ' + op)
   }
-  const mainEvent = { sender: { id: 1 } }
+  // real identity discipline: the guard compares e.sender === mainWindow.webContents
+  const mainWebContents = { id: 1 }
+  const mainEvent = { sender: mainWebContents }
   const auxEvent = { sender: { id: 99 } }
-  const ctx = { getDbCall: () => dbCall, getMainWindow: () => ({ isDestroyed: () => false, webContents: { id: 1 } }), log: { info: () => {} } }
+  const ctx = { getDbCall: () => dbCall, getMainWindow: () => ({ isDestroyed: () => false, webContents: mainWebContents }), log: { info: () => {} } }
   return { handlers: bridgeIpcHandlers(ctx), mainEvent, auxEvent, state }
 }
 
 test('IPC: aux window is forbidden on every channel; main window can enable/pair/revoke', async () => {
   const { handlers, mainEvent, auxEvent, state } = stubCtx({})
-  for (const [ch, fn] of Object.entries(handlers)) {
+  // QA R5: NO catch{} around assert.fail — a channel that ACCEPTS an aux sender must
+  // FAIL this test, and the rejection must be the sender gate itself (fail-closed),
+  // not a downstream crash that only accidentally stops the call.
+  const rejectAux = async (ch, fn, payload) => {
+    let threw = null
     try {
-      const r = fn(auxEvent, {})
+      const r = fn(auxEvent, payload)
       if (r && typeof r.then === 'function') await r
-      assert.fail(ch + ' did not reject aux window')
-    } catch { /* expected: sender gate */ }
+    } catch (e) { threw = e }
+    if (!threw) throw new Error(`FAIL: ${ch} accepted an aux-window sender`)
+    assert.match(threw.message, /forbidden: main window only/, `${ch} rejected for the wrong reason: ${threw.message}`)
+  }
+  const allChannels = Object.entries(handlers)
+  assert.equal(allChannels.length, 6, 'all six crossplatform:* channels are covered')
+  for (const [ch, fn] of allChannels) await rejectAux(ch, fn, { enabled: true })
+  // no-event and sender-less events also fail closed
+  for (const [ch, fn] of allChannels) {
+    let threw = null
+    try {
+      const r = fn(undefined, {})
+      if (r && typeof r.then === 'function') await r
+    } catch (e) { threw = e }
+    if (!threw) throw new Error(`FAIL: ${ch} accepted a missing event`)
+    assert.match(threw.message, /forbidden: main window only/)
   }
   // disabled by default
   assert.equal(handlers['crossplatform:status'](mainEvent).running, false)
@@ -251,7 +272,26 @@ test('IPC: aux window is forbidden on every channel; main window can enable/pair
   assert.equal(off.running, false)
   assert.equal(off.lanEnabled, false, 'disabling the bridge resets LAN exposure (safer re-enable default)')
   assert.equal(state[bootstrap.__keys.LAN_ENABLED_KEY], '0')
+  // port channel reports null when stopped (sixth channel, main-window path)
+  assert.equal(handlers['crossplatform:port'](mainEvent), null)
   await bootstrap.stopCrossPlatformBridge()
+  // restart safety: a fresh enable still gates aux senders on EVERY channel
+  const fresh = stubCtx(state)
+  await fresh.handlers['crossplatform:set-enabled'](fresh.mainEvent, { enabled: true })
+  for (const [ch, fn] of Object.entries(fresh.handlers)) await rejectAux2(ch, fn, fresh.auxEvent)
+  await bootstrap.stopCrossPlatformBridge()
+  function rejectAux2 (ch, fn, ev) {
+    let threw = null
+    try {
+      const r = fn(ev, { enabled: true })
+      if (r && typeof r.then === 'function') return r.then(() => { throw new Error(`FAIL: ${ch} accepted aux after restart`) }, e => {
+        assert.match(e.message, /forbidden: main window only/)
+      })
+    } catch (e) { threw = e }
+    if (threw) assert.match(threw.message, /forbidden: main window only/)
+    else if (!threw) throw new Error(`FAIL: ${ch} accepted an aux-window sender`)
+    return Promise.resolve()
+  }
 })
 
 test('IPC state survives restart semantics: enabled flag + devices persist in the meta store', async () => {
