@@ -110,6 +110,12 @@ export async function spawnApp (opts = {}) {
   // shells export it → electron.exe boots as plain Node and dies in src/main/index.js.
   const env = { ...process.env, TODO_USER_DATA_DIR: userDataDir, TODO_SYNC_PORT: String(syncPort) }
   delete env.ELECTRON_RUN_AS_NODE
+  // Win32 excluded-port ranges / pickFreePort's own TIME_WAIT residue: Chromium may SILENTLY
+  // rebind DevTools to an ephemeral port when the requested one is unbindable, and the
+  // caller's connect to the requested port gets ECONNREFUSED (root cause of the intermittent
+  // E1 boot flake in j-pd20-extension). Probe the requested port after spawn; if it never
+  // answers, ADOPT the port Chromium actually bound — the boot log names it in the
+  // 'DevTools listening on ws://127.0.0.1:<port>/' line. Bounded wait, no respawn needed.
   const child = spawn(ELECTRON, ['.', ...baseArgs, '--remote-debugging-port=' + port, ...(opts.appArgs || []), ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
     cwd: APP_CWD,
     env,
@@ -117,7 +123,31 @@ export async function spawnApp (opts = {}) {
     stdio: ['ignore', fs.openSync(logFile, 'a'), fs.openSync(logFile, 'a')],
     detached: false
   })
-  return { child, port, cdp: `http://127.0.0.1:${port}`, userDataDir, logFile }
+  let boundPort = port
+  const deadline = Date.now() + 15000
+  let named = null
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 400))
+    try {
+      const res = await fetch(`http://127.0.0.1:${boundPort}/json/version`, { signal: AbortSignal.timeout(1200) })
+      if (res.ok) break // requested port answered: done
+    } catch { /* not up yet — or silently rebound */ }
+    if (child.exitCode !== null) break // died for a real reason: let the caller's flow surface it
+    if (named === null) {
+      // one-shot: let the boot log name the real DevTools port, then probe THAT
+      try {
+        const m = fs.readFileSync(logFile, 'utf8').match(/DevTools listening on ws:\/\/127\.0\.0\.1:(\d+)\//)
+        if (m && Number(m[1]) !== port) named = Number(m[1])
+      } catch { /* log not flushed yet */ }
+      if (named !== null) {
+        try {
+          const res = await fetch(`http://127.0.0.1:${named}/json/version`, { signal: AbortSignal.timeout(1200) })
+          if (res.ok) { boundPort = named; break }
+        } catch { /* keep waiting */ }
+      }
+    }
+  }
+  return { child, port: boundPort, cdp: `http://127.0.0.1:${boundPort}`, userDataDir, logFile }
 }
 
 /** 优雅退出（Browser.close 触发 before-quit/mirror flush）→ 超时 taskkill 整树（win32 必须防锁残留）
