@@ -68,3 +68,45 @@ eslint (new files)                        -> 0 problems
 - Desktop settings UI/IPC to flip `crossplatform.enabled`, display the pairing code and list paired devices (this lane exposes the hooks only).
 - Real-device Android (APK on hardware) and real-browser Web/PWA bidirectional flows — other lanes; the endpoints above are the contract they integrate against.
 - LAN-reachability beyond loopback: the bridge binds 127.0.0.1; opening it to the LAN is a deliberate, user-enabled decision OUT of this lane's default.
+
+
+## Phase 3 (2026-11-07): settings surface + LAN exposure + discovery — commits ed71f9a4 / 94e9b865
+
+| Piece | Location |
+| --- | --- |
+| IPC channels | `pickdone/src/main/cross-platform/bridge-ipc.js` — `crossplatform:status / set-enabled / set-lan / pair-issue / revoke / port`; registered in `src/main/index.js` registerIpc; every channel main-window-gated (aux windows rejected, same sender-identity discipline as settings domain); responses sanitized (no secret, no token, no user rows) |
+| Preload surface | `pickdone/src/preload/index.js` — `window.crossPlatformAPI` |
+| Settings UI | `pickdone/renderer/js/components/settings/SettingsCrossTab.vue` + `SettingsModal.vue` ('cross' tab): enable toggle (default OFF), second explicit opt-in for LAN exposure, port/bind status line, one-time pairing code with countdown + scope choice (READ/WRITE), paired-device list with revoke, sanitized last-error; i18n zh-CN + en-US (`crossPlatform.*`) |
+| LAN exposure | `http-bridge.mjs` `bindAddress` option; `bridge-bootstrap.js` binds `0.0.0.0` ONLY when meta `crossplatform.lanEnabled === '1'`, else always `127.0.0.1`; disabling the bridge resets the LAN flag (safer re-enable default) |
+| Discovery | `GET /crossplatform/hello` — the only unauthenticated route, returns `{service:'pickdone-crossplatform', proto:1, pairingRequired:true}`, no user data |
+| Device registry | paired devices persisted via db meta `crossplatform.devices` (`{deviceId, scope, pairedAt, revokedAt?}`); `status()` exposes the sanitized snapshot |
+| Trust-root sync guard | `shared/machine-local-keys.mjs`: `crossplatform.*` added to `isMachineLocalMetaKey` — the pairing secret/nonce/revocations never replicate onto peers (a peer row would overwrite the local trust root) |
+| Command-bus gate | bridge ingress surfaces registered in `cli/check-command-bus.cjs` exemption ledger (injected-contract class, write-call ratchets 8/4) |
+
+### Default posture
+
+Bridge OFF → no listener exists at all. Enable (settings toggle) → listener on 127.0.0.1 only; loopback clients (same-machine web PWA/extension) work, LAN devices cannot reach it. Enable LAN (second toggle) → wildcard bind; data still gated by pairing + scoped tokens + origin/CSRF/replay/rate. No system proxy/firewall changes are made by this lane; port is ephemeral unless pinned by the caller.
+
+### Evidence (phase 3)
+
+```
+node --test pickdone/tests/unit/cross-platform/*.test.mjs  -> 76 pass / 0 fail, exit 0
+  bridge-settings.test.mjs (6): discovery beacon, loopback-default status (secret-leak assert),
+  LAN-mode bind answering on the machine's real LAN address, TWO independent clients
+  (web WRITE / android READ: push, pull, scope deny, disconnect retry, tombstone delete,
+  mid-session revoke), IPC channels incl. aux-window rejection on every channel and
+  meta-state restart semantics
+component gates (w5 split / structure / sfc)  -> 32 pass / 0 fail
+node cli/check-command-bus.cjs -> PASS;  w33 gate green;  vite build exit 0
+pre-commit full suite (last runs) -> 3148 pass / 0 fail (ed71f9a4), 5498 pass / 0 fail (94e9b865)
+```
+
+### Integration handoff for Web/Android client lanes (updated)
+
+- Same endpoints as Phase 2, plus: discovery via `GET /crossplatform/hello`; pairing codes are minted on the desktop settings tab (user reads the 6-digit code + sees its countdown); device identity = the `deviceId` the client chose (<=64 chars).
+- LAN reachability requires the desktop user to flip BOTH toggles (bridge + LAN). Clients should surface `origin_rejected` (ask desktop to allowlist the web origin) vs `csrf_rejected` (send the pairing-issued `csrfHeader` verbatim on every request) distinctly.
+
+### Still BLOCKED (unchanged, not faked)
+
+- Real Android device / real installed desktop E2E (other lanes / QA).
+- Relay/cloud path reuse for mobile: the bridge currently serves direct HTTP; riding the existing Relay for NAT-traversal is a deliberate follow-up, not claimed here.
