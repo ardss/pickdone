@@ -154,3 +154,38 @@ test('enqueue deduplicates by fingerprint', async () => {
   await q.enqueue({ ...ENTRY, payload: { text: 'same url, different text' } });
   assert.equal(storage.data.pdCaptureQueue.length, 1);
 });
+
+
+test('service worker restart preserves offline entries and reconnect delivers once', async () => {
+  const storage = makeStorage();
+  let now = 1_000_000;
+  let online = false;
+  let deliveries = 0;
+  const makeQueue = () => createQueue({
+    storage,
+    alarms: null,
+    now: () => now,
+    deliver: async () => {
+      if (!online) throw new Error('desktop offline');
+      deliveries += 1;
+    },
+  });
+
+  const firstWorker = makeQueue();
+  await firstWorker.enqueue(ENTRY);
+  await firstWorker.flush();
+  assert.equal(storage.data.pdCaptureQueue[0].attempts, 1);
+
+  // A new queue instance models an MV3 worker process restarted from persistent storage.
+  const restartedWorker = makeQueue();
+  assert.equal((await restartedWorker.load()).length, 1);
+  await restartedWorker.enqueue(ENTRY);
+  assert.equal((await restartedWorker.load()).length, 1, 'same fingerprint is not enqueued twice');
+
+  online = true;
+  now += BACKOFF_MS[0];
+  const result = await restartedWorker.flush();
+  assert.equal(result.sent.length, 1);
+  assert.equal(deliveries, 1);
+  assert.deepEqual(storage.data.pdCaptureQueue, []);
+});

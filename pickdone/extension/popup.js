@@ -1,20 +1,10 @@
-// Popup: shows queue state, lets the user trigger an immediate flush, and edits the
-// capture endpoint URL + access key (both persisted in chrome.storage.local and read
-// by the service worker's deliver()).
-const DEFAULT_ENDPOINT = 'http://127.0.0.1:7789/capture';
-const endpointInput = document.getElementById('endpoint');
+// Popup: queue state and the loopback capture access key.
 const apiKeyInput = document.getElementById('apiKey');
 
 async function loadConnectionSettings() {
-  const got = await chrome.storage.local.get(['pdEndpoint', 'pdCaptureKey']);
-  endpointInput.value = got.pdEndpoint || DEFAULT_ENDPOINT;
+  const got = await chrome.storage.local.get('pdCaptureKey');
   apiKeyInput.value = got.pdCaptureKey || '';
 }
-endpointInput.addEventListener('change', async () => {
-  const url = endpointInput.value.trim();
-  await chrome.storage.local.set({ pdEndpoint: url || DEFAULT_ENDPOINT });
-  endpointInput.value = url || DEFAULT_ENDPOINT;
-});
 apiKeyInput.addEventListener('change', async () => {
   await chrome.storage.local.set({ pdCaptureKey: apiKeyInput.value.trim() });
 });
