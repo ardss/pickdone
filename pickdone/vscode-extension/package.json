@@ -1,0 +1,33 @@
+{
+  "name": "pickdone-vscode",
+  "displayName": "PickDone",
+  "description": "Query PickDone tasks/projects, link workspace files and git commits as SourceRefs, and read WorkEpisode handoffs from the local PickDone desktop app.",
+  "version": "0.1.0",
+  "publisher": "pickdone",
+  "license": "MIT",
+  "engines": { "vscode": "^1.80.0" },
+  "categories": ["Other"],
+  "main": "./extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "commands": [
+      { "command": "pickdone.setKey", "title": "PickDone: Set Access Key" },
+      { "command": "pickdone.revokeKey", "title": "PickDone: Revoke Access Key" },
+      { "command": "pickdone.listTasks", "title": "PickDone: List Tasks" },
+      { "command": "pickdone.listProjects", "title": "PickDone: List Projects" },
+      { "command": "pickdone.linkSource", "title": "PickDone: Link Current File/Commit to Task" },
+      { "command": "pickdone.showHandoff", "title": "PickDone: Show Task Handoff" }
+    ],
+    "configuration": {
+      "title": "PickDone",
+      "properties": {
+        "pickdone.endpoint": {
+          "type": "string",
+          "default": "http://127.0.0.1:7789",
+          "description": "Loopback capture door of the local PickDone desktop app (must stay loopback)."
+        }
+      }
+    }
+  },
+  "scripts": {}
+}
