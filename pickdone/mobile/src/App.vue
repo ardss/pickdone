@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue'
 import { openRepository } from './repository'
 import copy from './i18n/zh-CN.js'
+import logoUrl from '../../assets/img/favicon.svg'
+import { PdActionButton, PdEmptyState, PdStatusChip, PdTaskCard, PdProjectCard, PdWorkEpisodeCard } from '../../shared/ui/index.js'
 
 const repo = ref(null)
 const tasks = ref([])
@@ -66,8 +68,8 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
 <template>
   <div class="app-shell">
     <header class="masthead">
-      <div class="brand"><span class="brand-mark">✓</span><span>PickDone</span></div>
-      <span class="local-badge">{{ copy.localRecord }}</span>
+      <div class="brand"><img class="brand-mark" :src="logoUrl" alt="" /><span>PickDone</span></div>
+      <PdStatusChip class="local-badge" tone="brand">{{ copy.localRecord }}</PdStatusChip>
     </header>
     <main>
       <div v-if="error" class="error" role="alert">{{ error }}</div>
@@ -75,37 +77,37 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
         <div class="eyebrow">{{ copy.today }} · {{ dateTitle }}</div>
         <h1>{{ copy.todaySlogan }}</h1>
         <p class="intro">{{ copy.todayIntroStart }} {{ todayTasks.length }} {{ copy.todayIntroEnd }}</p>
-        <button class="primary-add" type="button" @click="newTask"><span>＋</span> {{ copy.addTask }}</button>
-        <div class="section-heading"><h2>{{ copy.pending }}</h2><span>{{ todayTasks.length }}</span></div>
-        <p v-if="!todayTasks.length" class="empty">{{ copy.todayEmpty }}</p>
-        <article v-for="task in todayTasks" :key="task.id" class="task-card">
+        <PdActionButton class="primary-add" block @click="newTask"><span>＋</span> {{ copy.addTask }}</PdActionButton>
+        <div class="section-heading"><h2>{{ copy.pending }}</h2><PdStatusChip>{{ todayTasks.length }}</PdStatusChip></div>
+        <PdEmptyState v-if="!todayTasks.length" class="empty" :description="copy.todayEmpty" />
+        <PdTaskCard v-for="task in todayTasks" :key="task.id" class="task-card">
           <button class="check" type="button" :aria-label="copy.complete + task.content" @click="toggleTask(task)"></button>
-          <div class="task-main" @click="editTask(task)"><strong>{{ task.content }}</strong><small>{{ projectNameById(task.categoryId) }}<template v-if="task.description"> · {{ task.description }}</template></small></div>
-          <button class="mini" type="button" :aria-label="copy.record + task.content + copy.recordSuffix" @click="newEpisode(task)">◷</button>
-        </article>
-        <div v-if="completeTasks.length" class="section-heading completed-heading"><h2>{{ copy.completed }}</h2><span>{{ completeTasks.length }}</span></div>
-        <article v-for="task in completeTasks.slice(0, 10)" :key="task.id" class="task-card done">
+          <button class="task-main" type="button" @click="editTask(task)"><strong>{{ task.content }}</strong><small>{{ projectNameById(task.categoryId) }}<template v-if="task.description"> · {{ task.description }}</template></small></button>
+          <PdActionButton class="mini" tone="quiet" type="button" :aria-label="copy.record + task.content + copy.recordSuffix" @click="newEpisode(task)">◷</PdActionButton>
+        </PdTaskCard>
+        <div v-if="completeTasks.length" class="section-heading completed-heading"><h2>{{ copy.completed }}</h2><PdStatusChip>{{ completeTasks.length }}</PdStatusChip></div>
+        <PdTaskCard v-for="task in completeTasks.slice(0, 10)" :key="task.id" class="task-card done" :done="true">
           <button class="check checked" type="button" :aria-label="copy.restore + task.content" @click="toggleTask(task)">✓</button>
-          <div class="task-main" @click="editTask(task)"><strong>{{ task.content }}</strong><small>{{ projectNameById(task.categoryId) }}</small></div>
-        </article>
+          <button class="task-main" type="button" @click="editTask(task)"><strong>{{ task.content }}</strong><small>{{ projectNameById(task.categoryId) }}</small></button>
+        </PdTaskCard>
       </section>
       <section v-else-if="tab === 'projects'">
         <div class="eyebrow">{{ copy.yourSpace }}</div><h1>{{ copy.projects }}</h1><p class="intro">{{ copy.projectsIntro }}</p>
-        <button class="primary-add" type="button" @click="editor = 'project'"><span>＋</span> {{ copy.newProject }}</button>
-        <p v-if="!projects.length" class="empty">{{ copy.projectsEmpty }}</p>
-        <article v-for="project in projects" :key="project.id" class="project-card">
+        <PdActionButton class="primary-add" block @click="editor = 'project'"><span>＋</span> {{ copy.newProject }}</PdActionButton>
+        <PdEmptyState v-if="!projects.length" class="empty" :description="copy.projectsEmpty" />
+        <PdProjectCard v-for="project in projects" :key="project.id" class="project-card">
           <span class="project-dot" :style="{ background: project.color }"></span>
           <div><strong>{{ project.name }}</strong><small>{{ tasks.filter(task => task.categoryId === project.id && !task.complete).length }} {{ copy.pendingCount }}</small></div>
-        </article>
+        </PdProjectCard>
       </section>
       <section v-else>
         <div class="eyebrow">{{ copy.historyEyebrow }}</div><h1>{{ copy.history }}</h1><p class="intro">{{ copy.historyIntro }}</p>
-        <p v-if="!sortedEpisodes.length" class="empty">{{ copy.historyEmpty }}</p>
-        <article v-for="episode in sortedEpisodes" :key="episode.id" class="episode-card">
+        <PdEmptyState v-if="!sortedEpisodes.length" class="empty" :description="copy.historyEmpty" />
+        <PdWorkEpisodeCard v-for="episode in sortedEpisodes" :key="episode.id" class="episode-card">
           <div class="episode-top"><strong>{{ tasks.find(task => task.id === episode.taskId)?.content || copy.removedTask }}</strong><span>{{ duration(episode) }} {{ copy.minutes }}</span></div>
           <p>{{ episode.note || copy.noNote }}</p>
           <small>{{ new Date(episode.startedAt).toLocaleString('zh-CN') }} — {{ new Date(episode.endedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</small>
-        </article>
+        </PdWorkEpisodeCard>
       </section>
     </main>
     <nav class="bottom-nav" :aria-label="copy.nav">
@@ -129,7 +131,7 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
           <label>{{ copy.endTime }}<input v-model="episodeForm.endedAt" type="datetime-local" required /></label>
           <label>{{ copy.whatDone }}<textarea v-model="episodeForm.note" rows="3" :placeholder="copy.episodePrompt"></textarea></label>
         </template>
-        <button class="save" type="submit">{{ copy.save }}</button>
+        <PdActionButton class="save" type="submit" block>{{ copy.save }}</PdActionButton>
       </form>
     </div>
   </div>
