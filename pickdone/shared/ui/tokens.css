@@ -1,0 +1,76 @@
+/* PickDone semantic tokens. Brand and neutral values follow the desktop theme. */
+:root {
+  --pd-brand: #0f9d8f;
+  --pd-brand-strong: #0a6f62;
+  --pd-brand-hover: #0c8172;
+  --pd-brand-soft: #b5ded9;
+  --pd-brand-wash: #e2f4f1;
+  --pd-brand-mark-soft: #b5ded9;
+  --pd-on-brand: #ffffff;
+  --pd-text: #303133;
+  --pd-text-secondary: #606266;
+  --pd-muted: #6d7278;
+  --pd-background: #f8f8f8;
+  --pd-surface: #ffffff;
+  --pd-border: #e4e7ed;
+  --pd-success: #1f7a33;
+  --pd-success-soft: #e8f5e8;
+  --pd-warning: #9a6010;
+  --pd-warning-soft: #fff2dc;
+  --pd-danger: #d9534f;
+  --pd-danger-soft: #fef0f0;
+  --pd-font: Inter, "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  --pd-radius-sm: 6px;
+  --pd-radius-md: 10px;
+  --pd-radius-lg: 14px;
+  --pd-radius-xl: 18px;
+  --pd-space-1: 4px;
+  --pd-space-2: 8px;
+  --pd-space-3: 12px;
+  --pd-space-4: 16px;
+  --pd-space-6: 24px;
+  --pd-shadow-card: 0 2px 12px rgb(24 48 47 / 5%);
+  --pd-focus-ring: 0 0 0 3px rgb(15 157 143 / 20%);
+}
+:root[data-theme="dark"] {
+  --pd-brand: #35c2ae;
+  --pd-brand-strong: #4cd4c0;
+  --pd-brand-hover: #7fd0c7;
+  --pd-brand-soft: #143430;
+  --pd-on-brand: #102622;
+  --pd-text: #e8eaed;
+  --pd-text-secondary: #b8bdc7;
+  --pd-muted: #aeb4bf;
+  --pd-background: #17191e;
+  --pd-surface: #1c1f26;
+  --pd-border: #343a43;
+  --pd-success: #83d48b;
+  --pd-success-soft: #183622;
+  --pd-warning: #f2bb64;
+  --pd-warning-soft: #3d2c16;
+  --pd-danger: #ff8e8b;
+  --pd-danger-soft: #3c2325;
+  --pd-shadow-card: 0 2px 12px rgb(0 0 0 / 20%);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {
+    --pd-brand: #35c2ae;
+    --pd-brand-strong: #4cd4c0;
+    --pd-brand-hover: #7fd0c7;
+    --pd-brand-soft: #143430;
+    --pd-on-brand: #102622;
+    --pd-text: #e8eaed;
+    --pd-text-secondary: #b8bdc7;
+    --pd-muted: #aeb4bf;
+    --pd-background: #17191e;
+    --pd-surface: #1c1f26;
+    --pd-border: #343a43;
+    --pd-success: #83d48b;
+    --pd-success-soft: #183622;
+    --pd-warning: #f2bb64;
+    --pd-warning-soft: #3d2c16;
+    --pd-danger: #ff8e8b;
+    --pd-danger-soft: #3c2325;
+    --pd-shadow-card: 0 2px 12px rgb(0 0 0 / 20%);
+  }
+}
