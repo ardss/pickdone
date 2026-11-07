@@ -54,13 +54,16 @@ test('explicit delete door: saveTask({deleted:1}) tombstones a live row; editing
 
 test('applyPulled writes peer rows verbatim; sync-cycle mergePull honors LWW verdicts', async () => {
   const repo = await openRepository()
-  await repo.saveTask({ content: 'Local live', categoryId: 0 })
+  // The browser store persists across tests in this process (fixed db name 'pickdone-mobile-v1'),
+  // so rawAll can surface leftover rows from earlier tests - pin the local row via saveTask's return.
+  const savedLocal = await repo.saveTask({ content: 'Local live', categoryId: 0 })
   const localRows = await repo.rawAll('todos')
+  const localId = savedLocal.id
   const localById = new Map(localRows.map(row => [row.id, row]))
 
   const desktopTodoDto = { taskId: 'desk-1', title: 'From desktop', updatedAt: Date.now() + 60_000, clientTag: 'private-1' }
   const desktopTombDto = { taskId: 'desk-2', title: 'Tombstoned', updatedAt: Date.now() + 60_000, deleted: 1, deletedAt: Date.now() + 59_000 }
-  const stale = taskToDto({ id: localRows[0].id, content: 'Stale overwrite attempt', updatedAt: 1 })
+  const stale = taskToDto({ id: localId, content: 'Stale overwrite attempt', updatedAt: 1 })
   const { changes, conflicts, skipped } = mergePull({ todos: localRows }, { todos: [desktopTodoDto, desktopTombDto, stale] })
   assert.equal(changes.length, 2)
   assert.deepEqual(conflicts, [])
@@ -72,13 +75,13 @@ test('applyPulled writes peer rows verbatim; sync-cycle mergePull honors LWW ver
   assert.equal(raw.find(row => row.id === 'desk-1').clientTag, 'private-1', 'unknown inbound fields survive the repo door')
   assert.equal((await repo.tasks()).some(task => task.id === 'desk-2'), false)
   // stale skip was NOT applied
-  assert.equal((await repo.tasks()).find(task => task.id === localRows[0].id).content, 'Local live')
+  assert.equal((await repo.tasks()).find(task => task.id === localId).content, 'Local live')
   // now a newer desktop tombstone against the live local row = surfaced conflict, tombstone wins
-  const conflictBatch = mergePull({ todos: await repo.rawAll('todos') }, { todos: [taskToDto({ id: localRows[0].id, content: 'Local live', updatedAt: Date.now() + 90_000, deleted: 1, deletedAt: Date.now() + 89_000 })] })
+  const conflictBatch = mergePull({ todos: await repo.rawAll('todos') }, { todos: [taskToDto({ id: localId, content: 'Local live', updatedAt: Date.now() + 90_000, deleted: 1, deletedAt: Date.now() + 89_000 })] })
   assert.equal(conflictBatch.changes.length, 1)
   assert.equal(conflictBatch.conflicts[0].verdict, VERDICTS.CONFLICT_TOMBSTONE_WINS)
   for (const change of conflictBatch.changes) await repo.applyPulled(change.entity, change.row)
-  assert.equal((await repo.rawAll('todos')).find(row => row.id === localRows[0].id).deleted, 1)
+  assert.equal((await repo.rawAll('todos')).find(row => row.id === localId).deleted, 1)
 })
 
 test('planPush includes tombstones, chunks at 500, drops poison rows; summarize lifts conflicts', async () => {
