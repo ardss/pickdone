@@ -353,3 +353,10 @@ test('audit trail captured real security events', () => {
   assert.ok(auditLog.some(m => m.includes('device revoked: dev-kill')), 'revocation audited')
   assert.ok(auditLog.some(m => m.includes('listening on 127.0.0.1:')), 'bind address audited')
 })
+
+// run-all doctrine (tests/run-all.mjs): the suite runs with --test-force-exit, so a
+// file must not leave closing handles behind. undici's global fetch pool tears down its
+// keep-alive sockets asynchronously after bridge.close(); give it one settle tick here
+// so force-exit finds nothing mid-close (avoids the Windows libuv UV_HANDLE_CLOSING
+// assertion at exit).
+after(async () => { await new Promise(r => setTimeout(r, 500)) })

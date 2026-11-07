@@ -128,3 +128,28 @@ Machine-local filter completeness re-audited (both directions, single predicate)
 - outbound oplog segments: `db-oplog.js` entity='meta' -> isMachineLocalMetaKey;
 - inbound apply: `sync-apply.js` + `sync-apply-hydrate.js` reject machine-local meta rows;
 - `crossplatform.*` covered by the Phase-3 addition to `shared/machine-local-keys.mjs`. COMPLETE - no BLOCKED residue on the meta-leak axis.
+
+
+## Phase 4 (2026-11-07): controlled CORS for real browser clients (QA-found P0)
+
+Finding: a REAL Chromium page could not call the bridge at all — OPTIONS returned 405 with no Access-Control-Allow-*, so the page saw only 'Failed to fetch' while plain curl POSTs were green.
+
+Fix (`http-bridge.mjs`), red->green (tests FAILED first, then pass):
+
+- OPTIONS answered ONLY on the three existing routes; the Origin MUST be on the explicit allowlist (the same list as the auth gate); unknown origins get NO ACAO reflection and a bare 403 — no wildcard anywhere, ever
+- Response headers (preflight and actual): exact-echo `Access-Control-Allow-Origin: <allowlisted origin>`, `Allow-Methods: POST, OPTIONS`, `Allow-Headers: Authorization, Content-Type, X-PickDone-Request`, `Max-Age: 600`, `Vary: Origin`
+- Everything else unchanged: actual POSTs still require Bearer scoped token + CSRF header + messageId (replay cache) + rate limit + body cap; revocation still cuts devices off instantly
+
+Evidence:
+```
+RED  (pre-fix)   OPTIONS_STATUS 405, ACAO null                         -> tests fail 3/5
+GREEN (post-fix) bridge-cors.test.mjs 5/5; full lane suite 81/81, exit 0; eslint 0
+```
+
+REAL Chromium evidence (driven via the browser, not curl): a page served from the allowlisted origin `http://localhost:5173` performing genuine cross-origin fetches against the bridge:
+- pair -> `200 ok scope=WRITE`; pull -> `200`; push -> `200 verdict=applied` (task 'written from Chromium')
+- desktop-side revoke -> page's next pull reads `401 token_revoked` IN THE PAGE (error bodies are CORS-readable, not swallowed 'Failed to fetch')
+- negative in-browser: unauthenticated POST -> `403 csrf_rejected`, readable
+- reproducible host: `pickdone/scripts/cross-platform/chromium-e2e-host.mjs` (level-1 opt-in `--enable-bridge` required; loopback only; stop-file lifecycle; listener verified closed)
+
+Client-lane note: origins must be allowlisted on the desktop (settings-managed list, contract in Phase 2); `localhost:5173` (Vite dev) is the first allowlisted dev origin; a browser client cannot spoof Origin — the allowlist is the trust boundary for browsers, tokens+CSRF remain the auth.

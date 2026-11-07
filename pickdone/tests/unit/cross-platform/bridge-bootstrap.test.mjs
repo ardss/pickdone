@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 
@@ -86,3 +86,10 @@ test('disable + start tears the listener down (default-off contract)', async () 
   await bootstrap.stopCrossPlatformBridge()
   assert.equal(bootstrap.isBridgeEnabled(dbCall), false)
 })
+
+// run-all doctrine (tests/run-all.mjs): the suite runs with --test-force-exit, so a
+// file must not leave closing handles behind. undici's global fetch pool tears down its
+// keep-alive sockets asynchronously after bridge.close(); give it one settle tick here
+// so force-exit finds nothing mid-close (avoids the Windows libuv UV_HANDLE_CLOSING
+// assertion at exit).
+after(async () => { await new Promise(r => setTimeout(r, 500)) })

@@ -1,4 +1,4 @@
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { PairingChallengeService } from '../../../shared/cross-platform/pairing-challenge.mjs'
 import { AuthGate } from '../../../shared/cross-platform/auth-gate.mjs'
@@ -137,3 +137,10 @@ test('delete-vs-edit conflict surfaces through the full chain instead of silentl
   assert.equal(stored.deleted, 0)
   assert.equal(stored.content, 'desktop edit')
 })
+
+// run-all doctrine (tests/run-all.mjs): the suite runs with --test-force-exit, so a
+// file must not leave closing handles behind. undici's global fetch pool tears down its
+// keep-alive sockets asynchronously after bridge.close(); give it one settle tick here
+// so force-exit finds nothing mid-close (avoids the Windows libuv UV_HANDLE_CLOSING
+// assertion at exit).
+after(async () => { await new Promise(r => setTimeout(r, 500)) })

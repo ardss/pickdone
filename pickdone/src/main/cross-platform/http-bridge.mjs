@@ -172,15 +172,36 @@ export class CrossPlatformBridge {
   async close () {
     if (!this.server) return
     // destroy idle keep-alive sockets (undici/fetch pools hold them open) so close() settles
+    if (typeof this.server.closeIdleConnections === 'function') this.server.closeIdleConnections()
     if (typeof this.server.closeAllConnections === 'function') this.server.closeAllConnections()
     await new Promise(resolve => this.server.close(resolve))
     this.server = null
     this.port = null
   }
 
-  _send (res, status, body) {
+  /**
+   * Controlled CORS (QA fix: real Chromium could not call the bridge - OPTIONS 405,
+   * no ACAO). Headers are emitted ONLY for origins on the explicit allowlist; unknown
+   * origins get no reflection and no wildcard, ever.
+   */
+  _corsHeaders (req) {
+    const origin = req && req.headers && req.headers.origin
+    if (typeof origin !== 'string' || !this.gate.allowedOrigins.has(origin)) return null
+    return {
+      'Access-Control-Allow-Origin': origin, // exact echo of an ALLOWLISTED origin, never *
+      'Access-Control-Allow-Methods': 'POST, OPTIONS',
+      'Access-Control-Allow-Headers': 'Authorization, Content-Type, X-PickDone-Request',
+      'Access-Control-Max-Age': '600',
+      'Vary': 'Origin'
+    }
+  }
+
+  _send (res, status, body, req) {
     const json = JSON.stringify(body)
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(json) })
+    const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Content-Length': Buffer.byteLength(json) }
+    const cors = this._corsHeaders(req)
+    if (cors) Object.assign(headers, cors)
+    res.writeHead(status, headers)
     res.end(json)
   }
 
@@ -205,49 +226,61 @@ export class CrossPlatformBridge {
   async _dispatch (req, res) {
     try {
       const path = (req.url || '').split('?')[0]
+      // CORS preflight: ONLY on existing routes, ONLY for allowlisted origins (fail closed:
+      // unknown origin -> no ACAO reflection at all). Never opens new routes.
+      if (req.method === 'OPTIONS') {
+        const cors = this._corsHeaders(req)
+        if (ROUTES.has(path) && cors) {
+          const headers = { ...cors, 'Content-Length': 0 }
+          res.writeHead(204, headers)
+          res.end()
+          return
+        }
+        return this._send(res, 403, { error: 'origin_rejected' }, req)
+      }
       // discovery beacon: the ONLY unauthenticated route; carries no user data
       if (req.method === 'GET' && path === '/crossplatform/hello') {
-        return this._send(res, 200, { service: 'pickdone-crossplatform', proto: 1, pairingRequired: true })
+        return this._send(res, 200, { service: 'pickdone-crossplatform', proto: 1, pairingRequired: true }, req)
       }
-      if (req.method !== 'POST') return this._send(res, 405, { error: 'method_not_allowed' })
-      if (!ROUTES.has(path)) return this._send(res, 404, { error: 'not_found' })
+      if (req.method !== 'POST') return this._send(res, 405, { error: 'method_not_allowed' }, req)
+      if (!ROUTES.has(path)) return this._send(res, 404, { error: 'not_found' }, req)
 
       let raw
       try {
         raw = await this._readBody(req)
       } catch (e) {
-        return this._send(res, 413, { error: e.code || 'payload_too_large' })
+        return this._send(res, 413, { error: e.code || 'payload_too_large' }, req)
       }
       let body = {}
       try {
         body = raw ? JSON.parse(raw) : {}
       } catch {
-        return this._send(res, 400, { error: 'invalid_json' })
+        return this._send(res, 400, { error: 'invalid_json' }, req)
       }
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
-        return this._send(res, 400, { error: 'invalid_json' })
+        return this._send(res, 400, { error: 'invalid_json' }, req)
       }
 
-      if (path === '/crossplatform/pair') return this._handlePair(res, body)
+      if (path === '/crossplatform/pair') return this._handlePair(res, req, body)
       if (path === '/crossplatform/pull') return this._handlePull(req, res, body)
       if (path === '/crossplatform/push') return this._handlePush(req, res, body)
     } catch (e) {
       this.lastError = `${e && e.message}`
       this.log('bridge', `dispatch error: ${e && e.message} :: ${(e && e.stack || '').split('\n').slice(1, 3).join(' | ')}`)
-      return this._send(res, 500, { error: 'internal_error' })
+      return this._send(res, 500, { error: 'internal_error' }, req)
     }
   }
 
-  _handlePair (res, body) {
+  _handlePair (res, req, body) {
     const r = this.pairing.consume(body)
     if (!r.ok) {
       this.log('bridge', `pairing failed: ${r.code}`)
-      return this._send(res, PAIR_ERROR_STATUS[r.code] || 401, { ok: false, error: r.code })
+      return this._send(res, PAIR_ERROR_STATUS[r.code] || 401, { ok: false, error: r.code }, req)
     }
     this.log('bridge', `paired device ${r.deviceId} scope=${r.scope}`)
     this.devices.set(r.deviceId, { deviceId: r.deviceId, scope: r.scope, pairedAt: this.now() })
     if (this._devicesStore) this._devicesStore.save([...this.devices.values()])
-    return this._send(res, 200, { ok: true, token: r.token, expiresAt: r.expiresAt, scope: r.scope, deviceId: r.deviceId, csrfHeader: this.sessionNonce })
+    return this._send(res, 200, { ok: true, token: r.token, expiresAt: r.expiresAt, scope: r.scope, deviceId: r.deviceId, csrfHeader: this.sessionNonce }, req)
   }
 
   /**
@@ -272,13 +305,13 @@ export class CrossPlatformBridge {
     return h.startsWith('Bearer ') ? h.slice(7) : undefined
   }
 
-  _sendGateVerdict (res, verdict) {
+  _sendGateVerdict (res, req, verdict) {
     if (!verdict.ok) this.log('bridge', `gate reject: ${verdict.code}`)
-    if (verdict.ok) return this._send(res, 200, { ok: true, ...(verdict.replay ? { replay: true } : {}), result: verdict.result })
+    if (verdict.ok) return this._send(res, 200, { ok: true, ...(verdict.replay ? { replay: true } : {}), result: verdict.result }, req)
     const status = GATE_ERROR_STATUS[verdict.code] || (verdict.status >= 400 ? verdict.status : 401)
     const out = { ok: false, error: verdict.code }
     if (verdict.retryAfterMs != null) out.retryAfterMs = verdict.retryAfterMs
-    return this._send(res, status, out)
+    return this._send(res, status, out, req)
   }
 
   _handlePull (req, res, body) {
@@ -292,7 +325,7 @@ export class CrossPlatformBridge {
       return { entities, pulledAt: this.now() }
       } catch (e) { this.log('bridge', 'pull handler failed: ' + e.message + ' :: ' + (e.stack || '').split(String.fromCharCode(10))[1]); throw e }
     })
-    return this._sendGateVerdict(res, verdict)
+    return this._sendGateVerdict(res, req, verdict)
   }
 
   _handlePush (req, res, body) {
@@ -330,8 +363,8 @@ export class CrossPlatformBridge {
       return { results }
     })
     if (verdict.ok && verdict.result && verdict.result.invalid) {
-      return this._send(res, 400, { ok: false, error: verdict.result.error })
+      return this._send(res, 400, { ok: false, error: verdict.result.error }, req)
     }
-    return this._sendGateVerdict(res, verdict)
+    return this._sendGateVerdict(res, req, verdict)
   }
 }
