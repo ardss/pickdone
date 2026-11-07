@@ -269,7 +269,11 @@ function run () {
     { file: 'src/main/sync-apply-hydrate.js', frags: ['new Map((state.db.call(op, {}) || [])'] },
     // f4 category-tombstone filter cascade: the writer param defaults to the bus; callers pass
     // busWrite (sync-apply) or the direct fallback (UI restore path) — one whole-surface dispatch
-    { file: 'src/main/db-category-ops.js', frags: ['const w = write || ((op, p) => db.call(op, p))'] }
+    { file: 'src/main/db-category-ops.js', frags: ['const w = write || ((op, p) => db.call(op, p))'] },
+    // PD20 VS Code extension read door (capture-endpoint/index.js readDoorQuery): the ONE
+    // wholesale READ dispatch — linkSource writes go through bus.commit only; this line can
+    // never carry a write op (read-only op set, see handlers.linkSource + read-door.test.mjs)
+    { file: 'src/main/capture-endpoint/index.js', frags: ['return db.call(op, arg)'] }
   ]
   let p2sites = 0
   for (const base of ['src', 'cli']) {

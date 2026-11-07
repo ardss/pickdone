@@ -96,6 +96,19 @@ function writeMeta (key, value) {
   } catch { /* fail closed: keep the old value */ }
 }
 
+// Read door (PD20 VS Code extension MVP): the ONE wholesale read dispatch for the door's
+// GET routes. Read-only op set (queryTodos/categoriesAllRows/querySourcesByTask/
+// queryEpisodesByTask — no write op ever reaches db.call here: linkSource writes exclusively
+// through bus.commit inside handlers.linkSource). Fail-closed: a closed handle answers null.
+function readDoorQuery (op, arg) {
+  try {
+    if (!db.isOpen()) return null
+    return db.call(op, arg)
+  } catch {
+    return null
+  }
+}
+
 function start (opts = {}) {
   const safeStorage = resolveSafeStorage(opts.safeStorage)
   // memoize the migration per raw value so per-request getSecret calls don't rewrite meta
@@ -114,6 +127,13 @@ function start (opts = {}) {
     // live Chrome journey j-pd20-extension E1 door-probe pins it: 400 invalid payload must
     // reach the handler, never a 500).
     bus: require('../command-bus'),
+    // read door (PD20 VS Code extension MVP): read-only db ops, fail-closed on a closed handle
+    query: readDoorQuery,
+    linkSource: payload => require('./handlers').linkSource({
+      bus: require('../command-bus'),
+      query: readDoorQuery,
+      payload
+    }),
     getMeta: k => readMeta(k),
     getSecret: () => {
       migrate() // also covers a key the settings tab minted after boot

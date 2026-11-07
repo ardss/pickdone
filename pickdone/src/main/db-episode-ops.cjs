@@ -434,3 +434,4 @@ exports.queryDecisionsByTask = (db, taskId) => {
     ts: r.ts || 0
   }))
 }
+exports.parseNoteFields = parseNoteFields // read door (PD20 VS Code ext): /handoff maps vm episodes with the SAME round-trip as EditPanelWork

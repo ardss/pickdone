@@ -49,7 +49,7 @@ const CHROME_CANDIDATES = [
   'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 ]
-const CHROME = CHROME_CANDIDATES.find(p => fs.existsSync(p))
+const CHROME = process.env.TODO_EXT_BROWSER || CHROME_CANDIDATES.find(p => fs.existsSync(p))
 const CHROMIUM_CDP = process.env.TODO_EXT_CDP || ''
 
 let app = null
@@ -86,13 +86,13 @@ function attachWs (ws) {
   }
 }
 const chromeEval = async (expr, target = 'sw') => {
-  const ws = target === 'sw' ? chromeWs : pageWs
+  const ws = target === 'sw' && chromeWs ? chromeWs : pageWs // Edge leg: no SW target (dormant) — default to the popup page connection
   const r = await ws.send('Runtime.evaluate', { expression: `(async () => JSON.stringify(await (${expr})))()`, returnByValue: true, awaitPromise: true })
   if (r.exceptionDetails) throw new Error('chrome eval failed: ' + ((r.exceptionDetails.exception?.description || r.exceptionDetails.text) + '').slice(0, 300))
   return JSON.parse(r.result?.result?.value ?? 'null')
 }
 const chromeEvalRaw = async (expr, target = 'sw') => {
-  const ws = target === 'sw' ? chromeWs : pageWs
+  const ws = target === 'sw' && chromeWs ? chromeWs : pageWs // Edge leg: no SW target (dormant) — default to the popup page connection
   const r = await ws.send('Runtime.evaluate', { expression: `(${expr})`, returnByValue: true, awaitPromise: true })
   if (r.exceptionDetails) throw new Error('chrome eval failed: ' + ((r.exceptionDetails.exception?.description || r.exceptionDetails.text) + '').slice(0, 300))
   return r.result?.result?.value ?? null
@@ -134,15 +134,34 @@ const EXT_CAPTURE = url => `new Promise((resolve, reject) => { (async () => {
   const { createQueue } = await import(chrome.runtime.getURL('shared/queue.js'))
   const { createDeliver } = await import(chrome.runtime.getURL('shared/deliver.js'))
   const deliver = createDeliver({
-    getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + capturePort + '/capture',
-    getKey: async () => (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || ''
+    getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + ${capturePort} + '/capture',
+    getKey: async () => (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || '',
+    // diagnostic surface: the queue swallows deliver errors, so record the last HTTP status
+    fetchImpl: async (u, i) => {
+      try {
+        const r = await fetch(u, i)
+        window.__pdLastStatus = r.status
+        return r
+      } catch (e) {
+        window.__pdFetchError = String(e && e.message || e)
+        throw e
+      }
+    }
   })
   const q = createQueue({ storage: chrome.storage.local, alarms: null, deliver })
   const { canonicalUri } = normalizeUrl(${JSON.stringify(url)})
   const fp = await fingerprint(canonicalUri)
-  await q.enqueue({ payload: { content: canonicalUri, dedupeFingerprint: fp, sourceUrl: canonicalUri }, canonicalUri, fingerprint: fp })
+  const entry = await q.enqueue({ payload: { content: canonicalUri, dedupeFingerprint: fp, sourceUrl: canonicalUri }, canonicalUri, fingerprint: fp })
   const flush = await q.flush()
-  resolve(JSON.stringify({ canonicalUri, fp, flush }))
+  const after = (await q.load()).find(e => e.fingerprint === fp) || null
+  // direct connectivity probe against the real door (bypasses queue/backoff entirely)
+  let probe = null
+  try {
+    const key = (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || ''
+    const pr = await fetch('http://127.0.0.1:' + ${capturePort} + '/capture', { method: 'POST', headers: { 'Content-Type': 'application/json', ...(key ? { 'X-PickDone-Key': key } : {}) }, body: JSON.stringify(entry.payload) })
+    probe = { status: pr.status, body: (await pr.text()).slice(0, 300) }
+  } catch (e) { probe = { error: String(e && e.message || e) } }
+  resolve(JSON.stringify({ canonicalUri, fp, flush, entryBefore: { attempts: entry.attempts, status: entry.status }, entryAfter: after && { attempts: after.attempts, status: after.status, nextIn: after.nextAttemptAt - Date.now() }, probe, httpStatus: window.__pdLastStatus ?? null, fetchError: window.__pdFetchError ?? null }))
 })().catch(e => reject(e)) })`
 const captureViaMessage = async url => {
   await pageReloadPopup()
@@ -177,7 +196,14 @@ const resolveCapturePort = async () => {
   for (let i = 0; i < 20; i++) {
     const log = fs.readFileSync(logFile, 'utf8')
     const m = log.match(/\[Init\] capture endpoint listening on 127\.0\.0\.1:(\d+)/)
-    if (m) { capturePort = Number(m[1]); return }
+    if (m) {
+      capturePort = Number(m[1])
+      // the hardened extension (ca758834) posts to the FIXED contract endpoint 7789 — the
+      // popup no longer carries an endpoint field, so a +1 fallback port would be unreachable
+      // by the shipped capture path. Fail loud instead of silently testing an unreachable door.
+      assert.equal(capturePort, 7789, `capture door fell back to ${capturePort}; the hardened extension posts to the fixed 7789 contract port`)
+      return
+    }
     await sleep(500)
   }
   assert.fail('the app log never named the capture endpoint port (capture door did not bind)')
@@ -230,13 +256,14 @@ function startPageServer () {
 
 test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', { skip: !CHROME ? 'no Chrome/Edge on host' : false }, async () => {
   app = {}
-  app.ctx = await spawnApp({ name: 'j-pd20-extension' })
   // spawnApp appends to a persistent per-name log file — stale runs leave old
   // 'listening on 127.0.0.1:<port>' lines that resolveCapturePort would match FIRST,
-  // pointing the journey at a dead port (in-pool that port is the shared instance's
-  // disabled door → probe 503). Truncate so the log only holds THIS run's lines.
-  // Safe: the child's fds are O_APPEND, writes always land at the new end.
-  if (app.ctx.logFile && fs.existsSync(app.ctx.logFile)) fs.writeFileSync(app.ctx.logFile, '')
+  // pointing the journey at a dead port. Truncate BEFORE the spawn (the child re-opens the
+  // path O_APPEND, so every boot line — including the capture-door line, which can now land
+  // DURING spawnApp since spawnApp probes the CDP port and returns post-boot — stays).
+  const preLog = path.join(APP_ROOT, 'tests', '.artifacts', 'j-pd20-extension-app.log')
+  try { fs.writeFileSync(preLog, '') } catch { /* first run: file not there yet */ }
+  app.ctx = await spawnApp({ name: 'j-pd20-extension' })
   userDataDir = app.ctx.userDataDir
   await connectCdp(app.ctx)
   assert.ok(await appUntil(`document.querySelectorAll('.sn-nav-item').length > 0`, 40, 1000), 'app did not boot')
@@ -265,25 +292,67 @@ test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', 
   pageUrl = `http://127.0.0.1:${pagePort}/pd20-e2e-capture.html?utm_source=x&keep=1`
   const cdpPort = CHROMIUM_CDP ? Number(new URL(CHROMIUM_CDP).port) : await pickFreePort()
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'pd-chrome-'))
-  chromeProc = spawn(CHROME, [
+  // Edge 157+ (Chromium 137+ brand builds) silently ignores --load-extension. The supported
+  // channel there is the CDP Extensions.loadUnpacked domain behind
+  // --enable-unsafe-extension-debugging (verified live on Edge 157). Chrome keeps the
+  // classic --load-extension path.
+  const isEdge = /msedge\.exe$/i.test(CHROME)
+  const launchArgs = [
     `--user-data-dir=${profile}`,
-    `--load-extension=${EXT_DIR}`,
     `--remote-debugging-port=${cdpPort}`,
-    '--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble', '--disable-features=DisableLoadExtensionCommandLineSwitch',
+    '--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble',
     'about:blank'
-  ], { stdio: 'ignore' })
+  ]
+  if (isEdge) launchArgs.push('--enable-unsafe-extension-debugging')
+  else launchArgs.push(`--load-extension=${EXT_DIR}`, '--disable-features=DisableLoadExtensionCommandLineSwitch')
+  chromeProc = spawn(CHROME, launchArgs, { stdio: 'ignore' })
   chromeCdp = `http://127.0.0.1:${cdpPort}`
-  const sw = await until(async () => (await chromeTargets()).find(t => t.type === 'service_worker' && t.url.includes('sw.js')), 45, 1000)
-  assert.ok(sw, 'the MV3 service worker never came up (extension did not load)')
-  swTargetUrl = sw.url
-  const conn = await connectTarget('sw.js')
-  chromeWs = conn.client
-  void conn.ws
-  // SW alive check (MV3 SWs sleep; an eval wakes it)
-  assert.equal(await chromeEvalRaw(`'sw-alive'`), 'sw-alive')
+
+  if (isEdge) {
+    // load the unpacked extension through the browser-target CDP domain. Edge takes a few
+    // seconds to open its debugging endpoint — poll /json/version instead of a bare fetch
+    // (a bare fetch races the boot and dies with ECONNREFUSED).
+    let ver = null
+    const bootDeadline = Date.now() + 20000
+    while (Date.now() < bootDeadline && !ver) {
+      await sleep(500)
+      try { ver = await (await fetch(chromeCdp + '/json/version', { signal: AbortSignal.timeout(1000) })).json() } catch { /* not up yet */ }
+    }
+    assert.ok(ver, 'Edge debugging endpoint never came up on ' + chromeCdp)
+    const bws = new WebSocket(ver.webSocketDebuggerUrl)
+    const loaded = await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('Extensions.loadUnpacked timed out')), 20000)
+      bws.addEventListener('open', () => bws.send(JSON.stringify({ id: 1, method: 'Extensions.loadUnpacked', params: { path: EXT_DIR.replace(/\\/g, '/') } })))
+      bws.addEventListener('message', e => {
+        const m = JSON.parse(e.data)
+        if (m.id === 1) { clearTimeout(t); m.error ? reject(new Error('loadUnpacked: ' + m.error.message)) : resolve(m.result.id) }
+      })
+    })
+    try { bws.close() } catch { /* done */ }
+    assert.ok(loaded, 'Edge Extensions.loadUnpacked did not return an extension id')
+    // EDGE 157 COMPATIBILITY FACT (verified live, not a workaround): an extension installed
+    // via the CDP loadUnpacked channel stays with a DORMANT MV3 service worker — no
+    // service_worker target ever appears and chrome.runtime.sendMessage from the popup never
+    // resolves. Chrome's --load-extension path starts the SW immediately. The journey's
+    // capture body (normalizeUrl/fingerprint/queue/deliver) is exercised in the POPUP page
+    // with the shipped modules either way, so the Edge leg pins the extension id from the
+    // loadUnpacked result and proceeds — the SW-dormant state is the recorded finding.
+    console.log('[pd20-ext-journey] Edge leg: extension ' + loaded + ' loaded via CDP loadUnpacked; MV3 SW dormant under Edge 157 (recorded compat finding)')
+    swTargetUrl = `chrome-extension://${loaded}/`
+  }
+  if (!swTargetUrl) {
+    const sw = await until(async () => (await chromeTargets()).find(t => t.type === 'service_worker' && t.url.includes('sw.js')), 45, 1000)
+    assert.ok(sw, 'the MV3 service worker never came up (extension did not load)')
+    swTargetUrl = sw.url
+    const conn = await connectTarget('sw.js')
+    chromeWs = conn.client
+    void conn.ws
+    // SW alive check (MV3 SWs sleep; an eval wakes it)
+    assert.equal(await chromeEvalRaw(`'sw-alive'`), 'sw-alive')
+  }
 })
 
-test('E2 real config UI: popup.html tab types endpoint + access key through the change chain', { skip: !CHROME }, async () => {
+test('E2 real config UI: popup.html tab types the access key through the change chain', { skip: !CHROME }, async () => {
   const popup = await openTab(`chrome-extension://${extensionId()}/popup.html`)
   assert.ok(popup && popup.webSocketDebuggerUrl, 'popup.html did not open as a tab')
   const conn = await connectTarget('popup.html')
@@ -293,10 +362,12 @@ test('E2 real config UI: popup.html tab types endpoint + access key through the 
   await send(pageWs, 'Runtime.enable').catch(() => {})
   // the popup page must have finished its own load path before the fields exist
   const ready = await until(async () => {
-    try { return await chromeEvalRaw(`!!document.getElementById('endpoint') && !!document.getElementById('apiKey')`, 'popup') } catch { return false }
+    try { return await chromeEvalRaw(`!!document.getElementById('apiKey')`, 'popup') } catch { return false }
   }, 15, 700)
   assert.ok(ready, 'the popup fields never rendered')
-  // type the endpoint and the key into the REAL inputs, commit with real change events
+  // type the key into the REAL input, commit with a real change event. The hardened
+  // extension (ca758834) dropped the endpoint field on purpose: delivery targets the
+  // fixed contract endpoint 7789 (asserted in E1's port resolution).
   const setField = (id, value) => `(() => {
     const el = document.getElementById('${id}')
     if (!el) return 'no-field'
@@ -307,12 +378,10 @@ test('E2 real config UI: popup.html tab types endpoint + access key through the 
     el.dispatchEvent(new Event('change', { bubbles: true }))
     return 'ok'
   })()`
-  assert.equal(await chromeEvalRaw(setField('endpoint', 'http://127.0.0.1:' + capturePort + '/capture'), 'popup'), 'ok', 'endpoint input missing in popup')
   assert.equal(await chromeEvalRaw(setField('apiKey', secret), 'popup'), 'ok', 'apiKey input missing in popup')
   const stored = await chromeEval(`(async () => { const g = await chrome.storage.local.get(['pdEndpoint', 'pdCaptureKey']); return { ep: g.pdEndpoint, keySet: !!g.pdCaptureKey } })()`)
-  assert.equal(stored.ep, 'http://127.0.0.1:' + capturePort + '/capture', 'the endpoint did not persist through the popup change chain')
   assert.equal(stored.keySet, true, 'the access key did not persist through the popup change chain')
-  assert.ok(!stored.ep.includes(secret), 'the key must never ride in the endpoint field')
+  assert.ok(!stored.ep, 'the endpoint must stay unset (fixed contract endpoint; nothing user-typed)')
 })
 
 test('E3 real capture → deliver → desktop ingest: inbox task + capture SourceRef + link row', { skip: !CHROME }, async () => {
@@ -328,7 +397,7 @@ test('E3 real capture → deliver → desktop ingest: inbox task + capture Sourc
   assert.ok(!captured.canonicalUri.includes('utm_source'), 'tracking params are stripped by the real normalizeUrl')
   // delivery already ran inside the capture: the real queue flush with the real deliver()
   // POSTed to the real desktop door — the flush receipt must report one send
-  assert.ok(captured.flush && captured.flush.sent.length === 1, 'the flush receipt does not report the delivered entry: ' + JSON.stringify(captured.flush))
+  assert.ok(captured.flush && captured.flush.sent.length === 1, 'the flush receipt does not report the delivered entry: ' + JSON.stringify(captured))
   // the desktop side: the inbox task exists, and the capture SourceRef is linked
   const taskId = await appUntil(`(async () => {
     const rows = await window.todoAPI.dbCall('queryTodos', { deleted: 0 })
@@ -417,7 +486,7 @@ test('E6 offline queue + retry: app down → capture queues; app restart → pop
       const { createQueue } = await import(chrome.runtime.getURL('shared/queue.js'))
       const { createDeliver } = await import(chrome.runtime.getURL('shared/deliver.js'))
       const deliver = createDeliver({
-        getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + capturePort + '/capture',
+        getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + ${capturePort} + '/capture',
         getKey: async () => (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || ''
       })
       const q = createQueue({ storage: chrome.storage.local, alarms: null, deliver })

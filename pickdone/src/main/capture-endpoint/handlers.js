@@ -22,6 +22,7 @@ const crypto = require('crypto')
 
 const META_TASK_LINK_PREFIX = 'taskSourceLink:'
 const CAPTURE_PROVIDER_ID = 'capture'
+const LINK_PROVIDER_ID = 'vscode' // PD20 VS Code extension: link-source door provider (fixed, never client-chosen)
 
 const MAX_CONTENT = 5000 // same cap as the editor/db column (sanitizeText default)
 const MAX_FINGERPRINT = 256
@@ -122,4 +123,55 @@ function ingestCapture ({ bus, getMeta, payload }) {
   return { ok: true, status: 201, taskId }
 }
 
-module.exports = { ingestCapture, META_TASK_LINK_PREFIX, CAPTURE_PROVIDER_ID }
+module.exports = { ingestCapture, linkSource, META_TASK_LINK_PREFIX, CAPTURE_PROVIDER_ID, LINK_PROVIDER_ID }
+
+const LINK_URI_RE = /^(file:\/\/\/|git:[a-z0-9]+:[a-zA-Z0-9._\-/]{1,500}|https?:\/\/)/ // loopback-local refs only: workspace files or git commits — never free text
+
+/**
+ * Link one SourceRef to an EXISTING task (PD20 VS Code extension read/write door, P0 MVP).
+ * Same fail-closed shape as ingestCapture: validation BEFORE any bus commit; a rejected
+ * payload writes nothing. Dedupe: an identical (taskId, externalId) link resolves to the
+ * existing source row without writing.
+ * @param {object} ctx
+ * @param {object} ctx.bus  command bus
+ * @param {(op: string, arg: any) => any} ctx.query  read-only db query (fail-closed: null)
+ * @param {object} ctx.payload  { taskId, canonicalUri, sourceTitle?, externalId? }
+ * @returns {{ok:true,status:201,sourceRefId:string} | {ok:true,status:200,duplicate:true,sourceRefId:string}
+ *           | {ok:false,status:number,error:string}}
+ */
+function linkSource ({ bus, query, payload }) {
+  if (!payload || typeof payload !== 'object') return invalid('payload must be a JSON object')
+  const taskId = typeof payload.taskId === 'string' ? payload.taskId.trim() : ''
+  if (!taskId || taskId.length > 64) return invalid('taskId required')
+  const uri = typeof payload.canonicalUri === 'string' ? payload.canonicalUri.trim() : ''
+  if (!uri || uri.length > MAX_URL) return invalid('canonicalUri required (max ' + MAX_URL + ')')
+  if (!LINK_URI_RE.test(uri)) return invalid('canonicalUri must be a file://, git: or http(s) reference')
+  // privacy hard line: the VS Code side never ships file CONTENT — only a path/commit ref.
+  // A payload carrying content-ish bulk is rejected outright.
+  for (const banned of ['content', 'body', 'text']) {
+    if (payload[banned] != null) return invalid('"' + banned + '" is not accepted: source links carry references only')
+  }
+  let sourceTitle = null
+  if (payload.sourceTitle != null && payload.sourceTitle !== '') {
+    if (typeof payload.sourceTitle !== 'string' || payload.sourceTitle.length > MAX_TITLE) {
+      return invalid('sourceTitle too long (max ' + MAX_TITLE + ')')
+    }
+    sourceTitle = payload.sourceTitle
+  }
+  const externalId = typeof payload.externalId === 'string' && payload.externalId.trim()
+    ? payload.externalId.trim().slice(0, 256)
+    : uri
+
+  if (!query) return invalid('read channel not wired')
+  const todos = query('queryTodos', { deleted: 0 }) || []
+  if (!todos.some(t => t.taskId === taskId)) return { ok: false, status: 404, error: 'task not found' }
+
+  // dedupe: same task already linked to this exact uri (or externalId) → nothing to write
+  const existing = query('querySourcesByTask', taskId) || []
+  const hit = existing.find(s => s.canonicalUri === uri || s.externalId === externalId)
+  if (hit) return { ok: true, status: 200, duplicate: true, sourceRefId: hit.sourceRefId }
+
+  const sourceRefId = bus.commit('source', 'put', { providerId: LINK_PROVIDER_ID, externalId, title: sourceTitle })
+  bus.commit('tasksource', 'put', { taskId, sourceRefId: String(sourceRefId) })
+  return { ok: true, status: 201, sourceRefId: String(sourceRefId) }
+}
