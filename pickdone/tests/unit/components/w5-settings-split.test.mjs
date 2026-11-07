@@ -95,10 +95,7 @@ test('w5 SettingsModal split: cross-tab search core is a pure exported function 
 
 test('w5 SettingsModal split: parent slimmed and styles retained in the parent', () => {
   const parentLines = parent.split('\n').length
-  // integration (2026-11-07): +1 line from the lane-B projects-graduation toggle (afeae379)
-  // and +10 lines of cross-tab wiring (94e9b865) land in the parent legitimately — the slim
-  // intent stays enforced at the raised bound; the wave-1 slim target itself is unchanged.
-  assert.ok(parentLines < 810, `SettingsModal.vue should stay ~750 lines post-wave-1 (integration bound 810), got ${parentLines}`)
+  assert.ok(parentLines < 800, `SettingsModal.vue should be ~750 lines after wave 1, got ${parentLines}`)
   // generic form-control + sc-capture styles stay global in the parent (shared across tabs, non-scoped)
   assert.match(parent, /\.sc-capture \{/)
   assert.match(parent, /\.form-item \{/)
