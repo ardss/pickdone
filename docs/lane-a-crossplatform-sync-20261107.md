@@ -110,3 +110,21 @@ pre-commit full suite (last runs) -> 3148 pass / 0 fail (ed71f9a4), 5498 pass / 
 
 - Real Android device / real installed desktop E2E (other lanes / QA).
 - Relay/cloud path reuse for mobile: the bridge currently serves direct HTTP; riding the existing Relay for NAT-traversal is a deliberate follow-up, not claimed here.
+
+
+## QA R5 P0 fix (2026-11-07, commit 462f0692)
+
+Finding CONFIRMED: `bridge-ipc.js` called `makeSenderIsMain(e)` (which returns a boolean) without branching - aux windows were not rejected on `crossplatform:*`. Fixed fail-closed: `assertMainSender(e)` throws `forbidden: main window only` BEFORE any service access; missing/ sender-less events and guard errors also reject. Bonus fix in the same pass: `metaStore` was calling `setMeta({key,value})` (stub-only shape) - now canonical `setMeta([key, value])` / `getMeta(key) -> string`.
+
+QA repro (expect exit 0; the aux-rejection tests FAIL with 'accepted an aux-window sender' if the fix is reverted to the bare-call form - verified):
+
+```
+node --test pickdone/tests/unit/cross-platform/bridge-settings.test.mjs   # 6/6, exit 0
+node --test pickdone/tests/unit/cross-platform/*.test.mjs                 # 76/76, exit 0
+```
+
+Machine-local filter completeness re-audited (both directions, single predicate):
+- outbound meta snapshot: `sync-apply-snapshot.cjs` filters `isMachineLocalMetaKey` (both branches);
+- outbound oplog segments: `db-oplog.js` entity='meta' -> isMachineLocalMetaKey;
+- inbound apply: `sync-apply.js` + `sync-apply-hydrate.js` reject machine-local meta rows;
+- `crossplatform.*` covered by the Phase-3 addition to `shared/machine-local-keys.mjs`. COMPLETE - no BLOCKED residue on the meta-leak axis.
