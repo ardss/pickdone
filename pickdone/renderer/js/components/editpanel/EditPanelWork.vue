@@ -26,6 +26,7 @@
                :data-episode-id="ep.episodeId"
                @click="editEpisode(ep)" @keydown.enter.prevent="editEpisode(ep)">
             <span class="ep-work-row-text">{{ parseNote(ep.summary).goal || '' }}</span>
+            <em class="ep-work-row-role" :data-role="ep.role || 'human'">{{ ep.role || 'human' }}</em>
             <button class="mini ep-work-edit" @click.stop="editEpisode(ep)">
               {{ $t('statsJ.EditPanel.workEpisodeEdit') }}</button>
             <button class="mini ep-work-del" @click.stop="removeEpisode(ep)">
@@ -49,6 +50,14 @@
           <label class="ep-work-field">
             <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workEpisodeNext') }}</span>
             <input v-model="epForm.nextAction" class="ep-work-input" type="text" data-input="next-action" />
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workEpisodeRole') }}</span>
+            <select v-model="epForm.role" class="ep-work-input ep-work-role" data-input="role">
+              <option value="human">human</option>
+              <option value="agent">agent</option>
+              <option value="qa">qa</option>
+            </select>
           </label>
           <div class="ep-work-form-actions">
             <button class="mini ep-work-save-episode" :disabled="!epForm.goal || saving" @click="saveEpisode">
@@ -139,8 +148,9 @@ export default {
       sources: [] as any, // pd20 fix: linked sourceRefs ({linkId, sourceRefId, level, canonicalUri}) — the buildHandoff `sources` input
       loadFailed: false,
       copyState: '', // pd20 fix: user-visible copy feedback ('' | success | failure message)
-      // pd20 write forms: episode record (goal/outcome/nextAction) + source-ref bind
-      epForm: { goal: '', outcome: '', nextAction: '' },
+      // pd20 write forms: episode record (goal/outcome/nextAction) + source-ref bind.
+      // pd20 (2026-11-08): role rides the form — the A→B→QA attribution is user-writable.
+      epForm: { goal: '', outcome: '', nextAction: '', role: 'human' },
       editingId: '', // '' = creating a new episode; otherwise the episodeId being edited
       epSaveState: '',
       srcForm: { providerId: 'manual', externalId: '', title: '', trustLevel: 'L0' },
@@ -201,13 +211,13 @@ export default {
       return 'goal: ' + goal + '\noutcome: ' + outcome + '\nnextAction: ' + nextAction
     },
     resetEpForm () {
-      this.epForm = { goal: '', outcome: '', nextAction: '' }
+      this.epForm = { goal: '', outcome: '', nextAction: '', role: 'human' }
       this.editingId = ''
     },
     editEpisode (ep) {
       if (!ep) return
       const f = this.parseNote(ep.summary)
-      this.epForm = { goal: f.goal, outcome: f.outcome, nextAction: f.nextAction }
+      this.epForm = { goal: f.goal, outcome: f.outcome, nextAction: f.nextAction, role: ep.role || 'human' }
       this.editingId = ep.episodeId
       this.epSaveState = ''
     },
@@ -217,7 +227,7 @@ export default {
       if (!this.epForm.goal || this.saving || !this.taskId) return
       this.saving = true
       this.epSaveState = ''
-      const payload: any = { taskId: String(this.taskId), startedAt: Date.now(), note: this.noteFromForm() }
+      const payload: any = { taskId: String(this.taskId), startedAt: Date.now(), note: this.noteFromForm(), role: this.epForm.role }
       if (this.editingId) {
         const old = this.episodes.find(e => e.episodeId === this.editingId)
         payload.id = this.editingId
@@ -313,7 +323,9 @@ export default {
         const f = this.parseNote(ep && ep.summary)
         return {
           startedAt: ep && ep.startedAt ? new Date(ep.startedAt).toISOString() : '',
-          role: 'human',
+          // pd20 (2026-11-08): the view model's real role (legacy NULL already fell back to
+          // 'human' in queryEpisodesByTask) — the handoff shows the A→B→QA attribution.
+          role: (ep && ep.role) || 'human',
           goal: f.goal,
           outcome: f.outcome,
           nextAction: f.nextAction

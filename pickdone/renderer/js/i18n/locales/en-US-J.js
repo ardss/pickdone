@@ -168,6 +168,7 @@ export default {
   'statsJ.EditPanel.workEpisodeGoal': 'Goal',
   'statsJ.EditPanel.workEpisodeOutcome': 'Outcome',
   'statsJ.EditPanel.workEpisodeNext': 'Next action',
+  'statsJ.EditPanel.workEpisodeRole': 'Role',
   'statsJ.EditPanel.workEpisodeSave': 'Save',
   'statsJ.EditPanel.workEpisodeUpdate': 'Update',
   'statsJ.EditPanel.workEpisodeCancel': 'Cancel',

@@ -189,6 +189,16 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       if (!cols.includes('lastVerifiedAt')) d.exec('ALTER TABLE source_refs ADD COLUMN lastVerifiedAt INTEGER NOT NULL DEFAULT 0')
       return true
     } },
+    { v: 13, fn: d => {
+      // pd20 (2026-11-08): episode attribution — the A(agent research)→B(agent continuation)
+      // →QA(human review) closed loop needs each episode to carry WHO produced it. Probe-style
+      // column add (v2/v12 pattern) so both the upgraded shape and this boot's SCHEMA-exec'd
+      // table converge; NULL = legacy row / unknown caller (reads 'human' at the view layer,
+      // out-of-family values store NULL — same never-fabricate doctrine as source_refs.level).
+      const cols = d.prepare('PRAGMA table_info(work_episodes)').all().map(c => c.name)
+      if (!cols.includes('role')) d.exec('ALTER TABLE work_episodes ADD COLUMN role TEXT')
+      return true
+    } },
     ]
   buildMigrations.ensureRepeatDayUniqueness = ensureRepeatDayUniqueness
   return migrationsOverride || BUILT_IN

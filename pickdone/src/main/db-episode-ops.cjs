@@ -19,6 +19,13 @@ const mintId = prefix => prefix + '_' + Date.now().toString(36) + Math.random().
 // shared/*.mjs is the repo convention — CJS consumes it via require(esm) (Node >= 22.12).
 const { isKnownLevel, sourceFreshness } = require('../../shared/source-freshness.mjs')
 
+// pd20 (2026-11-08): episode attribution family — WHO produced this work round. Closed set
+// (human / agent / qa) so the handoff's A→B→QA loop is honest: an out-of-family value is a
+// caller bug, not a role (stores NULL; NULL reads 'human' at the view layer — legacy rows and
+// role-less callers were the human plain-note round-trip all along).
+const KNOWN_ROLES = new Set(['human', 'agent', 'qa'])
+exports.isKnownRole = r => KNOWN_ROLES.has(String(r))
+
 // ---- work_episodes ----
 exports.episodePut = (db, ep = {}) => {
   if (!ep || ep.taskId == null || ep.taskId === '') {
@@ -26,16 +33,19 @@ exports.episodePut = (db, ep = {}) => {
   }
   const id = ep.id != null && ep.id !== '' ? String(ep.id) : mintId('ep')
   const now = Date.now()
-  db.prepare(`INSERT INTO work_episodes (id, taskId, startedAt, endedAt, note, deleted, deletedAt, updatedAt)
-    VALUES (@id,@taskId,@startedAt,@endedAt,@note,0,0,@updatedAt)
+  db.prepare(`INSERT INTO work_episodes (id, taskId, startedAt, endedAt, note, role, deleted, deletedAt, updatedAt)
+    VALUES (@id,@taskId,@startedAt,@endedAt,@note,@role,0,0,@updatedAt)
     ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, startedAt=excluded.startedAt, endedAt=excluded.endedAt,
-      note=excluded.note, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
+      note=excluded.note, role=excluded.role, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
     .run({
       id,
       taskId: String(ep.taskId),
       startedAt: Number(ep.startedAt) || 0,
       endedAt: Number(ep.endedAt) || 0,
       note: ep.note != null ? String(ep.note) : null,
+      // pd20 (2026-11-08): attribution role — known family member verbatim, anything else NULL
+      // (same-id put can CORRECT a role; NULL legacy rows keep NULL, never stamped to 'human').
+      role: KNOWN_ROLES.has(String(ep.role)) ? String(ep.role) : null,
       updatedAt: Number(ep.updatedAt) > 0 ? Number(ep.updatedAt) : now
     })
   return id
@@ -53,13 +63,22 @@ exports.episodeRemoveIds = (db, ids, opts = {}) => removeByIds(db, 'work_episode
 exports.queryEpisodesByTask = (db, taskId) => {
   if (taskId == null || taskId === '') return []
   const eps = db.prepare(
-    'SELECT id, startedAt, endedAt, note FROM work_episodes WHERE taskId = @taskId AND deleted = 0 ORDER BY startedAt ASC, id ASC'
+    'SELECT id, startedAt, endedAt, note, role FROM work_episodes WHERE taskId = @taskId AND deleted = 0 ORDER BY startedAt ASC, id ASC'
   ).all({ taskId: String(taskId) })
   const resources = db.prepare(
     'SELECT sr.title FROM task_source_links tsl JOIN source_refs sr ON sr.id = tsl.sourceRefId' +
     ' WHERE tsl.taskId = @taskId AND tsl.deleted = 0 AND sr.deleted = 0 ORDER BY sr.id ASC'
   ).all({ taskId: String(taskId) }).map(r => r.title || '').filter(Boolean)
-  return eps.map(e => ({ episodeId: e.id, startedAt: e.startedAt, endedAt: e.endedAt, summary: e.note || '', resources }))
+  return eps.map(e => ({
+    episodeId: e.id,
+    startedAt: e.startedAt,
+    endedAt: e.endedAt,
+    summary: e.note || '',
+    // pd20 (2026-11-08): real attribution for the handoff loop; NULL (legacy/omitted) reads
+    // 'human' at the VIEW layer only — the storage row keeps NULL so a later correction is honest.
+    role: KNOWN_ROLES.has(String(e.role)) ? String(e.role) : 'human',
+    resources
+  }))
 }
 
 // Read-side (pd20 handoff copy): the EditPanel 'continue work' section's Copy-Handoff button

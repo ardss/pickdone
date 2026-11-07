@@ -14,7 +14,7 @@
  *   work <taskId>                       → get_task_context: {task, episodes, sources, handoff.json}
  *   work <taskId> episodes              → get_task_episodes: the episode list only
  *   work <taskId> handoff [--out DIR]   → export_handoff: markdown (+ --out writes .md + .json)
- *   work <taskId> add-episode           → record a work round (--goal required; --outcome/--next)
+ *   work <taskId> add-episode           → record a work round (--goal required; --outcome/--next/--role)
  *   work <taskId> add-source            → link a provenance ref (--provider --uri --title)
  *
  * English-only output (CLI doctrine). --json emits structured results for agent consumption.
@@ -57,7 +57,9 @@ function loadContext (lib, taskIdRef) {
     const f = parseNote(ep.summary)
     return {
       startedAt: ep.startedAt ? new Date(ep.startedAt).toISOString() : '',
-      role: 'human',
+      // pd20 (2026-11-08): real attribution (human/agent/qa) — the A→B→QA loop is visible in
+      // the handoff; queryEpisodesByTask already falls back to 'human' for legacy NULL rows.
+      role: ep.role || 'human',
       goal: f.goal,
       outcome: f.outcome,
       nextAction: f.nextAction
@@ -90,7 +92,7 @@ function runWork ({ opts, lib, emit }) {
     if (!episodes.length) return console.log('(no episodes)')
     console.log(episodes.map(e => {
       const f = parseNote(e.summary)
-      const bits = [e.episodeId, e.startedAt ? new Date(e.startedAt).toISOString() : '(no start)']
+      const bits = [e.episodeId, e.startedAt ? new Date(e.startedAt).toISOString() : '(no start)', '[' + (e.role || 'human') + ']']
       if (f.goal) bits.push('goal: ' + f.goal)
       if (f.outcome) bits.push('outcome: ' + f.outcome)
       if (f.nextAction) bits.push('next: ' + f.nextAction)
@@ -123,13 +125,21 @@ function runWork ({ opts, lib, emit }) {
     if (!goal) throw new lib.CliError('--goal=<text> is required (what this work round set out to do)', 'USAGE')
     const outcome = opts.outcome != null && opts.outcome !== true ? String(opts.outcome) : ''
     const nextAction = opts.next != null && opts.next !== true ? String(opts.next) : ''
+    // pd20 (2026-11-08): --role=<human|agent|qa> — WHO produced this round (the A→B→QA loop).
+    // Storage guards the family (out-of-family → NULL), but rejecting here gives the caller an
+    // explicit CLI error instead of a silently-unattributed row.
+    const role = opts.role != null && opts.role !== true ? String(opts.role) : ''
+    if (role && !['human', 'agent', 'qa'].includes(role)) {
+      throw new lib.CliError('--role must be one of: human, agent, qa', 'USAGE')
+    }
     const t = lib.resolveTask(taskIdRef)
     // The ONE mutation door: manifest-validated bus commit — the row is oplog-captured and
     // (since pd20 P0-3) LAN-synced to the paired device. Bus stamps updatedAt (LWW age).
     const id = lib.commit('episode', 'put', {
       taskId: t.taskId,
       startedAt: Date.now(),
-      note: noteFromFields(goal, outcome, nextAction)
+      note: noteFromFields(goal, outcome, nextAction),
+      ...(role ? { role } : {})
     })
     const hints = ['work ' + t.taskId + ' episodes to read back', 'work ' + t.taskId + ' handoff --out <dir> to export']
     const result = { episodeId: id, taskId: t.taskId, goal, outcome, nextAction }

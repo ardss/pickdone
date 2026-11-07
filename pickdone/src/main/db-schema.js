@@ -153,6 +153,9 @@ CREATE TABLE IF NOT EXISTS work_episodes (
   startedAt INTEGER NOT NULL DEFAULT 0,
   endedAt   INTEGER NOT NULL DEFAULT 0,
   note      TEXT,
+  -- pd20 (2026-11-08): attribution role (human/agent/qa). NULL = legacy row / unknown
+  -- caller — reads 'human' at the view layer, never fabricated at storage (v13 probe-add).
+  role      TEXT,
   deleted   INTEGER NOT NULL DEFAULT 0,
   deletedAt INTEGER NOT NULL DEFAULT 0,
   updatedAt INTEGER NOT NULL DEFAULT 0

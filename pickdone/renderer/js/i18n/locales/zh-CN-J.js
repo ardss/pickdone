@@ -167,6 +167,7 @@ export default {
   'statsJ.EditPanel.workEpisodeGoal': '目标',
   'statsJ.EditPanel.workEpisodeOutcome': '成果',
   'statsJ.EditPanel.workEpisodeNext': '下一步',
+  'statsJ.EditPanel.workEpisodeRole': '角色',
   'statsJ.EditPanel.workEpisodeSave': '保存',
   'statsJ.EditPanel.workEpisodeUpdate': '更新',
   'statsJ.EditPanel.workEpisodeCancel': '取消',
