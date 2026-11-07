@@ -44,5 +44,23 @@ export default {
   endTime: '结束时间',
   whatDone: '做了什么',
   episodePrompt: '写下这段工作的成果（可选）',
-  save: '保存'
+  save: '保存',
+
+  syncNav: '同步',
+  syncEyebrow: 'PAIRED DESKTOP',
+  syncTitle: '与桌面同步',
+  syncIntro: '在桌面端开启桥接并出示一次性配对码后，把桌面显示的配对信息粘贴到这里。桥接地址以桌面配对界面显示的为准（同一台机为回环地址，跨设备按受控局域网配对规范给出的地址）。配对令牌短期有效，且只保存在内存中，应用重启后需重新配对。',
+  syncEndpoint: '桌面桥接地址（以桌面配对界面显示为准）',
+  syncEndpointHint: '例如桌面显示的 http://127.0.0.1:52119 或受控局域网配对地址',
+  syncPairPayload: '配对信息（桌面显示的 JSON：{challengeId, code, deviceId}）',
+  syncPairBtn: '立即配对',
+  syncPullBtn: '拉取桌面数据',
+  syncPushBtn: '推送本地修改',
+  syncPairedState: '已配对',
+  syncScopeRead: '只读',
+  syncScopeWrite: '可读写',
+  syncNotPaired: '尚未配对',
+  syncDone: '同步完成',
+  syncConflicts: '处冲突已按新时间戳获胜合并，请核对：',
+  syncInvalidPayload: '配对信息不是有效的 JSON（需要 challengeId、code、deviceId）'
 }

@@ -1,6 +1,8 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { openRepository } from './repository'
+import { pairDesktop, createBridgeSession } from './sync/pair-client.js'
+import { mergePull, planPush, summarizePushResults } from './sync/sync-cycle.js'
 import copy from './i18n/zh-CN.js'
 import logoUrl from '../../assets/img/favicon.svg'
 import { PdActionButton, PdEmptyState, PdStatusChip, PdTaskCard, PdProjectCard, PdWorkEpisodeCard } from '../../shared/ui/index.js'
@@ -34,6 +36,58 @@ async function action(work) {
 onMounted(async () => {
   try { repo.value = await openRepository(); await refresh() } catch (cause) { error.value = cause.message || String(cause) }
 })
+
+// ---- Paired-desktop sync. Credentials live IN MEMORY ONLY (cleared when the app restarts);
+// ---- OS secure storage (Keystore) is the follow-up home. The endpoint is never guessed: it
+// ---- is whatever address the desktop pairing surface displays (loopback or controlled LAN).
+const syncEndpoint = ref('')
+const syncPayload = ref('')
+const syncCreds = ref(null)
+const syncConflicts = ref([])
+const syncBusy = ref(false)
+const syncNotice = ref('')
+function trimSyncUrl() { return syncEndpoint.value.trim().replace(/\/+$/, '') }
+async function syncAction(work) {
+  error.value = ''; syncNotice.value = ''; syncConflicts.value = []
+  syncBusy.value = true
+  try {
+    const conflicts = await work()
+    await refresh()
+    syncConflicts.value = conflicts || []
+    syncNotice.value = conflicts?.length ? (conflicts.length + ' ' + copy.syncConflicts) : copy.syncDone
+  } catch (cause) { error.value = cause.message || String(cause) }
+  finally { syncBusy.value = false }
+}
+async function doSyncPair() {
+  let payload
+  try { payload = JSON.parse(syncPayload.value) } catch { error.value = copy.syncInvalidPayload; return }
+  if (!payload?.challengeId || payload.code == null || !payload.deviceId) { error.value = copy.syncInvalidPayload; return }
+  await syncAction(async () => {
+    syncCreds.value = await pairDesktop({ baseUrl: trimSyncUrl(), challengeId: payload.challengeId, code: payload.code, deviceId: payload.deviceId })
+    syncNotice.value = copy.syncPairedState + ' (' + (syncCreds.value.scope === 'WRITE' ? copy.syncScopeWrite : copy.syncScopeRead) + ')'
+    return []
+  })
+}
+async function doSyncPull() {
+  await syncAction(async () => {
+    const session = createBridgeSession({ baseUrl: trimSyncUrl(), credentials: syncCreds.value, deviceId: syncCreds.value?.deviceId })
+    const result = await session.pull()
+    const raw = { todos: await repo.value.rawAll('todos'), categories: await repo.value.rawAll('categories'), work_episodes: await repo.value.rawAll('work_episodes') }
+    const { changes, conflicts } = mergePull(raw, result.entities)
+    for (const change of changes) await repo.value.applyPulled(change.entity, change.row)
+    return conflicts.map(c => ({ ...c, title: c.incoming?.content || c.incoming?.name || c.incoming?.note || c.id }))
+  })
+}
+async function doSyncPush() {
+  await syncAction(async () => {
+    const session = createBridgeSession({ baseUrl: trimSyncUrl(), credentials: syncCreds.value, deviceId: syncCreds.value?.deviceId })
+    const raw = { todos: await repo.value.rawAll('todos'), categories: await repo.value.rawAll('categories'), work_episodes: await repo.value.rawAll('work_episodes') }
+    const { ops } = planPush(raw)
+    if (!ops.length) return []
+    const result = await session.push(ops)
+    return summarizePushResults(result.results).conflicts
+  })
+}
 function newTask() {
   taskForm.value = { id: '', content: '', description: '', categoryId: 0, scheduledDay: today, complete: 0 }
   editor.value = 'task'
@@ -100,6 +154,26 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
           <div><strong>{{ project.name }}</strong><small>{{ tasks.filter(task => task.categoryId === project.id && !task.complete).length }} {{ copy.pendingCount }}</small></div>
         </PdProjectCard>
       </section>
+      <section v-else-if="tab === 'sync'">
+        <div class="eyebrow">{{ copy.syncEyebrow }}</div><h1>{{ copy.syncTitle }}</h1><p class="intro">{{ copy.syncIntro }}</p>
+        <div class="sync-card">
+          <label>{{ copy.syncEndpoint }}<input v-model="syncEndpoint" type="url" :placeholder="copy.syncEndpointHint" /></label>
+          <label>{{ copy.syncPairPayload }}<textarea v-model="syncPayload" rows="3" placeholder='{"challengeId":"…","code":"123456","deviceId":"android-1"}'></textarea></label>
+          <div class="sync-actions">
+            <PdActionButton :disabled="syncBusy" @click="doSyncPair">{{ copy.syncPairBtn }}</PdActionButton>
+            <PdActionButton :disabled="syncBusy || !syncCreds" @click="doSyncPull">{{ copy.syncPullBtn }}</PdActionButton>
+            <PdActionButton :disabled="syncBusy || !syncCreds" @click="doSyncPush">{{ copy.syncPushBtn }}</PdActionButton>
+          </div>
+          <p class="sync-state">
+            <span v-if="syncCreds">{{ copy.syncPairedState }} · {{ syncCreds.scope === 'WRITE' ? copy.syncScopeWrite : copy.syncScopeRead }}</span>
+            <span v-else>{{ copy.syncNotPaired }}</span>
+            <span v-if="syncNotice">{{ syncNotice }}</span>
+          </p>
+          <ul v-if="syncConflicts.length" class="sync-conflicts">
+            <li v-for="c in syncConflicts" :key="c.entity + ':' + c.id">{{ c.title }} · {{ c.verdict }}</li>
+          </ul>
+        </div>
+      </section>
       <section v-else>
         <div class="eyebrow">{{ copy.historyEyebrow }}</div><h1>{{ copy.history }}</h1><p class="intro">{{ copy.historyIntro }}</p>
         <PdEmptyState v-if="!sortedEpisodes.length" class="empty" :description="copy.historyEmpty" />
@@ -114,6 +188,7 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
       <button :class="{ active: tab === 'today' }" @click="tab = 'today'"><span>◫</span>{{ copy.today }}</button>
       <button :class="{ active: tab === 'projects' }" @click="tab = 'projects'"><span>▦</span>{{ copy.projects }}</button>
       <button :class="{ active: tab === 'history' }" @click="tab = 'history'"><span>◷</span>{{ copy.historyShort }}</button>
+      <button :class="{ active: tab === 'sync' }" @click="tab = 'sync'"><span>⇄</span>{{ copy.syncNav }}</button>
     </nav>
     <div v-if="editor" class="scrim" @click.self="editor = ''">
       <form class="sheet" @submit.prevent="editor === 'task' ? saveTask() : editor === 'project' ? saveProject() : saveEpisode()">

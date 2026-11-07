@@ -54,3 +54,11 @@ h2{margin:0;font-size:16px}
 .error{background:var(--pd-danger-soft);color:var(--pd-danger);border-radius:var(--pd-radius-md);padding:var(--pd-space-3);font-size:13px;margin-bottom:var(--pd-space-4)}
 @media(max-width:360px){.masthead{padding-left:var(--pd-space-4);padding-right:var(--pd-space-4)}main{padding-left:var(--pd-space-4);padding-right:var(--pd-space-4)}.sheet{padding-left:var(--pd-space-4);padding-right:var(--pd-space-4)}}
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:0s!important;animation-duration:0s!important}}
+/* Paired-desktop sync panel (memory-only credentials, one-shot pairing) */
+.sync-card{display:flex;flex-direction:column;gap:12px;padding:16px;border:1px solid rgba(120,130,140,.25);border-radius:14px;margin-top:12px}
+.sync-card label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:inherit}
+.sync-card input,.sync-card textarea{border:1px solid rgba(120,130,140,.4);border-radius:10px;padding:9px 12px;font:inherit;font-size:14px;background:transparent;color:inherit}
+.sync-card textarea{font-family:ui-monospace,monospace;resize:vertical}
+.sync-actions{display:flex;gap:8px;flex-wrap:wrap}
+.sync-state{display:flex;flex-direction:column;gap:4px;margin:0;font-size:13px;opacity:.85}
+.sync-conflicts{margin:0;padding-left:18px;font-size:13px}
