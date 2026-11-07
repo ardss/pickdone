@@ -1,0 +1,1 @@
+{"name":"PickDone Web","short_name":"PickDone","description":"本地优先的今日任务与工作历程","start_url":"/","display":"standalone","background_color":"#f7f5f0","theme_color":"#171b2c","icons":[{"src":"/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}

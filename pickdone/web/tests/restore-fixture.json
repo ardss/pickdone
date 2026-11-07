@@ -1,0 +1,50 @@
+{
+  "format": "pickdone-web-backup-v1",
+  "exportedAt": 1794023000000,
+  "tasks": [
+    {
+      "id": "browser-restore-task",
+      "content": "Restored browser task",
+      "description": "Recovered from JSON",
+      "categoryId": 88,
+      "complete": 0,
+      "completedAt": 0,
+      "scheduledAt": 0,
+      "scheduledDay": 20261107,
+      "remindAt": null,
+      "deadlineTs": 0,
+      "createdAt": 1794023000000,
+      "updatedAt": 1794023000000,
+      "deleted": 0,
+      "deletedAt": 0,
+      "syncAuthor": null,
+      "version": 0,
+      "sort": 0
+    }
+  ],
+  "projects": [
+    {
+      "id": 88,
+      "name": "Restored project",
+      "color": "#7a9e65",
+      "isFolder": 0,
+      "parentId": 0,
+      "createdAt": 1794023000000,
+      "updatedAt": 1794023000000,
+      "deleted": 0,
+      "deletedAt": 0
+    }
+  ],
+  "episodes": [
+    {
+      "id": "browser-restore-episode",
+      "taskId": "browser-restore-task",
+      "startedAt": 1794021200000,
+      "endedAt": 1794023000000,
+      "note": "Recovered work episode",
+      "deleted": 0,
+      "deletedAt": 0,
+      "updatedAt": 1794023000000
+    }
+  ]
+}
