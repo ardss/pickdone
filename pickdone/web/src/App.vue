@@ -3,6 +3,8 @@ import { computed, onMounted, ref } from 'vue'
 import { PdActionButton, PdEmptyState, PdTaskCard, PdProjectCard, PdWorkEpisodeCard } from '../../shared/ui/index.js'
 import t from './i18n/zh-CN.js'
 import { readAll, putRow, markDeleted, replaceAll, backupData, todayKey, dateInput, dayKey, newTask, newProject, newEpisode, episodeView } from './storage.js'
+import { pairDesktop, createBridgeClient } from './sync/bridge-client.js'
+import { mergePull, planPush, summarizePushResults } from './sync/sync-engine.js'
 
 const tab = ref('today')
 const theme = ref(localStorage.getItem('pickdone-web-theme') || 'light')
@@ -120,6 +122,68 @@ async function importBackup(event) {
   try { await replaceAll(JSON.parse(await file.text())); await refresh(); notice.value = t.restoreSuccess }
   catch (cause) { error.value = t.invalidFile + cause.message }
 }
+
+// ---- Desktop sync (one-shot pairing against the 127.0.0.1 bridge; credentials are short-lived) ----
+const syncUrl = ref(sessionStorage.getItem('pickdone-sync-endpoint') || '')
+const syncPairPayload = ref('')
+const syncCreds = ref(JSON.parse(sessionStorage.getItem('pickdone-sync-creds') || 'null'))
+const syncConflicts = ref([])
+const syncBusy = ref(false)
+const lastPullAt = ref(Number(sessionStorage.getItem('pickdone-sync-lastpull') || 0))
+function saveCreds() {
+  if (syncCreds.value) sessionStorage.setItem('pickdone-sync-creds', JSON.stringify(syncCreds.value))
+  else sessionStorage.removeItem('pickdone-sync-creds')
+}
+function rememberEndpoint() {
+  if (syncUrl.value) sessionStorage.setItem('pickdone-sync-endpoint', syncUrl.value.trim().replace(/\/+$/, ''))
+  else sessionStorage.removeItem('pickdone-sync-endpoint')
+}
+function trimUrl() { return syncUrl.value.trim().replace(/\/+$/, '') }
+function syncClient() {
+  return createBridgeClient({ baseUrl: trimUrl(), credentials: syncCreds.value, deviceId: syncCreds.value?.deviceId })
+}
+async function withSync(action, failLabel, okNotice) {
+  error.value = ''; notice.value = ''; syncConflicts.value = []
+  syncBusy.value = true
+  try {
+    const conflicts = await action()
+    await refresh()
+    syncConflicts.value = conflicts || []
+    notice.value = conflicts?.length ? (conflicts.length + ' ' + t.syncConflicts) : okNotice
+  } catch (cause) { error.value = failLabel + cause.message }
+  finally { syncBusy.value = false }
+}
+async function doSyncPair() {
+  let payload
+  try { payload = JSON.parse(syncPairPayload.value) } catch { error.value = t.syncInvalidPayload; return }
+  if (!payload || !payload.challengeId || payload.code == null || !payload.deviceId) { error.value = t.syncInvalidPayload; return }
+  error.value = ''; notice.value = ''
+  syncBusy.value = true
+  try {
+    syncCreds.value = await pairDesktop({ baseUrl: trimUrl(), challengeId: payload.challengeId, code: payload.code, deviceId: payload.deviceId })
+    rememberEndpoint(); saveCreds(); notice.value = t.syncPaired + ' (' + (syncCreds.value.scope === 'WRITE' ? t.syncScopeWrite : t.syncScopeRead) + ')'
+  } catch (cause) { error.value = t.syncPairFailed + cause.message }
+  finally { syncBusy.value = false }
+}
+async function doSyncPull() {
+  await withSync(async () => {
+    const result = await syncClient().pull()
+    const local = await readAll()
+    const { changes, conflicts } = mergePull(local, result.entities)
+    for (const change of changes) await putRow(change.store, change.row)
+    lastPullAt.value = Date.now(); sessionStorage.setItem('pickdone-sync-lastpull', String(lastPullAt.value))
+    return conflicts.map(c => ({ ...c, title: c.incoming?.content || c.incoming?.name || c.incoming?.note || c.id }))
+  }, t.syncPullFailed, t.syncPullDone)
+}
+async function doSyncPush() {
+  await withSync(async () => {
+    const local = await readAll()
+    const { ops } = planPush(local)
+    if (!ops.length) return []
+    const result = await syncClient().push(ops)
+    return summarizePushResults(result.results).conflicts
+  }, t.syncPushFailed, t.syncPushDone)
+}
 </script>
 
 <template>
@@ -131,11 +195,12 @@ async function importBackup(event) {
         <button :class="{ selected: tab === 'today' }" @click="tab = 'today'"><span class="nav-icon">◫</span>{{ t.today }}<span class="nav-count">{{ todayTasks.length }}</span></button>
         <button :class="{ selected: tab === 'projects' }" @click="tab = 'projects'"><span class="nav-icon">▦</span>{{ t.projects }}<span class="nav-count">{{ activeProjects.length }}</span></button>
         <button :class="{ selected: tab === 'history' }" @click="tab = 'history'"><span class="nav-icon">◷</span>{{ t.history }}</button>
+        <button :class="{ selected: tab === 'sync' }" @click="tab = 'sync'"><span class="nav-icon">⇄</span>{{ t.sync }}</button>
       </nav>
       <div class="side-bottom"><button :class="{ selected: tab === 'backup' }" @click="tab = 'backup'"><span class="nav-icon">⇩</span>{{ t.backup }}</button><p>{{ t.syncNote }}</p></div>
     </aside>
     <div class="main-wrap">
-      <header class="topbar"><div class="topbar-breadcrumb">PICKDONE <span>/</span> {{ tab === 'today' ? t.today : tab === 'projects' ? t.projects : tab === 'history' ? t.history : t.backup }}</div><div class="topbar-actions"><button class="theme-toggle" type="button" @click="toggleTheme">{{ theme === "dark" ? t.lightTheme : t.darkTheme }}</button><div class="storage-pill"><span class="status-dot"></span>{{ t.local }}</div></div></header>
+      <header class="topbar"><div class="topbar-breadcrumb">PICKDONE <span>/</span> {{ tab === 'today' ? t.today : tab === 'projects' ? t.projects : tab === 'history' ? t.history : tab === 'sync' ? t.sync : t.backup }}</div><div class="topbar-actions"><button class="theme-toggle" type="button" @click="toggleTheme">{{ theme === "dark" ? t.lightTheme : t.darkTheme }}</button><div class="storage-pill"><span class="status-dot"></span>{{ t.local }}</div></div></header>
       <main>
         <div v-if="error" class="message error" role="alert">{{ error }}</div>
         <div v-if="notice" class="message success" role="status">{{ notice }}</div>
@@ -154,6 +219,31 @@ async function importBackup(event) {
         <template v-else-if="tab === 'history'">
           <div class="page-heading"><span class="eyebrow">WORK JOURNAL</span><h1>{{ t.historyTitle }}</h1><p>{{ t.historyIntro }}</p></div>
           <div class="history-layout"><form class="episode-form card" @submit.prevent="saveEpisode"><h2>{{ editingEpisode ? t.editEpisode : t.addEpisode }}</h2><label>{{ t.chooseTask }}<select v-model="episodeTask" required><option value="" disabled>{{ t.chooseTask }}</option><option v-for="task in activeTasks" :key="task.id" :value="task.id">{{ task.content }}</option></select></label><div class="form-pair"><label>{{ t.started }}<input v-model="episodeStart" type="datetime-local" required></label><label>{{ t.ended }}<input v-model="episodeEnd" type="datetime-local" required></label></div><label>{{ t.summary }}<textarea v-model="episodeNote" :placeholder="t.summaryPlaceholder" rows="5" required></textarea></label><div class="form-actions"><button v-if="editingEpisode" type="button" class="text-button" @click="resetEpisode">{{ t.cancel }}</button><PdActionButton tone="primary" type="submit">{{ editingEpisode ? t.save : t.addEpisode }}</PdActionButton></div></form><div class="history-feed"><div class="section-head"><h2>{{ t.history }} <span class="muted-count">{{ activeEpisodes.length }}</span></h2></div><PdEmptyState v-if="!activeEpisodes.length" class="empty compact" :title="t.noEpisodes" :description="t.noEpisodesDetail"><template #icon>&#9687;</template></PdEmptyState><PdWorkEpisodeCard v-for="episode in activeEpisodes" :key="episode.id" class="episode-card"><div class="episode-top"><span class="episode-date">{{ formatTime(episode.startedAt) }}</span><span class="episode-duration">{{ minutes(episode) }} {{ t.duration }}</span></div><h3>{{ taskName(episode.taskId) }}</h3><p>{{ episode.note }}</p><div class="episode-actions"><button class="text-button" @click="startEpisode(episode)">{{ t.edit }}</button><button class="text-button danger" @click="deleteEpisode(episode)">{{ t.remove }}</button></div></PdWorkEpisodeCard></div></div>
+        </template>
+        <template v-else-if="tab === 'sync'">
+          <div class="page-heading"><span class="eyebrow">PAIRED DESKTOP SYNC</span><h1>{{ t.syncTitle }}</h1><p>{{ t.syncIntro }}</p></div>
+          <div class="sync-layout">
+            <form class="card sync-card" @submit.prevent="doSyncPair">
+              <h2>{{ t.syncPairBtn }}</h2>
+              <label>{{ t.syncEndpoint }}<input v-model="syncUrl" type="url" required :placeholder="t.syncEndpointHint"></label>
+              <label>{{ t.syncPairPayload }}<textarea v-model="syncPairPayload" rows="4" placeholder='{"challengeId":"…","code":"123456","deviceId":"web-1"}'></textarea></label>
+              <div class="form-actions"><PdActionButton tone="primary" type="submit" :disabled="syncBusy">{{ t.syncPairBtn }}</PdActionButton></div>
+            </form>
+            <div class="card sync-card">
+              <h2>{{ t.sync }}</h2>
+              <p class="sync-state">
+                <span v-if="syncCreds">{{ t.syncPaired }} · {{ syncCreds.scope === 'WRITE' ? t.syncScopeWrite : t.syncScopeRead }} · {{ t.syncLastPull }} {{ lastPullAt ? formatTime(lastPullAt) : t.syncNever }}</span>
+                <span v-else>{{ t.syncNotPaired }}</span>
+              </p>
+              <div class="form-actions">
+                <PdActionButton tone="primary" :disabled="syncBusy || !syncCreds" @click="doSyncPull">{{ t.syncPullBtn }}</PdActionButton>
+                <PdActionButton tone="secondary" :disabled="syncBusy || !syncCreds" @click="doSyncPush">{{ t.syncPushBtn }}</PdActionButton>
+              </div>
+              <ul v-if="syncConflicts.length" class="sync-conflicts">
+                <li v-for="c in syncConflicts" :key="c.store + ':' + c.id">{{ c.title }} · {{ c.verdict }}</li>
+              </ul>
+            </div>
+          </div>
         </template>
         <template v-else><div class="page-heading"><span class="eyebrow">DATA & PORTABILITY</span><h1>{{ t.backup }}</h1><p>{{ t.backupIntro }}</p></div><div class="backup-card card"><div class="backup-icon">⇩</div><div><h2>{{ t.backupTitle }}</h2><p>{{ t.backupIntro }}</p><p class="sync-note">{{ t.syncNote }}</p><div class="backup-actions"><PdActionButton tone="primary" @click="exportBackup">{{ t.export }}</PdActionButton><PdActionButton tone="secondary" @click="fileInput.click()">{{ t.import }}</PdActionButton><input ref="fileInput" type="file" accept=".json,application/json" hidden @change="importBackup"></div></div></div></template>
       </main>

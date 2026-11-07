@@ -36,3 +36,15 @@
   .sidebar nav button{padding:8px 7px}
   .sidebar .nav-count{display:none}
 }
+
+/* Desktop sync tab: paired-bridge panel (one-shot pairing, pull/push, conflict list) */
+.sync-layout{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:20px;align-items:start}
+.sync-card{display:flex;flex-direction:column;gap:14px;padding:24px}
+.sync-card h2{margin:0;font-size:17px}
+.sync-card label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--muted,#6b7280)}
+.sync-card input,.sync-card textarea{border:1px solid #d7dbe0;border-radius:10px;padding:9px 12px;font:inherit;font-size:14px;background:#fff;color:#1f2937}
+.sync-card textarea{font-family:ui-monospace,monospace;resize:vertical}
+.sync-state{margin:0;font-size:14px;color:#374151}
+.sync-conflicts{margin:0;padding:0 0 0 18px;font-size:13px;color:#92400e}
+[data-theme="dark"] .sync-card input,[data-theme="dark"] .sync-card textarea{background:#1c2128;border-color:#3a414b;color:#e5e7eb}
+[data-theme="dark"] .sync-state{color:#d1d5db}

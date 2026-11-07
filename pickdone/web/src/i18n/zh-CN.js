@@ -16,6 +16,10 @@ export default {
   deleteProject: '删除此项目？项目中的任务会保留并显示为未分类。', deleteEpisode: '删除这条工作记录？',
   taskRequired: '请输入任务内容', projectRequired: '请输入项目名称', episodeRequired: '请选择任务并填写工作记录',
   invalidTime: '结束时间不能早于开始时间', error: '操作失败：', saved: '已保存', storageError: '无法打开浏览器本地存储。请检查隐私模式或存储权限。',
-  syncNote: '桌面配对与同步尚未开放。本版不会连接桌面数据库，也不会开放局域网写入。',
+  syncNote: '桌面同步走受控配对：桌面端开启桥接并出示一次性配对码，本页配对后才可读写。未配对或令牌过期时不会发起任何连接。',
+  sync: '同步', syncTitle: '与桌面同步', syncIntro: '在桌面端开启桥接并生成一次性配对码后，把桌面显示的配对信息粘贴到下面。桥接地址以桌面配对界面显示的为准（同一台机为回环地址，跨设备按受控局域网配对规范给出的地址）。配对令牌短期有效且随标签页关闭即失效。',
+  syncEndpoint: '桌面桥接地址（以桌面配对界面显示为准）', syncEndpointHint: '例如桌面显示的 http://127.0.0.1:52119 或受控局域网配对地址', syncPairPayload: '配对信息（桌面显示的 JSON：{challengeId, code, deviceId}）', syncPairBtn: '立即配对', syncPullBtn: '拉取桌面数据', syncPushBtn: '推送本地修改',
+  syncPaired: '已配对', syncScopeRead: '只读', syncScopeWrite: '可读写', syncNotPaired: '尚未配对', syncLastPull: '上次拉取', syncNever: '从未',
+  syncPullDone: '已拉取桌面数据', syncPushDone: '本地修改已推送', syncConflicts: '处冲突已按新时间戳获胜合并，请核对：', syncInvalidPayload: '配对信息不是有效的 JSON（需要 challengeId、code、deviceId）', syncPullFailed: '拉取失败：', syncPushFailed: '推送失败：', syncPairFailed: '配对失败：',
   footer: '为专注而设计 · 本地优先', todayOverview: '今天，先完成重要的事。', progress: '今日进度'
 }
