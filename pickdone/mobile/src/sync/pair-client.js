@@ -1,4 +1,5 @@
 import { taskToDto, categoryToDto, episodeToDto } from './pair-contract.js'
+import { bridgeFetch } from './native-transport.js'
 
 const encoders = { todos: taskToDto, categories: categoryToDto, work_episodes: episodeToDto }
 
@@ -34,7 +35,7 @@ export function createPairSyncClient({ transport, deviceId, credentials, now = D
 
 export const PAIR_ROUTES = Object.freeze({ pair: '/crossplatform/pair', pull: '/crossplatform/pull', push: '/crossplatform/push' })
 
-export async function pairDesktop({ baseUrl, challengeId, code, deviceId, fetchImpl = fetch }) {
+export async function pairDesktop({ baseUrl, challengeId, code, deviceId, fetchImpl = bridgeFetch }) {
   if (!baseUrl) throw new TypeError('baseUrl required')
   if (!challengeId || !deviceId || code == null) throw new TypeError('challengeId, code and deviceId required')
   const res = await fetchImpl(baseUrl + PAIR_ROUTES.pair, {
@@ -47,7 +48,7 @@ export async function pairDesktop({ baseUrl, challengeId, code, deviceId, fetchI
   return { token: body.token, csrfNonce: body.csrfHeader, expiresAt: Number(body.expiresAt || 0), scope: body.scope, deviceId }
 }
 
-export function createBridgeSession({ baseUrl, credentials, deviceId, fetchImpl = fetch, now = Date.now, uuid = () => crypto.randomUUID() }) {
+export function createBridgeSession({ baseUrl, credentials, deviceId, fetchImpl = bridgeFetch, now = Date.now, uuid = () => crypto.randomUUID() }) {
   if (!baseUrl) throw new TypeError('baseUrl required')
   if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl required')
   if (!deviceId) throw new TypeError('deviceId required')
