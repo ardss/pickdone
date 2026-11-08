@@ -26,12 +26,13 @@ import net from 'node:net'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const RUN = join(HERE, '.run')
-// Use a sibling isolated worktree by default; permit an explicit override for CI.
+// Test the current integration repository by default; CI may override the bridge root.
 // No personal workstation path is embedded in the script.
 const LANE_A = process.env.PICKDONE_BRIDGE_REPO || resolve(HERE, '../..')
-const BRIDGE_PORT = 52141
-const WEB_PORT = 5173
-const CDP_PORT = 9251
+// Allocate fresh loopback ports so a prior Chrome/CDP run can never satisfy this test.
+const BRIDGE_PORT = await freePort()
+const WEB_PORT = await freePort()
+const CDP_PORT = await freePort()
 const DEVICE = 'web-e2e-rt'
 const CHROME = 'C:/Program Files/Google/Chrome/Application/chrome.exe'
 const WEB_ORIGIN = `http://127.0.0.1:${WEB_PORT}`
@@ -164,8 +165,9 @@ class Cdp {
 
 let exitCode = 1
 let blocked = false
+let cdp = null
 try {
-  const cdp = await Cdp.connect()
+  cdp = await Cdp.connect()
   await cdp.send('Page.enable')
   await cdp.send('Page.navigate', { url: WEB_ORIGIN })
   await until(async () => cdp.evalExpr(`!!document.querySelector('.sidebar nav button')`).catch(() => null), 15000, 'PWA app shell rendered')
@@ -240,11 +242,23 @@ try {
   console.error('  ✗ ' + e.message)
   exitCode = blocked ? 2 : 1
 } finally {
-  try { chrome.kill() } catch {}
-  try { bridge.close() } catch {}
+  // Close the browser via the actual CDP connection: killing only the launcher
+  // on Windows leaves renderer/GPU processes and the profile directory alive.
+  try { if (cdp) await Promise.race([cdp.send('Browser.close'), sleep(2000)]) } catch {}
+  try { cdp?.ws.close() } catch {}
   try { preview.kill() } catch {}
-  await sleep(500)
-  try { rmSync(profile, { recursive: true, force: true }) } catch {}
+  try { await Promise.resolve(bridge.close()) } catch {}
+  try { chrome.kill() } catch {}
+  let profileGone = false
+  for (let attempt = 0; attempt < 16; attempt++) {
+    await sleep(250)
+    try { rmSync(profile, { recursive: true, force: true, maxRetries: 2, retryDelay: 100 }) } catch {}
+    if (!existsSync(profile)) { profileGone = true; break }
+  }
+  if (!profileGone) {
+    console.error('[roundtrip] FAILED cleanup: isolated Chrome profile still exists')
+    exitCode = 1
+  }
 }
 audit('roundtrip finished exit=' + exitCode)
 console.log(exitCode === 0 ? 'RESULT: PASS — full browser round-trip green.' : exitCode === 2 ? 'RESULT: BLOCKED — server-side CORS gap (not a client failure).' : 'RESULT: FAIL.')

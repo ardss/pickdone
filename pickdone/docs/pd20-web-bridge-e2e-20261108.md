@@ -27,3 +27,9 @@ In the unified integration worktree, tests directly import this worktree's real 
 - Chrome and Edge MV3 live capture and offline queue, and any requested VS Code extension build/install.
 - A ↔ B real two-machine and Windows A production candidate acceptance; independent human UI QA.
 - Do not push, publish or overwrite real data solely based on these E2E checks.
+
+## 2026-11-08 isolated-Chrome process hygiene correction
+
+The initial E2E harness used fixed CDP port 9251. We found 35 Chrome processes belonging **only to previous isolated test profiles** across two test worktrees; these sessions could compete for that port. We terminated those test-only processes after verifying their command-line user-data-dir paths and confirmed 0 remained. This means the original R1–R5 checks proved behavior, but did not strictly prove that CDP always connected to the newly launched browser.
+
+The integrated harness now obtains fresh loopback ports for bridge, Web preview and CDP; it gracefully closes the browser with its own CDP connection, waits for isolated profile deletion, and converts any cleanup failure into a failing test result. **Fresh rerun after this correction: R1–R5 all PASS, exit 0, and 0 test Chrome processes remain.** The previously created test artifact directory is excluded from Git; production browser profiles were not targeted.
