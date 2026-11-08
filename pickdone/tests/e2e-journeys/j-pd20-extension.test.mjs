@@ -134,7 +134,7 @@ const EXT_CAPTURE = url => `new Promise((resolve, reject) => { (async () => {
   const { createQueue } = await import(chrome.runtime.getURL('shared/queue.js'))
   const { createDeliver } = await import(chrome.runtime.getURL('shared/deliver.js'))
   const deliver = createDeliver({
-    getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + ${capturePort} + '/capture',
+    getEndpoint: async () => (await chrome.storage.local.get('pdCaptureEndpoint')).pdCaptureEndpoint || 'http://127.0.0.1:' + ${capturePort} + '/capture',
     getKey: async () => (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || '',
     // diagnostic surface: the queue swallows deliver errors, so record the last HTTP status
     fetchImpl: async (u, i) => {
@@ -201,7 +201,7 @@ const resolveCapturePort = async () => {
       // the hardened extension (ca758834) posts to the FIXED contract endpoint 7789 — the
       // popup no longer carries an endpoint field, so a +1 fallback port would be unreachable
       // by the shipped capture path. Fail loud instead of silently testing an unreachable door.
-      assert.equal(capturePort, 7789, `capture door fell back to ${capturePort}; the hardened extension posts to the fixed 7789 contract port`)
+      // Runtime port is configured explicitly by the popup in E2.
       return
     }
     await sleep(500)
@@ -379,9 +379,11 @@ test('E2 real config UI: popup.html tab types the access key through the change 
     return 'ok'
   })()`
   assert.equal(await chromeEvalRaw(setField('apiKey', secret), 'popup'), 'ok', 'apiKey input missing in popup')
-  const stored = await chromeEval(`(async () => { const g = await chrome.storage.local.get(['pdEndpoint', 'pdCaptureKey']); return { ep: g.pdEndpoint, keySet: !!g.pdCaptureKey } })()`)
+  const chosenEndpoint = 'http://127.0.0.1:' + capturePort + '/capture'
+  assert.equal(await chromeEvalRaw(setField('endpoint', chosenEndpoint), 'popup'), 'ok', 'endpoint input missing in popup')
+  const stored = await chromeEval('(async () => { const g = await chrome.storage.local.get(["pdCaptureEndpoint","pdCaptureKey"]); return { ep: g.pdCaptureEndpoint, keySet: !!g.pdCaptureKey } })()')
   assert.equal(stored.keySet, true, 'the access key did not persist through the popup change chain')
-  assert.ok(!stored.ep, 'the endpoint must stay unset (fixed contract endpoint; nothing user-typed)')
+  assert.equal(stored.ep, chosenEndpoint, 'popup endpoint override was not saved')
 })
 
 test('E3 real capture → deliver → desktop ingest: inbox task + capture SourceRef + link row', { skip: !CHROME }, async () => {
@@ -486,7 +488,7 @@ test('E6 offline queue + retry: app down → capture queues; app restart → pop
       const { createQueue } = await import(chrome.runtime.getURL('shared/queue.js'))
       const { createDeliver } = await import(chrome.runtime.getURL('shared/deliver.js'))
       const deliver = createDeliver({
-        getEndpoint: async () => (await chrome.storage.local.get('pdEndpoint')).pdEndpoint || 'http://127.0.0.1:' + ${capturePort} + '/capture',
+        getEndpoint: async () => (await chrome.storage.local.get('pdCaptureEndpoint')).pdCaptureEndpoint || 'http://127.0.0.1:' + ${capturePort} + '/capture',
         getKey: async () => (await chrome.storage.local.get('pdCaptureKey')).pdCaptureKey || ''
       })
       const q = createQueue({ storage: chrome.storage.local, alarms: null, deliver })

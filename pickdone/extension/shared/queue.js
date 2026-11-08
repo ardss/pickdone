@@ -47,7 +47,7 @@ export function createQueue({ storage, alarms, deliver, now = () => Date.now(), 
     return entry;
   }
 
-  async function flush() {
+  async function flush({ force = false } = {}) {
     const entries = await load();
     const t = now();
     const sent = [];
@@ -55,11 +55,17 @@ export function createQueue({ storage, alarms, deliver, now = () => Date.now(), 
     const remaining = [];
     let changed = false;
     for (const entry of entries) {
+      if (entry.status === 'failed' && force) {
+        entry.status = 'queued';
+        entry.attempts = 0;
+        entry.nextAttemptAt = 0;
+        changed = true;
+      }
       if (entry.status !== 'queued') {
         remaining.push(entry);
         continue;
       }
-      if (entry.attempts > 0 && entry.nextAttemptAt > t) {
+      if (!force && entry.attempts > 0 && entry.nextAttemptAt > t) {
         remaining.push(entry); // still inside backoff window
         continue;
       }

@@ -1,49 +1,55 @@
-// Popup: shows queue state, lets the user trigger an immediate flush, and edits the
-// capture endpoint URL + access key (both persisted in chrome.storage.local and read
-// by the service worker's deliver()).
-const DEFAULT_ENDPOINT = 'http://127.0.0.1:7789/capture';
-const endpointInput = document.getElementById('endpoint');
-const apiKeyInput = document.getElementById('apiKey');
-
-async function loadConnectionSettings() {
-  const got = await chrome.storage.local.get(['pdEndpoint', 'pdCaptureKey']);
-  endpointInput.value = got.pdEndpoint || DEFAULT_ENDPOINT;
-  apiKeyInput.value = got.pdCaptureKey || '';
+/* global chrome */
+import { DEFAULT_CAPTURE_ENDPOINT, validateCaptureEndpoint } from './shared/endpoint-contract.js'
+const key = document.getElementById('apiKey')
+const endpoint = document.getElementById('endpoint')
+const message = document.getElementById('endpointError')
+function notify (text, bad = false) {
+  message.textContent = text
+  message.style.color = bad ? '#b42318' : ''
 }
-endpointInput.addEventListener('change', async () => {
-  const url = endpointInput.value.trim();
-  await chrome.storage.local.set({ pdEndpoint: url || DEFAULT_ENDPOINT });
-  endpointInput.value = url || DEFAULT_ENDPOINT;
-});
-apiKeyInput.addEventListener('change', async () => {
-  await chrome.storage.local.set({ pdCaptureKey: apiKeyInput.value.trim() });
-});
-
-function render(entries) {
-  const queued = entries.filter((e) => e.status === 'queued');
-  const failed = entries.filter((e) => e.status === 'failed');
+async function load () {
+  const v = await chrome.storage.local.get(['pdCaptureKey', 'pdCaptureEndpoint'])
+  key.value = v.pdCaptureKey || ''
+  endpoint.value = v.pdCaptureEndpoint || DEFAULT_CAPTURE_ENDPOINT
+  try { validateCaptureEndpoint(endpoint.value) } catch (e) { notify(e.message, true) }
+}
+key.addEventListener('change', async () => {
+  await chrome.storage.local.set({ pdCaptureKey: key.value.trim() })
+})
+endpoint.addEventListener('change', async () => {
+  try {
+    const safe = validateCaptureEndpoint(endpoint.value)
+    await chrome.storage.local.set({ pdCaptureEndpoint: safe })
+    endpoint.value = safe
+    notify('Saved. Retry queued captures with this local port.')
+  } catch (e) { notify(e.message + ' Previous address kept.', true) }
+})
+function render (entries) {
+  const queued = entries.filter(e => e.status === 'queued')
+  const failed = entries.filter(e => e.status === 'failed')
   document.getElementById('summary').textContent =
-    `${queued.length} queued · ${failed.length} failed`;
-  const ul = document.getElementById('entries');
-  ul.innerHTML = '';
+    queued.length + ' queued · ' + failed.length + ' failed'
+  const ul = document.getElementById('entries')
+  ul.innerHTML = ''
   for (const e of entries.slice(-20).reverse()) {
-    const li = document.createElement('li');
-    li.textContent = `${e.status === 'failed' ? '✗' : '…'} ${e.title || e.canonicalUri} (${e.attempts} tries)`;
-    ul.appendChild(li);
+    const li = document.createElement('li')
+    li.textContent = (e.status === 'failed' ? 'failed: ' : 'queued: ') +
+      (e.title || e.canonicalUri) + ' (' + e.attempts + ' tries)'
+    ul.appendChild(li)
   }
 }
-
-async function refresh() {
-  const { entries } = await chrome.runtime.sendMessage({ type: 'pd-queue-list' });
-  render(entries || []);
+async function refresh () {
+  const r = await chrome.runtime.sendMessage({ type: 'pd-queue-list' })
+  render(r?.entries || [])
 }
-
 document.getElementById('flush').addEventListener('click', async () => {
-  const result = await chrome.runtime.sendMessage({ type: 'pd-queue-flush' });
-  await refresh();
-  document.getElementById('summary').textContent +=
-    ` — sent ${result ? result.sent.length : 0}`;
-});
-
-loadConnectionSettings();
-refresh();
+  try {
+    const r = await chrome.runtime.sendMessage({ type: 'pd-queue-flush', force: true })
+    await refresh()
+    notify(r?.pending || r?.failedIds?.length
+      ? 'Still pending: check desktop port and access key, then retry.'
+      : 'Delivered ' + (r?.sent?.length || 0) + ' capture(s).', Boolean(r?.pending || r?.failedIds?.length))
+  } catch { notify('Desktop unavailable. Check loopback address and retry.', true) }
+})
+load()
+refresh()
