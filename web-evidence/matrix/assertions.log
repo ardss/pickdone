@@ -1,0 +1,103 @@
+2026-11-10T11:39:35.349Z PASS  cli-seed: isolated scratch DB used (never the real AppData database)  — K:\tmp\pd-web-matrix-20261110\cli-db
+2026-11-10T11:39:37.805Z PASS  cli-seed: tasks + category + episode + source recorded through CLI gates  — conflict=tid_840001f4pTET_1794310776442 handoff=tid_840001quV2rs_1794310776782 category=1794310777110792
+2026-11-10T11:39:37.805Z PASS  cli-seed: episode note carries goal/outcome/next (Finding/Decision fields live in the handoff note, no separate tables in this build)  — "Wire the episode ledger into the web pull"
+2026-11-10T11:39:38.044Z PASS  cli-seed: encrypted desktop DB decrypt-copied with the vendor driver + db.key (real rows preserved)  — todos,categories,filters,meta,plan_chips,tomato_records,sync_oplog,sync_revisions,sync_revision_payloads,sync_revision_current,work_episodes,source_refs,task_source_links,settings_rows
+2026-11-10T11:39:38.461Z PASS  host: real bridge + HTTPS PWA host up  — {"bridgePort":13583,"httpsPort":13582}
+2026-11-10T11:39:40.965Z PASS  theme-pixel[1280x800/light]: background sampled from screenshot pixels ({"r":247,"g":246,"b":242}) matches rendered CSS ({"root":"rgb(247, 246, 242)","body":"rgba(0, 0, 0, 0)"})  — today default cell
+2026-11-10T11:39:41.081Z PASS  g1-today[1280x800/light]: region heading "今天，先完成重要的事。" rendered  — "今天，先完成重要的事。"
+2026-11-10T11:39:41.084Z PASS  g1-today[1280x800/light]: task card text non-empty  — "Review sync conflict notes"
+2026-11-10T11:39:41.641Z PASS  g3-task-detail[1280x800/light]: edit panel heading "编辑任务" rendered  — "编辑任务"
+2026-11-10T11:39:41.644Z PASS  g3-task-detail[1280x800/light]: task title carried into the panel, non-empty  — "Review sync conflict notes"
+2026-11-10T11:39:42.682Z PASS  g2-projects[1280x800/light]: region heading "项目" rendered  — "项目"
+2026-11-10T11:39:42.684Z PASS  g2-projects[1280x800/light]: project card name non-empty (CLI-seeded "Apollo Delivery")  — "Apollo Delivery0 项任务"
+2026-11-10T11:39:43.613Z PASS  g4-episode-handoff[1280x800/light]: region heading "工作历程" rendered  — "工作历程"
+2026-11-10T11:39:43.616Z PASS  g4-episode-handoff[1280x800/light]: CLI-gated episode note (goal/outcome/next) rendered on the card  — "goal: Wire the episode ledger into the web pull\noutcome: Web leg pulls work_epis"
+2026-11-10T11:39:43.619Z PASS  g4-episode-handoff[1280x800/light]: episode bound to its CLI-seeded task title  — "Handoff: continue API integration"
+2026-11-10T11:39:48.938Z PASS  g5-sync-conflict[1280x800/light]: region heading "与桌面同步" rendered  — "与桌面同步"
+2026-11-10T11:39:48.941Z PASS  g5-sync-conflict[1280x800/light]: real conflict verdict conflict_tombstone_wins surfaced in the UI  — "Conflict seed task (web edited offline) · conflict_tombstone_wins"
+2026-11-10T11:39:48.944Z PASS  g5-sync-conflict[1280x800/light]: conflict count notice rendered  — "1 处冲突已按新时间戳获胜合并，请核对："
+2026-11-10T11:39:49.865Z PASS  g6-settings[1280x800/light]: settings-surface heading "备份与恢复" rendered  — "备份与恢复"
+2026-11-10T11:39:49.867Z PASS  g6-settings[1280x800/light]: data-portability card text non-empty  — "让本地数据更安心"
+2026-11-10T11:39:49.884Z PASS  g6-settings[1280x800/light]: theme toggle rendered with real box (70x33)  — {"x":1035,"y":18,"width":70,"height":33}
+2026-11-10T11:39:49.894Z PASS  touch-targets[1280x800/light]: desktop nav target >=24px (51px)  — {"x":18,"y":150,"width":214,"height":51}
+2026-11-10T11:39:50.837Z PASS  g1-empty[1280x800/light]: EmptyState "今天还没有任务" rendered, main area never blank  — "今天还没有任务"
+2026-11-10T11:39:51.392Z PASS  g2-empty[1280x800/light]: projects EmptyState rendered  — "还没有项目"
+2026-11-10T11:39:52.585Z PASS  g3-error[1280x800/light]: unknown deep link renders explicit error, never a blank main area  — "未找到该任务（可能已删除或尚未同步）： none-such-task"
+2026-11-10T11:39:53.139Z PASS  g4-empty[1280x800/light]: episode EmptyState "还没有工作记录" rendered  — "还没有工作记录"
+2026-11-10T11:39:53.719Z PASS  g5-empty[1280x800/light]: unpaired sync state "尚未配对" rendered  — "尚未配对"
+2026-11-10T11:39:54.276Z PASS  g6-empty[1280x800/light]: settings surface still renders its card in a fresh profile  — "让本地数据更安心"
+2026-11-10T11:39:56.301Z PASS  theme-pixel[1280x800/dark]: background sampled from screenshot pixels ({"r":23,"g":25,"b":30}) matches rendered CSS ({"root":"rgb(247, 246, 242)","body":"rgb(23, 25, 30)"})  — today default cell
+2026-11-10T11:39:56.421Z PASS  g1-today[1280x800/dark]: region heading "今天，先完成重要的事。" rendered  — "今天，先完成重要的事。"
+2026-11-10T11:39:56.423Z PASS  g1-today[1280x800/dark]: task card text non-empty  — "Review sync conflict notes"
+2026-11-10T11:39:56.999Z PASS  g3-task-detail[1280x800/dark]: edit panel heading "编辑任务" rendered  — "编辑任务"
+2026-11-10T11:39:57.002Z PASS  g3-task-detail[1280x800/dark]: task title carried into the panel, non-empty  — "Review sync conflict notes"
+2026-11-10T11:39:58.051Z PASS  g2-projects[1280x800/dark]: region heading "项目" rendered  — "项目"
+2026-11-10T11:39:58.053Z PASS  g2-projects[1280x800/dark]: project card name non-empty (CLI-seeded "Apollo Delivery")  — "Apollo Delivery0 项任务"
+2026-11-10T11:39:58.950Z PASS  g4-episode-handoff[1280x800/dark]: region heading "工作历程" rendered  — "工作历程"
+2026-11-10T11:39:58.952Z PASS  g4-episode-handoff[1280x800/dark]: CLI-gated episode note (goal/outcome/next) rendered on the card  — "goal: Wire the episode ledger into the web pull\noutcome: Web leg pulls work_epis"
+2026-11-10T11:39:58.955Z PASS  g4-episode-handoff[1280x800/dark]: episode bound to its CLI-seeded task title  — "Handoff: continue API integration"
+2026-11-10T11:40:04.275Z PASS  g5-sync-conflict[1280x800/dark]: region heading "与桌面同步" rendered  — "与桌面同步"
+2026-11-10T11:40:04.277Z PASS  g5-sync-conflict[1280x800/dark]: real conflict verdict conflict_tombstone_wins surfaced in the UI  — "Conflict seed task (web edited offline) · conflict_tombstone_wins"
+2026-11-10T11:40:04.279Z PASS  g5-sync-conflict[1280x800/dark]: conflict count notice rendered  — "1 处冲突已按新时间戳获胜合并，请核对："
+2026-11-10T11:40:05.180Z PASS  g6-settings[1280x800/dark]: settings-surface heading "备份与恢复" rendered  — "备份与恢复"
+2026-11-10T11:40:05.183Z PASS  g6-settings[1280x800/dark]: data-portability card text non-empty  — "让本地数据更安心"
+2026-11-10T11:40:05.197Z PASS  g6-settings[1280x800/dark]: theme toggle rendered with real box (70x33)  — {"x":1035,"y":18,"width":70,"height":33}
+2026-11-10T11:40:05.207Z PASS  touch-targets[1280x800/dark]: desktop nav target >=24px (51px)  — {"x":18,"y":150,"width":214,"height":51}
+2026-11-10T11:40:06.151Z PASS  g1-empty[1280x800/dark]: EmptyState "今天还没有任务" rendered, main area never blank  — "今天还没有任务"
+2026-11-10T11:40:06.705Z PASS  g2-empty[1280x800/dark]: projects EmptyState rendered  — "还没有项目"
+2026-11-10T11:40:07.856Z PASS  g3-error[1280x800/dark]: unknown deep link renders explicit error, never a blank main area  — "未找到该任务（可能已删除或尚未同步）： none-such-task"
+2026-11-10T11:40:08.416Z PASS  g4-empty[1280x800/dark]: episode EmptyState "还没有工作记录" rendered  — "还没有工作记录"
+2026-11-10T11:40:09.000Z PASS  g5-empty[1280x800/dark]: unpaired sync state "尚未配对" rendered  — "尚未配对"
+2026-11-10T11:40:09.557Z PASS  g6-empty[1280x800/dark]: settings surface still renders its card in a fresh profile  — "让本地数据更安心"
+2026-11-10T11:40:11.455Z PASS  theme-pixel[360x800/light]: background sampled from screenshot pixels ({"r":247,"g":246,"b":242}) matches rendered CSS ({"root":"rgb(247, 246, 242)","body":"rgba(0, 0, 0, 0)"})  — today default cell
+2026-11-10T11:40:11.561Z PASS  g1-today[360x800/light]: region heading "今天，先完成重要的事。" rendered  — "今天，先完成重要的事。"
+2026-11-10T11:40:11.563Z PASS  g1-today[360x800/light]: task card text non-empty  — "Review sync conflict notes"
+2026-11-10T11:40:12.131Z PASS  g3-task-detail[360x800/light]: edit panel heading "编辑任务" rendered  — "编辑任务"
+2026-11-10T11:40:12.133Z PASS  g3-task-detail[360x800/light]: task title carried into the panel, non-empty  — "Review sync conflict notes"
+2026-11-10T11:40:13.090Z PASS  g2-projects[360x800/light]: region heading "项目" rendered  — "项目"
+2026-11-10T11:40:13.091Z PASS  g2-projects[360x800/light]: project card name non-empty (CLI-seeded "Apollo Delivery")  — "Apollo Delivery0 项任务"
+2026-11-10T11:40:13.977Z PASS  g4-episode-handoff[360x800/light]: region heading "工作历程" rendered  — "工作历程"
+2026-11-10T11:40:13.979Z PASS  g4-episode-handoff[360x800/light]: CLI-gated episode note (goal/outcome/next) rendered on the card  — "goal: Wire the episode ledger into the web pull\noutcome: Web leg pulls work_epis"
+2026-11-10T11:40:13.981Z PASS  g4-episode-handoff[360x800/light]: episode bound to its CLI-seeded task title  — "Handoff: continue API integration"
+2026-11-10T11:40:19.262Z PASS  g5-sync-conflict[360x800/light]: region heading "与桌面同步" rendered  — "与桌面同步"
+2026-11-10T11:40:19.264Z PASS  g5-sync-conflict[360x800/light]: real conflict verdict conflict_tombstone_wins surfaced in the UI  — "Conflict seed task (web edited offline) · conflict_tombstone_wins"
+2026-11-10T11:40:19.266Z PASS  g5-sync-conflict[360x800/light]: conflict count notice rendered  — "1 处冲突已按新时间戳获胜合并，请核对："
+2026-11-10T11:40:20.162Z PASS  g6-settings[360x800/light]: settings-surface heading "备份与恢复" rendered  — "备份与恢复"
+2026-11-10T11:40:20.165Z PASS  g6-settings[360x800/light]: data-portability card text non-empty  — "让本地数据更安心"
+2026-11-10T11:40:20.177Z PASS  g6-settings[360x800/light]: theme toggle rendered with real box (58x44)  — {"x":248,"y":-138,"width":58,"height":44}
+2026-11-10T11:40:20.206Z PASS  touch-targets[360x800/light]: all sidebar nav buttons >=44px (min measured 44px)  — 44x45,44x45,44x45,44x45
+2026-11-10T11:40:20.595Z PASS  touch-targets[360x800/light]: task check control >=44px (44x44)  — {"x":34,"y":644,"width":44,"height":44}
+2026-11-10T11:40:20.602Z PASS  touch-targets[360x800/light]: task row action >=44px (44x44)  — {"x":226,"y":644,"width":44,"height":44}
+2026-11-10T11:40:21.475Z PASS  g1-empty[360x800/light]: EmptyState "今天还没有任务" rendered, main area never blank  — "今天还没有任务"
+2026-11-10T11:40:22.000Z PASS  g2-empty[360x800/light]: projects EmptyState rendered  — "还没有项目"
+2026-11-10T11:40:23.154Z PASS  g3-error[360x800/light]: unknown deep link renders explicit error, never a blank main area  — "未找到该任务（可能已删除或尚未同步）： none-such-task"
+2026-11-10T11:40:23.728Z PASS  g4-empty[360x800/light]: episode EmptyState "还没有工作记录" rendered  — "还没有工作记录"
+2026-11-10T11:40:24.287Z PASS  g5-empty[360x800/light]: unpaired sync state "尚未配对" rendered  — "尚未配对"
+2026-11-10T11:40:24.812Z PASS  g6-empty[360x800/light]: settings surface still renders its card in a fresh profile  — "让本地数据更安心"
+2026-11-10T11:40:26.737Z PASS  theme-pixel[360x800/dark]: background sampled from screenshot pixels ({"r":23,"g":25,"b":30}) matches rendered CSS ({"root":"rgb(247, 246, 242)","body":"rgb(23, 25, 30)"})  — today default cell
+2026-11-10T11:40:26.843Z PASS  g1-today[360x800/dark]: region heading "今天，先完成重要的事。" rendered  — "今天，先完成重要的事。"
+2026-11-10T11:40:26.845Z PASS  g1-today[360x800/dark]: task card text non-empty  — "Review sync conflict notes"
+2026-11-10T11:40:27.414Z PASS  g3-task-detail[360x800/dark]: edit panel heading "编辑任务" rendered  — "编辑任务"
+2026-11-10T11:40:27.416Z PASS  g3-task-detail[360x800/dark]: task title carried into the panel, non-empty  — "Review sync conflict notes"
+2026-11-10T11:40:28.438Z PASS  g2-projects[360x800/dark]: region heading "项目" rendered  — "项目"
+2026-11-10T11:40:28.439Z PASS  g2-projects[360x800/dark]: project card name non-empty (CLI-seeded "Apollo Delivery")  — "Apollo Delivery0 项任务"
+2026-11-10T11:40:29.350Z PASS  g4-episode-handoff[360x800/dark]: region heading "工作历程" rendered  — "工作历程"
+2026-11-10T11:40:29.352Z PASS  g4-episode-handoff[360x800/dark]: CLI-gated episode note (goal/outcome/next) rendered on the card  — "goal: Wire the episode ledger into the web pull\noutcome: Web leg pulls work_epis"
+2026-11-10T11:40:29.354Z PASS  g4-episode-handoff[360x800/dark]: episode bound to its CLI-seeded task title  — "Handoff: continue API integration"
+2026-11-10T11:40:34.622Z PASS  g5-sync-conflict[360x800/dark]: region heading "与桌面同步" rendered  — "与桌面同步"
+2026-11-10T11:40:34.623Z PASS  g5-sync-conflict[360x800/dark]: real conflict verdict conflict_tombstone_wins surfaced in the UI  — "Conflict seed task (web edited offline) · conflict_tombstone_wins"
+2026-11-10T11:40:34.625Z PASS  g5-sync-conflict[360x800/dark]: conflict count notice rendered  — "1 处冲突已按新时间戳获胜合并，请核对："
+2026-11-10T11:40:35.502Z PASS  g6-settings[360x800/dark]: settings-surface heading "备份与恢复" rendered  — "备份与恢复"
+2026-11-10T11:40:35.504Z PASS  g6-settings[360x800/dark]: data-portability card text non-empty  — "让本地数据更安心"
+2026-11-10T11:40:35.516Z PASS  g6-settings[360x800/dark]: theme toggle rendered with real box (58x44)  — {"x":248,"y":-138,"width":58,"height":44}
+2026-11-10T11:40:35.541Z PASS  touch-targets[360x800/dark]: all sidebar nav buttons >=44px (min measured 44px)  — 44x45,44x45,44x45,44x45
+2026-11-10T11:40:35.940Z PASS  touch-targets[360x800/dark]: task check control >=44px (44x44)  — {"x":34,"y":644,"width":44,"height":44}
+2026-11-10T11:40:35.947Z PASS  touch-targets[360x800/dark]: task row action >=44px (44x44)  — {"x":226,"y":644,"width":44,"height":44}
+2026-11-10T11:40:36.819Z PASS  g1-empty[360x800/dark]: EmptyState "今天还没有任务" rendered, main area never blank  — "今天还没有任务"
+2026-11-10T11:40:37.375Z PASS  g2-empty[360x800/dark]: projects EmptyState rendered  — "还没有项目"
+2026-11-10T11:40:38.539Z PASS  g3-error[360x800/dark]: unknown deep link renders explicit error, never a blank main area  — "未找到该任务（可能已删除或尚未同步）： none-such-task"
+2026-11-10T11:40:39.094Z PASS  g4-empty[360x800/dark]: episode EmptyState "还没有工作记录" rendered  — "还没有工作记录"
+2026-11-10T11:40:39.654Z PASS  g5-empty[360x800/dark]: unpaired sync state "尚未配对" rendered  — "尚未配对"
+2026-11-10T11:40:40.198Z PASS  g6-empty[360x800/dark]: settings surface still renders its card in a fresh profile  — "让本地数据更安心"
+2026-11-10T11:40:40.504Z PASS  manifest: every captured cell recorded with viewport/theme/navPath/timestamp/build  — 48 cells
+2026-11-10T11:40:41.632Z PASS  cleanup: host stopped + scratch certs/db removed + all 3 ports verified closed  — {"stopped":true,"closed":[true,true,true]}
