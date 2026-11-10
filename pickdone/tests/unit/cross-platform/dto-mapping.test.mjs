@@ -103,3 +103,35 @@ test('no device-private filesystem path field is ever emitted by the mappers', (
   const json = JSON.stringify(taskToDto(row))
   assert.ok(!json.includes('secret.png'), 'local paths must not cross the wire')
 })
+
+// ---- G2 zone-2/zone-3 contract (v13, 2026-11-10): handoff targeting + actor provenance ----
+test('task DTO carries handoff targeting fields and round-trips them', () => {
+  const row = { id: 't-h', content: 'Handed off', updatedAt: 9, deleted: 0, deletedAt: 0, handoffTo: 'android-1', handoffFrom: 'win-b', handoffNote: 'context here', handoffAckedAt: 0 }
+  const dto = taskToDto(row)
+  assert.equal(dto.taskId, 't-h')
+  assert.equal(dto.handoffTo, 'android-1')
+  assert.equal(dto.handoffFrom, 'win-b')
+  assert.equal(dto.handoffNote, 'context here')
+  assert.equal(dto.handoffAckedAt, 0)
+  const back = taskFromDto(dto)
+  assert.equal(back.handoffTo, 'android-1')
+  assert.equal(back.handoffAckedAt, 0)
+})
+
+test('task DTO omits handoff keys entirely when the row has none (old payloads stay byte-compatible)', () => {
+  const dto = taskToDto({ id: 't-old', content: 'Plain', updatedAt: 1, deleted: 0, deletedAt: 0 })
+  for (const k of ['handoffTo', 'handoffFrom', 'handoffNote', 'handoffAckedAt']) {
+    assert.equal(Object.hasOwn(dto, k), false, `no fabricated ${k} key`)
+  }
+})
+
+test('episode DTO carries actor provenance (actorType/role) and round-trips it', () => {
+  const dto = episodeToDto({ id: 'e-ag', taskId: 't-h', startedAt: 1, endedAt: 0, note: 'working', actorType: 'agent', role: 'agent', deleted: 0, deletedAt: 0, updatedAt: 2 })
+  assert.equal(dto.actorType, 'agent')
+  assert.equal(dto.role, 'agent')
+  const back = episodeFromDto(dto)
+  assert.equal(back.actorType, 'agent')
+  assert.equal(back.role, 'agent')
+  const legacy = episodeToDto({ id: 'e-h', taskId: 't-h', startedAt: 1, endedAt: 2, note: '', deleted: 0, deletedAt: 0, updatedAt: 3 })
+  assert.equal(Object.hasOwn(legacy, 'actorType'), false, 'human episodes carry no fabricated actor key')
+})

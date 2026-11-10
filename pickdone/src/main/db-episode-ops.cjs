@@ -26,16 +26,23 @@ exports.episodePut = (db, ep = {}) => {
   }
   const id = ep.id != null && ep.id !== '' ? String(ep.id) : mintId('ep')
   const now = Date.now()
-  db.prepare(`INSERT INTO work_episodes (id, taskId, startedAt, endedAt, note, deleted, deletedAt, updatedAt)
-    VALUES (@id,@taskId,@startedAt,@endedAt,@note,0,0,@updatedAt)
+  // v13 (2026-11-10): actor provenance rides the put (G2 zone-3). A caller that omits the
+  // fields keeps the legacy NULL = human-episode semantics; a put is an id-referenced upsert,
+  // so an explicit NULL on an existing row also clears a stale value verbatim.
+  const actorType = ep.actorType != null && String(ep.actorType) !== '' ? String(ep.actorType) : null
+  const role = ep.role != null && String(ep.role) !== '' ? String(ep.role) : null
+  db.prepare(`INSERT INTO work_episodes (id, taskId, startedAt, endedAt, note, actorType, role, deleted, deletedAt, updatedAt)
+    VALUES (@id,@taskId,@startedAt,@endedAt,@note,@actorType,@role,0,0,@updatedAt)
     ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, startedAt=excluded.startedAt, endedAt=excluded.endedAt,
-      note=excluded.note, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
+      note=excluded.note, actorType=excluded.actorType, role=excluded.role, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
     .run({
       id,
       taskId: String(ep.taskId),
       startedAt: Number(ep.startedAt) || 0,
       endedAt: Number(ep.endedAt) || 0,
       note: ep.note != null ? String(ep.note) : null,
+      actorType,
+      role,
       updatedAt: Number(ep.updatedAt) > 0 ? Number(ep.updatedAt) : now
     })
   return id

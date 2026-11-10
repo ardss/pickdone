@@ -22,7 +22,11 @@ export const DTO_VERSION = 1
 export const TASK_DTO_FIELDS = [
   'id', 'content', 'description', 'categoryId', 'complete',
   'scheduledAt', 'scheduledDay', 'remindAt', 'deadlineTs',
-  'createdAt', 'updatedAt', 'deleted', 'deletedAt', 'syncAuthor', 'version'
+  'createdAt', 'updatedAt', 'deleted', 'deletedAt', 'syncAuthor', 'version',
+  // Handoff targeting (v13, G2 zone-2): the desktop's addressed-device fields ride the
+  // pull verbatim; rows without them (pre-v13, ordinary tasks) simply omit the keys —
+  // pickKnown only copies fields present on the row, so old payloads stay byte-compatible.
+  'handoffTo', 'handoffFrom', 'handoffNote', 'handoffAckedAt'
 ]
 
 export const CATEGORY_DTO_FIELDS = [
@@ -30,7 +34,11 @@ export const CATEGORY_DTO_FIELDS = [
 ]
 
 export const EPISODE_DTO_FIELDS = [
-  'id', 'taskId', 'startedAt', 'endedAt', 'note', 'deleted', 'deletedAt', 'updatedAt'
+  'id', 'taskId', 'startedAt', 'endedAt', 'note',
+  // Actor provenance (v13, G2 zone-3): 'agent' on either key marks an agent-worked episode;
+  // NULL/absent = legacy human episode. Never fabricated on the egress side.
+  'actorType', 'role',
+  'deleted', 'deletedAt', 'updatedAt'
 ]
 
 export const SOURCE_REF_DTO_FIELDS = [
