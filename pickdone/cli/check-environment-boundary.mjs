@@ -10,7 +10,11 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const rules = [
   ['machine-specific Windows path', /\b[A-Z]:[\\/](?:Users|AIControl|ZPROJECT|pickdone-drill|PickDone)(?:[\\/]|(?=['"\s]|$))/i],
   ['private LAN address', /\b(?:192\.168\.\d{1,3}\.\d{1,3}|10\.\d{1,3}\.\d{1,3}\.\d{1,3}|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3})\b/],
-  ['personal Windows computer name', /\bDESKTOP-[A-Z0-9-]{5,}\b/i],
+  // Machine-name rule: Windows auto-generated names are one alphanumeric token that
+  // always contains a digit after the vendor prefix. Requiring the digit (and banning
+  // '-' in the suffix) keeps real names detected while ordinary compound identifiers
+  // such as the mobile lane's desktop-contract module no longer false-positive.
+  ['personal Windows computer name', /\bDESKTOP-[A-Za-z0-9]*[0-9][A-Za-z0-9]*\b/],
   ['absolute personal home path', /\/(?:home|Users)\/[A-Za-z0-9._-]+\/[A-Za-z0-9._~/-]+/i]
 ]
 
