@@ -60,3 +60,15 @@
 [data-theme="dark"] .storage-pill.offline{background:#3a2410;color:#fbbf24}
 [data-theme="dark"] .sync-auto-note{color:#9ca3af}
 [data-theme="dark"] .sync-warn{background:#33270c;color:#fbbf24;border-color:#7a5b12}
+
+/* G2 screenshot-matrix audit (ux-contract-20261110 §6): on the 360px viewport every
+   interactive target must measure >=44x44 real rendered px (touch-target rule). */
+@media(max-width:560px){
+  .sidebar nav button{min-width:44px;min-height:44px}
+  .check{height:44px;width:44px;border-radius:12px}
+  .task-row{gap:10px;padding:12px 10px}
+  .text-button,.icon-button{min-height:44px;min-width:44px;display:inline-flex;align-items:center;justify-content:center}
+  .theme-toggle{min-height:44px;min-width:44px}
+  .quick-add .primary{min-height:44px}
+  .sync-card button{min-height:44px}
+}

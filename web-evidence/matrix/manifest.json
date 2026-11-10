@@ -1,0 +1,745 @@
+{
+  "generatedAt": "2026-11-10T11:40:40.501Z",
+  "cells": [
+    {
+      "file": "01-today--web--1280x800--light--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "sidebar > 今日任务"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--1280x800--light--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "今日任务",
+        "task card > 编辑"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--1280x800--light--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "sidebar > 项目",
+        "project card click"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--1280x800--light--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "sidebar > 工作历程"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--1280x800--light--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "offline edit on web (pushed on reconnect)",
+        "desktop tombstone (sqlite)",
+        "同步 > 拉取桌面数据"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--1280x800--light--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "deep link #/backup (side-bottom entry hidden <=850px)",
+        "topbar theme toggle"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "01-today--web--1280x800--light--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 今日任务 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--1280x800--light--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 项目 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--1280x800--light--error.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "error",
+      "navPath": [
+        "deep link #/task/<unknown id>"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--1280x800--light--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 工作历程 (no episodes)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--1280x800--light--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 同步 (unpaired)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--1280x800--light--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "deep link #/backup (fresh profile)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "01-today--web--1280x800--dark--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "sidebar > 今日任务"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--1280x800--dark--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "今日任务",
+        "task card > 编辑"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--1280x800--dark--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "sidebar > 项目",
+        "project card click"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--1280x800--dark--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "sidebar > 工作历程"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--1280x800--dark--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "offline edit on web (pushed on reconnect)",
+        "desktop tombstone (sqlite)",
+        "同步 > 拉取桌面数据"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--1280x800--dark--default.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "deep link #/backup (side-bottom entry hidden <=850px)",
+        "topbar theme toggle"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "01-today--web--1280x800--dark--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 今日任务 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--1280x800--dark--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 项目 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--1280x800--dark--error.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "error",
+      "navPath": [
+        "deep link #/task/<unknown id>"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--1280x800--dark--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 工作历程 (no episodes)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--1280x800--dark--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 同步 (unpaired)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--1280x800--dark--empty.png",
+      "client": "web",
+      "viewport": "1280x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "deep link #/backup (fresh profile)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "01-today--web--360x800--light--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "sidebar > 今日任务"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--360x800--light--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "今日任务",
+        "task card > 编辑"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--360x800--light--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "sidebar > 项目",
+        "project card click"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--360x800--light--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "sidebar > 工作历程"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--360x800--light--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "offline edit on web (pushed on reconnect)",
+        "desktop tombstone (sqlite)",
+        "同步 > 拉取桌面数据"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--360x800--light--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "default",
+      "navPath": [
+        "deep link #/backup (side-bottom entry hidden <=850px)",
+        "topbar theme toggle"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "01-today--web--360x800--light--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 今日任务 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--360x800--light--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 项目 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--360x800--light--error.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "error",
+      "navPath": [
+        "deep link #/task/<unknown id>"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--360x800--light--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 工作历程 (no episodes)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--360x800--light--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 同步 (unpaired)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--360x800--light--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "light",
+      "state": "empty",
+      "navPath": [
+        "deep link #/backup (fresh profile)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "01-today--web--360x800--dark--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "sidebar > 今日任务"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--360x800--dark--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "今日任务",
+        "task card > 编辑"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--360x800--dark--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "sidebar > 项目",
+        "project card click"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--360x800--dark--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "sidebar > 工作历程"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--360x800--dark--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "offline edit on web (pushed on reconnect)",
+        "desktop tombstone (sqlite)",
+        "同步 > 拉取桌面数据"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--360x800--dark--default.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "default",
+      "navPath": [
+        "deep link #/backup (side-bottom entry hidden <=850px)",
+        "topbar theme toggle"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "01-today--web--360x800--dark--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 今日任务 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "02-projects--web--360x800--dark--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 项目 (no data)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "03-task-detail--web--360x800--dark--error.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "error",
+      "navPath": [
+        "deep link #/task/<unknown id>"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "04-episode-handoff--web--360x800--dark--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 工作历程 (no episodes)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "05-sync-conflict--web--360x800--dark--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "fresh profile > 同步 (unpaired)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    },
+    {
+      "file": "06-settings--web--360x800--dark--empty.png",
+      "client": "web",
+      "viewport": "360x800@1",
+      "theme": "dark",
+      "state": "empty",
+      "navPath": [
+        "deep link #/backup (fresh profile)"
+      ],
+      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "build": {
+        "webVersion": "0.1.0",
+        "commit": "working-tree"
+      }
+    }
+  ]
+}
