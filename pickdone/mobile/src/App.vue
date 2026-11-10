@@ -1,13 +1,15 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { openRepository } from './repository'
 import { pairDesktop, createBridgeSession } from './sync/pair-client.js'
 import { mergePull, planPush, summarizePushResults } from './sync/sync-cycle.js'
+import { classifyFirstScreen } from './firstscreen.js'
 import copy from './i18n/zh-CN.js'
 import logoUrl from '../../assets/img/favicon.svg'
 import { PdActionButton, PdEmptyState, PdStatusChip, PdTaskCard, PdProjectCard, PdWorkEpisodeCard } from '../../shared/ui/index.js'
 
 const repo = ref(null)
+const booting = ref(true)
 const tasks = ref([])
 const projects = ref([])
 const episodes = ref([])
@@ -24,6 +26,27 @@ const todayTasks = computed(() => tasks.value.filter(task => !task.complete && (
 const completeTasks = computed(() => tasks.value.filter(task => task.complete).sort((a, b) => b.updatedAt - a.updatedAt))
 const sortedEpisodes = computed(() => [...episodes.value].sort((a, b) => b.startedAt - a.startedAt))
 
+// ---- G2 four-zone cockpit state (ux-contract §4/§5) ----
+const DEVICE_ID = 'android-1'
+const showAllPush = ref(false)
+const lastSyncAt = ref(Number(localStorage.getItem('pickdone.lastSyncAt') || 0))
+const online = ref(navigator.onLine)
+const goOnline = () => { online.value = true }
+const goOffline = () => { online.value = false }
+const cockPit = computed(() => classifyFirstScreen({
+  tasks: tasks.value,
+  episodes: episodes.value,
+  conflicts: syncConflicts.value,
+  syncError: lastSyncError.value,
+  lastSyncAt: lastSyncAt.value,
+  today,
+  deviceId: DEVICE_ID,
+  showAll: showAllPush.value,
+}))
+const lastSyncText = computed(() => cockPit.value.blocked.lastSyncAt
+  ? copy.lastSyncLabel + ' ' + new Date(cockPit.value.blocked.lastSyncAt).toLocaleString('zh-CN')
+  : copy.neverSynced)
+
 async function refresh() {
   tasks.value = await repo.value.tasks()
   projects.value = await repo.value.projects()
@@ -34,8 +57,28 @@ async function action(work) {
   try { await work(); await refresh() } catch (cause) { error.value = cause.message || String(cause) }
 }
 onMounted(async () => {
+  window.addEventListener('online', goOnline)
+  window.addEventListener('offline', goOffline)
   try { repo.value = await openRepository(); await refresh() } catch (cause) { error.value = cause.message || String(cause) }
+  booting.value = false
 })
+onUnmounted(() => {
+  window.removeEventListener('online', goOnline)
+  window.removeEventListener('offline', goOffline)
+})
+
+// ---- Pull-to-refresh: one pass refreshes all four zone inputs (G8) ----
+const ptrActive = ref(false)
+let ptrStartY = 0
+function ptrTouchStart(event) { ptrStartY = event.touches[0].clientY }
+function ptrTouchMove(event) {
+  ptrActive.value = window.scrollY <= 0 && event.touches[0].clientY - ptrStartY > 70
+}
+function ptrTouchEnd() {
+  if (!ptrActive.value) return
+  ptrActive.value = false
+  action(refresh)
+}
 
 // ---- Paired-desktop sync. Credentials live IN MEMORY ONLY (cleared when the app restarts);
 // ---- OS secure storage (Keystore) is the follow-up home. The endpoint is never guessed: it
@@ -46,6 +89,7 @@ const syncCreds = ref(null)
 const syncConflicts = ref([])
 const syncBusy = ref(false)
 const syncNotice = ref('')
+const lastSyncError = ref('')
 function trimSyncUrl() { return syncEndpoint.value.trim().replace(/\/+$/, '') }
 async function syncAction(work) {
   error.value = ''; syncNotice.value = ''; syncConflicts.value = []
@@ -54,8 +98,14 @@ async function syncAction(work) {
     const conflicts = await work()
     await refresh()
     syncConflicts.value = conflicts || []
+    lastSyncError.value = ''
+    lastSyncAt.value = Date.now()
+    localStorage.setItem('pickdone.lastSyncAt', String(lastSyncAt.value))
     syncNotice.value = conflicts?.length ? (conflicts.length + ' ' + copy.syncConflicts) : copy.syncDone
-  } catch (cause) { error.value = cause.message || String(cause) }
+  } catch (cause) {
+    error.value = cause.message || String(cause)
+    lastSyncError.value = error.value
+  }
   finally { syncBusy.value = false }
 }
 async function doSyncPair() {
@@ -87,6 +137,10 @@ async function doSyncPush() {
     const result = await session.push(ops)
     return summarizePushResults(result.results).conflicts
   })
+}
+async function retryLastSync() {
+  if (!syncCreds.value || !trimSyncUrl()) { syncNotice.value = copy.syncNotPaired; return }
+  await doSyncPull()
 }
 function newTask() {
   taskForm.value = { id: '', content: '', description: '', categoryId: 0, scheduledDay: today, complete: 0 }
@@ -120,25 +174,61 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
 </script>
 
 <template>
-  <div class="app-shell">
+  <div class="app-shell" @touchstart="ptrTouchStart" @touchmove="ptrTouchMove" @touchend="ptrTouchEnd">
     <header class="masthead">
       <div class="brand"><img class="brand-mark" :src="logoUrl" alt="" /><span>PickDone</span></div>
       <PdStatusChip class="local-badge" tone="brand">{{ copy.localRecord }}</PdStatusChip>
     </header>
+    <div v-if="!online" class="offline-banner" role="status">{{ copy.offlineBanner }}</div>
+    <div v-if="ptrActive" class="ptr-indicator" aria-hidden="true">↓</div>
     <main>
+      <div v-if="booting" class="cockpit-skeleton" aria-hidden="true">
+        <div class="skel-line w60"></div><div class="skel-line w90"></div><div class="skel-line w80"></div><div class="skel-line w40"></div>
+      </div>
+      <template v-else>
       <div v-if="error" class="error" role="alert">{{ error }}</div>
       <section v-if="tab === 'today'">
-        <div class="eyebrow">{{ copy.today }} · {{ dateTitle }}</div>
+        <div class="eyebrow">{{ copy.cockpitEyebrow }} · {{ dateTitle }}</div>
         <h1>{{ copy.todaySlogan }}</h1>
-        <p class="intro">{{ copy.todayIntroStart }} {{ todayTasks.length }} {{ copy.todayIntroEnd }}</p>
         <PdActionButton class="primary-add" block @click="newTask"><span>＋</span> {{ copy.addTask }}</PdActionButton>
-        <div class="section-heading"><h2>{{ copy.pending }}</h2><PdStatusChip>{{ todayTasks.length }}</PdStatusChip></div>
-        <PdEmptyState v-if="!todayTasks.length" class="empty" :description="copy.todayEmpty" />
-        <PdTaskCard v-for="task in todayTasks" :key="task.id" class="task-card">
-          <button class="check" type="button" :aria-label="copy.complete + task.content" @click="toggleTask(task)"></button>
-          <button class="task-main" type="button" @click="editTask(task)"><strong>{{ task.content }}</strong><small>{{ projectNameById(task.categoryId) }}<template v-if="task.description"> · {{ task.description }}</template></small></button>
-          <PdActionButton class="mini" tone="quiet" type="button" :aria-label="copy.record + task.content + copy.recordSuffix" @click="newEpisode(task)">◷</PdActionButton>
+
+        <!-- Zone 1: push-now (待推进) -->
+        <div class="zone-heading"><h2>{{ copy.zonePush }}</h2><PdStatusChip>{{ cockPit.push.total }}</PdStatusChip></div>
+        <PdEmptyState v-if="!cockPit.push.total" class="empty" :description="copy.pushEmpty" />
+        <PdTaskCard v-for="row in cockPit.push.rows" :key="row.id" class="task-card zone-row">
+          <button class="check" type="button" :aria-label="copy.complete + row.task.content" @click="toggleTask(row.task)"></button>
+          <button class="task-main" type="button" @click="editTask(row.task)"><strong>{{ row.task.content }}</strong><small><span class="project-dot inline-dot" :style="{ background: projects.find(p => p.id === row.task.categoryId)?.color || 'var(--pd-muted)' }"></span>{{ projectNameById(row.task.categoryId) }}</small><small v-if="row.nextAction" class="next-action">{{ copy.nextActionLabel }}：{{ row.nextAction }}</small></button>
+          <PdActionButton class="mini" tone="quiet" type="button" :aria-label="copy.record + row.task.content + copy.recordSuffix" @click="newEpisode(row.task)">◷</PdActionButton>
         </PdTaskCard>
+        <button v-if="cockPit.push.hidden" class="zone-showall" type="button" @click="showAllPush = true">{{ copy.zoneShowAll }} ({{ cockPit.push.total }})</button>
+        <button v-else-if="showAllPush && cockPit.push.total > 5" class="zone-showall" type="button" @click="showAllPush = false">{{ copy.zoneShowLess }}</button>
+
+        <!-- Zone 2: waiting-on-me (待我接手) -->
+        <div class="zone-heading"><h2>{{ copy.zoneWaiting }}</h2><PdStatusChip>{{ cockPit.waiting.rows.length }}</PdStatusChip></div>
+        <p v-if="!cockPit.waiting.rows.length" class="zone-zero">{{ copy.waitingEmpty }}<span class="zone-gap-note">{{ copy.waitingGapNote }}</span></p>
+        <PdTaskCard v-for="row in cockPit.waiting.rows" :key="row.id" class="task-card zone-row">
+          <span class="project-dot" :style="{ background: 'var(--pd-brand)' }"></span>
+          <button class="task-main" type="button" @click="editTask(row.task)"><strong>{{ row.task.content }}</strong><small>{{ copy.zoneWaiting }} ← {{ row.from }}</small><small v-if="row.note" class="next-action">{{ row.note }}</small></button>
+          <PdActionButton class="mini takeover" type="button" @click="editTask(row.task)">{{ copy.takeOver }}</PdActionButton>
+        </PdTaskCard>
+
+        <!-- Zone 3: agent-working (Agent 处理中) -->
+        <div class="zone-heading"><h2>{{ copy.zoneAgent }}</h2><PdStatusChip>{{ cockPit.agent.rows.length }}</PdStatusChip></div>
+        <p v-if="!cockPit.agent.rows.length" class="zone-zero">{{ copy.agentEmpty }}</p>
+        <button v-for="row in cockPit.agent.rows" :key="row.id" class="agent-row" type="button" @click="tab = 'history'">
+          <span class="agent-dot" aria-hidden="true">◆</span>
+          <span class="agent-main"><strong>{{ tasks.find(task => task.id === row.episode.taskId)?.content || copy.removedTask }}</strong><small>{{ row.agentId }} · {{ copy.agentStarted }} {{ new Date(row.startedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}<template v-if="row.note"> · {{ row.note }}</template></small></span>
+          <span class="agent-open">{{ copy.openTimeline }}</span>
+        </button>
+
+        <!-- Zone 4: blocked/conflict (阻塞/冲突) -->
+        <div class="zone-heading"><h2>{{ copy.zoneBlocked }}</h2><PdStatusChip :tone="cockPit.blocked.rows.length ? 'danger' : 'brand'">{{ cockPit.blocked.rows.length }}</PdStatusChip></div>
+        <p v-if="cockPit.blocked.healthy" class="zone-zero healthy">✓ {{ copy.noBlockers }} {{ lastSyncText }}</p>
+        <div v-for="row in cockPit.blocked.rows" :key="row.id" class="blocked-row">
+          <span class="blocker-text">{{ row.kind === 'conflict' ? row.title + '（' + row.verdict + '）' : row.title }}</span>
+          <PdActionButton class="mini blocker-action" tone="quiet" type="button" @click="row.action === 'resolve-conflict' ? (tab = 'sync') : retryLastSync()">{{ row.action === 'resolve-conflict' ? copy.resolveConflict : copy.retrySync }}</PdActionButton>
+        </div>
+
         <div v-if="completeTasks.length" class="section-heading completed-heading"><h2>{{ copy.completed }}</h2><PdStatusChip>{{ completeTasks.length }}</PdStatusChip></div>
         <PdTaskCard v-for="task in completeTasks.slice(0, 10)" :key="task.id" class="task-card done" :done="true">
           <button class="check checked" type="button" :aria-label="copy.restore + task.content" @click="toggleTask(task)">✓</button>
@@ -183,6 +273,7 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
           <small>{{ new Date(episode.startedAt).toLocaleString('zh-CN') }} — {{ new Date(episode.endedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) }}</small>
         </PdWorkEpisodeCard>
       </section>
+      </template>
     </main>
     <nav class="bottom-nav" :aria-label="copy.nav">
       <button :class="{ active: tab === 'today' }" @click="tab = 'today'"><span>◫</span>{{ copy.today }}</button>

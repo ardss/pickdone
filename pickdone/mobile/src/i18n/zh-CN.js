@@ -62,5 +62,29 @@ export default {
   syncNotPaired: '尚未配对',
   syncDone: '同步完成',
   syncConflicts: '处冲突已按新时间戳获胜合并，请核对：',
-  syncInvalidPayload: '配对信息不是有效的 JSON（需要 challengeId、code、deviceId）'
+  syncInvalidPayload: '配对信息不是有效的 JSON（需要 challengeId、code、deviceId）',
+
+  // ---- G2 four-zone first screen (ux-contract §4) ----
+  cockpitEyebrow: '工作台',
+  zonePush: '待推进',
+  zoneWaiting: '待我接手',
+  zoneAgent: 'Agent 处理中',
+  zoneBlocked: '阻塞 / 冲突',
+  zoneShowAll: '显示全部',
+  zoneShowLess: '收起',
+  pushEmpty: '今天没有待推进的任务。',
+  nextActionLabel: '下一步',
+  takeOver: '接手',
+  waitingEmpty: '暂无指派到本设备的交接。',
+  waitingGapNote: '交接定向字段尚未进入桥接契约（后端缺口），有数据后会显示在这里。',
+  agentEmpty: '当前没有进行中的 Agent 任务。',
+  agentStarted: '开始于',
+  openTimeline: '查看历程',
+  noBlockers: '无阻塞，同步健康。',
+  lastSyncLabel: '上次同步',
+  neverSynced: '尚未同步',
+  resolveConflict: '去处理冲突',
+  retrySync: '重试同步',
+  offlineBanner: '离线 — 改动已保存在本机，恢复联网后同步。',
+  queuedBadge: '待同步'
 }
