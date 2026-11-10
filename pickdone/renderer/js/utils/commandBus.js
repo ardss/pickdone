@@ -57,7 +57,12 @@ export const VERB_TO_OP = {
   'source.put': 'sourcePut',
   'source.removeByIds': 'sourceRemoveByIds',
   'tasksource.put': 'taskSourcePut',
-  'tasksource.remove': 'taskSourceRemove'
+  'tasksource.remove': 'taskSourceRemove',
+  // pd20 S1 closure (migration v14): finding/decision writes ride the same bus door
+  'finding.put': 'findingPut',
+  'finding.removeIds': 'findingRemoveIds',
+  'decision.put': 'decisionPut',
+  'decision.removeIds': 'decisionRemoveIds'
 }
 
 function legacyDbCall (op, params) {

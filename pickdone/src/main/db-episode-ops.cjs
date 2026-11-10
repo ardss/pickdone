@@ -257,6 +257,10 @@ exports.sourceAllRows = db => rowAll(db, 'source_refs')
 exports.sourceTombstones = db => rowTombstones(db, 'source_refs')
 exports.taskSourceAllRows = db => rowAll(db, 'task_source_links')
 exports.taskSourceTombstones = db => rowTombstones(db, 'task_source_links')
+exports.findingAllRows = db => rowAll(db, 'work_findings')
+exports.findingTombstones = db => rowTombstones(db, 'work_findings')
+exports.decisionAllRows = db => rowAll(db, 'work_decisions')
+exports.decisionTombstones = db => rowTombstones(db, 'work_decisions')
 
 // Pair lookups for the sync-apply pair-collapse rule (see sync-apply.js): a peer source/link
 // row whose (providerId, externalId) / (taskId, sourceRefId) pair already exists locally under
@@ -280,4 +284,153 @@ function removeByIds (db, table, ids, opts = {}) {
   }))
   tr()
   return changed
+}
+
+// ---- work_findings / work_decisions (pd20 S1 closure, migration v14, 2026-11-10) ----
+// The two mission §04 entities v13 left out. Same family doctrine as episode.role /
+// source_refs.level: an out-of-family enum value stores NULL (a caller bug is not a fact),
+// list-shaped columns store a JSON array or NULL (never a fabricated shape).
+//
+// THE STORAGE RULE (mission: "禁止把猜测变成验收结论" — a guess must not become an acceptance
+// conclusion): a finding whose verificationLevel is 'speculation' can never persist with
+// status 'confirmed' — findingPut normalizes that combination to 'open'. An observed finding
+// MAY be confirmed, and a same-id put can correct the level (speculation → observed), which
+// is the honest path from a guess to a verified conclusion.
+const KNOWN_CONFIDENCE = new Set(['high', 'medium', 'low'])
+const KNOWN_VLEVEL = new Set(['observed', 'inferred', 'speculation'])
+const KNOWN_FSTATUS = new Set(['open', 'confirmed', 'retracted'])
+
+const famOrNull = (set, v) => (v != null && set.has(String(v))) ? String(v) : null
+
+// JSON-array-or-NULL column codec: only an array of string-able scalars persists (as JSON);
+// anything else — a bare string, a number, garbage — stores NULL. Round-trips verbatim.
+const jsonArrOrNull = v => {
+  if (!Array.isArray(v)) return null
+  const clean = v.filter(x => x != null && typeof x !== 'object').map(String)
+  return clean.length ? JSON.stringify(clean) : null
+}
+const parseJsonArr = s => {
+  if (s == null) return []
+  try { const v = JSON.parse(s); return Array.isArray(v) ? v.map(String) : [] } catch { return [] }
+}
+
+exports.findingPut = (db, f = {}) => {
+  if (!f || f.taskId == null || f.taskId === '') {
+    throw new Error('[db-episode-ops] findingPut: taskId is required')
+  }
+  if (f.statement == null || String(f.statement).trim() === '') {
+    throw new Error('[db-episode-ops] findingPut: statement is required (an empty fact is not a fact)')
+  }
+  const id = f.id != null && f.id !== '' ? String(f.id) : mintId('fnd')
+  const now = Date.now()
+  const confidence = famOrNull(KNOWN_CONFIDENCE, f.confidence)
+  const verificationLevel = famOrNull(KNOWN_VLEVEL, f.verificationLevel)
+  let status = famOrNull(KNOWN_FSTATUS, f.status)
+  // THE STORAGE RULE: speculation never persists as confirmed. An out-of-family status on a
+  // speculation stays NULL (the caller bug is not papered over with a family member).
+  if (verificationLevel === 'speculation' && status === 'confirmed') status = 'open'
+  db.prepare(`INSERT INTO work_findings (id, taskId, statement, confidence, verificationLevel, sourceRefs, createdBy, status, ts, deleted, deletedAt, updatedAt)
+    VALUES (@id,@taskId,@statement,@confidence,@verificationLevel,@sourceRefs,@createdBy,@status,@ts,0,0,@updatedAt)
+    ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, statement=excluded.statement, confidence=excluded.confidence,
+      verificationLevel=excluded.verificationLevel, sourceRefs=excluded.sourceRefs, createdBy=excluded.createdBy,
+      status=excluded.status, ts=excluded.ts, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
+    .run({
+      id,
+      taskId: String(f.taskId),
+      statement: String(f.statement),
+      confidence,
+      verificationLevel,
+      sourceRefs: jsonArrOrNull(f.sourceRefs),
+      createdBy: f.createdBy != null ? String(f.createdBy) : null,
+      status,
+      ts: Number(f.ts) > 0 ? Number(f.ts) : now,
+      updatedAt: Number(f.updatedAt) > 0 ? Number(f.updatedAt) : now
+    })
+  return id
+}
+
+exports.findingRemoveIds = (db, ids, opts = {}) => removeByIds(db, 'work_findings', ids, opts)
+
+// Read-side view model (EditPanelWork Finding block + CLI list-finding + handoff export):
+// live rows of one task, oldest ts first (chronological like the episodes). NULL family
+// values read honestly at the view layer — 'unknown', never a fabricated family member.
+// Read-only → no manifest row; whitelisted in handlers/todo.js (queryEpisodesByTask class).
+exports.queryFindingsByTask = (db, taskId) => {
+  if (taskId == null || taskId === '') return []
+  return db.prepare(
+    'SELECT id, statement, confidence, verificationLevel, sourceRefs, createdBy, status, ts' +
+    ' FROM work_findings WHERE taskId = @taskId AND deleted = 0 ORDER BY ts ASC, id ASC'
+  ).all({ taskId: String(taskId) }).map(r => ({
+    findingId: r.id,
+    statement: r.statement || '',
+    confidence: KNOWN_CONFIDENCE.has(String(r.confidence)) ? String(r.confidence) : 'unknown',
+    verificationLevel: KNOWN_VLEVEL.has(String(r.verificationLevel)) ? String(r.verificationLevel) : 'unknown',
+    sourceRefs: parseJsonArr(r.sourceRefs),
+    createdBy: r.createdBy || '',
+    status: KNOWN_FSTATUS.has(String(r.status)) ? String(r.status) : (r.status == null ? 'open' : 'unknown'),
+    ts: r.ts || 0
+  }))
+}
+
+exports.decisionPut = (db, dec = {}) => {
+  if (!dec || dec.taskId == null || dec.taskId === '') {
+    throw new Error('[db-episode-ops] decisionPut: taskId is required')
+  }
+  if (dec.choice == null || String(dec.choice).trim() === '') {
+    throw new Error('[db-episode-ops] decisionPut: choice is required (an empty choice is not a decision)')
+  }
+  const id = dec.id != null && dec.id !== '' ? String(dec.id) : mintId('dec')
+  const now = Date.now()
+  db.prepare(`INSERT INTO work_decisions (id, taskId, choice, alternatives, tradeoffs, decider, rationale, relatedFindings, supersedes, ts, deleted, deletedAt, updatedAt)
+    VALUES (@id,@taskId,@choice,@alternatives,@tradeoffs,@decider,@rationale,@relatedFindings,@supersedes,@ts,0,0,@updatedAt)
+    ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, choice=excluded.choice, alternatives=excluded.alternatives,
+      tradeoffs=excluded.tradeoffs, decider=excluded.decider, rationale=excluded.rationale,
+      relatedFindings=excluded.relatedFindings, supersedes=excluded.supersedes, ts=excluded.ts,
+      deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
+    .run({
+      id,
+      taskId: String(dec.taskId),
+      choice: String(dec.choice),
+      alternatives: jsonArrOrNull(dec.alternatives),
+      tradeoffs: jsonArrOrNull(dec.tradeoffs),
+      decider: dec.decider != null ? String(dec.decider) : null,
+      rationale: dec.rationale != null ? String(dec.rationale) : null,
+      relatedFindings: jsonArrOrNull(dec.relatedFindings),
+      supersedes: dec.supersedes != null && dec.supersedes !== '' ? String(dec.supersedes) : null,
+      ts: Number(dec.ts) > 0 ? Number(dec.ts) : now,
+      updatedAt: Number(dec.updatedAt) > 0 ? Number(dec.updatedAt) : now
+    })
+  return id
+}
+
+exports.decisionRemoveIds = (db, ids, opts = {}) => removeByIds(db, 'work_decisions', ids, opts)
+
+// Read-side view model: live decisions of one task, oldest ts first. The reverse supersede
+// relation (supersededBy) is computed HERE from the LIVE rows of the same task — a tombstoned
+// successor no longer counts as superseding (the revocation history stays honest at read time).
+exports.queryDecisionsByTask = (db, taskId) => {
+  if (taskId == null || taskId === '') return []
+  const rows = db.prepare(
+    'SELECT id, choice, alternatives, tradeoffs, decider, rationale, relatedFindings, supersedes, ts' +
+    ' FROM work_decisions WHERE taskId = @taskId AND deleted = 0 ORDER BY ts ASC, id ASC'
+  ).all({ taskId: String(taskId) })
+  const supersededBy = new Map()
+  for (const r of rows) {
+    if (r.supersedes != null) {
+      if (!supersededBy.has(r.supersedes)) supersededBy.set(r.supersedes, [])
+      supersededBy.get(r.supersedes).push(r.id)
+    }
+  }
+  return rows.map(r => ({
+    decisionId: r.id,
+    choice: r.choice || '',
+    alternatives: parseJsonArr(r.alternatives),
+    tradeoffs: parseJsonArr(r.tradeoffs),
+    decider: r.decider || '',
+    rationale: r.rationale || '',
+    relatedFindings: parseJsonArr(r.relatedFindings),
+    supersedes: r.supersedes || null,
+    supersededBy: supersededBy.get(r.id) || null,
+    ts: r.ts || 0
+  }))
 }

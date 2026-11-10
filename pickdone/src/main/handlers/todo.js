@@ -105,7 +105,14 @@ module.exports = function todoHandlers (ctx) {
     'queryEpisodesByCategory',
     // pd20 (2026-11-03): the EditPanelWork 'continue work' forms write episodes + source links
     // through the SAME bus door — the six domain writes are non-internal manifest rows now.
-    'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove'
+    'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove',
+    // pd20 S1 closure (migration v14): the EditPanelWork finding/decision forms write through
+    // the SAME bus door — the four domain writes are non-internal manifest rows (episode-family class).
+    'findingPut', 'findingRemoveIds', 'decisionPut', 'decisionRemoveIds',
+    // queryFindingsByTask / queryDecisionsByTask (pd20 S1 closure): read-only finding/decision
+    // view models for the EditPanelWork blocks + handoff (impl db-episode-ops.cjs; same
+    // read-only class as queryEpisodesByTask — any window, no manifest row)
+    'queryFindingsByTask', 'queryDecisionsByTask'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —

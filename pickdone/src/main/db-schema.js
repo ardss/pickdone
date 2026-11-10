@@ -190,6 +190,45 @@ CREATE TABLE IF NOT EXISTS task_source_links (
   UNIQUE (taskId, sourceRefId)
 );
 CREATE INDEX IF NOT EXISTS idx_task_source_links_task ON task_source_links (taskId);
-CREATE INDEX IF NOT EXISTS idx_task_source_links_ref ON task_source_links (sourceRefId);`
+CREATE INDEX IF NOT EXISTS idx_task_source_links_ref ON task_source_links (sourceRefId);
+-- Work findings (pd20 S1 closure, migration v14 — v8-style dual manifest: fresh databases get
+-- the table from SCHEMA, upgrades from the v14 migration; the two DDL copies must stay
+-- column-identical, asserted by pd20-finding-decision.test.mjs). Family columns
+-- (confidence/verificationLevel/status) are NULLable TEXT: an out-of-family value stores NULL,
+-- never fabricated (v13 role doctrine); list columns are JSON arrays or NULL.
+CREATE TABLE IF NOT EXISTS work_findings (
+  id                TEXT PRIMARY KEY,
+  taskId            TEXT NOT NULL,
+  statement         TEXT NOT NULL,
+  confidence        TEXT,
+  verificationLevel TEXT,
+  sourceRefs        TEXT,
+  createdBy         TEXT,
+  status            TEXT,
+  ts                INTEGER NOT NULL DEFAULT 0,
+  deleted           INTEGER NOT NULL DEFAULT 0,
+  deletedAt         INTEGER NOT NULL DEFAULT 0,
+  updatedAt         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_work_findings_task ON work_findings (taskId, ts);
+-- Work decisions (pd20 S1 closure, migration v14 — same dual-manifest doctrine as
+-- work_findings above). supersedes carries the revocable decision it replaces (verbatim id);
+-- the reverse relation (supersededBy) is computed at read time from live rows.
+CREATE TABLE IF NOT EXISTS work_decisions (
+  id              TEXT PRIMARY KEY,
+  taskId          TEXT NOT NULL,
+  choice          TEXT NOT NULL,
+  alternatives    TEXT,
+  tradeoffs       TEXT,
+  decider         TEXT,
+  rationale       TEXT,
+  relatedFindings TEXT,
+  supersedes      TEXT,
+  ts              INTEGER NOT NULL DEFAULT 0,
+  deleted         INTEGER NOT NULL DEFAULT 0,
+  deletedAt       INTEGER NOT NULL DEFAULT 0,
+  updatedAt       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_work_decisions_task ON work_decisions (taskId, ts);`
 
 module.exports = { SCHEMA }

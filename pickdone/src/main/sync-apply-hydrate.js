@@ -30,7 +30,10 @@ const SYNCABLE_ENTITIES = new Set(['todo', 'setting', 'tomato', 'category', 'pla
   // PD20 (2026-11-05): work-episode / source-ref / task-source-link rows sync (cross-device
   // handoff; manifest rows carry the full-sync flag). `file`-provider source refs stay
   // machine-local (isMachineLocalSourceRef gate below and in sync-apply.js).
-  'episode', 'source', 'tasksource'])
+  'episode', 'source', 'tasksource',
+  // pd20 S1 closure (migration v14): finding/decision rows sync the same full-row doctrine
+  // (mission §04 — the facts and the choices must survive a device handoff like episodes do).
+  'finding', 'decision'])
 // settings_rows keys holding password/question CIPHERTEXT — never egress, never ingress (round-3).
 const SECURITY_LOCK_KEY = /^securityLock/
 
@@ -84,6 +87,8 @@ function createHydrationCache (state) {
     episode: id => load('episode', 'episodeAllRows', r => String(r.id)).get(String(id)),
     source: id => load('source', 'sourceAllRows', r => String(r.id)).get(String(id)),
     tasksource: id => load('tasksource', 'taskSourceAllRows', r => String(r.id)).get(String(id)),
+    finding: id => load('finding', 'findingAllRows', r => String(r.id)).get(String(id)),
+    decision: id => load('decision', 'decisionAllRows', r => String(r.id)).get(String(id)),
     plan: id => load('plan', 'planAll', r => String(r.id)).get(String(id)),
     filter: id => load('filter', 'filterList', r => String(r.id)).get(String(id)),
     // M3 (2026-09-20): tombstone reads — a LOCALLY deleted plan/filter must take part in inbound
@@ -194,7 +199,7 @@ function hydrateRow (state, ptr, cache) {
     if (p.deleted || p.deletedAt) return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: true, deletedAt: p.deletedAt || ptr.ts, data: null }
     return { ...base, updatedAt: p.updatedAt || ptr.ts, deleted: false, deletedAt: 0, data: p }
   }
-    if (ptr.entity === 'episode' || ptr.entity === 'source' || ptr.entity === 'tasksource') {
+    if (ptr.entity === 'episode' || ptr.entity === 'source' || ptr.entity === 'tasksource' || ptr.entity === 'finding' || ptr.entity === 'decision') {
     // PD20 (2026-11-05): category-doctrine hydration on the raw row tables (tombstones included).
     // A pointer whose row is gone locally hydrates as a ptr.ts-age tombstone (peer deletion of a
     // row we purged); a row-PRESENT tombstone carries its honest deletedAt/updatedAt (D13 rule).

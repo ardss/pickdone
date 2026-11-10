@@ -144,6 +144,13 @@ const COMMANDS = {
   // explicit age (sync-apply parity).
   'episode.put':        { entity: 'episode', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'episodePut' },
   'episode.removeIds':  { entity: 'episode', verb: 'removeIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'episodeRemoveIds' },
+  // pd20 S1 closure (migration v14): Finding/Decision ride the same full-sync row contract.
+  // Cross-entity sync ingress (sync-apply hydrate lists) stays the S2 transport line's scope —
+  // these rows make the bus door valid locally (manifest validation + oplog capture) today.
+  'finding.put':        { entity: 'finding', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'findingPut' },
+  'finding.removeIds':  { entity: 'finding', verb: 'removeIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'findingRemoveIds' },
+  'decision.put':       { entity: 'decision', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'decisionPut' },
+  'decision.removeIds': { entity: 'decision', verb: 'removeIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'decisionRemoveIds' },
   'source.put':         { entity: 'source', verb: 'put', sync: 'full', lwwField: 'updatedAt', tombstone: null, op: 'sourcePut' },
   'source.removeByIds': { entity: 'source', verb: 'removeByIds', sync: 'full', lwwField: 'updatedAt', tombstone: 'pointer', op: 'sourceRemoveByIds' },
   // Note: the task-source entity key is ALL-LOWERCASE (`tasksource.*`) per the manifest's

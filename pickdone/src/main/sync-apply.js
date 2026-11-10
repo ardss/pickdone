@@ -260,7 +260,7 @@ function applyRowInner (state, incoming) {
     } else {
       localRow = { updatedAt: tsMap.get(incoming.id) || 0, deleted: false, deletedAt: 0, data: { key: incoming.id, value: localVal } }
     }
-  } else if (entity === 'episode' || entity === 'source' || entity === 'tasksource') {
+  } else if (entity === 'episode' || entity === 'source' || entity === 'tasksource' || entity === 'finding' || entity === 'decision') {
     // PD20 (2026-11-05): category-doctrine local lookup — the raw row tables carry real
     // updatedAt/deleted/deletedAt columns (episodeAllRows/sourceAllRows/taskSourceAllRows), so
     // a live row AND a locally tombstoned row both take part in LWW with their honest ages.
@@ -306,7 +306,7 @@ function applyRowInner (state, incoming) {
   // tombstone instead of resurrecting.
   // S4: this keep used to be completely silent — record the explicit ruling + surface it
   // (flag-gated; flag off → byte-identical silence).
-  if ((entity === 'plan' || entity === 'filter' || entity === 'episode' || entity === 'source' || entity === 'tasksource') && localRow && localRow.deleted &&
+  if ((entity === 'plan' || entity === 'filter' || entity === 'episode' || entity === 'source' || entity === 'tasksource' || entity === 'finding' || entity === 'decision') && localRow && localRow.deleted &&
       incoming && !incoming.deleted && stampNum(localRow.deletedAt) >= stampNum(incoming.updatedAt)) {
     // W8 fix (2026-10-25): the guard was strict `>`, so an EXACT-STAMP tie (deletedAt ==
     // updatedAt — the peer edited at the same millisecond it (or a peer) deleted) fell through to
@@ -632,15 +632,15 @@ function applyRowInner (state, incoming) {
       if (localRow) busWrite(state, 'filterDelete', [Number(incoming.id), { deletedAt: winner.deletedAt || incoming.deletedAt, updatedAt: winner.updatedAt }])
       else return false
     } else state.pendingWrites.filters.push({ ...winner.data, id: Number(incoming.id) }) // bulk-buffered
-  } else if (entity === 'episode' || entity === 'source' || entity === 'tasksource') {
+  } else if (entity === 'episode' || entity === 'source' || entity === 'tasksource' || entity === 'finding' || entity === 'decision') {
     // PD20 (2026-11-05): cross-device handoff rows land through their regular bus commands
     // (episode.put / source.put / tasksource.put + the tombstone removes). Volume is low
     // (handoff history per task), so direct per-row writes — no bulk buffer needed. The put
     // ops preserve an explicit updatedAt verbatim (wire-carried LWW age survives the hop),
     // and the tombstone removes accept {id, deletedAt, updatedAt} stamps (R7 P1-2 doctrine:
     // no local re-stamp, no echo bounce).
-    const putCmd = entity === 'episode' ? 'episodePut' : entity === 'source' ? 'sourcePut' : 'taskSourcePut'
-    const removeCmd = entity === 'episode' ? 'episodeRemoveIds' : entity === 'source' ? 'sourceRemoveByIds' : 'taskSourceRemove'
+    const putCmd = { episode: 'episodePut', source: 'sourcePut', tasksource: 'taskSourcePut', finding: 'findingPut', decision: 'decisionPut' }[entity]
+    const removeCmd = { episode: 'episodeRemoveIds', source: 'sourceRemoveByIds', tasksource: 'taskSourceRemove', finding: 'findingRemoveIds', decision: 'decisionRemoveIds' }[entity]
     if (winner.deleted && !winner.data) {
       // Ghost-tombstone guard (plan doctrine): a peer deletion of a row we never had applies
       // as a no-op (watermark advances) without materializing a content-empty junk row.

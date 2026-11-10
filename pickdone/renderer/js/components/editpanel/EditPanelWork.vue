@@ -68,6 +68,99 @@
           </div>
         </div>
       </div>
+      <!-- pd20 S1 closure (migration v14): the Finding block — observed facts with an honest
+           confidence/verification display ('unknown' = never fabricated). Writes ride the same
+           bus door (finding.put / finding.removeIds). -->
+      <div class="ep-work-block" data-block="findings">
+        <div class="ep-work-label">{{ $t('statsJ.EditPanel.workFindingTitle') }}</div>
+        <div v-if="findings.length" class="ep-work-list">
+          <div v-for="f in findings" :key="f.findingId" class="ep-work-row" :data-finding-id="f.findingId">
+            <span class="ep-work-row-text">{{ f.statement }}</span>
+            <em class="ep-work-row-role" :data-level="f.verificationLevel">{{ f.verificationLevel }}/{{ f.confidence }}</em>
+            <em class="ep-work-row-role" :data-status="f.status">{{ f.status }}</em>
+            <button class="mini ep-work-finding-del" @click="removeFinding(f)">
+              {{ $t('statsJ.EditPanel.workEpisodeDelete') }}</button>
+          </div>
+        </div>
+        <div v-else class="ep-work-text">{{ $t('statsJ.EditPanel.workFindingEmpty') }}</div>
+        <div class="ep-work-form" data-block="finding-form">
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workFindingStatement') }}</span>
+            <input v-model="fndForm.statement" class="ep-work-input" type="text" data-input="finding-statement" />
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workFindingConfidence') }}</span>
+            <select v-model="fndForm.confidence" class="ep-work-input ep-work-confidence" data-input="finding-confidence">
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workFindingLevel') }}</span>
+            <select v-model="fndForm.verificationLevel" class="ep-work-input ep-work-level" data-input="finding-level">
+              <option value="observed">observed</option>
+              <option value="inferred">inferred</option>
+              <option value="speculation">speculation</option>
+            </select>
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workFindingBy') }}</span>
+            <input v-model="fndForm.createdBy" class="ep-work-input" type="text" data-input="finding-by" />
+          </label>
+          <div class="ep-work-form-actions">
+            <button class="mini ep-work-save-finding" :disabled="!fndForm.statement || saving" @click="saveFinding">
+              {{ $t('statsJ.EditPanel.workFindingSave') }}</button>
+            <span v-if="fndSaveState" class="ep-work-save-state" role="status" data-state="finding">{{ fndSaveState }}</span>
+          </div>
+        </div>
+      </div>
+      <!-- pd20 S1 closure: the Decision block — choice + alternatives/tradeoffs + decider +
+           rationale + the revocable supersedes relation (supersededBy is read-derived). -->
+      <div class="ep-work-block" data-block="decisions">
+        <div class="ep-work-label">{{ $t('statsJ.EditPanel.workDecisionTitle') }}</div>
+        <div v-if="decisions.length" class="ep-work-list">
+          <div v-for="d in decisions" :key="d.decisionId" class="ep-work-row" :data-decision-id="d.decisionId">
+            <span class="ep-work-row-text">{{ d.choice }}</span>
+            <em class="ep-work-row-role" :data-decider="d.decider">{{ d.decider }}</em>
+            <em v-if="d.supersededBy && d.supersededBy.length" class="ep-work-row-role" data-superseded="true">superseded</em>
+            <button class="mini ep-work-decision-del" @click="removeDecision(d)">
+              {{ $t('statsJ.EditPanel.workEpisodeDelete') }}</button>
+          </div>
+        </div>
+        <div v-else class="ep-work-text">{{ $t('statsJ.EditPanel.workDecisionEmpty') }}</div>
+        <div class="ep-work-form" data-block="decision-form">
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workDecisionChoice') }}</span>
+            <input v-model="decForm.choice" class="ep-work-input" type="text" data-input="decision-choice" />
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workDecisionAlternatives') }}</span>
+            <input v-model="decForm.alternatives" class="ep-work-input" type="text" data-input="decision-alternatives" />
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workDecisionTradeoffs') }}</span>
+            <input v-model="decForm.tradeoffs" class="ep-work-input" type="text" data-input="decision-tradeoffs" />
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workDecisionDecider') }}</span>
+            <input v-model="decForm.decider" class="ep-work-input" type="text" data-input="decision-decider" />
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workDecisionRationale') }}</span>
+            <input v-model="decForm.rationale" class="ep-work-input" type="text" data-input="decision-rationale" />
+          </label>
+          <label class="ep-work-field">
+            <span class="ep-work-field-name">{{ $t('statsJ.EditPanel.workDecisionSupersedes') }}</span>
+            <input v-model="decForm.supersedes" class="ep-work-input" type="text" data-input="decision-supersedes" />
+          </label>
+          <div class="ep-work-form-actions">
+            <button class="mini ep-work-save-decision" :disabled="!decForm.choice || saving" @click="saveDecision">
+              {{ $t('statsJ.EditPanel.workDecisionSave') }}</button>
+            <span v-if="decSaveState" class="ep-work-save-state" role="status" data-state="decision">{{ decSaveState }}</span>
+          </div>
+        </div>
+      </div>
       <div class="ep-work-block" data-block="resources">
         <div class="ep-work-label">{{ $t('statsJ.EditPanel.workEpisodeResources') }}</div>
         <div v-if="sources.length" class="ep-work-list">
@@ -146,6 +239,13 @@ export default {
       open: true,
       episodes: [] as any,
       sources: [] as any, // pd20 fix: linked sourceRefs ({linkId, sourceRefId, level, canonicalUri}) — the buildHandoff `sources` input
+      // pd20 S1 closure (migration v14): findings/decisions view models + their write forms.
+      findings: [] as any,
+      decisions: [] as any,
+      fndForm: { statement: '', confidence: 'high', verificationLevel: 'observed', createdBy: '' },
+      fndSaveState: '',
+      decForm: { choice: '', alternatives: '', tradeoffs: '', decider: '', rationale: '', supersedes: '' },
+      decSaveState: '',
       loadFailed: false,
       copyState: '', // pd20 fix: user-visible copy feedback ('' | success | failure message)
       // pd20 write forms: episode record (goal/outcome/nextAction) + source-ref bind.
@@ -180,7 +280,7 @@ export default {
       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this.open = !this.open }
     },
     async load (id) {
-      if (!id || !(window.todoAPI && window.todoAPI.dbCall)) { this.episodes = []; this.sources = []; return }
+      if (!id || !(window.todoAPI && window.todoAPI.dbCall)) { this.episodes = []; this.sources = []; this.findings = []; this.decisions = []; return }
       try {
         const rows = await window.todoAPI.dbCall('queryEpisodesByTask', id)
         this.episodes = Array.isArray(rows) ? rows : []
@@ -193,6 +293,20 @@ export default {
         this.sources = Array.isArray(srcs) ? srcs : []
       } catch (e) {
         this.sources = [] // provenance read failure must not break the section (handoff just carries fewer sources)
+      }
+      // pd20 S1 closure: findings/decisions ride the same read-only whitelist doors; a read
+      // failure must not break the section (the handoff just carries fewer facts).
+      try {
+        const fnds = await window.todoAPI.dbCall('queryFindingsByTask', id)
+        this.findings = Array.isArray(fnds) ? fnds : []
+      } catch (e) {
+        this.findings = []
+      }
+      try {
+        const decs = await window.todoAPI.dbCall('queryDecisionsByTask', id)
+        this.decisions = Array.isArray(decs) ? decs : []
+      } catch (e) {
+        this.decisions = []
       }
     },
     // Episode note round-trip: the storage column is a single `note` string; the form's three
@@ -301,6 +415,86 @@ export default {
     },
     // pd20: delete the source ref itself (tombstone) — the link row disappears from every
     // read (the query joins on sr.deleted = 0), matching the journey's cleanup semantics.
+    // pd20 S1 closure: finding/decision writes ride the SAME bus door (finding.put /
+    // decision.put manifest rows). The list forms keep the storage honesty rules visible:
+    // a speculation level is recorded as such and the storage layer will never let it
+    // persist as confirmed. The alternatives/tradeoffs/supersedes inputs are split the same
+    // way the CLI splits them (| for lists, verbatim id for supersedes).
+    async saveFinding () {
+      if (!this.fndForm.statement || this.saving || !this.taskId) return
+      this.saving = true
+      this.fndSaveState = ''
+      try {
+        await commit('finding', 'put', {
+          taskId: String(this.taskId),
+          statement: this.fndForm.statement,
+          confidence: this.fndForm.confidence,
+          verificationLevel: this.fndForm.verificationLevel,
+          createdBy: this.fndForm.createdBy || 'human',
+          ts: Date.now()
+        })
+        this.fndSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveOk')
+        this.fndForm = { statement: '', confidence: 'high', verificationLevel: 'observed', createdBy: '' }
+        await this.load(this.taskId)
+      } catch (e) {
+        this.fndSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveFail') + (e && e.message ? ' (' + e.message + ')' : '')
+      } finally {
+        this.saving = false
+      }
+    },
+    async removeFinding (f) {
+      if (!f || !f.findingId || this.saving) return
+      this.saving = true
+      this.fndSaveState = ''
+      try {
+        await commit('finding', 'removeIds', [f.findingId])
+        this.fndSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveOk')
+        await this.load(this.taskId)
+      } catch (e) {
+        this.fndSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveFail') + (e && e.message ? ' (' + e.message + ')' : '')
+      } finally {
+        this.saving = false
+      }
+    },
+    async saveDecision () {
+      if (!this.decForm.choice || this.saving || !this.taskId) return
+      this.saving = true
+      this.decSaveState = ''
+      const splitList = v => String(v || '').split('|').map(x => x.trim()).filter(Boolean)
+      try {
+        await commit('decision', 'put', {
+          taskId: String(this.taskId),
+          choice: this.decForm.choice,
+          alternatives: splitList(this.decForm.alternatives),
+          tradeoffs: splitList(this.decForm.tradeoffs),
+          decider: this.decForm.decider || 'human',
+          rationale: this.decForm.rationale || null,
+          supersedes: this.decForm.supersedes || null,
+          ts: Date.now()
+        })
+        this.decSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveOk')
+        this.decForm = { choice: '', alternatives: '', tradeoffs: '', decider: '', rationale: '', supersedes: '' }
+        await this.load(this.taskId)
+      } catch (e) {
+        this.decSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveFail') + (e && e.message ? ' (' + e.message + ')' : '')
+      } finally {
+        this.saving = false
+      }
+    },
+    async removeDecision (d) {
+      if (!d || !d.decisionId || this.saving) return
+      this.saving = true
+      this.decSaveState = ''
+      try {
+        await commit('decision', 'removeIds', [d.decisionId])
+        this.decSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveOk')
+        await this.load(this.taskId)
+      } catch (e) {
+        this.decSaveState = this.$t('statsJ.EditPanel.workEpisodeSaveFail') + (e && e.message ? ' (' + e.message + ')' : '')
+      } finally {
+        this.saving = false
+      }
+    },
     async removeSource (src) {
       if (!src || !src.sourceRefId || this.saving) return
       this.saving = true
@@ -338,7 +532,7 @@ export default {
         // pd20 fix: the real signature is buildHandoff(episodes, sources, task) → {text, json}.
         // The clipboard gets result.text (the markdown), NOT the object — the old code did
         // String(result) and pasted "[object Object]".
-        const result = this.buildHandoff(this.handoffEpisodes(), this.sources || [], { id: this.taskId, title: this.taskTitle })
+        const result = this.buildHandoff(this.handoffEpisodes(), this.sources || [], { id: this.taskId, title: this.taskTitle }, this.findings || [], this.decisions || [])
         const text = (result && typeof result.text === 'string') ? result.text : ''
         if (!text) throw new Error('empty handoff text')
         await navigator.clipboard.writeText(text)
@@ -356,7 +550,7 @@ export default {
     async copyHandoffJson () {
       if (typeof this.buildHandoff !== 'function') { this.copyState = this.$t('statsJ.EditPanel.workEpisodeCopyFail'); return }
       try {
-        const result = this.buildHandoff(this.handoffEpisodes(), this.sources || [], { id: this.taskId, title: this.taskTitle })
+        const result = this.buildHandoff(this.handoffEpisodes(), this.sources || [], { id: this.taskId, title: this.taskTitle }, this.findings || [], this.decisions || [])
         const text = result && result.json ? JSON.stringify(result.json, null, 2) : ''
         if (!text || text === '{}') throw new Error('empty handoff json')
         await navigator.clipboard.writeText(text)

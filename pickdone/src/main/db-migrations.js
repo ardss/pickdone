@@ -199,6 +199,52 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       if (!cols.includes('role')) d.exec('ALTER TABLE work_episodes ADD COLUMN role TEXT')
       return true
     } },
+    { v: 14, fn: d => {
+      // pd20 S1 closure (2026-11-10): the two entities the mission §04 contract still lacked
+      // after v13 — Finding (observed fact; confidence/verificationLevel/sourceRefs/createdBy/
+      // ts/status) and Decision (choice/alternatives/tradeoffs/decider/ts/rationale/
+      // relatedFindings + the revocable supersedes relation). Pure IF NOT EXISTS DDL (v11
+      // style — additive, an upgraded library and this boot's SCHEMA-exec'd tables converge;
+      // the column-identical parity is asserted by pd20-finding-decision.test.mjs). Family
+      // columns (confidence/verificationLevel/status) are NULLable TEXT: an out-of-family
+      // value stores NULL — never fabricated (v13 role doctrine). List-shaped columns
+      // (sourceRefs/alternatives/tradeoffs/relatedFindings) are JSON arrays; a non-array
+      // shape stores NULL, never a fabricated shape. THE STORAGE RULE: a verificationLevel
+      // of 'speculation' can never carry status 'confirmed' — db-episode-ops findingPut
+      // normalizes that to 'open' (a guess must not become an acceptance conclusion).
+      d.exec(`CREATE TABLE IF NOT EXISTS work_findings (
+        id                TEXT PRIMARY KEY,
+        taskId            TEXT NOT NULL,
+        statement         TEXT NOT NULL,
+        confidence        TEXT,
+        verificationLevel TEXT,
+        sourceRefs        TEXT,
+        createdBy         TEXT,
+        status            TEXT,
+        ts                INTEGER NOT NULL DEFAULT 0,
+        deleted           INTEGER NOT NULL DEFAULT 0,
+        deletedAt         INTEGER NOT NULL DEFAULT 0,
+        updatedAt         INTEGER NOT NULL DEFAULT 0
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_work_findings_task ON work_findings (taskId, ts)')
+      d.exec(`CREATE TABLE IF NOT EXISTS work_decisions (
+        id              TEXT PRIMARY KEY,
+        taskId          TEXT NOT NULL,
+        choice          TEXT NOT NULL,
+        alternatives    TEXT,
+        tradeoffs       TEXT,
+        decider         TEXT,
+        rationale       TEXT,
+        relatedFindings TEXT,
+        supersedes      TEXT,
+        ts              INTEGER NOT NULL DEFAULT 0,
+        deleted         INTEGER NOT NULL DEFAULT 0,
+        deletedAt       INTEGER NOT NULL DEFAULT 0,
+        updatedAt       INTEGER NOT NULL DEFAULT 0
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_work_decisions_task ON work_decisions (taskId, ts)')
+      return true
+    } },
     ]
   buildMigrations.ensureRepeatDayUniqueness = ensureRepeatDayUniqueness
   return migrationsOverride || BUILT_IN

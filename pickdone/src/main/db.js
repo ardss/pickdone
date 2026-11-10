@@ -642,6 +642,19 @@ const OPS = {
   queryEpisodesByTask: (...a) => require('./db-episode-ops.cjs').queryEpisodesByTask(db, ...a),
   querySourcesByTask: (...a) => require('./db-episode-ops.cjs').querySourcesByTask(db, ...a), // pd20 handoff copy: read-only source-ref read (canonicalUri composed in db-episode-ops.cjs) — whitelisted with queryEpisodesByTask, no manifest row (read-only class)
   queryEpisodesByCategory: (...a) => require('./db-episode-ops.cjs').queryEpisodesByCategory(db, ...a), // pd20 P1-01 project work-handoff: per-task episode rollup for a category's live todos (impl db-episode-ops.cjs; read-only → whitelisted with queryEpisodesByTask in handlers/todo.js, no manifest row)
+  // pd20 S1 closure (migration v14): work_findings / work_decisions ops (impl db-episode-ops.cjs).
+  // puts/removes are manifest rows (finding.put/removeIds, decision.put/removeIds); the two
+  // queries are read-only view models whitelisted in handlers/todo.js (queryEpisodesByTask class).
+  findingPut: (...a) => require('./db-episode-ops.cjs').findingPut(db, ...a),
+  findingRemoveIds: (...a) => require('./db-episode-ops.cjs').findingRemoveIds(db, ...a),
+  decisionPut: (...a) => require('./db-episode-ops.cjs').decisionPut(db, ...a),
+  decisionRemoveIds: (...a) => require('./db-episode-ops.cjs').decisionRemoveIds(db, ...a),
+  queryFindingsByTask: (...a) => require('./db-episode-ops.cjs').queryFindingsByTask(db, ...a),
+  queryDecisionsByTask: (...a) => require('./db-episode-ops.cjs').queryDecisionsByTask(db, ...a),
+  findingAllRows: (...a) => require('./db-episode-ops.cjs').findingAllRows(db, ...a),
+  findingTombstones: (...a) => require('./db-episode-ops.cjs').findingTombstones(db, ...a),
+  decisionAllRows: (...a) => require('./db-episode-ops.cjs').decisionAllRows(db, ...a),
+  decisionTombstones: (...a) => require('./db-episode-ops.cjs').decisionTombstones(db, ...a),
   // pd20 LAN sync (2026-11-05): raw row reads for the sync engine's snapshot/seed enumeration and
   // the pair-collapse lookups (sync-apply ingress). Main-internal only — NOT in handlers/todo.js
   // read whitelist, so the renderer cannot reach them (same class as appendOplogPointers).

@@ -600,6 +600,13 @@
         // pd20 handoff copy: read-only source-ref read ({level, canonicalUri, title} view model);
         // the web demo serves one static sample source so Copy-Handoff has provenance to assemble.
         return [{ level: 'L0', canonicalUri: 'web-demo://spec-sample', title: 'demo source' }]
+      case 'queryFindingsByTask':
+        // pd20 S1 closure (migration v14): read-only finding view models — the web demo serves
+        // an empty list so the Findings block renders its honest empty state.
+        return []
+      case 'queryDecisionsByTask':
+        // pd20 S1 closure: read-only decision view models — same empty-state doctrine.
+        return []
       default:
         // 未实现 op 显式失败(此前返回 null 假成功,调用方把 null 当真结果渲染/入库)。console.warn 曾被 UI 吞掉,排查不到
         throw new Error('[appBrowserShim] dbCall 未实现操作:' + op)

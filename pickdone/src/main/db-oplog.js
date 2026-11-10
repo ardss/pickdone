@@ -138,6 +138,12 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       case 'sourceRemoveByIds': return arr('source', result)
       case 'taskSourcePut': return [one('tasksource', result)]
       case 'taskSourceRemove': return arr('tasksource', result)
+      // pd20 S1 closure (migration v14): finding/decision rows capture like the episode family —
+      // puts mint one pointer, removes return the ids ACTUALLY tombstoned (row-granular).
+      case 'findingPut': return [one('finding', result)]
+      case 'findingRemoveIds': return arr('finding', result)
+      case 'decisionPut': return [one('decision', result)]
+      case 'decisionRemoveIds': return arr('decision', result)
       case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
       // setMetaMany takes a list of [k, v] pairs — same meta entity, row-granular pointers per key
       case 'setMetaMany': return arr('meta', (Array.isArray(params) ? params : []).map(p => p && p[0]))

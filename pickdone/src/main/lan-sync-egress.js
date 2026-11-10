@@ -98,6 +98,9 @@ function createEgressSurface (ctx) {
           out.push({ entity: 'source', id: String(r.id), updatedAt: r.updatedAt || 0, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: r.deleted ? null : r })
         }
         for (const r of state().db.call('taskSourceAllRows', {}) || []) out.push({ entity: 'tasksource', id: String(r.id), updatedAt: r.updatedAt || 0, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: r.deleted ? null : r })
+        // pd20 S1 closure (migration v14): finding/decision rows egress like the episode family.
+        for (const r of state().db.call('findingAllRows', {}) || []) out.push({ entity: 'finding', id: String(r.id), updatedAt: r.updatedAt || 0, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: r.deleted ? null : r })
+        for (const r of state().db.call('decisionAllRows', {}) || []) out.push({ entity: 'decision', id: String(r.id), updatedAt: r.updatedAt || 0, deleted: !!r.deleted, deletedAt: r.deletedAt || 0, data: r.deleted ? null : r })
         // Meta entity (GAP-A fix 2026-09-19): meta has no list-read op (db.js is size-ratcheted), so
         // syncable meta keys used to be enumerated from their oplog pointers only — a live key whose
         // pointers fell out of the ring never appeared in a snapshot AND was refused on ingress
