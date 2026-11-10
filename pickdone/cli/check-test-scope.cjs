@@ -149,8 +149,12 @@ function scopeFor (files = stagedFiles()) {
       // The staged TEST files' own dirs (a changed helper/helper-adjacent spec) — plus, coarse
       // again, tests/lib changes touch everything.
       if (f.startsWith('tests/lib/')) { dirs.add('tests/unit'); continue }
-      const m = /^(tests\/unit\/[^/]+)/.exec(f)
+      // W34 fix: capture the DIR component only. A file DIRECTLY under tests/unit/ (no second
+      // slash) used to make [^/]+ swallow the filename, so the FILE path itself became a --dirs
+      // entry and run-all fail-closed with "entry matching no discovered test file".
+      const m = /^(tests\/unit\/[^/]+)\//.exec(f)
       if (m) { dirs.add(m[1]); continue }
+      if (/^tests\/unit\/[^/]+$/.test(f)) { dirs.add('tests/unit'); continue }
       return { verdict: 'full', dirs: [], reason: `staged non-unit test: ${f} — fail wide` }
     }
     const hit = SURFACE_MAP.find(([prefix]) => f.startsWith(prefix + '/'))
