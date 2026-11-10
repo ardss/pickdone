@@ -1,5 +1,9 @@
 # Changelog（中文版）
 
+## [0.4.0-beta.29] - 2026-11-10
+
+- PickDone 2.0 工作连续性里程碑（PD20 长程）：Task→Episode→Finding/Decision→SourceRef→Handoff 全链闭环（迁移 v14、CLI、EditPanel UI、handoff 导出）；跨端桥接受理无 Origin 头的已认证原生客户端（loopback 锚定，认证零弱化）并加固错误恢复；Android/Web/扩展三客户端落地（离线 PWA outbox 真桥同步、Capacitor 原生 HTTP 配对、MV3 捕获含用户可见端口冲突哨兵、深链与拖拽互通、VS Code VSIX MVP）；安装链新增五表面身份审计与一键备份/升级/回滚演练；独立 QA 判定候选 GO-READY（候选态 ≠ Publish）。
+- 本线以下为维护分支累积的 [Unreleased] 条目，随本候选一并交付。
 ## [Unreleased]
 
 - 更新链路（W33，#224）：404 重试风暴根治——release feed 缺失（HTTP 404 / ENOTFOUND / 无已发布 release）归类为 FEED_MISSING 且绝不再挂 30s 退避（瞬时错误保留每次唤醒 3 次预算），状态暴露 lastCheckError {kind, at} 使"该 tag 无公开 release 资产"可与网络故障区分，同类 feed 缺失错误只广播一次。回归测试钉死：持续 404 → 零重查；瞬时错误 → 有界。

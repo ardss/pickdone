@@ -4,6 +4,10 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/). The 0.x series is the initial-development band: from 0.4.0 on, any user-visible new feature bumps MINOR; PATCH is fixes/internal hardening only. 1.0.0 marks stable data format + sync. Historical versions (≤0.3.7) are not retro-renumbered.
 
+## [0.4.0-beta.29] - 2026-11-10
+
+- PickDone 2.0 work-continuity milestone (PD20 long-run): the Task→Episode→Finding/Decision→SourceRef→Handoff loop is closed end to end (migration v14, CLI, EditPanel UI, handoff export), the cross-platform bridge accepts authenticated native clients without an Origin header (loopback-anchored, zero auth weakening) with error-recovery hardening, the Android/Web/extension clients landed (offline PWA outbox with real bridge sync, Capacitor native HTTP pairing, MV3 capture with a user-visible port-conflict sentinel, deep links and drag-drop interop, a VS Code VSIX MVP), the installer chain gained a five-surface identity audit and a scripted backup/upgrade/rollback drill, and an independent QA verdict marked the candidate GO-READY (candidate ≠ publish).
+- Everything below this line was accumulated on the maintenance branch as [Unreleased] and ships in this candidate.
 ## [Unreleased]
 
 - Updater (W33, #224): the 404 retry storm is fixed — a missing release feed (HTTP 404 / ENOTFOUND / no published release) is now classified FEED_MISSING and never re-armed on the 30s backoff (transient failures keep a 3-retry-per-wake budget), the status exposes lastCheckError {kind, at} so "this tag has no public release assets" is distinguishable from a network failure, and identical feed-missing errors broadcast once instead of spamming. Regression tests pin: persistent 404 → zero re-checks; transient → bounded.
