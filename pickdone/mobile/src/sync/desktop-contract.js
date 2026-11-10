@@ -1,9 +1,10 @@
-// Matches desktop Lane A DTO contract at 85d5f3c1. No network or DB access here.
+// Matches desktop Lane A DTO contract (shared/cross-platform/dto.mjs, v13 field set 2026-11-10).
+// No network or DB access here.
 export const DTO_VERSION = 1
 
-const taskFields = ['description', 'categoryId', 'complete', 'scheduledAt', 'scheduledDay', 'remindAt', 'deadlineTs', 'createdAt', 'updatedAt', 'deleted', 'deletedAt', 'syncAuthor', 'version']
+const taskFields = ['description', 'categoryId', 'complete', 'scheduledAt', 'scheduledDay', 'remindAt', 'deadlineTs', 'createdAt', 'updatedAt', 'deleted', 'deletedAt', 'syncAuthor', 'version', 'handoffTo', 'handoffFrom', 'handoffNote', 'handoffAckedAt']
 const categoryFields = ['id', 'name', 'color', 'isFolder', 'parentId', 'deleted', 'deletedAt', 'updatedAt']
-const episodeFields = ['taskId', 'startedAt', 'endedAt', 'deleted', 'deletedAt', 'updatedAt']
+const episodeFields = ['taskId', 'startedAt', 'endedAt', 'actorType', 'role', 'deleted', 'deletedAt', 'updatedAt']
 
 function pick(row, fields) {
   return Object.fromEntries(fields.filter(field => Object.hasOwn(row, field)).map(field => [field, row[field]]))

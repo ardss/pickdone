@@ -3,14 +3,13 @@
 // doors already produce: repository rows (todos/work_episodes), sync-cycle
 // conflicts and the last sync outcome.
 //
-// Field reality (honest, 2026-11-10): the bridge DTO contract (mobile/src/sync/
-// pair-contract.js) carries todos {title, description, scheduled*, ...} and
-// episodes {summary, startedAt, endedAt} only. Handoff targeting fields
-// (handoffTo/handoffFrom/handoffAckedAt) and agent-actor fields (actorType/
-// agentId/role) are NOT yet in the DTO set — decoders carry unknown DTO fields
-// verbatim (carryUnknown), so this classifier reads them if/when the desktop
-// side starts emitting them. Until then zones 2 and 3 stay legitimately empty;
-// this is the documented OPEN backend gap, not a fake-data substitute.
+// Field reality (updated 2026-11-10, v13 contract): the bridge DTO contract
+// (shared/cross-platform/dto.mjs + the mobile contract copies) now carries the handoff
+// targeting fields (handoffTo/handoffFrom/handoffNote/handoffAckedAt — desktop migration v13,
+// todos probe-add) and the episode actor fields (actorType/role — work_episodes probe-add).
+// Desktop migration: src/main/db-migrations.js v13; rows without the columns (pre-v13,
+// ordinary tasks/human episodes) simply omit the DTO keys, so zones 2 and 3 stay legitimately
+// empty when the desktop has no handoff/agent data — never a fake-data substitute.
 const PUSH_VISIBLE_MAX = 5
 const isLive = row => !row?.deleted && !row?.delete && !row?.complete
 

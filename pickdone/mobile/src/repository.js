@@ -2,11 +2,20 @@ import { Capacitor } from '@capacitor/core'
 import { CapacitorSQLite, SQLiteConnection } from '@capacitor-community/sqlite'
 
 const schema = [
-  'CREATE TABLE IF NOT EXISTS todos (id TEXT PRIMARY KEY, content TEXT, description TEXT, categoryId INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0, completedAt INTEGER NOT NULL DEFAULT 0, scheduledDay INTEGER NOT NULL DEFAULT 0, createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0, deletedAt INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, syncAuthor TEXT)',
+  // v13 contract fields (2026-11-10): todos handoff targeting + work_episodes actor provenance
+  // (matches the desktop migration v13 / dto.mjs field set — zone-2/zone-3 real data).
+  'CREATE TABLE IF NOT EXISTS todos (id TEXT PRIMARY KEY, content TEXT, description TEXT, categoryId INTEGER NOT NULL DEFAULT 0, complete INTEGER NOT NULL DEFAULT 0, completedAt INTEGER NOT NULL DEFAULT 0, scheduledDay INTEGER NOT NULL DEFAULT 0, createdAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0, deleted INTEGER NOT NULL DEFAULT 0, deletedAt INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 0, syncAuthor TEXT, handoffTo TEXT, handoffFrom TEXT, handoffNote TEXT, handoffAckedAt INTEGER NOT NULL DEFAULT 0)',
   'CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT, color TEXT, isFolder INTEGER DEFAULT 0, parentId INTEGER DEFAULT 0, createdAt INTEGER, updatedAt INTEGER NOT NULL DEFAULT 0, deleted INTEGER DEFAULT 0, deletedAt INTEGER NOT NULL DEFAULT 0)',
   'CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)',
-  'CREATE TABLE IF NOT EXISTS work_episodes (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, startedAt INTEGER NOT NULL DEFAULT 0, endedAt INTEGER NOT NULL DEFAULT 0, note TEXT, deleted INTEGER NOT NULL DEFAULT 0, deletedAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0)'
+  'CREATE TABLE IF NOT EXISTS work_episodes (id TEXT PRIMARY KEY, taskId TEXT NOT NULL, startedAt INTEGER NOT NULL DEFAULT 0, endedAt INTEGER NOT NULL DEFAULT 0, note TEXT, actorType TEXT, role TEXT, deleted INTEGER NOT NULL DEFAULT 0, deletedAt INTEGER NOT NULL DEFAULT 0, updatedAt INTEGER NOT NULL DEFAULT 0)'
 ]
+
+// Probe-add migration (desktop v13 pattern): an EXISTING install's tables predate the v13
+// contract columns; CREATE TABLE IF NOT EXISTS will not add them. Idempotent on every boot.
+const v13Columns = {
+  todos: [['handoffTo', 'TEXT'], ['handoffFrom', 'TEXT'], ['handoffNote', 'TEXT'], ['handoffAckedAt', 'INTEGER NOT NULL DEFAULT 0']],
+  work_episodes: [['actorType', 'TEXT'], ['role', 'TEXT']]
+}
 
 function browserStore() {
   const open = new Promise((resolve, reject) => {
@@ -45,6 +54,12 @@ export async function openRepository() {
     native = await sqlite.createConnection('pickdone_mobile', false, 'no-encryption', 1, false)
     await native.open()
     for (const statement of schema) await native.execute(statement)
+    for (const [table, columns] of Object.entries(v13Columns)) {
+      const existing = new Set(((await native.query('SELECT name FROM pragma_table_info(?)', [table])).values || []).map(row => row.name))
+      for (const [name, ddl] of columns) {
+        if (!existing.has(name)) await native.execute('ALTER TABLE ' + table + ' ADD COLUMN ' + name + ' ' + ddl)
+      }
+    }
   } else {
     browser = browserStore()
     await browser.all('todos')
@@ -81,7 +96,7 @@ export async function openRepository() {
       // is re-minted. A row without an id is rejected.
       if (!row || row.id == null) throw new Error('applyPulled: row with id required')
       if (entity === 'todos') {
-        if (native) await run('INSERT OR REPLACE INTO todos (id,content,description,categoryId,complete,completedAt,scheduledDay,createdAt,updatedAt,deleted,deletedAt,version,syncAuthor) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)', [row.id,row.content ?? '',row.description ?? '',Number(row.categoryId || 0),Number(row.complete || 0),Number(row.completedAt || 0),Number(row.scheduledDay || 0),Number(row.createdAt || row.updatedAt || 0),Number(row.updatedAt || 0),row.deleted ? 1 : 0,Number(row.deletedAt || 0),Number(row.version || 0),row.syncAuthor ?? null])
+        if (native) await run('INSERT OR REPLACE INTO todos (id,content,description,categoryId,complete,completedAt,scheduledDay,createdAt,updatedAt,deleted,deletedAt,version,syncAuthor,handoffTo,handoffFrom,handoffNote,handoffAckedAt) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)', [row.id,row.content ?? '',row.description ?? '',Number(row.categoryId || 0),Number(row.complete || 0),Number(row.completedAt || 0),Number(row.scheduledDay || 0),Number(row.createdAt || row.updatedAt || 0),Number(row.updatedAt || 0),row.deleted ? 1 : 0,Number(row.deletedAt || 0),Number(row.version || 0),row.syncAuthor ?? null,row.handoffTo ?? null,row.handoffFrom ?? null,row.handoffNote ?? null,Number(row.handoffAckedAt || 0)])
         else await putBrowser('todos', row)
         return
       }
@@ -96,7 +111,7 @@ export async function openRepository() {
         return
       }
       if (entity === 'work_episodes') {
-        if (native) await run('INSERT OR REPLACE INTO work_episodes (id,taskId,startedAt,endedAt,note,deleted,deletedAt,updatedAt) VALUES (?,?,?,?,?,?,?,?)', [row.id,row.taskId ?? '',Number(row.startedAt || 0),Number(row.endedAt || 0),row.note ?? '',row.deleted ? 1 : 0,Number(row.deletedAt || 0),Number(row.updatedAt || 0)])
+        if (native) await run('INSERT OR REPLACE INTO work_episodes (id,taskId,startedAt,endedAt,note,actorType,role,deleted,deletedAt,updatedAt) VALUES (?,?,?,?,?,?,?,?,?,?)', [row.id,row.taskId ?? '',Number(row.startedAt || 0),Number(row.endedAt || 0),row.note ?? '',row.actorType ?? null,row.role ?? null,row.deleted ? 1 : 0,Number(row.deletedAt || 0),Number(row.updatedAt || 0)])
         else await putBrowser('work_episodes', row)
         return
       }

@@ -3,6 +3,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { openRepository } from './repository'
 import { pairDesktop, createBridgeSession } from './sync/pair-client.js'
 import { mergePull, planPush, summarizePushResults } from './sync/sync-cycle.js'
+import { resolveConflict, conflictSides } from './conflict-resolve.js'
 import { classifyFirstScreen } from './firstscreen.js'
 import copy from './i18n/zh-CN.js'
 import logoUrl from '../../assets/img/favicon.svg'
@@ -27,7 +28,7 @@ const completeTasks = computed(() => tasks.value.filter(task => task.complete).s
 const sortedEpisodes = computed(() => [...episodes.value].sort((a, b) => b.startedAt - a.startedAt))
 
 // ---- G2 four-zone cockpit state (ux-contract §4/§5) ----
-const DEVICE_ID = 'android-1'
+const DEVICE_ID = ref(localStorage.getItem('pickdone.deviceId') || 'android-1')
 const showAllPush = ref(false)
 const lastSyncAt = ref(Number(localStorage.getItem('pickdone.lastSyncAt') || 0))
 const online = ref(navigator.onLine)
@@ -40,12 +41,34 @@ const cockPit = computed(() => classifyFirstScreen({
   syncError: lastSyncError.value,
   lastSyncAt: lastSyncAt.value,
   today,
-  deviceId: DEVICE_ID,
+  deviceId: DEVICE_ID.value,
   showAll: showAllPush.value,
 }))
 const lastSyncText = computed(() => cockPit.value.blocked.lastSyncAt
   ? copy.lastSyncLabel + ' ' + new Date(cockPit.value.blocked.lastSyncAt).toLocaleString('zh-CN')
   : copy.neverSynced)
+
+// ---- G11 Settings surface (ux-contract §2.2-4: minimal Android settings screen) ----
+// Sync status / device name / pairing entry / theme follow / offline hint. The device name is
+// the sync identity (DEVICE_ID above); the theme follows the OS (prefers-color-scheme tokens,
+// same source `cmd uimode` drives on the AVD) and the current scheme is shown read-only.
+const systemTheme = ref(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+const themeMedia = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null
+const themeChanged = event => { systemTheme.value = event.matches ? 'dark' : 'light' }
+if (themeMedia) { try { themeMedia.addEventListener('change', themeChanged) } catch { themeMedia.addListener(themeChanged) } }
+onUnmounted(() => { if (themeMedia) { try { themeMedia.removeEventListener('change', themeChanged) } catch { themeMedia.removeListener(themeChanged) } } })
+const deviceNameInput = ref(DEVICE_ID.value)
+function saveDeviceName() {
+  const name = deviceNameInput.value.trim()
+  if (!name) return
+  DEVICE_ID.value = name
+  localStorage.setItem('pickdone.deviceId', name)
+  syncNotice.value = copy.settingsDeviceSaved
+}
+const syncStateText = computed(() => syncCreds.value
+  ? copy.syncPairedState + ' · ' + (syncCreds.value.scope === 'WRITE' ? copy.syncScopeWrite : copy.syncScopeRead)
+  : copy.syncNotPaired)
+const lastSyncShort = computed(() => lastSyncAt.value ? new Date(lastSyncAt.value).toLocaleString('zh-CN') : copy.neverSynced)
 
 async function refresh() {
   tasks.value = await repo.value.tasks()
@@ -86,22 +109,24 @@ function ptrTouchEnd() {
 const syncEndpoint = ref('')
 const syncPayload = ref('')
 const syncCreds = ref(null)
+// G10: pull conflicts PERSIST here (not cleared by the next sync action) until the user
+// resolves each one through the conflict sheet; zone-4 rows and the sheet read this list.
 const syncConflicts = ref([])
 const syncBusy = ref(false)
 const syncNotice = ref('')
 const lastSyncError = ref('')
 function trimSyncUrl() { return syncEndpoint.value.trim().replace(/\/+$/, '') }
 async function syncAction(work) {
-  error.value = ''; syncNotice.value = ''; syncConflicts.value = []
+  error.value = ''; syncNotice.value = ''
   syncBusy.value = true
   try {
     const conflicts = await work()
     await refresh()
-    syncConflicts.value = conflicts || []
+    if (conflicts) syncConflicts.value = conflicts
     lastSyncError.value = ''
     lastSyncAt.value = Date.now()
     localStorage.setItem('pickdone.lastSyncAt', String(lastSyncAt.value))
-    syncNotice.value = conflicts?.length ? (conflicts.length + ' ' + copy.syncConflicts) : copy.syncDone
+    syncNotice.value = syncConflicts.value.length ? (syncConflicts.value.length + ' ' + copy.syncConflicts) : copy.syncDone
   } catch (cause) {
     error.value = cause.message || String(cause)
     lastSyncError.value = error.value
@@ -127,6 +152,36 @@ async function doSyncPull() {
     for (const change of changes) await repo.value.applyPulled(change.entity, change.row)
     return conflicts.map(c => ({ ...c, title: c.incoming?.content || c.incoming?.name || c.incoming?.note || c.id }))
   })
+}
+
+// ---- G10 conflict sheet (ux-contract: both versions side by side + timestamps + 3 actions) ----
+const conflictSheet = ref(null) // the syncConflicts entry currently open in the sheet
+const conflictSidePanel = computed(() => conflictSheet.value ? conflictSides(conflictSheet.value) : null)
+function openConflict(row) {
+  conflictSheet.value = syncConflicts.value.find(c => c.entity === row.entity && String(c.id) === String(row.refId)) || null
+}
+async function resolveConflictChoice(choice) {
+  const conflict = conflictSheet.value
+  if (!conflict) return
+  await action(async () => {
+    const plan = resolveConflict(conflict, choice)
+    for (const change of plan.apply) await repo.value.applyPulled(change.entity, change.row)
+    if (plan.push.length && syncCreds.value && trimSyncUrl()) {
+      // Same push channel as the ordinary sync: rows encoded through the contract encoders.
+      const session = createBridgeSession({ baseUrl: trimSyncUrl(), credentials: syncCreds.value, deviceId: syncCreds.value?.deviceId })
+      await session.push(buildConflictPushOps(plan))
+    }
+    syncConflicts.value = syncConflicts.value.filter(c => c !== conflict)
+    syncNotice.value = copy.conflictResolvedPrefix + ' ' + copy['conflict_' + plan.resolution]
+  })
+  conflictSheet.value = ''
+}
+// The push channel takes pre-encoded DTO ops; encode each decision row through the same
+// planPush encoders the ordinary push uses (one op per entity).
+function buildConflictPushOps(plan) {
+  const raw = { todos: [], categories: [], work_episodes: [] }
+  for (const item of plan.push) raw[item.entity] = (raw[item.entity] || []).concat(item.row)
+  return planPush(raw).ops
 }
 async function doSyncPush() {
   await syncAction(async () => {
@@ -226,7 +281,7 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
         <p v-if="cockPit.blocked.healthy" class="zone-zero healthy">✓ {{ copy.noBlockers }} {{ lastSyncText }}</p>
         <div v-for="row in cockPit.blocked.rows" :key="row.id" class="blocked-row">
           <span class="blocker-text">{{ row.kind === 'conflict' ? row.title + '（' + row.verdict + '）' : row.title }}</span>
-          <PdActionButton class="mini blocker-action" tone="quiet" type="button" @click="row.action === 'resolve-conflict' ? (tab = 'sync') : retryLastSync()">{{ row.action === 'resolve-conflict' ? copy.resolveConflict : copy.retrySync }}</PdActionButton>
+          <PdActionButton class="mini blocker-action" tone="quiet" type="button" @click="row.action === 'resolve-conflict' ? openConflict(row) : retryLastSync()">{{ row.action === 'resolve-conflict' ? copy.resolveConflict : copy.retrySync }}</PdActionButton>
         </div>
 
         <div v-if="completeTasks.length" class="section-heading completed-heading"><h2>{{ copy.completed }}</h2><PdStatusChip>{{ completeTasks.length }}</PdStatusChip></div>
@@ -243,6 +298,30 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
           <span class="project-dot" :style="{ background: project.color }"></span>
           <div><strong>{{ project.name }}</strong><small>{{ tasks.filter(task => task.categoryId === project.id && !task.complete).length }} {{ copy.pendingCount }}</small></div>
         </PdProjectCard>
+      </section>
+      <section v-else-if="tab === 'settings'">
+        <div class="eyebrow">{{ copy.settingsEyebrow }}</div><h1>{{ copy.settingsTitle }}</h1><p class="intro">{{ copy.settingsIntro }}</p>
+        <div class="settings-group">
+          <div class="settings-row">
+            <div class="settings-label"><strong>{{ copy.settingsSyncStatus }}</strong><small>{{ syncStateText }} · {{ copy.settingsLastSync }} {{ lastSyncShort }}</small></div>
+            <PdStatusChip :tone="syncCreds ? 'brand' : 'neutral'">{{ syncCreds ? copy.settingsPairedChip : copy.settingsUnpairedChip }}</PdStatusChip>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label"><strong>{{ copy.settingsOffline }}</strong><small>{{ online ? copy.settingsOfflineOk : copy.offlineBanner }}</small></div>
+            <PdStatusChip :tone="online ? 'brand' : 'danger'">{{ online ? copy.settingsOnlineChip : copy.settingsOfflineChip }}</PdStatusChip>
+          </div>
+          <div class="settings-row">
+            <div class="settings-label"><strong>{{ copy.settingsTheme }}</strong><small>{{ copy.settingsThemeFollow }}</small></div>
+            <PdStatusChip tone="neutral">{{ systemTheme === 'dark' ? copy.settingsThemeDark : copy.settingsThemeLight }}</PdStatusChip>
+          </div>
+          <label class="settings-field">{{ copy.settingsDeviceName }}
+            <input v-model="deviceNameInput" type="text" :placeholder="DEVICE_ID" />
+          </label>
+          <div class="settings-actions">
+            <PdActionButton @click="saveDeviceName">{{ copy.settingsDeviceSave }}</PdActionButton>
+            <PdActionButton tone="quiet" @click="tab = 'sync'">{{ copy.settingsPairingEntry }}</PdActionButton>
+          </div>
+        </div>
       </section>
       <section v-else-if="tab === 'sync'">
         <div class="eyebrow">{{ copy.syncEyebrow }}</div><h1>{{ copy.syncTitle }}</h1><p class="intro">{{ copy.syncIntro }}</p>
@@ -280,7 +359,34 @@ const duration = episode => Math.round((episode.endedAt - episode.startedAt) / 6
       <button :class="{ active: tab === 'projects' }" @click="tab = 'projects'"><span>▦</span>{{ copy.projects }}</button>
       <button :class="{ active: tab === 'history' }" @click="tab = 'history'"><span>◷</span>{{ copy.historyShort }}</button>
       <button :class="{ active: tab === 'sync' }" @click="tab = 'sync'"><span>⇄</span>{{ copy.syncNav }}</button>
+      <button :class="{ active: tab === 'settings' }" @click="tab = 'settings'"><span>⚙</span>{{ copy.settingsNav }}</button>
     </nav>
+    <!-- G10 conflict-resolution sheet: both versions side by side + timestamps + 3 actions -->
+    <div v-if="conflictSheet" class="scrim" @click.self="conflictSheet = ''">
+      <div class="sheet conflict-sheet" role="dialog" :aria-label="copy.conflictSheetTitle">
+        <div class="sheet-handle"></div>
+        <div class="sheet-header"><h2>{{ copy.conflictSheetTitle }}</h2><button type="button" class="close-x" :aria-label="copy.close" @click="conflictSheet = ''">×</button></div>
+        <p class="conflict-verdict">{{ conflictSheet.title }} · {{ conflictSheet.verdict }}</p>
+        <div class="conflict-versus">
+          <div class="conflict-side">
+            <span class="conflict-side-tag">{{ copy.conflictLocalTag }}</span>
+            <p>{{ conflictSidePanel.local ? conflictSidePanel.local.text : copy.conflictNoLocal }}</p>
+            <small v-if="conflictSidePanel.local">{{ new Date(conflictSidePanel.local.updatedAt).toLocaleString('zh-CN') }}<template v-if="conflictSidePanel.local.deleted"> · {{ copy.conflictDeletedTag }}</template></small>
+          </div>
+          <div class="conflict-side incoming">
+            <span class="conflict-side-tag">{{ copy.conflictIncomingTag }}</span>
+            <p>{{ conflictSidePanel.incoming ? conflictSidePanel.incoming.text : copy.conflictNoIncoming }}</p>
+            <small v-if="conflictSidePanel.incoming">{{ new Date(conflictSidePanel.incoming.updatedAt).toLocaleString('zh-CN') }}<template v-if="conflictSidePanel.incoming.deleted"> · {{ copy.conflictDeletedTag }}</template></small>
+          </div>
+        </div>
+        <div class="conflict-actions">
+          <PdActionButton block :disabled="syncBusy" @click="resolveConflictChoice('keep-local')">{{ copy.conflictKeepLocal }}</PdActionButton>
+          <PdActionButton block tone="quiet" :disabled="syncBusy" @click="resolveConflictChoice('keep-incoming')">{{ copy.conflictKeepIncoming }}</PdActionButton>
+          <PdActionButton block tone="quiet" :disabled="syncBusy" @click="resolveConflictChoice('keep-both')">{{ copy.conflictKeepBoth }}</PdActionButton>
+        </div>
+        <p class="conflict-note">{{ copy.conflictNote }}</p>
+      </div>
+    </div>
     <div v-if="editor" class="scrim" @click.self="editor = ''">
       <form class="sheet" @submit.prevent="editor === 'task' ? saveTask() : editor === 'project' ? saveProject() : saveEpisode()">
         <div class="sheet-handle"></div>
