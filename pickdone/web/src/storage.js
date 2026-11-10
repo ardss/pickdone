@@ -1,5 +1,7 @@
 const DB_NAME = 'pickdone-web-v1'
+const DB_VERSION = 2
 const STORES = ['tasks', 'projects', 'episodes']
+const OUTBOX_STORE = 'outbox'
 let connection
 
 function requestResult(request) {
@@ -11,9 +13,14 @@ function requestResult(request) {
 export function openDatabase() {
   if (!('indexedDB' in globalThis)) return Promise.reject(new Error('This browser does not support IndexedDB'))
   if (!connection) connection = new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, 1)
+    const request = indexedDB.open(DB_NAME, DB_VERSION)
     request.onupgradeneeded = () => {
       for (const name of STORES) if (!request.result.objectStoreNames.contains(name)) request.result.createObjectStore(name, { keyPath: 'id' })
+      if (!request.result.objectStoreNames.contains(OUTBOX_STORE)) {
+        // v2: durable offline queue — 'ts' index lets coalescing read in chronological order
+        const outbox = request.result.createObjectStore(OUTBOX_STORE, { keyPath: 'id' })
+        outbox.createIndex('ts', 'ts')
+      }
     }
     request.onsuccess = () => resolve(request.result)
     request.onerror = () => reject(request.error)
@@ -61,6 +68,49 @@ export async function markDeleted(store, id) {
     tx.oncomplete = () => resolve(changed)
     tx.onerror = () => reject(tx.error)
   })
+}
+/**
+ * One local mutation = row write + durable outbox entry in the SAME transaction,
+ * so a reload mid-flush can never lose a change. Returns the resulting queue rows.
+ */
+export async function writeLocal(store, row, kind = 'upsert') {
+  if (!STORES.includes(store)) throw new Error('Unknown collection')
+  const db = await openDatabase()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction([store, OUTBOX_STORE], 'readwrite')
+    let queueRows = []
+    const op = { id: crypto.randomUUID(), store, rowId: String(row.id), kind, ts: Date.now() }
+    tx.objectStore(store).put(row)
+    const outboxStore = tx.objectStore(OUTBOX_STORE)
+    const cursorReq = outboxStore.openCursor()
+    cursorReq.onsuccess = () => {
+      const cursor = cursorReq.result
+      if (cursor) { queueRows.push(cursor.value); cursor.continue() }
+    }
+    outboxStore.put(op)
+    tx.oncomplete = () => resolve(queueRows.concat([op]))
+    tx.onabort = () => reject(tx.error || new Error('Storage transaction aborted'))
+    tx.onerror = () => reject(tx.error)
+  })
+}
+export async function readOutbox() {
+  const db = await openDatabase()
+  const tx = db.transaction(OUTBOX_STORE, 'readonly')
+  return requestResult(tx.objectStore(OUTBOX_STORE).getAll())
+}
+export async function saveOutbox(rows) {
+  const db = await openDatabase()
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(OUTBOX_STORE, 'readwrite')
+    tx.objectStore(OUTBOX_STORE).clear()
+    for (const row of rows || []) tx.objectStore(OUTBOX_STORE).put(row)
+    tx.oncomplete = () => resolve(rows || [])
+    tx.onerror = () => reject(tx.error)
+  })
+}
+export async function clearOutbox() {
+  const db = await openDatabase()
+  return transaction([OUTBOX_STORE], 'readwrite', tx => tx.objectStore(OUTBOX_STORE).clear())
 }
 export async function replaceAll(data) {
   validateBackup(data)

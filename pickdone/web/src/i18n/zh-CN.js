@@ -21,5 +21,10 @@ export default {
   syncEndpoint: '桌面桥接地址（以桌面配对界面显示为准）', syncEndpointHint: '例如桌面显示的 http://127.0.0.1:52119 或受控局域网配对地址', syncPairPayload: '配对信息（桌面显示的 JSON：{challengeId, code, deviceId}）', syncPairBtn: '立即配对', syncPullBtn: '拉取桌面数据', syncPushBtn: '推送本地修改',
   syncPaired: '已配对', syncScopeRead: '只读', syncScopeWrite: '可读写', syncNotPaired: '尚未配对', syncLastPull: '上次拉取', syncNever: '从未',
   syncPullDone: '已拉取桌面数据', syncPushDone: '本地修改已推送', syncConflicts: '处冲突已按新时间戳获胜合并，请核对：', syncInvalidPayload: '配对信息不是有效的 JSON（需要 challengeId、code、deviceId）', syncPullFailed: '拉取失败：', syncPushFailed: '推送失败：', syncPairFailed: '配对失败：',
-  footer: '为专注而设计 · 本地优先', todayOverview: '今天，先完成重要的事。', progress: '今日进度'
+  footer: '为专注而设计 · 本地优先',
+  offlineState: '离线 · 本地模式', offlineBanner: '当前离线——修改已保存在本浏览器，恢复联网后将自动同步到桌面。',
+  syncPending: '项修改待同步', syncConverged: '离线期间的修改已与桌面同步完成。',
+  syncAutoNote: '已配对时：联网状态下会自动推送并拉取，离线期间的修改会在恢复联网后自动重放，无需手动操作。',
+  dataClearWarning: '注意：清理浏览器站点数据（Cookie 与站点数据）会同时删除本地任务库和配对状态，且无法恢复。请先在“备份与恢复”导出 JSON 备份。',
+  taskNotFound: '未找到该任务（可能已删除或尚未同步）：', todayOverview: '今天，先完成重要的事。', progress: '今日进度'
 }

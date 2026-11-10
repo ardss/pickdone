@@ -48,3 +48,15 @@
 .sync-conflicts{margin:0;padding:0 0 0 18px;font-size:13px;color:#92400e}
 [data-theme="dark"] .sync-card input,[data-theme="dark"] .sync-card textarea{background:#1c2128;border-color:#3a414b;color:#e5e7eb}
 [data-theme="dark"] .sync-state{color:#d1d5db}
+
+/* S5 continuity: offline banner, pending badge, honest sync notes */
+.offline-banner{background:#b45309;color:#fff;font-size:13px;padding:9px 49px;text-align:center}
+.storage-pill.offline{background:#fde8d7;color:#9a4a12}
+.storage-pill.offline .status-dot{background:#d97706}
+.pending-badge{background:#b45309;color:#fff;border-radius:12px;font-size:10px;padding:2px 7px;margin-left:6px;font-weight:700}
+.sync-auto-note{margin:0;font-size:12px;color:#4b5563;line-height:1.7}
+.sync-warn{margin:0;font-size:12px;color:#92400e;background:#fef3c7;border:1px solid #fcd34d;border-radius:9px;padding:10px 12px;line-height:1.7}
+[data-theme="dark"] .offline-banner{background:#92400e}
+[data-theme="dark"] .storage-pill.offline{background:#3a2410;color:#fbbf24}
+[data-theme="dark"] .sync-auto-note{color:#9ca3af}
+[data-theme="dark"] .sync-warn{background:#33270c;color:#fbbf24;border-color:#7a5b12}
