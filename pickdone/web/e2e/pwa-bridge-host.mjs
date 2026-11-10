@@ -103,6 +103,14 @@ const control = createServer((req, res) => {
     })
     return
   }
+  if (req.method === 'POST' && path === '/challenge') {
+    // fresh one-shot pairing for multi-session matrix runs (each browser context pairs itself)
+    const suffix = Date.now().toString(36)
+    const ch = live.issuePairing(DEVICE + '-' + suffix, { scope: 'WRITE' })
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify({ challengeId: ch.challengeId, code: ch.code, deviceId: DEVICE + '-' + suffix }))
+    return
+  }
   if (req.method === 'GET' && path === '/state') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
