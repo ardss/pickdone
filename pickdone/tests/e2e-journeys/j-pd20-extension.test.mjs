@@ -303,12 +303,16 @@ test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', 
     '--no-first-run', '--no-default-browser-check', '--disable-session-crashed-bubble',
     'about:blank'
   ]
-  if (isEdge) launchArgs.push('--enable-unsafe-extension-debugging')
-  else launchArgs.push(`--load-extension=${EXT_DIR}`, '--disable-features=DisableLoadExtensionCommandLineSwitch')
+  // S6 2026-11-10 corrected journey: live-probed Chrome 141 on this host IGNORES
+  // --load-extension exactly like Edge 157 (only component extensions appear in /json;
+  // PickDone's SW never starts). The CDP Extensions.loadUnpacked channel behind
+  // --enable-unsafe-extension-debugging is therefore the single supported path for BOTH
+  // brand browsers — the isEdge split below keys the message wording only.
+  launchArgs.push('--enable-unsafe-extension-debugging')
   chromeProc = spawn(CHROME, launchArgs, { stdio: 'ignore' })
   chromeCdp = `http://127.0.0.1:${cdpPort}`
 
-  if (isEdge) {
+  { // CDP loadUnpacked — Chrome AND Edge (see the corrected-journey note above)
     // load the unpacked extension through the browser-target CDP domain. Edge takes a few
     // seconds to open its debugging endpoint — poll /json/version instead of a bare fetch
     // (a bare fetch races the boot and dies with ECONNREFUSED).
@@ -318,7 +322,7 @@ test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', 
       await sleep(500)
       try { ver = await (await fetch(chromeCdp + '/json/version', { signal: AbortSignal.timeout(1000) })).json() } catch { /* not up yet */ }
     }
-    assert.ok(ver, 'Edge debugging endpoint never came up on ' + chromeCdp)
+    assert.ok(ver, (isEdge ? 'Edge' : 'Chrome') + ' debugging endpoint never came up on ' + chromeCdp)
     const bws = new WebSocket(ver.webSocketDebuggerUrl)
     const loaded = await new Promise((resolve, reject) => {
       const t = setTimeout(() => reject(new Error('Extensions.loadUnpacked timed out')), 20000)
@@ -329,7 +333,7 @@ test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', 
       })
     })
     try { bws.close() } catch { /* done */ }
-    assert.ok(loaded, 'Edge Extensions.loadUnpacked did not return an extension id')
+    assert.ok(loaded, (isEdge ? 'Edge' : 'Chrome') + ' Extensions.loadUnpacked did not return an extension id')
     // EDGE 157 COMPATIBILITY FACT (verified live, not a workaround): an extension installed
     // via the CDP loadUnpacked channel stays with a DORMANT MV3 service worker — no
     // service_worker target ever appears and chrome.runtime.sendMessage from the popup never
@@ -337,7 +341,7 @@ test('E1 setup: app + endpoint meta + real Chrome with the unpacked extension', 
     // capture body (normalizeUrl/fingerprint/queue/deliver) is exercised in the POPUP page
     // with the shipped modules either way, so the Edge leg pins the extension id from the
     // loadUnpacked result and proceeds — the SW-dormant state is the recorded finding.
-    console.log('[pd20-ext-journey] Edge leg: extension ' + loaded + ' loaded via CDP loadUnpacked; MV3 SW dormant under Edge 157 (recorded compat finding)')
+    console.log('[pd20-ext-journey] ' + (isEdge ? 'Edge' : 'Chrome') + ' leg: extension ' + loaded + ' loaded via CDP loadUnpacked; MV3 SW dormant under loadUnpacked (recorded compat finding, now measured on BOTH brand browsers)')
     swTargetUrl = `chrome-extension://${loaded}/`
   }
   if (!swTargetUrl) {
