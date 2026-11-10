@@ -117,7 +117,11 @@ export class AuthGate {
     try {
       result = { ok: true, status: 200, result: handler(String(deviceId), req.payload) }
     } catch (e) {
-      result = { ok: false, status: 500, code: 'handler_error', detail: e && e.message }
+      // J5 (2026-11-10): a FAILED execution is NOT settled — a 500 (transient repo
+      // fault, weak network, crash mid-handler) must never be cached, or the client's
+      // retry of the SAME messageId would be pinned to the cached failure for the whole
+      // dedupe window (silent data loss). Repo ops are idempotent, so re-execution is safe.
+      return { ok: false, status: 500, code: 'handler_error', detail: e && e.message }
     }
     this.settled.set(key, { settledAt: this.now(), result })
     this._sweepSettled()
