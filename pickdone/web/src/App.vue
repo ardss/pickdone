@@ -13,8 +13,14 @@ const tab = ref(parseHash(location.hash).name === 'task' ? 'today' : parseHash(l
 const deepLinkedTask = ref(parseHash(location.hash).name === 'task' ? parseHash(location.hash).id : null)
 function applyHash() {
   const route = parseHash(location.hash)
-  if (route.name === 'task') { tab.value = 'today'; deepLinkedTask.value = route.id }
-  else { tab.value = route.name; deepLinkedTask.value = null }
+  if (route.name === 'task') {
+    tab.value = 'today'; deepLinkedTask.value = route.id
+    if (ready.value) {
+      const task = rows.value.tasks.find(row => row.id === route.id)
+      if (task && !task.deleted) startTask(task)
+      else error.value = t.taskNotFound + ' ' + route.id
+    }
+  } else { tab.value = route.name; deepLinkedTask.value = null }
 }
 function goTab(name) {
   tab.value = name; deepLinkedTask.value = null
