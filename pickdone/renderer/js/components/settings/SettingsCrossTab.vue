@@ -74,7 +74,7 @@ export default {
   name: 'SettingsCrossTab',
   data () {
     return {
-      status: { running: false, enabled: false, lanEnabled: false, port: null, devices: [], lastError: null },
+      status: { running: false, enabled: false, lanEnabled: false, lanReachable: false, port: null, devices: [], lastError: null },
       busy: false,
       pairDeviceId: '',
       pairScope: 'READ',

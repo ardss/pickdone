@@ -176,6 +176,15 @@ interface TodoAPI {
 
 interface Window {
   todoAPI: TodoAPI
+  /** Cross-platform sync bridge (Lane A): main-window-gated, sanitized; exposed in src/preload/index.js */
+  crossPlatformAPI: {
+    status: () => Promise<any>
+    setEnabled: (enabled: boolean) => Promise<any>
+    setLan: (enabled: boolean) => Promise<any>
+    issuePairing: (deviceId: string, scope: string) => Promise<any>
+    revoke: (deviceId: string) => Promise<any>
+    port: () => Promise<any>
+  }
   /** Command bus (renderer/js/utils/commandBus.js): validated/stamped mutation writes via commands:commit */
   commands: {
     commit: (entity: string, verb: string, payload?: any, opts?: any) => Promise<any>
