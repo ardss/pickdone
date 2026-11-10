@@ -16,6 +16,7 @@
  */
 const vscode = require('vscode')
 const crypto = require('crypto')
+const { diagnosticsSummary, buildContextTitle, buildDeepLink } = require('./lib.js')
 const { execFile } = require('child_process')
 const path = require('path')
 
@@ -150,6 +151,48 @@ function activate (context) {
     }
   }))
 
+  // S6 MVP upgrade: capture the CURRENT editor context (file + selection + diagnostics
+  // + git branch/sha) as a reference-shaped SourceRef on an existing task. Privacy line
+  // unchanged and now doubly enforced: diagnostics are summarized to counts + source
+  // names + line numbers — the diagnostic MESSAGE text never leaves the editor (lib.js
+  // is unit-tested for exactly that), and the payload still carries no content/body/text
+  // (the door rejects content-bearing payloads as defense in depth).
+  context.subscriptions.push(vscode.commands.registerCommand('pickdone.captureContext', async () => {
+    if (!await requireKey()) return
+    const editor = vscode.window.activeTextEditor
+    if (!editor) { vscode.window.showErrorMessage('PickDone: open a file first.'); return }
+    const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri)
+    if (!workspaceFolder) { vscode.window.showErrorMessage('PickDone: the file is not inside a workspace folder.'); return }
+    try {
+      const tasks = await request(context, 'GET', '/tasks')
+      if (!tasks.length) { vscode.window.showInformationMessage('PickDone: no open tasks to link to.'); return }
+      const picked = await vscode.window.showQuickPick(tasks.slice(0, MAX_TASKS_SHOWN).map(t => ({
+        label: t.content.length > 90 ? t.content.slice(0, 90) + '…' : t.content,
+        taskId: t.taskId
+      })), { placeHolder: 'Capture current file/selection/diagnostics into which task?' })
+      if (!picked) return
+      const relPath = path.relative(workspaceFolder.uri.fsPath, editor.document.uri.fsPath).replace(/\\/g, '/')
+      const selStart = editor.selection.start.line + 1
+      const selEnd = editor.selection.end.line + 1
+      const allDiags = vscode.languages.getDiagnostics(editor.document.uri)
+      const diagSummary = diagnosticsSummary(allDiags)
+      const branch = await git(workspaceFolder.uri.fsPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
+      const commit = await git(workspaceFolder.uri.fsPath, ['rev-parse', 'HEAD'])
+      const title = buildContextTitle({ relPath, sel: { start: selStart, end: selEnd }, diagSummary, branch, sha: commit })
+      const payload = {
+        taskId: picked.taskId,
+        canonicalUri: 'file:///' + relPath,
+        sourceTitle: title,
+        externalId: commit ? 'git:' + relPath + ':' + commit.slice(0, 12) : 'file:///' + relPath
+      }
+      await request(context, 'POST', '/link-source', payload)
+      vscode.window.showInformationMessage('PickDone: captured ' + title + ' → ' + picked.label,
+        'Open task').then(pick => { if (pick === 'Open task') vscode.commands.executeCommand('pickdone.openTask', picked.taskId) })
+    } catch (e) {
+      vscode.window.showErrorMessage(String(e.message || e))
+    }
+  }))
+
   context.subscriptions.push(vscode.commands.registerCommand('pickdone.showHandoff', async (taskIdArg) => {
     if (!await requireKey()) return
     let taskId = taskIdArg
@@ -167,11 +210,41 @@ function activate (context) {
       const h = await request(context, 'GET', '/handoff?taskId=' + encodeURIComponent(taskId))
       const doc = await vscode.workspace.openTextDocument({ content: (h && h.text) || '', language: 'markdown' })
       await vscode.window.showTextDocument(doc, { preview: true })
+      const open = await vscode.window.showInformationMessage('Handoff ' + taskId + ' shown.', 'Open task in PickDone')
+      if (open) await vscode.commands.executeCommand('pickdone.openTask', taskId)
     } catch (e) {
       vscode.window.showErrorMessage(String(e.message || e))
     }
   }))
 }
+
+  // Deep link (S6): the renderer ships ONE hash route for a task (router.js
+  // /todo-list/task/:id) — desktop and web builds share the grammar. The OS-level
+  // pickdone:// protocol registration is desktop packaging scope (S7), so the command
+  // opens the configured web base when present and otherwise hands the user the link.
+  context.subscriptions.push(vscode.commands.registerCommand('pickdone.openTask', async (taskIdArg) => {
+    if (!await requireKey()) return
+    let taskId = taskIdArg
+    if (!taskId) {
+      const tasks = await request(context, 'GET', '/tasks')
+      if (!tasks.length) { vscode.window.showInformationMessage('PickDone: no open tasks.'); return }
+      const picked = await vscode.window.showQuickPick(tasks.slice(0, MAX_TASKS_SHOWN).map(t => ({
+        label: t.content.length > 90 ? t.content.slice(0, 90) + '…' : t.content,
+        taskId: t.taskId
+      })), { placeHolder: 'Open which task in PickDone?' })
+      if (!picked) return
+      taskId = picked.taskId
+    }
+    const webBase = String(vscode.workspace.getConfiguration('pickdone').get('webBase') || '').trim()
+    if (!webBase) {
+      await vscode.env.clipboard.writeText(buildDeepLink('<pickdone-web-base>', taskId))
+      vscode.window.showInformationMessage('Set "pickdone.webBase" (web/PWA base URL) to open tasks in the browser; link copied: #/todo-list/task/' + taskId)
+      return
+    }
+    const uri = vscode.Uri.parse(buildDeepLink(webBase, taskId))
+    await vscode.env.openExternal(uri)
+    vscode.window.showInformationMessage('PickDone: opening task ' + taskId + ' in the browser.')
+  }))
 
 function deactivate () {}
 
