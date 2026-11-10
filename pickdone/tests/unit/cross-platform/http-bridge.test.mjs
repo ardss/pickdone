@@ -152,10 +152,13 @@ test('UNPAIRED device: pull/push without a token fail closed with 401 token_miss
   const noTok = await post(port, '/crossplatform/pull', { deviceId: 'stranger', messageId: 'x1' }, { 'X-PickDone-Request': stores._state.sessionNonce, Origin: 'http://localhost:5173' })
   assert.equal(noTok.status, 401)
   assert.equal(noTok.json.error, 'token_missing')
-  // no headers at all -> origin gate rejects even earlier (fail-closed, no payload feedback)
+  // no headers at all -> still fail-closed with 403 and no payload feedback. qa-r7 P1 fix
+  // (2026-11-10): a loopback peer with no Origin header waives ONLY the origin check
+  // (native client shape), so the bare probe now fails at the NEXT stage: csrf_rejected.
+  // A non-loopback peer without Origin would still get origin_rejected.
   const bare = await post(port, '/crossplatform/push', { deviceId: 'stranger', messageId: 'x2', payload: { ops: [] } })
   assert.equal(bare.status, 403)
-  assert.equal(bare.json.error, 'origin_rejected')
+  assert.equal(bare.json.error, 'csrf_rejected')
   // correct headers but no bearer -> 401, and the probe learns nothing about payload shape
   const noCreds = await post(port, '/crossplatform/push', { deviceId: 'stranger', messageId: 'x3', payload: { ops: [] } }, { 'X-PickDone-Request': stores._state.sessionNonce, Origin: 'http://localhost:5173' })
   assert.equal(noCreds.status, 401)

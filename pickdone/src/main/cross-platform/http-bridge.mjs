@@ -284,19 +284,37 @@ export class CrossPlatformBridge {
   }
 
   /**
+   * Loopback peer check for the native-client origin waiver (qa-r7 P1 fix, 2026-11-10).
+   * A native client (Android pair-client.js shape) sends NO browser Origin header —
+   * the AuthGate contract (isLocalLoopback) waives the ORIGIN check for such a peer,
+   * but ONLY when the TCP peer address is itself loopback. Every other gate stage
+   * (CSRF, token, scope, replay, rate) still applies unchanged — this is NOT an
+   * auth bypass: a non-loopback (LAN/public) peer without Origin still fails closed
+   * with origin_rejected, and a loopback peer WITH an Origin header still goes
+   * through the normal allowlist check (browser behavior is untouched).
+   */
+  _isLoopbackPeer (req) {
+    const addr = req && req.socket && req.socket.remoteAddress
+    if (typeof addr !== 'string') return false
+    return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
+  }
+
+  /**
    * Shared gate marshaling: bridge-specific headers -> AuthGate request, verdict -> HTTP.
    * Push/pull MUST carry the CSRF header value issued at pairing time (`csrfHeader`).
    */
   _gateRequest (req, body, op) {
+    const origin = req.headers.origin
+    const hasOrigin = typeof origin === 'string' && origin !== ''
     return {
       op,
-      origin: req.headers.origin,
+      origin,
       csrfHeader: req.headers['x-pickdone-request'],
       bearer: this._bearer(req),
       deviceId: body.deviceId,
       messageId: body.messageId,
       payload: body.payload,
-      isLocalLoopback: false
+      isLocalLoopback: !hasOrigin && this._isLoopbackPeer(req)
     }
   }
 
