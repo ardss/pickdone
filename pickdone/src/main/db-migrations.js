@@ -190,13 +190,33 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       return true
     } },
     { v: 13, fn: d => {
-      // pd20 (2026-11-08): episode attribution — the A(agent research)→B(agent continuation)
-      // →QA(human review) closed loop needs each episode to carry WHO produced it. Probe-style
-      // column add (v2/v12 pattern) so both the upgraded shape and this boot's SCHEMA-exec'd
-      // table converge; NULL = legacy row / unknown caller (reads 'human' at the view layer,
-      // out-of-family values store NULL — same never-fabricate doctrine as source_refs.level).
-      const cols = d.prepare('PRAGMA table_info(work_episodes)').all().map(c => c.name)
-      if (!cols.includes('role')) d.exec('ALTER TABLE work_episodes ADD COLUMN role TEXT')
+      // INTEG NOTE (2026-11-10): v13 is the union of two evolutions merged in lr/integ-20261110
+      // — the integ core line's episode-role column (pd20 attribution, 2026-11-08: the
+      // A(agent research)→B(agent continuation)→QA(human review) closed loop needs each
+      // episode to carry WHO produced it) and the android G2 line's handoff targeting +
+      // actorType provenance below. The v14 block that follows (findings/decisions) exists
+      // only on the integ side and is preserved untouched.
+      // G2 zone-2/zone-3 real-data contract (2026-11-10): handoff targeting on todos and
+      // actor provenance on work_episodes. Probe-style column adds (v2/v12 pattern) so the
+      // upgraded shape and this boot's SCHEMA-exec'd tables converge; existing databases pay
+      // only NULLable column adds. Semantics: todos.handoffTo names the device the task was
+      // addressed to (handoffFrom = sender, handoffNote = message, handoffAckedAt > 0 =
+      // receiver accepted); work_episodes.actorType / role mark agent-worked episodes
+      // ('agent' on either — shared/handoff.mjs normalizes by role, the S1 DTO family by
+      // actorType). NULL/0 = not a handoff / human episode — never fabricated. Fully
+      // backward compatible: old readers ignore unknown columns, old payloads leave them NULL.
+      const todoCols = d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='todos'").get()
+        ? d.prepare('PRAGMA table_info(todos)').all().map(c => c.name)
+        : []
+      if (todoCols.length && !todoCols.includes('handoffTo')) d.exec('ALTER TABLE todos ADD COLUMN handoffTo TEXT')
+      if (todoCols.length && !todoCols.includes('handoffFrom')) d.exec('ALTER TABLE todos ADD COLUMN handoffFrom TEXT')
+      if (todoCols.length && !todoCols.includes('handoffNote')) d.exec('ALTER TABLE todos ADD COLUMN handoffNote TEXT')
+      if (todoCols.length && !todoCols.includes('handoffAckedAt')) d.exec('ALTER TABLE todos ADD COLUMN handoffAckedAt INTEGER NOT NULL DEFAULT 0')
+      const epCols = d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='work_episodes'").get()
+        ? d.prepare('PRAGMA table_info(work_episodes)').all().map(c => c.name)
+        : []
+      if (epCols.length && !epCols.includes('actorType')) d.exec('ALTER TABLE work_episodes ADD COLUMN actorType TEXT')
+      if (epCols.length && !epCols.includes('role')) d.exec('ALTER TABLE work_episodes ADD COLUMN role TEXT')
       return true
     } },
     { v: 14, fn: d => {

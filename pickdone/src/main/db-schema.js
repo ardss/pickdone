@@ -40,7 +40,14 @@ CREATE TABLE IF NOT EXISTS todos (
   -- Row provenance (protocol v3, 2026-09-29): the device whose write produced this row's
   -- current updatedAt. Lets the merge layer suppress same-writer stale echoes instead of
   -- minting junk conflict copies. NULL = pre-v7 legacy row (unknown author).
-  syncAuthor    TEXT
+  syncAuthor    TEXT,
+  -- Handoff targeting (migration v13, G2 zone-2 contract): the desktop addressed this task
+  -- to a device (handoffTo), from handoffFrom, with handoffNote; handoffAckedAt > 0 marks
+  -- the receiving device's acceptance. All NULL/0 on ordinary tasks — never fabricated.
+  handoffTo     TEXT,
+  handoffFrom   TEXT,
+  handoffNote   TEXT,
+  handoffAckedAt INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
@@ -153,8 +160,11 @@ CREATE TABLE IF NOT EXISTS work_episodes (
   startedAt INTEGER NOT NULL DEFAULT 0,
   endedAt   INTEGER NOT NULL DEFAULT 0,
   note      TEXT,
-  -- pd20 (2026-11-08): attribution role (human/agent/qa). NULL = legacy row / unknown
-  -- caller — reads 'human' at the view layer, never fabricated at storage (v13 probe-add).
+  -- pd20 (2026-11-08) + G2 (2026-11-10, integ union): attribution role (human/agent/qa) and
+  -- actor provenance. NULL = legacy row / unknown caller — role reads 'human' at the view
+  -- layer; actorType is the S1 naming — either carrying 'agent' marks the episode
+  -- agent-worked. Neither column is ever fabricated at storage (v13 probe-add).
+  actorType TEXT,
   role      TEXT,
   deleted   INTEGER NOT NULL DEFAULT 0,
   deletedAt INTEGER NOT NULL DEFAULT 0,

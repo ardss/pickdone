@@ -62,3 +62,60 @@ h2{margin:0;font-size:16px}
 .sync-actions{display:flex;gap:8px;flex-wrap:wrap}
 .sync-state{display:flex;flex-direction:column;gap:4px;margin:0;font-size:13px;opacity:.85}
 .sync-conflicts{margin:0;padding-left:18px;font-size:13px}
+
+/* ---- G2 four-zone cockpit (ux-contract §4/§5) ---- */
+.offline-banner{position:sticky;top:0;z-index:6;padding:var(--pd-space-2) var(--pd-space-6);background:var(--pd-warning-soft);color:var(--pd-warning);font-size:12px;font-weight:600;text-align:center}
+.ptr-indicator{position:fixed;top:calc(68px + env(safe-area-inset-top));left:0;right:0;z-index:6;text-align:center;color:var(--pd-brand-strong);font-size:20px;animation:ptr-nudge .8s ease-in-out infinite}
+@keyframes ptr-nudge{50%{transform:translateY(6px)}}
+.cockpit-skeleton{padding:var(--pd-space-4) 0;display:flex;flex-direction:column;gap:var(--pd-space-3)}
+.skel-line{height:16px;border-radius:var(--pd-radius-sm);background:linear-gradient(90deg,var(--pd-border) 25%,var(--pd-background) 50%,var(--pd-border) 75%);background-size:200% 100%;animation:skel 1.2s linear infinite}
+@keyframes skel{to{background-position:-200% 0}}
+.w90{width:90%}.w80{width:80%}.w60{width:60%}.w40{width:40%}
+.zone-heading{display:flex;align-items:center;gap:var(--pd-space-2);margin:28px 0 var(--pd-space-2);min-height:32px}
+.zone-heading h2{font-size:15px}
+.zone-showall{display:block;width:100%;min-height:48px;border:0;background:none;color:var(--pd-brand-strong);font-size:13px;font-weight:700;text-align:center}
+.zone-row{min-height:48px}
+.next-action{color:var(--pd-brand-strong)!important}
+.inline-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:4px;vertical-align:middle}
+.takeover{width:auto;min-width:64px;height:44px;padding:0 var(--pd-space-3);font-size:13px}
+.zone-zero{margin:0 0 var(--pd-space-2);padding:var(--pd-space-3) var(--pd-space-4);min-height:44px;background:var(--pd-background);border-radius:var(--pd-radius-md);font-size:13px;color:var(--pd-muted);display:flex;flex-direction:column;gap:4px}
+.zone-zero.healthy{color:var(--pd-success)}
+.zone-gap-note{font-size:11px;opacity:.8}
+.agent-row{display:flex;align-items:center;gap:var(--pd-space-3);width:100%;min-height:48px;margin-bottom:var(--pd-space-2);padding:var(--pd-space-2) var(--pd-space-4);border:1px solid var(--pd-border);border-radius:var(--pd-radius-lg);background:var(--pd-surface);color:var(--pd-text);text-align:left}
+.agent-dot{color:var(--pd-brand-strong);font-size:16px;flex:none}
+.agent-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.agent-main strong{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-main small{font-size:11px;color:var(--pd-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.agent-open{flex:none;color:var(--pd-brand-strong);font-size:12px;font-weight:700}
+.blocked-row{display:flex;align-items:center;gap:var(--pd-space-3);min-height:48px;margin-bottom:var(--pd-space-2);padding:var(--pd-space-2) var(--pd-space-4);background:var(--pd-danger-soft);border-radius:var(--pd-radius-md)}
+.blocker-text{flex:1;min-width:0;font-size:13px;color:var(--pd-danger);overflow:hidden;text-overflow:ellipsis;white-space:normal}
+.blocker-action{flex:none;width:auto;min-width:72px;height:44px;padding:0 var(--pd-space-3);font-size:12px;white-space:nowrap}
+@media(prefers-reduced-motion:reduce){.ptr-indicator,.skel-line{animation:none}}
+
+/* ---- G10 conflict sheet (ux-contract: both sides side by side + timestamps + 3 actions) ---- */
+.conflict-sheet{max-height:86dvh;overflow:auto}
+.conflict-verdict{margin:0 0 var(--pd-space-3);font-size:12px;color:var(--pd-muted);word-break:break-all}
+.conflict-versus{display:grid;grid-template-columns:1fr 1fr;gap:var(--pd-space-2);margin-bottom:var(--pd-space-4)}
+.conflict-side{min-width:0;padding:var(--pd-space-3);border:1px solid var(--pd-border);border-radius:var(--pd-radius-md);background:var(--pd-background);display:flex;flex-direction:column;gap:4px}
+.conflict-side.incoming{border-color:var(--pd-brand);background:var(--pd-surface)}
+.conflict-side-tag{font-size:11px;font-weight:700;color:var(--pd-brand-strong);letter-spacing:.05em}
+.conflict-side p{margin:0;font-size:13px;font-weight:600;word-break:break-word;overflow-wrap:anywhere}
+.conflict-side small{font-size:11px;color:var(--pd-muted)}
+.conflict-actions{display:flex;flex-direction:column;gap:var(--pd-space-2)}
+.conflict-note{margin:var(--pd-space-3) 0 0;font-size:11px;color:var(--pd-muted)}
+
+/* ---- G11 Settings surface (ux-contract §2.2-4) ---- */
+.settings-group{display:flex;flex-direction:column;gap:var(--pd-space-2)}
+.settings-row{display:flex;align-items:center;gap:var(--pd-space-3);min-height:56px;padding:var(--pd-space-3) var(--pd-space-4);border:1px solid var(--pd-border);border-radius:var(--pd-radius-lg);background:var(--pd-surface)}
+.settings-label{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}
+.settings-label strong{font-size:14px}
+.settings-label small{font-size:11px;color:var(--pd-muted)}
+.settings-field{display:flex;flex-direction:column;gap:var(--pd-space-1);margin-top:var(--pd-space-2);font-size:13px;font-weight:600}
+.settings-field input{min-height:48px;margin-top:var(--pd-space-1);padding:0 var(--pd-space-4);border:1px solid var(--pd-border);border-radius:var(--pd-radius-md);background:var(--pd-surface);color:var(--pd-text);font-weight:400}
+.settings-actions{display:flex;gap:var(--pd-space-2);margin-top:var(--pd-space-3)}
+.settings-actions .pd-btn{flex:1}
+/* 390dp-and-up: settings rows relax to a two-column rhythm; 360dp stays single column */
+@media(min-width:390px){
+  .settings-row{padding:var(--pd-space-4)}
+  .conflict-versus{gap:var(--pd-space-3)}
+}

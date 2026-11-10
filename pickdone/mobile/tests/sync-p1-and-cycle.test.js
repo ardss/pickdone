@@ -54,11 +54,11 @@ test('explicit delete door: saveTask({deleted:1}) tombstones a live row; editing
 
 test('applyPulled writes peer rows verbatim; sync-cycle mergePull honors LWW verdicts', async () => {
   const repo = await openRepository()
-  // The browser store persists across tests in this process (fixed db name 'pickdone-mobile-v1'),
-  // so rawAll can surface leftover rows from earlier tests - pin the local row via saveTask's return.
-  const savedLocal = await repo.saveTask({ content: 'Local live', categoryId: 0 })
+  // Deterministic id: the fake-indexeddb store persists across this file's tests, so a
+  // positional localRows[0] assumption is order-dependent — address THE row we created.
+  const localId = 'local-live-' + Math.random().toString(36).slice(2, 8)
+  await repo.saveTask({ id: localId, content: 'Local live', categoryId: 0 })
   const localRows = await repo.rawAll('todos')
-  const localId = savedLocal.id
   const localById = new Map(localRows.map(row => [row.id, row]))
 
   const desktopTodoDto = { taskId: 'desk-1', title: 'From desktop', updatedAt: Date.now() + 60_000, clientTag: 'private-1' }

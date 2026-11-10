@@ -33,19 +33,28 @@ exports.episodePut = (db, ep = {}) => {
   }
   const id = ep.id != null && ep.id !== '' ? String(ep.id) : mintId('ep')
   const now = Date.now()
-  db.prepare(`INSERT INTO work_episodes (id, taskId, startedAt, endedAt, note, role, deleted, deletedAt, updatedAt)
-    VALUES (@id,@taskId,@startedAt,@endedAt,@note,@role,0,0,@updatedAt)
+  // v13 (2026-11-10, integ union of the pd20 role line + android G2 zone-3): actor provenance
+  // rides the put. A caller that omits the fields keeps the legacy NULL = human-episode
+  // semantics; a put is an id-referenced upsert, so an explicit NULL on an existing row also
+  // clears a stale value verbatim. role additionally respects the integ KNOWN_ROLES family
+  // (out-of-family value stores NULL — never fabricated; same-id put can CORRECT a role).
+  const actorType = ep.actorType != null && String(ep.actorType) !== '' ? String(ep.actorType) : null
+  const role = KNOWN_ROLES.has(String(ep.role)) ? String(ep.role) : null
+  db.prepare(`INSERT INTO work_episodes (id, taskId, startedAt, endedAt, note, actorType, role, deleted, deletedAt, updatedAt)
+    VALUES (@id,@taskId,@startedAt,@endedAt,@note,@actorType,@role,0,0,@updatedAt)
     ON CONFLICT(id) DO UPDATE SET taskId=excluded.taskId, startedAt=excluded.startedAt, endedAt=excluded.endedAt,
-      note=excluded.note, role=excluded.role, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
+      note=excluded.note, actorType=excluded.actorType, role=excluded.role, deleted=0, deletedAt=0, updatedAt=excluded.updatedAt`)
     .run({
       id,
       taskId: String(ep.taskId),
       startedAt: Number(ep.startedAt) || 0,
       endedAt: Number(ep.endedAt) || 0,
       note: ep.note != null ? String(ep.note) : null,
-      // pd20 (2026-11-08): attribution role — known family member verbatim, anything else NULL
-      // (same-id put can CORRECT a role; NULL legacy rows keep NULL, never stamped to 'human').
-      role: KNOWN_ROLES.has(String(ep.role)) ? String(ep.role) : null,
+      // pd20 (2026-11-08) + G2 (2026-11-10): attribution role — known family member verbatim,
+      // anything else NULL (same-id put can CORRECT a role; NULL legacy rows keep NULL, never
+      // stamped to 'human'); actorType is the android G2 provenance naming, verbatim or NULL.
+      actorType,
+      role,
       updatedAt: Number(ep.updatedAt) > 0 ? Number(ep.updatedAt) : now
     })
   return id

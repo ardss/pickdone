@@ -22,7 +22,7 @@ const Database = require_('../../../vendor/better-sqlite3-multiple-ciphers')
 const migrations = buildMigrations(null, null)
 const v11 = migrations.find(m => m.v === 11)
 const v12 = migrations.find(m => m.v === 12) // pd20 source verification columns (level/lastVerifiedAt)
-const v13 = migrations.find(m => m.v === 13) // pd20 episode attribution (role)
+const v13 = migrations.find(m => m.v === 13) // union: pd20 episode attribution (role) + handoff targeting (todos) + actor provenance (G2)
 
 /** A real SQLite db with the three v11 tables (+v12 verification +v13 role columns), behind the real
  * command bus — the dbCall seam routes manifest ops to the domain service exactly like db.js. */
