@@ -59,6 +59,12 @@ module.exports = {
       rules: { 'no-loop-func': 'off', 'no-constant-condition': 'off', 'no-return-assign': 'off' }
     },
     {
+      // VS Code 扩展宿主是 CommonJS + Node globals（vscode 注入 require/module）
+      files: ['vscode-extension/**/*.js'],
+      parserOptions: { ecmaVersion: 2022, sourceType: 'script' },
+      env: { node: true }
+    },
+    {
       // CLI/主进程里确有 CJS 写法的文件按需在此放宽
       files: ['cli/lib.js'],
       parserOptions: { ecmaVersion: 2022, sourceType: 'script' },

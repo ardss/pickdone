@@ -15,7 +15,6 @@
  *     invalidates this one on the next request).
  */
 const vscode = require('vscode')
-const crypto = require('crypto')
 const { diagnosticsSummary, buildContextTitle, buildDeepLink } = require('./lib.js')
 const { execFile } = require('child_process')
 const path = require('path')
@@ -216,8 +215,6 @@ function activate (context) {
       vscode.window.showErrorMessage(String(e.message || e))
     }
   }))
-}
-
   // Deep link (S6): the renderer ships ONE hash route for a task (router.js
   // /todo-list/task/:id) — desktop and web builds share the grammar. The OS-level
   // pickdone:// protocol registration is desktop packaging scope (S7), so the command
@@ -245,6 +242,8 @@ function activate (context) {
     await vscode.env.openExternal(uri)
     vscode.window.showInformationMessage('PickDone: opening task ' + taskId + ' in the browser.')
   }))
+
+}
 
 function deactivate () {}
 
