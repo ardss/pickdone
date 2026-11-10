@@ -266,7 +266,7 @@
           <!-- LAN sync tab (P3a 2026-09-16): v-if keeps its DOM out of the default view (visual
                baseline gate); it also participates in cross-tab search while a query is active -->
           <settings-sync-tab v-if="tab==='sync' || searching" v-show="searching || tab==='sync'" @open-updates="tab='about'"/>
-          <settings-capture-tab v-show="searching || tab==='capture'"/>
+          <settings-capture-tab v-show="searching || tab==='capture'"/> <settings-cross-tab v-if="tab==='cross' || searching" v-show="searching || tab==='cross'"/> <!-- Lane A bridge tab: v-if keeps DOM out of the default view -->
           <!-- Data management tab (child component); the DOM order matches the tab order: tomato → sync → data → about -->
           <settings-data-tab v-show="searching || tab==='data'"/>
           <!-- About / feedback (kept last in the DOM to match the visual tab order: ...tomato → data → about) -->
@@ -328,17 +328,18 @@ import SettingsShortcutsTab from './settings/SettingsShortcutsTab.vue'
 import SettingsDataTab from './settings/SettingsDataTab.vue'
 import SettingsSyncTab from './settings/SettingsSyncTab.vue'
 import SettingsCaptureTab from './settings/SettingsCaptureTab.vue'
+import SettingsCrossTab from './settings/SettingsCrossTab.vue'
 import { filterSettingsPanels } from './settings/settingsSearch.js'
 
 export default {
   name: 'SettingsModal',
   mixins: [dialogA11y],
-  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab },
+  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab, SettingsCrossTab },
   data () {
     let tab0 = 'general'
     try { tab0 = localStorage.getItem('settingsTab') || 'general' } catch (e) { /* privacy mode etc. */ }
     return {
-      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'capture', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
+      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'cross', 'capture', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
       searchQ: '',
       searching: false,
       searchEmpty: false,
@@ -371,7 +372,7 @@ export default {
       const u = this.$store.state.auth.user || {}
       return u.userNameDefault ? this.$t('statsA.core.offlineUser') : (u.userName || '')
     },
-    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['capture', this.$t('statsH.SettingsModal.tabCapture')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
+    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['cross', this.$t('crossPlatform.tab')], ['capture', this.$t('statsH.SettingsModal.tabCapture')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
     localDescLines: {
       get () { return this.st.todoDescriptionDisplayLineNumber },
       set (v) { this.set({ todoDescriptionDisplayLineNumber: v }) }

@@ -241,7 +241,17 @@ function run () {
   const EXEMPT_FILES = {
     'src/main/db.js': { why: 'the engine itself — the bus and every op implementation dispatch here', ratchet: 0 },
     'src/main/command-bus.js': { why: 'the single write door — commit() is the only caller that maps commands to ops', ratchet: 0 },
-    'src/main/tomato-announce.js': { why: 'sync ingress plumbing — announce meta row written through the init()-injected db surface (tests stub it; same ingress class as lan-sync-bootstrap was)', ratchet: 1 }
+    'src/main/tomato-announce.js': { why: 'sync ingress plumbing — announce meta row written through the init()-injected db surface (tests stub it; same ingress class as lan-sync-bootstrap was)', ratchet: 1 },
+    // Lane A (2026-11-07): cross-platform bridge ingress — the repo adapter routes peer rows
+    // onto the SAME db.call door the LAN sync-apply ingress uses; the injected contract is
+    // what the contract tests stub (routing through the module bus would bypass it).
+    'src/main/cross-platform/desktop-repo.js': { why: 'bridge sync ingress over the init()-injected db surface (peer rows in, same ingress class as sync-apply)', ratchet: 8 },
+    // Machine-local bridge state (pairing secret/nonce/revocations/devices + enabled flags)
+    // persisted via getMeta/setMeta on the injected surface; machine-local by contract
+    // (isMachineLocalMetaKey covers 'crossplatform.*'), never user data.
+    // Ratchet 4 reflects the merged state incl. ed71f9a4's device registry (integration
+    // resolution 2026-11-07 — the lane ratchet is authoritative for the merged tree).
+    'src/main/cross-platform/bridge-bootstrap.js': { why: 'machine-local bridge trust-root persistence over the injected db surface', ratchet: 4 }
   }
   const writeUniverse = new Set([...dbWriteOps, ...writeOps])
   // Exact-line anchors for the two import-engine bus-facade literals (h7-1 guard pins them

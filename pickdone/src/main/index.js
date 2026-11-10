@@ -748,7 +748,7 @@ function registerIpc () {
     getMainWindow, showMainOrLock,
     isLocked, isLockWindow, lockAppNow, unlockAppNow, verifyLockPassword, allowWithinRate,
     isSafeExternal, attachDir,
-    resyncDbWatch: () => extWatch.currentResyncDbWatch(),
+    resyncDbWatch: () => extWatch.currentResyncDbWatch(), getDbCall: () => (op, p) => dbm.call(op, p),
     notifySyncChange: op => { try { require('./lan-sync-bootstrap').kickSyncRound('local-write:' + op) } catch { /* sync lazy-not-init */ }  try { require('./relay-sync-bootstrap').kickRelayRound('local-write:' + op) } catch { /* relay lazy-not-init */ } },
     broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated,
     rebuildTrayMenu, getTray: trayCluster.getTray, updateTomatoTray,
@@ -767,7 +767,8 @@ function registerIpc () {
     require('./handlers/csv-import')(hctx),
     require('./handlers/tomato')(hctx),
     require('./handlers/system')(hctx),
-    require('./win-bind')(hctx) // T7: five dedicated win-bind:* channels (win-bind/index.js)
+    require('./win-bind')(hctx), // T7: five dedicated win-bind:* channels (win-bind/index.js)
+    require('./cross-platform/bridge-ipc').bridgeIpcHandlers(hctx) // Lane A: crossplatform:* settings channels
   )
   // Flush-ack handshake receiver (see will-quit): renderer sends this after dispatching its debounced
   // flush writes on app-quitting-flush. fire-and-forget (ipcMain.on, not handle) — the main process is

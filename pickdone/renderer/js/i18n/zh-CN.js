@@ -69,6 +69,33 @@ export default {
     "scNavInbox": "切换到待办箱"
   
   },
+"crossPlatform": {
+    "tab": "手机 / 网页同步",
+    "section": "手机 / 网页同步桥",
+    "enableLabel": "启用手机 / 网页同步",
+    "enableTip": "已配对的手机和浏览器可以通过本地鉴权通道与本机同步任务数据；默认关闭。",
+    "lanLabel": "允许局域网设备连接",
+    "lanTip": "关闭=仅本机可用（localhost）。开启=同一 Wi-Fi 下的手机可访问同步端口。未配对设备之前端口不开放。",
+    "statusRunning": "运行中 · 端口 {port}（{bind}）",
+    "statusStopped": "同步桥未运行",
+    "pairSection": "配对新设备",
+    "pairDeviceIdLabel": "设备标识（显示在本机）",
+    "pairScopeLabel": "权限",
+    "pairScopeRead": "仅查看",
+    "pairScopeWrite": "查看并编辑",
+    "pairIssueBtn": "生成配对码",
+    "pairCodeLabel": "配对码",
+    "pairExpiresIn": "{n}秒内有效，仅可使用一次",
+    "pairCodeTip": "在手机 / 网页客户端输入此码完成配对。配对码会过期且只能使用一次。",
+    "devicesSection": "已配对设备",
+    "deviceScope": "{scope}",
+    "devicePairedAt": "配关于 {time}",
+    "deviceRevoked": "已撤销",
+    "revokeBtn": "撤销",
+    "noDevices": "还没有已配对的设备。",
+    "lastErrorLabel": "最近错误",
+    "securityNote": "每个请求都使用短期作用域令牌鉴权；撤销设备后立即断开。"
+},
 "sync": {
     "tab": "同步",
     "freeForever": "本地功能永久免费",

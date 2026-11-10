@@ -30,7 +30,9 @@ test('w5 SettingsModal split: parent imports and registers both tab children', (
   assert.match(parent, /import SettingsDataTab from '\.\/settings\/SettingsDataTab\.vue'/)
   // S4 (2026-11-03): the registration set grew by SettingsCaptureTab (local capture endpoint
   // tab) — anchor updated BYTE-EXACT to the new set so it keeps pinning the real state.
-  assert.match(parent, /components: \{ SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab \}/)
+  // Lane A (2026-11-07): registration set grew again by SettingsCrossTab (mobile/web sync
+  // bridge tab) — anchor updated BYTE-EXACT to the new set so it keeps pinning the real state.
+  assert.match(parent, /components: \{ SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab, SettingsCrossTab \}/)
   assert.match(parent, /<settings-shortcuts-tab v-show="searching \|\| tab==='shortcuts'" ref="shortcutsTab"\/>/)
   assert.match(parent, /<settings-data-tab v-show="searching \|\| tab==='data'"\/>/)
 })
