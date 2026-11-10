@@ -19,6 +19,13 @@ Per-group: justified adaptation differences first; unjustified breaks are listed
   `#2f4935` primary buttons, green check fill) while the desktop leg uses brand TEAL as the
   only accent (ux-contract §Visual hierarchy). This is color drift, not a viewport necessity —
   needs token alignment or an explicitly documented per-client brand exception.
+  FIXED (02f51347): web `style.css` now defines the `--pd-*` token layer from
+  ux-contract-20261110 §1.1 (`--brand #0f9d8f`, `--brand-strong #0c8172`, `--brand-text #0a6f62`,
+  `--brand-light #e2f4f1` / dark `#143430`, focus-ring `rgba(15,157,143,.18)`), light AND dark,
+  and every hardcoded green accent was replaced with token references. Resampled pixels:
+  light hero rgb(226,244,241) = `#e2f4f1`, dark hero rgb(20,52,48) = `#143430` — both exactly
+  the contract token values. Note: the dark rules previously referenced UNDEFINED `--pd-*`
+  vars; defining them is part of this fix.
 
 ## G2 Projects (`02-projects--web--*` vs `04-projects--desktop-*`)
 
@@ -28,7 +35,7 @@ Per-group: justified adaptation differences first; unjustified breaks are listed
 - ADAPTATION (reflow): the two-pane grid (`330px | 1fr`) collapses to one column at <=850px;
   project detail moves under the list. Verified in 360px cells.
 - FAIL (same accent drift as G1: project color dot and hover states are green on web, teal
-  on desktop).
+  on desktop). FIXED by the same token alignment (02f51347).
 
 ## G3 Task detail (`03-task-detail--web--*`)
 
@@ -71,6 +78,14 @@ Per-group: justified adaptation differences first; unjustified breaks are listed
   tasks off the web Today list; the capture pipeline had to normalize ms->yyyymmdd in the
   decrypted copy (same conversion the desktop UI applies at render time). This unit mismatch
   belongs in the sync DTO layer, not in a capture hack.
+  FIXED (02f51347): the unit boundary now lives in `web/src/sync/dto-mapping.js` — pull
+  converts desktop day-start epoch ms -> web yyyymmdd key, push converts back (ranges never
+  overlap: day key <= 99991231 < any real epoch-ms day start). Desktop schema untouched. The
+  capture-time normalization hack was REMOVED and the 48-cell matrix re-ran all green without
+  it — the DTO path alone now lands desktop-scheduled tasks on the web Today list
+  (`g1-today ... task card text non-empty — "Draft launch checklist"` in assertions.log).
+  Unit contract pinned red-first in `web/tests/sync.test.mjs` (bidirectional, cross-day
+  boundary, empty/absent, echo stability).
 
 ## G6 Settings (`06-settings--web--*` vs `08/09-settings--desktop-*`)
 
@@ -86,6 +101,11 @@ Per-group: justified adaptation differences first; unjustified breaks are listed
   `#/backup`, not by any on-screen control. A primary surface with no touch entry point is
   a real usability break; needs a visible mobile entry (or bottom-nav placement in a
   follow-up).
+  FIXED (02f51347, low-cost CSS path): at <=560px the 备份与恢复 button is no longer
+  `display:none` — it renders as a 44x44px icon button in the collapsed top nav row
+  (`.side-bottom` becomes a flex item; its caption paragraph stays hidden). The <=850px rail
+  already kept the button visible (icon-only); only the 560px block needed the change. No
+  security/permission design involved, so no OPEN item.
 
 ## Cross-group notes
 

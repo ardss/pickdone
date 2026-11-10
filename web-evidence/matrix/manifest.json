@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-11-10T11:40:40.501Z",
+  "generatedAt": "2026-11-10T12:16:58.021Z",
   "cells": [
     {
       "file": "01-today--web--1280x800--light--default.png",
@@ -10,7 +10,7 @@
       "navPath": [
         "sidebar > 今日任务"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -26,7 +26,7 @@
         "今日任务",
         "task card > 编辑"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -42,7 +42,7 @@
         "sidebar > 项目",
         "project card click"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -57,7 +57,7 @@
       "navPath": [
         "sidebar > 工作历程"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -74,7 +74,7 @@
         "desktop tombstone (sqlite)",
         "同步 > 拉取桌面数据"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -90,7 +90,7 @@
         "deep link #/backup (side-bottom entry hidden <=850px)",
         "topbar theme toggle"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -105,7 +105,7 @@
       "navPath": [
         "fresh profile > 今日任务 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -120,7 +120,7 @@
       "navPath": [
         "fresh profile > 项目 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -135,7 +135,7 @@
       "navPath": [
         "deep link #/task/<unknown id>"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -150,7 +150,7 @@
       "navPath": [
         "fresh profile > 工作历程 (no episodes)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -165,7 +165,7 @@
       "navPath": [
         "fresh profile > 同步 (unpaired)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -180,7 +180,7 @@
       "navPath": [
         "deep link #/backup (fresh profile)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -195,7 +195,7 @@
       "navPath": [
         "sidebar > 今日任务"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -211,7 +211,7 @@
         "今日任务",
         "task card > 编辑"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -227,7 +227,7 @@
         "sidebar > 项目",
         "project card click"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -242,7 +242,7 @@
       "navPath": [
         "sidebar > 工作历程"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -259,7 +259,7 @@
         "desktop tombstone (sqlite)",
         "同步 > 拉取桌面数据"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -275,7 +275,7 @@
         "deep link #/backup (side-bottom entry hidden <=850px)",
         "topbar theme toggle"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -290,7 +290,7 @@
       "navPath": [
         "fresh profile > 今日任务 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -305,7 +305,7 @@
       "navPath": [
         "fresh profile > 项目 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -320,7 +320,7 @@
       "navPath": [
         "deep link #/task/<unknown id>"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -335,7 +335,7 @@
       "navPath": [
         "fresh profile > 工作历程 (no episodes)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -350,7 +350,7 @@
       "navPath": [
         "fresh profile > 同步 (unpaired)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -365,7 +365,7 @@
       "navPath": [
         "deep link #/backup (fresh profile)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -380,7 +380,7 @@
       "navPath": [
         "sidebar > 今日任务"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -396,7 +396,7 @@
         "今日任务",
         "task card > 编辑"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -412,7 +412,7 @@
         "sidebar > 项目",
         "project card click"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -427,7 +427,7 @@
       "navPath": [
         "sidebar > 工作历程"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -444,7 +444,7 @@
         "desktop tombstone (sqlite)",
         "同步 > 拉取桌面数据"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -460,7 +460,7 @@
         "deep link #/backup (side-bottom entry hidden <=850px)",
         "topbar theme toggle"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -475,7 +475,7 @@
       "navPath": [
         "fresh profile > 今日任务 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -490,7 +490,7 @@
       "navPath": [
         "fresh profile > 项目 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -505,7 +505,7 @@
       "navPath": [
         "deep link #/task/<unknown id>"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -520,7 +520,7 @@
       "navPath": [
         "fresh profile > 工作历程 (no episodes)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -535,7 +535,7 @@
       "navPath": [
         "fresh profile > 同步 (unpaired)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -550,7 +550,7 @@
       "navPath": [
         "deep link #/backup (fresh profile)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -565,7 +565,7 @@
       "navPath": [
         "sidebar > 今日任务"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -581,7 +581,7 @@
         "今日任务",
         "task card > 编辑"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -597,7 +597,7 @@
         "sidebar > 项目",
         "project card click"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -612,7 +612,7 @@
       "navPath": [
         "sidebar > 工作历程"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -629,7 +629,7 @@
         "desktop tombstone (sqlite)",
         "同步 > 拉取桌面数据"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -645,7 +645,7 @@
         "deep link #/backup (side-bottom entry hidden <=850px)",
         "topbar theme toggle"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -660,7 +660,7 @@
       "navPath": [
         "fresh profile > 今日任务 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -675,7 +675,7 @@
       "navPath": [
         "fresh profile > 项目 (no data)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -690,7 +690,7 @@
       "navPath": [
         "deep link #/task/<unknown id>"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -705,7 +705,7 @@
       "navPath": [
         "fresh profile > 工作历程 (no episodes)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -720,7 +720,7 @@
       "navPath": [
         "fresh profile > 同步 (unpaired)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
@@ -735,7 +735,7 @@
       "navPath": [
         "deep link #/backup (fresh profile)"
       ],
-      "capturedAt": "2026-11-10T11:40:40.501Z",
+      "capturedAt": "2026-11-10T12:16:58.020Z",
       "build": {
         "webVersion": "0.1.0",
         "commit": "working-tree"
