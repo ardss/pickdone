@@ -1,12 +1,26 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { PdActionButton, PdEmptyState, PdTaskCard, PdProjectCard, PdWorkEpisodeCard } from '../../shared/ui/index.js'
 import t from './i18n/zh-CN.js'
-import { readAll, putRow, markDeleted, replaceAll, backupData, todayKey, dateInput, dayKey, newTask, newProject, newEpisode, episodeView } from './storage.js'
+import { readAll, putRow, markDeleted, replaceAll, backupData, todayKey, dateInput, dayKey, newTask, newProject, newEpisode, episodeView, readOutbox, saveOutbox, clearOutbox, writeLocal } from './storage.js'
 import { pairDesktop, createBridgeClient } from './sync/bridge-client.js'
 import { mergePull, planPush, summarizePushResults } from './sync/sync-engine.js'
+import { outboxSummary } from './sync/outbox.js'
+import { parseHash, hashFor } from './router.js'
 
-const tab = ref('today')
+// ---- Hash routing: tabs and #/task/:id deep links share desktop/Android task ids ----
+const tab = ref(parseHash(location.hash).name === 'task' ? 'today' : parseHash(location.hash).name)
+const deepLinkedTask = ref(parseHash(location.hash).name === 'task' ? parseHash(location.hash).id : null)
+function applyHash() {
+  const route = parseHash(location.hash)
+  if (route.name === 'task') { tab.value = 'today'; deepLinkedTask.value = route.id }
+  else { tab.value = route.name; deepLinkedTask.value = null }
+}
+function goTab(name) {
+  tab.value = name; deepLinkedTask.value = null
+  history.replaceState(null, '', hashFor({ name }))
+}
+window.addEventListener('hashchange', applyHash)
 const theme = ref(localStorage.getItem('pickdone-web-theme') || 'light')
 document.documentElement.dataset.theme = theme.value
 function toggleTheme() { theme.value = theme.value === 'dark' ? 'light' : 'dark'; document.documentElement.dataset.theme = theme.value; localStorage.setItem('pickdone-web-theme', theme.value) }
@@ -44,43 +58,101 @@ function taskName(id) { return activeTasks.value.find(task => task.id === id)?.c
 function formatTime(ms) { return new Intl.DateTimeFormat('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }).format(ms) }
 function minutes(row) { return Math.max(0, Math.round((row.endedAt - row.startedAt) / 60000)) }
 async function refresh() { rows.value = await readAll() }
+
+// ---- Offline continuity: durable outbox + reconnect replay (mission S5/J5) ----
+// Every local mutation is written together with an outbox entry (same IndexedDB
+// transaction). While offline nothing is pretended: the queue grows and the UI
+// says so. When connectivity and pairing return, a full push+pull cycle runs and
+// the queue is ONLY cleared after both directions actually converged.
+const online = ref(typeof navigator !== 'undefined' ? navigator.onLine : true)
+const pending = ref(0)
+const flushing = ref(false)
+let flushTimer = null
+let flushInterval = null
+async function recountPending() { pending.value = outboxSummary(await readOutbox()).total }
+async function enqueueOp(store, rowId, kind) {
+  const queue = enqueueMutation(await readOutbox(), { store, rowId, kind })
+  await saveOutbox(queue)
+  pending.value = outboxSummary(queue).total
+}
+async function localWrite(store, row) { await writeLocal(store, row); pending.value = outboxSummary(await readOutbox()).total }
+async function localDelete(store, id) {
+  const changed = await markDeleted(store, id)
+  if (changed) await enqueueOp(store, id, 'delete')
+}
+function scheduleFlush(delay = 800) { clearTimeout(flushTimer); flushTimer = setTimeout(() => { flushOutbox() }, delay) }
+async function flushOutbox() {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return
+  if (!syncCreds.value || flushing.value) return
+  const queue = await readOutbox()
+  if (!queue.length) return
+  flushing.value = true
+  try {
+    const local = await readAll()
+    const client = syncClient()
+    const { ops } = planPush(local)
+    if (ops.length) await client.push(ops)
+    const result = await client.pull()
+    const { changes } = mergePull(local, result.entities)
+    for (const change of changes) await putRow(change.store, change.row)
+    lastPullAt.value = Date.now(); sessionStorage.setItem('pickdone-sync-lastpull', String(lastPullAt.value))
+    await clearOutbox(); pending.value = 0
+    await refresh()
+    notice.value = t.syncConverged
+  } catch { /* offline again, token expired or bridge down: the durable queue keeps every change; retried on the next tick/online event */ }
+  finally { flushing.value = false }
+}
+function handleOnline() { online.value = true; scheduleFlush(300) }
+function handleOffline() { online.value = false }
+onUnmounted(() => { clearTimeout(flushTimer); clearInterval(flushInterval); window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline) })
+
 async function run(action) {
   error.value = ''; notice.value = ''
-  try { await action(); await refresh(); notice.value = t.saved }
+  try { await action(); await refresh(); notice.value = t.saved; scheduleFlush() }
   catch (cause) { error.value = t.error + cause.message }
 }
 onMounted(async () => {
-  try { await refresh(); ready.value = true }
-  catch (cause) { error.value = t.storageError + ' ' + cause.message }
+  try {
+    await refresh(); ready.value = true
+    await recountPending()
+    window.addEventListener('online', handleOnline)
+    window.addEventListener('offline', handleOffline)
+    flushInterval = setInterval(() => { flushOutbox() }, 10000)
+    if (deepLinkedTask.value) {
+      const task = rows.value.tasks.find(row => row.id === deepLinkedTask.value)
+      if (task && !task.deleted) startTask(task)
+      else error.value = t.taskNotFound + ' ' + deepLinkedTask.value
+    }
+  } catch (cause) { error.value = t.storageError + ' ' + cause.message }
 })
 async function addTask() {
   if (!taskDraft.value.trim()) { error.value = t.taskRequired; return }
-  await run(async () => { await putRow('tasks', newTask(taskDraft.value, taskProject.value)); taskDraft.value = '' })
+  await run(async () => { await localWrite('tasks', newTask(taskDraft.value, taskProject.value)); taskDraft.value = '' })
 }
 function startTask(task) { editingTask.value = { ...task, scheduledDayInput: dateInput(task.scheduledDay) } }
 async function saveTask() {
   const draft = editingTask.value
   if (!draft?.content.trim()) { error.value = t.taskRequired; return }
   await run(async () => {
-    await putRow('tasks', { ...draft, content: draft.content.trim(), categoryId: Number(draft.categoryId), scheduledDay: dayKey(draft.scheduledDayInput), updatedAt: Date.now(), version: Number(draft.version || 0) + 1 })
+    await localWrite('tasks', { ...draft, content: draft.content.trim(), categoryId: Number(draft.categoryId), scheduledDay: dayKey(draft.scheduledDayInput), updatedAt: Date.now(), version: Number(draft.version || 0) + 1 })
     editingTask.value = null
   })
 }
 async function toggleTask(task) {
   await run(() => putRow('tasks', { ...task, complete: task.complete ? 0 : 1, completedAt: task.complete ? 0 : Date.now(), updatedAt: Date.now(), version: Number(task.version || 0) + 1 }))
 }
-async function deleteTask(task) { if (confirm(t.deleteTask)) await run(() => markDeleted('tasks', task.id)) }
+async function deleteTask(task) { if (confirm(t.deleteTask)) await run(() => localDelete('tasks', task.id)) }
 async function addProject() {
   if (!projectDraft.value.trim()) { error.value = t.projectRequired; return }
-  await run(async () => { await putRow('projects', newProject(projectDraft.value, rows.value.projects)); projectDraft.value = '' })
+  await run(async () => { await localWrite('projects', newProject(projectDraft.value, rows.value.projects)); projectDraft.value = '' })
 }
 async function saveProject() {
   if (!editingProject.value?.name.trim()) { error.value = t.projectRequired; return }
-  await run(async () => { await putRow('projects', { ...editingProject.value, name: editingProject.value.name.trim(), updatedAt: Date.now() }); editingProject.value = null })
+  await run(async () => { await localWrite('projects', { ...editingProject.value, name: editingProject.value.name.trim(), updatedAt: Date.now() }); editingProject.value = null })
 }
 async function deleteProject(project) {
   if (!confirm(t.deleteProject)) return
-  await run(async () => { await markDeleted('projects', project.id); if (selectedProject.value === project.id) selectedProject.value = 0 })
+  await run(async () => { await localDelete('projects', project.id); if (selectedProject.value === project.id) selectedProject.value = 0 })
 }
 function resetEpisode() {
   editingEpisode.value = null; episodeTask.value = ''; episodeNote.value = ''
@@ -101,10 +173,10 @@ async function saveEpisode() {
       ? { ...editingEpisode.value, taskId: episodeTask.value, note: episodeNote.value.trim(), startedAt: start, endedAt: end, updatedAt: Date.now() }
       : newEpisode(episodeTask.value, episodeNote.value, start, end)
     delete row.episodeId; delete row.summary
-    await putRow('episodes', row); resetEpisode()
+    await localWrite('episodes', row); resetEpisode()
   })
 }
-async function deleteEpisode(row) { if (confirm(t.deleteEpisode)) await run(() => markDeleted('episodes', row.id)) }
+async function deleteEpisode(row) { if (confirm(t.deleteEpisode)) await run(() => localDelete('episodes', row.id)) }
 async function exportBackup() {
   try {
     const data = backupData(await readAll())
@@ -192,15 +264,16 @@ async function doSyncPush() {
       <div class="brand"><div class="brand-mark">✓</div><div><strong>{{ t.brand }}</strong><small>WEB EDITION</small></div></div>
       <p class="side-caption">WORKSPACE</p>
       <nav aria-label="主导航">
-        <button :class="{ selected: tab === 'today' }" @click="tab = 'today'"><span class="nav-icon">◫</span>{{ t.today }}<span class="nav-count">{{ todayTasks.length }}</span></button>
-        <button :class="{ selected: tab === 'projects' }" @click="tab = 'projects'"><span class="nav-icon">▦</span>{{ t.projects }}<span class="nav-count">{{ activeProjects.length }}</span></button>
-        <button :class="{ selected: tab === 'history' }" @click="tab = 'history'"><span class="nav-icon">◷</span>{{ t.history }}</button>
-        <button :class="{ selected: tab === 'sync' }" @click="tab = 'sync'"><span class="nav-icon">⇄</span>{{ t.sync }}</button>
+        <button :class="{ selected: tab === 'today' }" @click="goTab('today')"><span class="nav-icon">◫</span>{{ t.today }}<span class="nav-count">{{ todayTasks.length }}</span></button>
+        <button :class="{ selected: tab === 'projects' }" @click="goTab('projects')"><span class="nav-icon">▦</span>{{ t.projects }}<span class="nav-count">{{ activeProjects.length }}</span></button>
+        <button :class="{ selected: tab === 'history' }" @click="goTab('history')"><span class="nav-icon">◷</span>{{ t.history }}</button>
+        <button :class="{ selected: tab === 'sync' }" @click="goTab('sync')"><span class="nav-icon">⇄</span>{{ t.sync }}</button>
       </nav>
-      <div class="side-bottom"><button :class="{ selected: tab === 'backup' }" @click="tab = 'backup'"><span class="nav-icon">⇩</span>{{ t.backup }}</button><p>{{ t.syncNote }}</p></div>
+      <div class="side-bottom"><button :class="{ selected: tab === 'backup' }" @click="goTab('backup')"><span class="nav-icon">⇩</span>{{ t.backup }}</button><p>{{ t.syncNote }}</p></div>
     </aside>
     <div class="main-wrap">
-      <header class="topbar"><div class="topbar-breadcrumb">PICKDONE <span>/</span> {{ tab === 'today' ? t.today : tab === 'projects' ? t.projects : tab === 'history' ? t.history : tab === 'sync' ? t.sync : t.backup }}</div><div class="topbar-actions"><button class="theme-toggle" type="button" @click="toggleTheme">{{ theme === "dark" ? t.lightTheme : t.darkTheme }}</button><div class="storage-pill"><span class="status-dot"></span>{{ t.local }}</div></div></header>
+      <header class="topbar"><div class="topbar-breadcrumb">PICKDONE <span>/</span> {{ tab === 'today' ? t.today : tab === 'projects' ? t.projects : tab === 'history' ? t.history : tab === 'sync' ? t.sync : t.backup }}</div><div class="topbar-actions"><button class="theme-toggle" type="button" @click="toggleTheme">{{ theme === "dark" ? t.lightTheme : t.darkTheme }}</button><div class="storage-pill" :class="{ offline: !online }"><span class="status-dot"></span>{{ online ? t.local : t.offlineState }}<span v-if="pending" class="pending-badge">{{ pending }}</span></div></div></header>
+      <div v-if="!online" class="offline-banner" role="status">{{ t.offlineBanner }}</div>
       <main>
         <div v-if="error" class="message error" role="alert">{{ error }}</div>
         <div v-if="notice" class="message success" role="status">{{ notice }}</div>
@@ -232,9 +305,11 @@ async function doSyncPush() {
             <div class="card sync-card">
               <h2>{{ t.sync }}</h2>
               <p class="sync-state">
-                <span v-if="syncCreds">{{ t.syncPaired }} · {{ syncCreds.scope === 'WRITE' ? t.syncScopeWrite : t.syncScopeRead }} · {{ t.syncLastPull }} {{ lastPullAt ? formatTime(lastPullAt) : t.syncNever }}</span>
+                <span v-if="syncCreds">{{ t.syncPaired }} · {{ syncCreds.scope === 'WRITE' ? t.syncScopeWrite : t.syncScopeRead }} · {{ t.syncLastPull }} {{ lastPullAt ? formatTime(lastPullAt) : t.syncNever }}<template v-if="pending"> · <strong>{{ pending }} {{ t.syncPending }}</strong></template></span>
                 <span v-else>{{ t.syncNotPaired }}</span>
               </p>
+              <p class="sync-auto-note">{{ t.syncAutoNote }}</p>
+              <p class="sync-warn">{{ t.dataClearWarning }}</p>
               <div class="form-actions">
                 <PdActionButton tone="primary" :disabled="syncBusy || !syncCreds" @click="doSyncPull">{{ t.syncPullBtn }}</PdActionButton>
                 <PdActionButton tone="secondary" :disabled="syncBusy || !syncCreds" @click="doSyncPush">{{ t.syncPushBtn }}</PdActionButton>
@@ -245,7 +320,7 @@ async function doSyncPush() {
             </div>
           </div>
         </template>
-        <template v-else><div class="page-heading"><span class="eyebrow">DATA & PORTABILITY</span><h1>{{ t.backup }}</h1><p>{{ t.backupIntro }}</p></div><div class="backup-card card"><div class="backup-icon">⇩</div><div><h2>{{ t.backupTitle }}</h2><p>{{ t.backupIntro }}</p><p class="sync-note">{{ t.syncNote }}</p><div class="backup-actions"><PdActionButton tone="primary" @click="exportBackup">{{ t.export }}</PdActionButton><PdActionButton tone="secondary" @click="fileInput.click()">{{ t.import }}</PdActionButton><input ref="fileInput" type="file" accept=".json,application/json" hidden @change="importBackup"></div></div></div></template>
+        <template v-else><div class="page-heading"><span class="eyebrow">DATA & PORTABILITY</span><h1>{{ t.backup }}</h1><p>{{ t.backupIntro }}</p></div><div class="backup-card card"><div class="backup-icon">⇩</div><div><h2>{{ t.backupTitle }}</h2><p>{{ t.backupIntro }}</p><p class="sync-note">{{ t.dataClearWarning }}</p><p class="sync-note">{{ t.syncNote }}</p><div class="backup-actions"><PdActionButton tone="primary" @click="exportBackup">{{ t.export }}</PdActionButton><PdActionButton tone="secondary" @click="fileInput.click()">{{ t.import }}</PdActionButton><input ref="fileInput" type="file" accept=".json,application/json" hidden @change="importBackup"></div></div></div></template>
       </main>
       <footer>{{ t.footer }}</footer>
     </div>
