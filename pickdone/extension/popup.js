@@ -1,8 +1,22 @@
 /* global chrome */
 import { DEFAULT_CAPTURE_ENDPOINT, validateCaptureEndpoint } from './shared/endpoint-contract.js'
+import { probeDoor } from './shared/door-probe.js'
 const key = document.getElementById('apiKey')
 const endpoint = document.getElementById('endpoint')
 const message = document.getElementById('endpointError')
+const connState = document.getElementById('connState')
+
+// J3 sentinel (qa-r7 P1): the 7789 port conflict must be USER-VISIBLE with retry guidance.
+// The probe proves the endpoint answers as the REAL PickDone door (X-PickDone-Door /
+// X-PickDone-Port identity headers) and classifies unreachable / foreign-process /
+// port-moved states. Rendered on popup open and via the explicit check button.
+async function renderConnState () {
+  const r = await probeDoor(endpoint.value.trim() || DEFAULT_CAPTURE_ENDPOINT)
+  connState.className = r.state === 'ok' ? 'good' : 'bad'
+  connState.textContent = r.message
+  return r
+}
+document.getElementById('checkConn').addEventListener('click', renderConnState)
 function notify (text, bad = false) {
   message.textContent = text
   message.style.color = bad ? '#b42318' : ''
@@ -51,5 +65,5 @@ document.getElementById('flush').addEventListener('click', async () => {
       : 'Delivered ' + (r?.sent?.length || 0) + ' capture(s).', Boolean(r?.pending || r?.failedIds?.length))
   } catch { notify('Desktop unavailable. Check loopback address and retry.', true) }
 })
-load()
+load().then(renderConnState)
 refresh()

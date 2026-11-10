@@ -78,8 +78,13 @@ function startCaptureServer (opts = {}) {
 
   function respond (res, status, json) {
     if (res.writableEnded) return
-    // 204 (OPTIONS preflight) must not carry a body
-    const headers = Object.assign({}, CORS_HEADERS)
+    // J3 sentinel: EVERY answer carries the door identity so a client (extension popup probe,
+    // VS Code extension) can prove it reached the REAL PickDone door and learn the actual
+    // bound port — the silent EADDRINUSE fallback to basePort+1 used to leave both ends blind.
+    const headers = Object.assign({}, CORS_HEADERS, {
+      'X-PickDone-Door': '1',
+      'X-PickDone-Port': String(actualPort || basePort)
+    })
     if (status === 204) {
       res.writeHead(204, headers)
       res.end()

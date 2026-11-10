@@ -30,6 +30,30 @@ button {
   width: 100%;
   padding: 6px;
 }
+/* J3 sentinel: the port-conflict / unreachable state is a first-class visible block,
+   never a silent console-only failure. */
+#connState {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  display: none;
+  white-space: normal;
+}
+#connState.bad {
+  display: block;
+  background: #fdecea;
+  color: #b42318;
+  border: 1px solid #f1b3ae;
+}
+#connState.good {
+  display: block;
+  background: #e8f5ec;
+  color: #1a7f37;
+  border: 1px solid #b7dfc3;
+}
+#checkConn {
+  margin-bottom: 8px;
+}
 .row {
   display: flex;
   align-items: center;

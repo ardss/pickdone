@@ -3,6 +3,8 @@
 <head><meta charset="utf-8" /><link rel="stylesheet" href="popup.css" /></head>
 <body>
   <h1>PickDone queue</h1>
+  <div id="connState" role="alert" aria-live="polite"></div>
+  <button id="checkConn">Check desktop connection</button>
   <div class="row"><label for="apiKey">Access key (loopback)</label><input id="apiKey" type="password" placeholder="paste key from PickDone settings" /></div>
   <div class="row"><label for="endpoint">Desktop capture address (localhost only)</label><input id="endpoint" type="text" spellcheck="false" placeholder="http://127.0.0.1:7789/capture" /></div>
   <div id="endpointError" role="status" aria-live="polite"></div>
