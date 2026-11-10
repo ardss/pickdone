@@ -12,6 +12,24 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
   K_PAIRING_SECRET, K_DEVICE_NAME, K_MANUAL_PEERS, K_PEER_WATERMARKS, K_ENABLED,
   K_PEER_ALIAS_PREFIX, PAIRING_CODE_TTL_MS, DEFAULT_PORT, log }) => {
   /* ---------- P1-3 (2026-09-19 UX review): unpair a device ---------- */
+  /** F1/F2 (2026-11-11 real two-machine acceptance): BOTH initiator pairing ops restart the
+   *  node BEFORE persisting the fresh per-pair secret, so the restarted node's live peer entry
+   *  still holds the STALE secret — the post-pair round dialed with it, the peer's server
+   *  answered auth-failed, and the dialer entered the TERMINAL unpaired state ("re-pair
+   *  required") immediately after a SUCCESSFUL re-pair. Inbound/backlog then stayed dead until
+   *  a manual sync disable/enable. Fix: after the persist, install the fresh secret into the
+   *  live entry (addPeer) and clear that peer's terminal flag + poll backpressure
+   *  (node.onPairSuccess) so the kicked post-pair round dials with the RIGHT secret. */
+  function tellLiveNodePaired (deviceId, name, host, port, secret) {
+    try {
+      const state = getState()
+      if (!state.node || !deviceId) return
+      if (typeof state.node.addPeer === 'function') {
+        state.node.addPeer({ deviceId, name: name || undefined, host: host || undefined, port, secret })
+      }
+      if (typeof state.node.onPairSuccess === 'function') state.node.onPairSuccess(deviceId)
+    } catch (e) { log.warn('[LanSync] live-node pair refresh failed:', e && e.message) }
+  }
   /**
    * Remove a paired device: drop its manual peer record + push watermark and REVOKE the shared
    * pairing secret. Documented consequence (surfaced in the confirm dialog): pairing uses a single
@@ -120,6 +138,7 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     }
     if (r.peer && r.peer.deviceId) {
       persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret })
+      tellLiveNodePaired(r.peer.deviceId, r.peer.name, r.peer.host, r.peer.port, r.secret)
     }
     // D2 fix (2026-10-21): the fire-and-forget round used to have NO catch — a rejected round
     // (transport dead right after pairing) surfaced as an unhandled promise rejection.
@@ -167,7 +186,10 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
       err.code = 'PAIR_RESTART_FAILED_NOT_PERSISTED'
       throw err
     }
-    if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
+    if (r.deviceId) {
+      persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
+      tellLiveNodePaired(r.deviceId, undefined, r.host, r.port, r.secret)
+    }
     // D2 fix (2026-10-21): same catch contract as syncPairWithCode above.
     Promise.resolve().then(runRound).then(persistPeerWatermarks).catch(e => log.warn('[LanSync] post-pair first round failed:', e && e.message))
     return { ...getSettingsPayload(), host: r.host, port: r.port }

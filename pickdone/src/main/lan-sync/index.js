@@ -603,6 +603,29 @@ function createLanSyncNode(opts) {
       if (peerId) forgetPeer(String(peerId))
     },
 
+    /** F1/F2 (2026-11-11 real two-machine acceptance): a SUCCESSFUL pairing with a peer is the
+     *  ONLY trust-root change event — it must clear that peer's terminal unpaired block AND
+     *  every per-peer poll-backpressure stamp (hibernate streak, dial window, flush stall,
+     *  error). Before this existed, the initiator's post-pair round dialed with the stale
+     *  per-pair secret, was rejected, and the resulting terminal unpaired state stayed stuck
+     *  until a manual sync disable/enable (ab226-acceptance.md steps 6 & 12, repro'd twice).
+     *  Deliberately NOT the same as rememberPeer's re-announce clearance: this is called only
+     *  from genuine pairing-success paths (pair-ops after persist / paired-inbound), never
+     *  from discovery flaps, so a REVOKED pairing stays blocked (see the revocation test). */
+    onPairSuccess(peerId) {
+      const id = String(peerId || '')
+      if (!id) return
+      unpairedBy.delete(id) // terminal auth-rejection block
+      const t = retryTimers.get(id)
+      if (t) { clearTimeout(t); retryTimers.delete(id) }
+      backoffMs.delete(id)
+      failStreakBy.delete(id)
+      dialNotBefore.delete(id)
+      flushStallBy.delete(id) // Layer-2 stalled-push counter (a re-pair re-arms snapshot recovery)
+      errorBy.delete(id) // stale error stamp must not linger in the Device Center card
+      refreshOnline(id)
+    },
+
     /** P1-3: manual retry-now (Device Center "sync now"): clear the dial window and cancel the
      *  pending retry timer so the next startSyncRound dials immediately. The failure streak is
      *  KEPT — a manual dial that fails again must not silently reset the hibernate budget. */

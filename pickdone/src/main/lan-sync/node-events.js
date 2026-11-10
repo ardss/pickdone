@@ -53,6 +53,11 @@ module.exports = ({ getState, emitSyncEvent, notifyRenderers, kickSyncRound, sch
         // and is persisted in the peer record + fed to the live node entry for dialing.
         persistPairedPeer({ deviceId: info.deviceId, name: info.deviceName, host: info.host, port: peerPort, secret: info.secret })
         if (state.node) state.node.addPeer({ deviceId: info.deviceId, name: info.deviceName, host: normalizeHost(info.host) || undefined, port: peerPort, secret: info.secret })
+        // F1/F2 (2026-11-11 real two-machine acceptance): the acceptor never restarts its node,
+        // so rememberPeer's terminal clear alone is not enough — any hibernate/backoff/flush-stall
+        // the dialer piled up against this peer during the unpaired window must also clear on the
+        // pairing success (pairing = the only trust-root change event). Guarded: older nodes lack it.
+        if (state.node && typeof state.node.onPairSuccess === 'function') state.node.onPairSuccess(info.deviceId)
         kickSyncRound('paired-inbound')
       } catch (e) { log.warn('[LanSync] paired-inbound persist failed:', e.message) }
     })
