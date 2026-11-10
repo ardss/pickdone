@@ -64,6 +64,7 @@ const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-vis
   'j-attachment-image.test.mjs', // W29 (2026-11-01) paste-image live journey — same live-Electron pool class
   'j-pd20-episode.test.mjs', // pd20 (2026-11-03) work-episode live journey — same live-pool class (run-interactions-shared target)
   'j-pd20-extension.test.mjs', // pd20 (2026-11-04) MV3 capture live journey (real Chrome + unpacked extension) — same live class
+  'j-pd20-deeplink-drop.test.mjs', // pd20 (2026-11-10) S6 deep link + drag-drop live journey (real Electron + synthetic uri-list drop) — same live class; standalone node --test stage
   'j-pd20-finding-decision.test.mjs', // pd20 (2026-11-10) S1 Finding/Decision J1 journey — CLI-driven on an isolated TODO_DB_DIR library (no Electron), runs standalone via node --test as its own targeted stage; pool-classified here per the e2e-journeys doctrine
   'j-win-snippet-live.test.mjs', // pd20 (2026-11-04) MANUAL live stage (TODO_WIN_SNIPPET_LIVE=1): real Win+Shift+S SendInput — never in pools (drives the real mouse/keyboard)
   // 2026-09-28 un-excluded: the --test-force-exit + 2min-ceiling harness added after that wave

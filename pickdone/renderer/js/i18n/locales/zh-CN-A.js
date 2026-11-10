@@ -1,6 +1,7 @@
 // i18n 分片（Batch A）：统计复盘页（StatisticsView/ChartCard/chartConfigs/insights/achievements）+ MatrixGrid
 export default {
   statsA: {
+    TaskDeepLink: { notFound: '未找到该任务（可能已删除或链接过期）' },
     DepView: {
       ready: '可立即做',
       blocked: '被阻塞',

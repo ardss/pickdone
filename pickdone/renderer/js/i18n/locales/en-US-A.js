@@ -1,6 +1,7 @@
 // i18n shard (Batch A): zh source chunk - do not edit values here for EN; see i18n/README.md
 export default {
   statsA: {
+    TaskDeepLink: { notFound: 'Task not found (it may be deleted or the link is stale)' },
     DepView: {
       ready: 'Ready',
       blocked: 'Blocked',

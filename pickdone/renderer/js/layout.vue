@@ -48,6 +48,7 @@ import TomatoPanel from './components/TomatoPanel.vue'
 import TomatoFocusRecord from './components/TomatoFocusRecordModal.vue'
 import TaskAccountModal from './components/TaskAccountModal.vue'
 import WinControls from './components/WinControls.vue'
+import { installCaptureDrop } from './utils/captureDrop.js'
 import ViewMoreMenu from './components/ViewMoreMenu.vue'
 import ContextMenuHost from './components/ContextMenuHost.vue'
 import RepeatModal from './components/RepeatModal.vue'
@@ -135,6 +136,9 @@ export default {
     }
   },
   mounted () {
+    // S6 ecosystem interop: drop a browser URL on the window -> inbox task + SourceRef
+    // (same bus rows as the capture door). The uninstaller keeps the app-shell hot path clean.
+    try { this._pdDropUninstall = installCaptureDrop(window) } catch { /* drop interop is best-effort */ }
     // [w7] While the panel is open the user may manually resize the window; a snapshot taken at
     // open time would restore a stale width on close. _attachPreWidthResize (methods) hooks a
     // debounced resize listener so _preEditWidth tracks the LATEST pre-open width.
@@ -170,6 +174,7 @@ export default {
     if (this._attachTimer) clearTimeout(this._attachTimer)
     document.removeEventListener('mousedown', this._onDocClick)
     this._detachPreWidthResize()
+    if (this._pdDropUninstall) { try { this._pdDropUninstall() } catch {} this._pdDropUninstall = null }
   }
 }
 </script>
