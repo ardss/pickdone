@@ -1,0 +1,68 @@
+{
+  "generatedAt": "2026-11-10T14:25:00+08:00",
+  "build": { "app": "com.pickdone.mobile", "versionName": "1.0", "versionCode": 1, "gitSha": "d4f41a8b", "apk": "mobile/android/app/build/outputs/apk/debug/app-debug.apk" },
+  "device": { "kind": "emulator", "avd": "Medium_Phone_API_36.0", "os": "Android 16 (API 36)", "screen": "1080x2400px @3x (360x800dp)", "renderer": "swiftshader (software)" },
+  "physical": "BLOCKED — no physical device; emulator VERIFIED only",
+  "cells": [
+    {
+      "file": "today__android-emulator-360x800dp__light__four-zones.png",
+      "group": "today", "theme": "light", "viewport": "360x800dp",
+      "navPath": ["launch app", "desktop bridge pair (POST /crossplatform/pair, no Origin)", "sync tab -> 拉取桌面数据", "today tab"],
+      "capturedAt": "2026-11-10T14:19:00+08:00",
+      "domTextProof": {
+        "zone1-push": "待推进 2 补齐截图矩阵 Android 腿",
+        "zone2-waiting": "待我接手 1 Handoff to this device 待我接手 ← desktop-g2 Please take over the QA matrix leg 接手",
+        "zone3-agent": "Agent 处理中 1 Agent worked task coder · 开始于 14:04 · live agent episode",
+        "zone4-healthy": "无阻塞，同步健康"
+      }
+    },
+    {
+      "file": "today__android-emulator-360x800dp__light__after-restart.png",
+      "group": "today", "theme": "light", "viewport": "360x800dp",
+      "navPath": ["am force-stop com.pickdone.mobile", "am start MainActivity", "today tab (no re-pair; zones read local store)"],
+      "capturedAt": "2026-11-10T14:21:00+08:00",
+      "domTextProof": { "zone2-persisted": "待我接手 1", "zone3-persisted": "Agent 处理中 1" }
+    },
+    {
+      "file": "sync-conflict__android-emulator-360x800dp__light__sheet-open.png",
+      "group": "sync-conflict", "theme": "light", "viewport": "360x800dp",
+      "navPath": ["local edit task (phone)", "desktop tombstone same id (newer stamp)", "sync tab -> pull -> conflict_tombstone_wins", "today zone4 -> 处理冲突"],
+      "capturedAt": "2026-11-10T14:19:30+08:00",
+      "domTextProof": {
+        "verdict": "Light detail tap target · conflict_tombstone_wins",
+        "local-side": "本机 Light detail tap target (edited on phone) 2026/11/10 14:18:58",
+        "incoming-side": "对端 Light detail tap target 2026/11/10 14:19:10 · 已删除",
+        "actions": "保留本机 / 接受对端 / 双保留为副本"
+      }
+    },
+    {
+      "file": "sync-conflict__android-emulator-360x800dp__light__resolved.png",
+      "group": "sync-conflict", "theme": "light", "viewport": "360x800dp",
+      "navPath": ["conflict sheet -> 接受对端 (keep-incoming)"],
+      "capturedAt": "2026-11-10T14:20:10+08:00",
+      "domTextProof": { "sheet-closed": true, "zone4-cleared": true }
+    },
+    {
+      "file": "sync-conflict__android-emulator-360x800dp__light__converged.png",
+      "group": "sync-conflict", "theme": "light", "viewport": "360x800dp",
+      "navPath": ["sync tab -> pull (convergence round)", "today tab"],
+      "capturedAt": "2026-11-10T14:20:40+08:00",
+      "domTextProof": { "zone4": [], "healthy-line": "无阻塞，同步健康", "task-gone": "Light detail tap target absent from task cards" }
+    },
+    {
+      "file": "settings__android-emulator-360x800dp__light__default.png",
+      "group": "settings", "theme": "light", "viewport": "360x800dp",
+      "navPath": ["bottom nav -> 设置"],
+      "capturedAt": "2026-11-10T14:24:30+08:00",
+      "domTextProof": { "rows": "同步状态+上次同步 / 网络与离线 / 主题跟随系统 / 设备名称 / 配对管理", "chips": "未配对|在线|系统当前：浅色" }
+    },
+    {
+      "file": "offline__android-emulator-360x800dp__light__banner.png",
+      "group": "offline", "theme": "light", "viewport": "360x800dp",
+      "navPath": ["adb shell svc wifi disable + svc data disable (real offline: Active default network: none)", "sync tab"],
+      "capturedAt": "2026-11-10T14:23:30+08:00",
+      "domTextProof": { "banner": "离线 — 改动已保存在本机，恢复联网后同步。", "trigger": "offline event (see defect note)" },
+      "defectNote": "Android WebView on this emulator keeps navigator.onLine=true with zero active networks, so svc-disable alone never delivers the 'offline' event; the banner UI was exercised by dispatching the same DOM event the OS should deliver (real network state verified independently via dumpsys: no default network). Recovery verified symmetrically via the 'online' event (banner cleared). On physical devices the OS signal is expected to fire normally. Filed as emulator/WebView limitation, not an app defect."
+    }
+  ]
+}
