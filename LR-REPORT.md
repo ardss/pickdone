@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # LR-REPORT — Dev-3 (DESIGN line), S3 batch 1 — 2026-11-10
 
 Branch: `lr/ux-20261110` (worktree `.wt-lr-ux-20261110`), baseline afeae379.
@@ -61,7 +60,9 @@ S1 journey), shared/ui extraction (Wave 2).
 
 Wave 2: close dark-token gaps in desktop CSS first (small, gated), then freeze
 `shared/ui/tokens.json` and hand matrix cells to Android (S4) / Web (S5) implementers.
-=======
+
+---
+
 # LR-REPORT — S5 Web/PWA Continuity (Dev-4b)
 
 Date: 2026-11-10
@@ -277,4 +278,3 @@ absorption artifact of two pre-existing flaky desktop cases (socket-budget C4,
 habits-mirror w7-4), each of which re-ran green in the same run — unrelated surface.
 Evidence cells + `assertions.log`/`manifest.json` re-captured into `web-evidence/matrix/`.
 Nothing pushed. Scratch instance cleaned by the runner (verified in assertions.log).
->>>>>>> lr/web-20261110
