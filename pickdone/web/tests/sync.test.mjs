@@ -60,6 +60,43 @@ test('episode and category aliases round trip; tombstones never dropped', () => 
   assert.throws(() => taskFromDto({ taskId: 'x' }), /title/)
 })
 
+// ---- scheduledDay unit contract: desktop column = local day-start epoch ms,
+// web canonical = yyyymmdd integer. The DTO layer is the unit boundary. ----
+
+test('pull: desktop epoch-ms scheduledDay maps to the web yyyymmdd day key (FAIL-2 red)', () => {
+  const dayStart = new Date(2026, 10, 10).getTime()          // 2026-11-10 00:00 local
+  const row = taskFromDto({ taskId: 'd1', title: 'From desktop', scheduledDay: dayStart, updatedAt: 1 })
+  assert.equal(row.scheduledDay, 20261110, 'desktop ms day-start must land as yyyymmdd so the web Today filter matches')
+  // late-evening timestamps on the same wall-clock day keep the same key (cross-day boundary)
+  const lateNight = new Date(2026, 10, 10, 23, 59).getTime()
+  assert.equal(taskFromDto({ taskId: 'd2', title: 'x', scheduledDay: lateNight, updatedAt: 1 }).scheduledDay, 20261110)
+  const nextDay = new Date(2026, 10, 11, 0, 1).getTime()
+  assert.equal(taskFromDto({ taskId: 'd3', title: 'x', scheduledDay: nextDay, updatedAt: 1 }).scheduledDay, 20261111)
+})
+
+test('pull: an already-yyyymmdd scheduledDay (web echo) passes through unchanged', () => {
+  const row = taskFromDto({ taskId: 'w1', title: 'Echo', scheduledDay: 20261110, updatedAt: 1 })
+  assert.equal(row.scheduledDay, 20261110)
+})
+
+test('pull: empty/absent scheduledDay stays empty', () => {
+  assert.equal(taskFromDto({ taskId: 'e1', title: 'x', scheduledDay: 0, updatedAt: 1 }).scheduledDay, 0)
+  assert.equal('scheduledDay' in taskFromDto({ taskId: 'e2', title: 'x', updatedAt: 1 }), false)
+})
+
+test('push: web yyyymmdd scheduledDay maps to desktop local day-start epoch ms (FAIL-2 red)', () => {
+  const dto = taskToDto({ id: 'w2', content: 'To desktop', scheduledDay: 20261110, updatedAt: 1 })
+  assert.equal(dto.scheduledDay, new Date(2026, 10, 10).getTime(), 'desktop column is epoch ms; a raw yyyymmdd would land in 1970')
+})
+
+test('scheduledDay round trip is stable in both directions', () => {
+  const dayStart = new Date(2026, 10, 10).getTime()
+  const webRow = taskFromDto({ taskId: 'r1', title: 'x', scheduledDay: dayStart, updatedAt: 1 })
+  const echoedDto = taskToDto(webRow)
+  assert.equal(echoedDto.scheduledDay, dayStart, 'web->desktop->echo restores the same ms instant')
+  assert.equal(taskFromDto(echoedDto).scheduledDay, 20261110)
+})
+
 // ---- pairing + client transport ----
 
 test('pairDesktop exchanges the one-time challenge for scoped credentials', async () => {

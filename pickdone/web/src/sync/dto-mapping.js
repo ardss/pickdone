@@ -6,6 +6,40 @@
 
 export const DTO_VERSION = 1
 
+// ---- scheduledDay unit boundary (G2 FAIL-2 fix) ----
+// Desktop persists todos.scheduledDay as the LOCAL DAY-START EPOCH MS
+// (src/main/db-rows.js: +dayjs(todoTime).startOf('day')); the web canonical
+// form is the yyyymmdd day key (web/src/storage.js todayKey()). The desktop DTO
+// layer (shared/cross-platform/dto.mjs) carries the column verbatim, so THIS
+// layer converts — desktop ms in, web key out on pull; web key in, desktop ms
+// out on push. Disambiguation: a yyyymmdd integer is <= 99991231 (< 1e8) while
+// any real epoch-ms day start is >= 1e11, so the ranges never overlap.
+const DAY_KEY_MAX = 99991231
+
+function msToDayKey(ms) {
+  const d = new Date(ms)
+  return d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate()
+}
+
+function dayKeyToMs(key) {
+  const s = String(key)
+  return new Date(Number(s.slice(0, 4)), Number(s.slice(4, 6)) - 1, Number(s.slice(6, 8))).getTime()
+}
+
+function desktopDayToWeb(value) {
+  if (value == null || value === '' || value === 0) return value
+  const n = Number(value)
+  if (!Number.isFinite(n)) return value
+  return n > DAY_KEY_MAX ? msToDayKey(n) : n // already a day key (web echo) -> verbatim
+}
+
+function webDayToDesktop(value) {
+  if (value == null || value === '' || value === 0) return value
+  const n = Number(value)
+  if (!Number.isFinite(n)) return value
+  return n > DAY_KEY_MAX ? n : dayKeyToMs(n) // already epoch ms (double-converted echo) -> verbatim
+}
+
 function pick(row, fields) {
   return Object.fromEntries(fields.filter(f => Object.hasOwn(row, f)).map(f => [f, row[f]]))
 }
@@ -28,6 +62,7 @@ function tomb(row) { return row.deleted || row.delete ? 1 : 0 }
 export function taskToDto(row) {
   if (!row?.id) throw new TypeError('task id required')
   const dto = pick(row, TASK_DTO_FIELDS)
+  if (Object.hasOwn(dto, 'scheduledDay')) dto.scheduledDay = webDayToDesktop(dto.scheduledDay)
   dto.taskId = row.id
   dto.title = row.content
   dto.deleted = tomb(row)
@@ -65,6 +100,7 @@ export function taskFromDto(dto) {
   const id = dto.taskId != null ? dto.taskId : dto.id
   if (id == null || id === '') throw new TypeError('taskId/id required')
   const row = pick(dto, TASK_DTO_FIELDS)
+  if (Object.hasOwn(row, 'scheduledDay')) row.scheduledDay = desktopDayToWeb(row.scheduledDay)
   const content = Object.hasOwn(dto, 'title') ? dto.title : dto.content
   if (typeof content !== 'string') throw new TypeError('task title/content required')
   row.id = String(id)

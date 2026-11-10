@@ -64,11 +64,10 @@ function decryptCopy() {
     db.exec(ddl.replace(/^CREATE TABLE\s+(IF NOT EXISTS\s+)?("?[\w]+"?)/i, 'CREATE TABLE plain.$2'))
     db.exec(`INSERT INTO plain."${table}" SELECT * FROM main."${table}"`)
   }
-  // Desktop stores scheduledDay as day-start epoch ms; the web contract field is the yyyymmdd
-  // day key (same conversion the desktop UI applies when it renders the day). Normalize here so
-  // the pulled rows carry the SAME day semantics the desktop user sees. (Raw ms vs yyyymmdd is
-  // a known cross-client mapping gap — recorded in DIFF-NOTES.md.)
-  db.exec(`UPDATE plain.todos SET scheduledDay = CAST(strftime('%Y%m%d', scheduledDay/1000, 'unixepoch', 'localtime') AS INTEGER) WHERE scheduledDay > 0`)
+  // NOTE (G2 FAIL-2 fix): the desktop column keeps its native day-start epoch ms here and the
+  // pulled rows are converted ms->yyyymmdd by web/src/sync/dto-mapping.js (the DTO unit
+  // boundary). No capture-time normalization anymore — the former hack is covered by
+  // web/tests/sync.test.mjs (scheduledDay unit contract).
   db.exec('DETACH DATABASE plain')
   db.close()
   return tables
