@@ -105,7 +105,9 @@ test('E2E: settings modal opens (regression: an unclosed template div once broke
   // sync tab added (P3a LAN sync, 49f8be3): between Pomodoro and Data Management
   // capture tab added (S4 browser-extension capture endpoint, this branch): between Sync and
   // Data Management — a deliberate feature tab, not broken UI; expectation updated accordingly.
-  assert.deepEqual(st.tabs, ['General', 'Appearance', 'Calendar', 'Shortcuts', 'Pomodoro', 'Sync', 'Capture', 'Data Management', 'Feedback & About'])
+  // Mobile / Web sync bridge tab added (Lane A cross-platform, 94d4d585): between Sync and Capture —
+  // QA S8 2026-11-10 caught this fixture rotting again; same deliberate-tab doctrine.
+  assert.deepEqual(st.tabs, ['General', 'Appearance', 'Calendar', 'Shortcuts', 'Pomodoro', 'Sync', 'Mobile / Web sync', 'Capture', 'Data Management', 'Feedback & About'])
 })
 
 test('E2E: settings tab underline strictly aligns with text (regression: EP nth-child(2)/last-child padding misalignment)', { skip: !available || !isolated }, async () => {
