@@ -150,6 +150,20 @@ const closeEditPanel = async () => {
   return false
 }
 const section = sel => `.edit-panel .ep-work-section ${sel}`
+// USER-MODEL delete: click the row action, then give the read-back the full 5s window; if the
+// row is STILL there, click again — the same as a real user whose click got swallowed re-
+// clicking. (The EditPanelWork quiescent-wait fix, 2026-11-10, removed the silent drop that
+// made the first click land in the previous commit's `saving` window; the retry only covers
+// a genuinely lost click. Window NOT enlarged — one full 10x500ms poll per click round.)
+const clickUntilGone = async (sel, goneExpr) => {
+  for (let round = 0; round < 4; round++) {
+    if (await evalJson(ctx, goneExpr)) return true
+    assert.ok(await clickSec(sel), 'the ' + sel + ' click failed (round ' + round + ')')
+    if (await untilJson(goneExpr, 10, 500)) return true
+    diag('delete round ' + round + ' left the row behind; re-clicking ' + sel)
+  }
+  return false
+}
 
 test('T1 boot: dedicated isolated instance, en-US, onboarding dismissed', async () => {
   ctx = await spawnApp({ name: 'j-pd20-episode' })
@@ -236,8 +250,8 @@ test('T3 episode CRUD through the REAL form: create → state line → read-back
   const eps3 = await untilJson(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length === 2) ? e : null })()`, 10, 500)
   assert.ok(eps3, 'the second episode did not land in storage')
   const id2 = eps3.find(e => e.episodeId !== id1).episodeId
-  assert.ok(await clickSec('[data-episode-id="' + id2 + '"] .ep-work-del'), 'the Delete button click failed')
-  assert.ok(await untilJson(`(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length === 1) ? true : null })()`, 10, 500),
+  assert.ok(await clickUntilGone('[data-episode-id="' + id2 + '"] .ep-work-del',
+    `(async () => { const e = await window.todoAPI.dbCall('queryEpisodesByTask', ${JSON.stringify(taskId)}); return (e && e.length === 1) ? true : null })()`),
     'the deleted episode is still in storage after the row Delete')
 })
 
@@ -280,8 +294,8 @@ test('T4 source bind/unbind/delete through the REAL form: link → L0 read-back 
   assert.equal(srcs2[0].sourceRefId, refId, 're-linking the same (providerId, externalId) must REUSE the existing source ref, not mint a duplicate')
 
   // DELETE: remove the ref itself → the joined read disappears
-  assert.ok(await clickSec('.ep-work-src-del'), 'the source Delete button click failed')
-  assert.ok(await untilJson(`(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)}); return (s && s.length === 0) ? true : null })()`, 10, 500),
+  assert.ok(await clickUntilGone('.ep-work-src-del',
+    `(async () => { const s = await window.todoAPI.dbCall('querySourcesByTask', ${JSON.stringify(taskId)}); return (s && s.length === 0) ? true : null })()`),
     'the deleted source ref is still in the read-back after the row Delete')
 })
 

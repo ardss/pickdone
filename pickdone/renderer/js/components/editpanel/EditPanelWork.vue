@@ -358,8 +358,23 @@ export default {
         this.saving = false
       }
     },
+    // P1 fix (j-pd20-episode T3/T4, 2026-11-10): the row actions below used to bail on the
+    // shared `saving` flag. A click landing inside the PREVIOUS commit's quiescence window
+    // (save → state 'Saved' → the 4-read load() that follows) was SILENTLY dropped — no
+    // feedback, row stays, the state line still shows the stale 'Saved'. Live ops trace
+    // (window.__ops, removeSource.dropped saving:true 3ms after saveSource.enter) proved the
+    // episode journey's red "still in the read-back after the row Delete" is exactly this
+    // drop, not a storage failure. A user's click is a command, not a suggestion: wait out
+    // the in-flight commit (≤5s) and run the action serialized behind it. removeByIds is
+    // tombstone-idempotent (WHERE id = ? AND deleted=0), so even a double click that both
+    // survive the wait stays correct.
+    async waitOpsQuiescent () {
+      for (let i = 0; i < 200 && this.saving; i++) await new Promise(resolve => setTimeout(resolve, 25))
+    },
     async removeEpisode (ep) {
-      if (!ep || this.saving) return
+      if (!ep) return
+      await this.waitOpsQuiescent()
+      if (this.saving) return // the in-flight commit never settled — do not stack a second op
       this.saving = true
       this.epSaveState = ''
       try {
@@ -400,7 +415,9 @@ export default {
     },
     // pd20: undo a binding — tombstone the task_source_links row (the ref itself survives).
     async unbindSource (src) {
-      if (!src || !src.linkId || this.saving) return
+      if (!src || !src.linkId) return
+      await this.waitOpsQuiescent()
+      if (this.saving) return // the in-flight commit never settled — do not stack a second op
       this.saving = true
       this.srcSaveState = ''
       try {
@@ -496,7 +513,9 @@ export default {
       }
     },
     async removeSource (src) {
-      if (!src || !src.sourceRefId || this.saving) return
+      if (!src || !src.sourceRefId) return
+      await this.waitOpsQuiescent()
+      if (this.saving) return // the in-flight commit never settled — do not stack a second op
       this.saving = true
       this.srcSaveState = ''
       try {
