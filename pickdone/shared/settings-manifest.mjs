@@ -88,7 +88,10 @@ export const SETTINGS_MANIFEST = {
     closeActionMinimize: true, isCompleteWithSubtasks: true, isTodoEditModalCloseAutoSave: true,
     isCompleteCheckboxColorFollow: true, runWhenComputerStart: false, hideMainWindowOnStartup: false,
     enableHardwareAcceleration: true, showNoDate: true, showCompleteNoDate: true, showComplete: true,
-    developerMode: false, showTodayXModule: false, showHabitModule: false, showProjectsModule: false,
+    // showProjectsModule mirrors renderer DEFAULT_SETTINGS (pd20 lane B 2026-11-07 graduation):
+    // the CLI's settingsEffective reports the App-run default, so a stale false here would
+    // contradict the visible Project entry on a fresh install.
+    developerMode: false, showTodayXModule: false, showHabitModule: false, showProjectsModule: true,
     showDepsModule: false, isShowSubTask: true, isCalendarDimUncompleted: true, isShowCalendarPrivacyMode: false,
     isDefaultSubTaskFolded: false, showHolidayMarkers: true, showTodoCheckboxOrder: true,
     enableSecurityLock: false, autoBackupEnabled: true, isCalendarBackgroundUserSelected: false,

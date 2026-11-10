@@ -21,11 +21,16 @@ export const DEFAULT_SETTINGS = {
   showNoDate: true,
   showCompleteNoDate: true,
   showComplete: true,
-  developerMode: false, // developer mode: master gate for unfinished/structural experiments (today-x, habit, projects, deps)
+  developerMode: false, // developer mode: master gate for unfinished/structural experiments (today-x, habit, deps)
   showTodayXModule: false, // today experimental view (two-layer gate: developerMode && this)
   autoDownloadUpdates: true, // Auto-update: download in background when a new version is found (off = notify only; manual download on the settings page)
   showHabitModule: false, // habit check-in module (two-layer gate: developerMode && this)
-  showProjectsModule: false, // projects module (two-layer gate: developerMode && this — still experimental, not graduated)
+  // [pd20 lane B 2026-11-07] graduated: projects rides its own switch alone (nav-gate.js) and
+  // defaults ON so a cold-start new user sees the entry. Existing blobs that persist false keep
+  // it hidden (an explicit preference is never force-overridden). The CLI mirror in
+  // shared/settings-manifest.mjs defaults was kept in lockstep (its settingsEffective reports
+  // what the App runs with — a stale false there would contradict the visible entry).
+  showProjectsModule: true, // projects module (own switch alone since graduation; no developerMode requirement)
   showDepsModule: false, // dependency view (two-layer gate: developerMode && this; today deps mode + project deps tab)
   // pd20 (2026-11-05) P0-2: the EditPanel 'continue work' section (work episodes + source refs +
   // handoff copy) is DEFAULT-ON. The old undeclared key read undefined → OFF, which hid the whole
