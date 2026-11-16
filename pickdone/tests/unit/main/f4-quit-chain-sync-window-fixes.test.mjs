@@ -16,8 +16,11 @@ import { createRequire } from 'node:module'
  *      error + single-retry path instead of hanging in 'downloading' forever.
  *   #4 windowBoundsVisible: center OR any corner on some workArea (half-off-screen clamps back).
  *   #5 persistBoundsState: maximized windows persist NORMAL bounds + winIsMaximized flag.
- *   #6 pair-ops: the paired-peer record persists only AFTER restartSync succeeds; a restart
- *      failure persists nothing and rejects with code PAIR_RESTART_FAILED_NOT_PERSISTED.
+ *   #6 pair-ops: the paired-peer record persists BEFORE restartSync (R7 P0 fix 2026-11-13 —
+ *      restorePeers() at restart is the only live-node registration observed to reach the
+ *      restarted node; the old persist-after-restart order left the initiator's live node
+ *      without the peer until the next full app restart). A restart failure rolls the record
+ *      back and rejects with code PAIR_RESTART_FAILED_NOT_PERSISTED.
  *   #7 relay adapter disable/forget await the in-flight round (whenIdle) before mutating state.
  *   #8 relaySetEnabled runs adapter.enable() BEFORE the revisionsFlag flip/backfill — a rejected
  *      enable leaves no flag/backfill side effects.
@@ -164,7 +167,7 @@ function makePairOps ({ restartImpl }) {
     stopSync: () => {}, startSync: () => {}, runRound: () => Promise.resolve(),
     persistPeerWatermarks: () => events.push('watermarks'),
     persistPairedPeer: rec => events.push('persist:' + rec.deviceId),
-    removePairedPeer: () => {},
+    removePairedPeer: id => events.push('remove:' + id),
     restartSync: restartImpl,
     manualPeers: () => [], loadPeerWatermarks: () => ({}), notifyRenderers: () => {}, emitSyncEvent: () => {},
     K_PAIRING_SECRET: 'sync.pairingSecret', K_DEVICE_NAME: 'sync.deviceName', K_MANUAL_PEERS: 'sync.manualPeers',
@@ -179,16 +182,16 @@ function makePairOps ({ restartImpl }) {
   return { ops, events }
 }
 
-test('#6 syncPairWithCode persists the peer only AFTER a successful restart', async () => {
+test('#6 syncPairWithCode persists the peer BEFORE the restart (R7: restorePeers must see it)', async () => {
   const { ops, events } = makePairOps({ restartImpl: async () => { events.push('restart') } })
   await ops.syncPairWithCode({ code: '123456' })
   const persistAt = events.indexOf('persist:peer-1')
   const restartAt = events.indexOf('restart')
-  assert.ok(persistAt > -1 && restartAt > -1 && restartAt < persistAt,
-    'restart precedes persist (events: ' + events.join(',') + ')')
+  assert.ok(persistAt > -1 && restartAt > -1 && persistAt < restartAt,
+    'persist precedes restart (events: ' + events.join(',') + ')')
 })
 
-test('#6 syncPairWithCode: failed restart persists NOTHING and rejects with PAIR_RESTART_FAILED_NOT_PERSISTED', async () => {
+test('#6 syncPairWithCode: failed restart rolls the record back and rejects with PAIR_RESTART_FAILED_NOT_PERSISTED', async () => {
   const { ops, events } = makePairOps({ restartImpl: async () => { events.push('restart-failed'); throw new Error('EADDRINUSE') } })
   await assert.rejects(() => ops.syncPairWithCode({ code: '123456' }), e => {
     assert.equal(e.code, 'PAIR_RESTART_FAILED_NOT_PERSISTED')
@@ -196,22 +199,23 @@ test('#6 syncPairWithCode: failed restart persists NOTHING and rejects with PAIR
     assert.match(e.message, /peer may already show/, 'error carries the true cross-side state')
     return true
   })
-  assert.equal(events.includes('persist:peer-1'), false, 'no ghost pairing on disk')
+  assert.equal(events.includes('remove:peer-1'), true, 'the just-written record is rolled back — no ghost pairing on disk')
 })
 
-test('#6 syncPairRequest: failed restart persists NOTHING and rejects with the structured code', async () => {
+test('#6 syncPairRequest: failed restart rolls the record back and rejects with the structured code', async () => {
   const { ops, events } = makePairOps({ restartImpl: async () => { throw new Error('bind failed') } })
   await assert.rejects(() => ops.syncPairRequest({ host: '127.0.0.1', port: 58472 }), e => {
     assert.equal(e.code, 'PAIR_RESTART_FAILED_NOT_PERSISTED')
     return true
   })
-  assert.equal(events.includes('persist:peer-2'), false)
+  assert.equal(events.includes('remove:peer-2'), true, 'the just-written record is rolled back')
 })
 
-test('#6 syncPairRequest: successful restart persists after it (ordering)', async () => {
+test('#6 syncPairRequest persists BEFORE the restart (ordering)', async () => {
   const { ops, events } = makePairOps({ restartImpl: async () => { events.push('restart') } })
   await ops.syncPairRequest({ host: '127.0.0.1', port: 58472 })
-  assert.ok(events.indexOf('restart') < events.indexOf('persist:peer-2'))
+  assert.ok(events.indexOf('persist:peer-2') < events.indexOf('restart'),
+    'persist precedes restart (events: ' + events.join(',') + ')')
 })
 
 /* ------------------------------------------------------------------ *

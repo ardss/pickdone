@@ -127,19 +127,30 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // state (the peer may already show us as paired) so the user can re-pair knowingly.
     // (The legacy global-secret adoption above stays before the restart on purpose: it is a
     // fallback secret for pre-F1 peers, inert without a persisted peer record.)
+    // R7 P0 fix (2026-11-13 real two-machine drill): persist BEFORE the restart. restorePeers()
+    // inside startSync is the only registration path observed to actually reach the live node —
+    // with persist AFTER the restart (the old order), the initiator's freshly restarted node
+    // missed the just-paired peer entirely (rounds ran targets=0 until the next FULL app
+    // restart; repro'd twice on physical Windows A/B, beta.29). Fail-closed F4 #6 is preserved
+    // by rolling the just-written record back when the restart fails, so a failed bind still
+    // persists NOTHING and rejects with the same structured code as before.
+    const peerRec = r.peer && r.peer.deviceId
+      ? { deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret }
+      : null
+    if (peerRec) persistPairedPeer(peerRec)
     try {
       // S5: awaited + fail-closed — a bind failure after pairing surfaces to the renderer as a
       // rejected pairing op with sync OFF, not as a silent dead toggle.
       await restartSync({ preserveEnabled: true })
     } catch (e) {
+      if (peerRec) { try { removePairedPeer(peerRec.deviceId) } catch { /* rollback best-effort */ } }
       const err = new Error('syncPairWithCode: pairing accepted by the peer but the node restart failed — NOT persisted locally (the peer may already show this device as paired): ' + ((e && e.message) || e))
       err.code = 'PAIR_RESTART_FAILED_NOT_PERSISTED'
       throw err
     }
-    if (r.peer && r.peer.deviceId) {
-      persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret })
-      tellLiveNodePaired(r.peer.deviceId, r.peer.name, r.peer.host, r.peer.port, r.secret)
-    }
+    // Belt-and-braces: on the restored node the peer is already present (restorePeers); this
+    // also covers any restart implementation that does not hydrate from the persisted table.
+    if (peerRec) tellLiveNodePaired(peerRec.deviceId, peerRec.name, peerRec.host, peerRec.port, peerRec.secret)
     // D2 fix (2026-10-21): the fire-and-forget round used to have NO catch — a rejected round
     // (transport dead right after pairing) surfaced as an unhandled promise rejection.
     Promise.resolve().then(runRound).then(persistPeerWatermarks).catch(e => log.warn('[LanSync] post-pair first round failed:', e && e.message))
@@ -175,21 +186,24 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // PRESERVED so legacy global-secret peers keep authenticating across new pairings.
     if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, String(r.secret))
     log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
-    // F4 #6: same fail-closed contract as syncPairWithCode — the peer record persists ONLY after
-    // the restart succeeds, so a failed bind can never leave a persisted pairing the UI reported
-    // as failed. Structured code carries the true cross-side state (the peer accepted).
+    // R7 P0 fix (2026-11-13): same persist-before-restart + rollback-on-failure contract as
+    // syncPairWithCode above — restorePeers() at restart is the proven live-node registration
+    // path; the post-restart tellLiveNodePaired alone was observed swallowed on real A/B
+    // (initiator rounds ran targets=0 until the next full app restart).
+    const rec = r.deviceId ? { deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret } : null
+    if (rec) persistPairedPeer(rec)
+    // F4 #6 / S5 fail-closed: a failed bind must leave NOTHING persisted — the just-written
+    // record is rolled back here, keeping the old "NOT persisted locally" contract intact.
     try {
       // S5: awaited + fail-closed (same contract as syncPairWithCode above).
       await restartSync({ preserveEnabled: true })
     } catch (e) {
+      if (rec) { try { removePairedPeer(rec.deviceId) } catch { /* rollback best-effort */ } }
       const err = new Error('syncPairRequest: pairing accepted by ' + host + ' but the node restart failed — NOT persisted locally (the peer may already show this device as paired): ' + ((e && e.message) || e))
       err.code = 'PAIR_RESTART_FAILED_NOT_PERSISTED'
       throw err
     }
-    if (r.deviceId) {
-      persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
-      tellLiveNodePaired(r.deviceId, undefined, r.host, r.port, r.secret)
-    }
+    if (rec) tellLiveNodePaired(rec.deviceId, undefined, rec.host, rec.port, rec.secret)
     // D2 fix (2026-10-21): same catch contract as syncPairWithCode above.
     Promise.resolve().then(runRound).then(persistPeerWatermarks).catch(e => log.warn('[LanSync] post-pair first round failed:', e && e.message))
     return { ...getSettingsPayload(), host: r.host, port: r.port }
