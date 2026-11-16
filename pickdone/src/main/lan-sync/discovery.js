@@ -200,8 +200,15 @@ function createDiscovery() {
       // UDP fallback: same leak guard — close the previous socket + interval before recreating.
       if (udpTimer) { clearInterval(udpTimer); udpTimer = null }
       if (udp) { try { udp.close() } catch { /* noop */ } udp = null }
-      startUdpFallback({ deviceId, name, port })
     }
+    // QA-R7 §7 fix (2026-11-16): mDNS ANNOUNCE packets cross machines, but mDNS QUERIES often
+    // get no cross-machine answer (Windows responder/firewall quirks) — a bonjour-only setup
+    // meant the peer's browser found nothing and the 6-digit-code pairing path died on
+    // "peer not discovered". The UDP fallback channel PROVES it crosses machines (lab stub
+    // announcement dialed in within seconds). Run it ALWAYS — alongside bonjour when present,
+    // as the only channel when bonjour-service is unavailable — so advertise+listen never
+    // depends on cross-machine mDNS query round-trips.
+    startUdpFallback({ deviceId, name, port })
   }
 
   function startUdpFallback({ deviceId, name, port }) {
