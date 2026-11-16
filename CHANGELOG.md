@@ -4,6 +4,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/). The 0.x series is the initial-development band: from 0.4.0 on, any user-visible new feature bumps MINOR; PATCH is fixes/internal hardening only. 1.0.0 marks stable data format + sync. Historical versions (≤0.3.7) are not retro-renumbered.
 
+## [0.4.0-beta.30] - 2026-11-16
+
+### Fixed
+- LAN sync (QA-R7 P0, real two-machine drill): an initiator-side pairing restarted the live node BEFORE persisting the just-paired peer, so every round ran with targets=0 until the next full app restart and deletes propagated only via the acceptor's 5-minute periodic pull. Both pairing flows now persist the peer record BEFORE the restart (restorePeers at restart is the proven registration path), with the just-written record rolled back when the restart fails so the fail-closed contract is preserved. End-to-end: post-pair round confirms immediately, an initiator-side delete reaches the peer in ≤2s (was ~5 minutes).
+- LAN sync discovery (QA-R7 §7): the six-digit-code pairing path died cross-machine because the UDP fallback channel only ran when bonjour-service was absent — on a normal install, discovery depended entirely on mDNS, whose QUERIES frequently get no cross-machine answer even though ANNOUNCES do cross. The UDP fallback now runs ALWAYS alongside bonjour, so advertise+listen never depends on cross-machine mDNS query round-trips.
+
 ## [0.4.0-beta.29] - 2026-11-10
 
 - PickDone 2.0 work-continuity milestone (PD20 long-run): the Task→Episode→Finding/Decision→SourceRef→Handoff loop is closed end to end (migration v14, CLI, EditPanel UI, handoff export), the cross-platform bridge accepts authenticated native clients without an Origin header (loopback-anchored, zero auth weakening) with error-recovery hardening, the Android/Web/extension clients landed (offline PWA outbox with real bridge sync, Capacitor native HTTP pairing, MV3 capture with a user-visible port-conflict sentinel, deep links and drag-drop interop, a VS Code VSIX MVP), the installer chain gained a five-surface identity audit and a scripted backup/upgrade/rollback drill, and an independent QA verdict marked the candidate GO-READY (candidate ≠ publish).

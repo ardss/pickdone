@@ -1,5 +1,11 @@
 # Changelog（中文版）
 
+## [0.4.0-beta.30] - 2026-11-16
+
+### Fixed
+- LAN 同步（QA-R7 P0，真机双机演练）：发起端配对在持久化新 peer 之前就重启了活节点，导致每轮同步 targets=0 直到下次完整重启，删除只能靠对端 5 分钟周期拉取传播。两条配对流程现在都在重启前先持久化 peer（重启时的 restorePeers 是被证实的注册路径），重启失败时回滚刚写入的记录、保住 fail-closed 契约。端到端：配对后首轮立即确认，发起端删除 ≤2 秒到达对端（原约 5 分钟）。
+- LAN 同步发现（QA-R7 §7）：六位码配对跨机失效，根因是 UDP 兜底通道只在 bonjour-service 缺席时才启动——正常安装下发现完全依赖 mDNS，而 mDNS 查询经常跨机无应答（广播却能跨机到达）。UDP 兜底现在无条件与 bonjour 伴跑，广播+监听不再依赖跨机 mDNS 查询回路。
+
 ## [0.4.0-beta.29] - 2026-11-10
 
 - PickDone 2.0 工作连续性里程碑（PD20 长程）：Task→Episode→Finding/Decision→SourceRef→Handoff 全链闭环（迁移 v14、CLI、EditPanel UI、handoff 导出）；跨端桥接受理无 Origin 头的已认证原生客户端（loopback 锚定，认证零弱化）并加固错误恢复；Android/Web/扩展三客户端落地（离线 PWA outbox 真桥同步、Capacitor 原生 HTTP 配对、MV3 捕获含用户可见端口冲突哨兵、深链与拖拽互通、VS Code VSIX MVP）；安装链新增五表面身份审计与一键备份/升级/回滚演练；独立 QA 判定候选 GO-READY（候选态 ≠ Publish）。
