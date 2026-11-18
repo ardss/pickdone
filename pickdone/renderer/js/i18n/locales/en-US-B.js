@@ -79,6 +79,10 @@ export default {
       "memorialKept": "{n} days kept"
     },
     "ProjectsView": {
+      "recoveryTitle": "Projects awaiting recovery ({n})",
+      "recoveryExplain": "These project names are damaged, but their original IDs and task links remain. Expand to inspect and open tasks. No names are guessed and no tasks are reclassified.",
+      "recoveryItem": "Original project ID {id} · {count} tasks ({open} unfinished)",
+      "recoveryEmpty": "No linked tasks; original project record is preserved for investigation.",
       "toolbarTip": "Projects help you push one thing forward: see progress, focus time and overdue items",
       "newProject": "New Project",
       "promptTitle": "New Project",

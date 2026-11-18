@@ -63,6 +63,8 @@ module.exports = function todoHandlers (ctx) {
     'getById', 'getAll', 'queryTodos', 'getMeta', 'deleteMeta',
     // CONTRACT (2026-09-20, F-UI): batch meta read (read-only, ANY window — replaces per-key getMeta loops)
     'getMetaMany',
+    // Project-v2 only: filtered read-only enumeration for backup, not arbitrary meta key listing.
+    'projectV2Keys',
     'upsert', 'upsertMany', 'commitSyncBatch', 'hardDelete', 'hardDeleteMany', 'setMeta',
     'getAllCategories', 'upsertCategory',
     // Filter CRUD (filterUpsert/filterDelete are user-level safe writes, same as upsertCategory) + count reads

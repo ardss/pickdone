@@ -25,6 +25,7 @@ Read commands:
   tag    [list]                   list tags (derived from #tag in titles/descriptions)
   tag rename <old> <new>          rewrite #old → #new across all tasks
   tag rm <name>                   strip a tag from all tasks
+  project-v2 [list|audit|migrate [--dry-run|--yes --yes-i-know]]    independent project identities, explicit task links and unresolved legacy-project audit
   projects [--status active|paused|done|cancelled]        list projects (progress/focus minutes/overdue/next 7 days)
   project <name|id> [--on|--off] [--deadline date|none] [--status active|paused|done|cancelled|none]  details / set project / set deadline / set lifecycle status (none clears)
   view list                       saved smart lists (same filters table the App's filter views use)

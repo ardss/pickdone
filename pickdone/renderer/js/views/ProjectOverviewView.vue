@@ -57,7 +57,20 @@
         </div>
       </div>
       <!-- 过滤无结果 ≠ 真没项目:区分文案 + 一键清除筛选出口;filter=all 仍走原有"暂无项目"空态 -->
-      <empty-state v-if="!filteredProjects.length">
+      <!-- A legacy project with a damaged category name is still a project record.
+           It must be visible without inventing a replacement name or reassigning tasks. -->
+      <section v-if="unresolvedLegacyProjects.length" class="proj-recovery" aria-label="Legacy project recovery">
+        <h3 class="proj-recovery__title">{{ $t('statsB.ProjectsView.recoveryTitle', { n: unresolvedLegacyProjects.length }) }}</h3>
+        <p class="proj-recovery__explain">{{ $t('statsB.ProjectsView.recoveryExplain') }}</p>
+        <details v-for="p in unresolvedLegacyProjects" :key="p.id" class="proj-recovery__entry">
+          <summary>{{ $t('statsB.ProjectsView.recoveryItem', { id: p.id, count: p.tasks.length, open: p.tasks.filter(t => !t.complete).length }) }}</summary>
+          <p v-if="!p.tasks.length" class="proj-recovery__empty">{{ $t('statsB.ProjectsView.recoveryEmpty') }}</p>
+          <div v-else class="proj-recovery__tasks">
+            <button v-for="t in p.tasks" :key="t.taskId" type="button" class="proj-recovery__task" :title="t.taskContent" @click="openRecoveredTask(t)">{{ t.taskContent }}</button>
+          </div>
+        </details>
+      </section>
+      <empty-state v-if="!filteredProjects.length && !unresolvedLegacyProjects.length">
         <template #text>
           <template v-if="filter !== 'all' && projects.length">{{ $t('projQ.filteredEmpty') }}</template>
           <template v-else>{{ $t('statsB.ProjectsView.empty') }}</template>
@@ -115,6 +128,15 @@ export default {
   },
   computed: {
     statusFilters () { return ['all', ...PROJECT_STATUSES] },
+    unresolvedLegacyProjects () {
+      const cats = this.$store.state.category.list || []
+      const liveNamed = new Set(cats.filter(c => !c.delete && String(c.categoryName || '').trim()).map(c => String(c.categoryId)))
+      const ids = this.$store.state.category.projectIds || []
+      const tasks = (this.$store.state.todo.todoList || []).filter(t => t && !t.delete)
+      return [...new Set(ids.map(String))].filter(id => !liveNamed.has(id))
+        .map(id => ({ id, tasks: tasks.filter(t => String(t.categoryId) === id) }))
+        .sort((a, b) => b.tasks.length - a.tasks.length)
+    },
     loadThreshold () { return Number(this.$store.state.settings.dailyLoadWarnThreshold) || 0 },
     projects () {
       const today0 = this.$store.state.todo.todayTimestamp || +dayjs().startOf('day')
@@ -217,6 +239,7 @@ export default {
       return s === 'overdue' ? 'proj-card__dl--over' : (s === 'soon' ? 'proj-card__dl--soon' : '')
     },
     open (id) { this.$router.push({ name: 'todo-list-project', params: { id: String(id) } }).catch(() => {}) },
+    openRecoveredTask (t) { this.$store.commit('ui/openEdit', t) },
     /** Progress ring SVG parameters (r=13, viewBox 32) */
     ring (p) {
       const C = 2 * Math.PI * 13
@@ -344,4 +367,14 @@ html[data-theme="dark"] .proj-card { background: rgba(255, 255, 255, .03); }
 .proj-card__facts > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .proj-card__facts b { color: var(--text-3); font-weight: 500; margin-right: 4px; }
 .proj-card__facts .proj-card__risk { color: var(--danger); }
+.proj-recovery { margin: 22px 28px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--gray-bg); }
+.proj-recovery__title { font-size: var(--fs-md); font-weight: 600; margin: 0 0 6px; color: var(--text-1); }
+.proj-recovery__explain { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.6; margin: 0 0 12px; }
+.proj-recovery__entry { border-top: 1px solid var(--line); padding: 9px 0; color: var(--text-2); }
+.proj-recovery__entry summary { cursor: pointer; font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; }
+.proj-recovery__entry summary:hover { color: var(--brand-text); }
+.proj-recovery__tasks { max-height: 210px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding: 7px 0 4px 16px; }
+.proj-recovery__task { text-align: left; color: var(--text-2); font-size: var(--fs-xs); padding: 4px 7px; border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.proj-recovery__task:hover, .proj-recovery__task:focus-visible { color: var(--brand-text); background: var(--brand-light); }
+.proj-recovery__empty { color: var(--text-3); font-size: var(--fs-xs); margin: 6px 0 0 18px; }
 </style>

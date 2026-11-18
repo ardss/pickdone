@@ -78,6 +78,10 @@ export default {
       memorialKept: '已坚持 {n} 天'
     },
     ProjectsView: {
+      recoveryTitle: '待恢复项目记录（{n}）',
+      recoveryExplain: '这些项目的原始名称损坏，但项目 ID 和关联任务仍在。展开可查看并打开任务；不自动猜测名称，也不改变任务分类。',
+      recoveryItem: '原项目 ID {id} · {count} 条任务（未完成 {open}）',
+      recoveryEmpty: '没有关联任务；原项目记录保留待核查。',
       toolbarTip: '项目用于集中推进一件事：看到进度、专注投入与逾期',
       newProject: '新建项目',
       promptTitle: '新建项目',
