@@ -62,7 +62,7 @@
       <div v-if="devMode" class="ep-cat-wrap">
         <ep-dependencies ref="depBlock" :task="e" @patch="patchPreds"/>
       </div>
-      <ep-work v-if="$store.state.settings.developerMode === true && ($store.state.settings.workEpisode || {}).enabled" :task-id="(e && e.taskId) || 0" :task-title="(e && e.title) || ''"/>
+      <ep-work ref="workBlock" v-if="$store.state.settings.developerMode === true && ($store.state.settings.workEpisode || {}).enabled" :task-id="(e && e.taskId) || 0" :task-title="(e && e.title) || ''"/>
 
       <ep-tags :tags="taskTags" @add="addTag" @remove="removeTag"/>
 
@@ -128,6 +128,10 @@
       <div class="ep-flex"></div>
 
       <div class="ep-tools">
+        <button v-if="!inRecycle" type="button" class="ep-tool ep-copy" :title="$t('statsE.TodoItem.copyTaskFull')"
+                :aria-label="$t('statsE.TodoItem.copyTaskFull')" @click.stop="copyTaskFull">
+          <app-icon name="copy" :size="16"/>
+        </button>
         <span class="ml-auto"></span>
         <!-- [maint-0925 A5] delete is a no-op on a recycle-state row and purge belongs to RecycleBinView — hide, same rule as the complete/repeat rows -->
         <span v-if="!inRecycle" class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown="onDelTaskKey">
@@ -155,6 +159,7 @@ import {dayjs, FMT, reportError } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
+import { copyTaskFull } from './editpanel/taskCopy.js'
 import { isRenderableAttachmentUrl } from '../utils/core.js' // [W21] subsCompleteTarget rides with editpanel/subtaskOps.toggleSub now
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
@@ -391,6 +396,7 @@ export default {
     onRepeatRowKey: roleButtonActivate(function () { this.askRepeatEdit() }),
     onDeadlineRowKey: roleButtonActivate(function () { this.openDeadlinePick() }),
     onDelTaskKey: roleButtonActivate(function () { this.delTask() }),
+    copyTaskFull () { return copyTaskFull(this) },
     markDirty (k) { if (this._save) this._save.markDirty(k) },
     // W21 split: drag-sort mechanics moved to editpanel/subtaskOps.initSubSortable (verbatim)
     initSubSortable () { return subtaskOps.initSubSortable(this) },

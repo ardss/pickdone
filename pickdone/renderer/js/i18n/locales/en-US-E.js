@@ -240,6 +240,7 @@ export default {
       "markIncomplete": "Mark incomplete",
       "moveToToday": "Move to today",
       "postponeToTomorrow": "Postpone to tomorrow",
+      "copyTaskFull": "Copy all task details",
       "copyTitleDesc": "Copy title & description",
       "copiedMsg": "Copied",
       "copyFailMsg": "Copy failed",

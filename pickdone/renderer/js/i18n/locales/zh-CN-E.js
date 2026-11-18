@@ -240,6 +240,7 @@ export default {
       "markIncomplete": "标记未完成",
       "moveToToday": "移动到今天",
       "postponeToTomorrow": "推迟到明天",
+      "copyTaskFull": "复制任务完整信息",
       "copyTitleDesc": "复制标题与描述",
       "copiedMsg": "已复制",
       "copyFailMsg": "复制失败",
