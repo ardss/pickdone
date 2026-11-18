@@ -91,13 +91,7 @@ export function formatTaskHandoff (task, options = {}) {
     ...attachmentLines(images, '图片'),
     '',
     '## 文件附件',
-    ...attachmentLines(files, '附件'),
-    '',
-    '## 任务专注记录',
-    options.focusRecords ? JSON.stringify(options.focusRecords, null, 2) : '无',
-    '',
-    '## 已启用的工作连续性内容',
-    options.work ? JSON.stringify(options.work, null, 2) : '未启用'
+    ...attachmentLines(files, '附件')
   ]
   return lines.join('\n')
 }

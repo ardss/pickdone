@@ -53,24 +53,21 @@ test('UI adds just the copy icon to existing footer and still has delete control
   assert.ok(!footer.includes('复制给AI'))
 })
 
-test('copy includes every visible detail section including focus, repeat rule, and optional work records', () => {
+test('copy retains task fields but never adds focus-history or work-continuity sections', () => {
   const text = formatTaskHandoff(sample, {
     categoryName: 'PickDone', categoryColor: '#5f9ea0',
     estimate: 4, actual: 2, repeatCount: 3,
     repeatRule: {type: 'weekly', interval: 1, days: [1, 3]},
     focusRecords: [{tomatoId: 'focus-abc', focusDuration: 25, succeed: true}],
-    work: {
-      episodes: [{episodeId:'ep-1',summary:'实现复制',role:'agent'}],
-      findings: [{statement:'已验证剪贴板',confidence:'high'}],
-      decisions: [{choice:'复用任务ID',decider:'human'}],
-      sources: [{title:'设计图',canonicalUri:'source-example'}]
-    }
+    work: { episodes: [{episodeId: 'ep-1', summary: 'internal work history'}] }
   })
   for (const value of [
     '分类颜色: #5f9ea0', '已完成番茄: 2', '重复组任务数: 3',
-    'weekly', 'focus-abc', 'ep-1', '已验证剪贴板',
-    '复用任务ID', '设计图', '创建时间:', '最近修改:', '完成时间:'
+    'weekly', '创建时间:', '最近修改:', '完成时间:'
   ]) assert.ok(text.includes(value), value)
+  for (const excluded of ['## 任务专注记录', '## 已启用的工作连续性内容', 'focus-abc', 'ep-1', 'internal work history']) {
+    assert.ok(!text.includes(excluded), excluded)
+  }
 })
 
 test('handoff faithfully copies data without adding executor instructions or attachment disclaimers', () => {
@@ -88,6 +85,10 @@ test('handoff faithfully copies data without adding executor instructions or att
     assert.ok(!text.includes('按任务描述执行'))
     assert.ok(!text.includes('图片和附件只记录受控引用'))
     assert.ok(!text.includes('附件仅含引用，文件本体需从原设备获取'))
-    assert.ok(text.trimEnd().endsWith('未启用'))
+    assert.ok(text.includes('## 文件附件'))
+    assert.ok(!text.includes('## 任务专注记录'))
+    assert.ok(!text.includes('## 已启用的工作连续性内容'))
+    assert.ok(!text.includes('## 给执行者'))
+    assert.ok(!text.includes('未启用'))
   }
 })
