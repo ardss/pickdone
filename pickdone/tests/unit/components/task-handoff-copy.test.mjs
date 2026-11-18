@@ -72,3 +72,16 @@ test('copy includes every visible detail section including focus, repeat rule, a
     '复用任务ID', '设计图', '创建时间:', '最近修改:', '完成时间:'
   ]) assert.ok(text.includes(value), value)
 })
+
+test('executor instructions are concise and attachment notes appear only when needed', () => {
+  const noAttachments = formatTaskHandoff({taskId:'tid_test', taskContent:'发布内容', taskDescribe:'原文内容'})
+  const tail = noAttachments.split('## 给执行者')[1]
+  assert.ok(tail.includes('pickdone get tid_test --json'))
+  assert.ok(tail.includes('按任务描述执行'))
+  assert.ok(!tail.includes('附件仅含引用'))
+  assert.ok(!tail.includes('本卡是复制时的任务快照'))
+  assert.ok(!tail.includes('图片和附件只记录受控引用'))
+  assert.equal(tail.trim().split('\n').length, 1)
+  const withAttachments = formatTaskHandoff({taskId:'tid_img', taskContent:'有附件', image:[{name:'图.png',url:'local://demo.png'}]})
+  assert.ok(withAttachments.includes('附件仅含引用，文件本体需从原设备获取。'))
+})

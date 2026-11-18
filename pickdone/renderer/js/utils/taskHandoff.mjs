@@ -100,9 +100,8 @@ export function formatTaskHandoff (task, options = {}) {
     options.work ? JSON.stringify(options.work, null, 2) : '未启用',
     '',
     '## 给执行者',
-    '本卡是复制时的任务快照；有 PickDone CLI 权限时请按唯一任务ID读取最新内容：pickdone get ' + task.taskId + ' --json',
-    '图片和附件只记录受控引用，不包含二进制内容；如无法访问原设备，请要求用户另外发送附件。',
-    '处理结果可使用现有 CLI 更新任务描述；满足验收条件后再勾选任务并回读确认。'
+    '如可访问 PickDone，请先读取最新任务：pickdone get ' + task.taskId + ' --json；按任务描述执行，完成后回写并核验。',
+    ...(asArray(images).length || asArray(files).length ? ['附件仅含引用，文件本体需从原设备获取。'] : [])
   ]
   return lines.join('\n')
 }
