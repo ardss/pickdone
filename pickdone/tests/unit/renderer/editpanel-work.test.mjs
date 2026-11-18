@@ -254,7 +254,7 @@ function mountPanel ({ settings = {}, episodes = EPISODES, sources = [], commitI
 
     const { reactive, nextTick } = Vue
     const state = reactive({
-      settings,
+      settings: { developerMode: true, ...settings },
       todo: { todoList: [{ taskId: 42, title: '写周报', subtasks: '[]', image: '[]', files: '[]', updateTime: 1, deleted: 0 }], recycleList: [], todayTimestamp: 1700000000000 },
       ui: { rightSidebarTodoEdit: { visible: false, taskId: 42, collapsed: false } }
     })
@@ -443,11 +443,11 @@ test('pd20 failure: a rejected commit surfaces the failure state line and does N
     'the form is NOT reset on failure (the user keeps their input)')
 })
 
-test('pd20 P0-2 (2026-11-05): the section defaults ON via DEFAULT_SETTINGS.workEpisode and a Copy-Handoff(JSON) button exports the structured contract', async () => {
+test('pd20 preview defaults OFF, while Copy-Handoff JSON remains available after opt-in', async () => {
   // default-on: the declared setting flips the old silent default (undeclared key → undefined → OFF)
   const { DEFAULT_SETTINGS } = require('../../../renderer/js/store/settings-schema.js')
-  assert.equal(DEFAULT_SETTINGS.workEpisode && DEFAULT_SETTINGS.workEpisode.enabled, true,
-    'DEFAULT_SETTINGS.workEpisode.enabled must be true (discoverable work-handoff surface)')
+  assert.equal(DEFAULT_SETTINGS.workEpisode && DEFAULT_SETTINGS.workEpisode.enabled, false,
+    'DEFAULT_SETTINGS.workEpisode.enabled must be false (preview hidden by default)')
   // JSON export: the second copy button writes buildHandoff's .json (previously built and dropped)
   const h = await mountPanel({ settings: { workEpisode: { enabled: true } } })
   assert.ok(h.root.querySelector('.ep-work-copy-json'), 'the JSON copy button renders alongside the markdown one')

@@ -32,12 +32,9 @@ export const DEFAULT_SETTINGS = {
   // what the App runs with — a stale false there would contradict the visible entry).
   showProjectsModule: true, // projects module (own switch alone since graduation; no developerMode requirement)
   showDepsModule: false, // dependency view (two-layer gate: developerMode && this; today deps mode + project deps tab)
-  // pd20 (2026-11-05) P0-2: the EditPanel 'continue work' section (work episodes + source refs +
-  // handoff copy) is DEFAULT-ON. The old undeclared key read undefined → OFF, which hid the whole
-  // work-handoff surface from every non-developer; an undeclared key is also outside the F-C2
-  // DEFAULT_SETTINGS whitelist, so the toggle could not even survive an inbound settings patch.
-  // Declaring it makes it a real setting: visible, persistable, syncable, user-toggleable.
-  workEpisode: { enabled: true },
+  // Work continuity stays a developer-only preview until its drawer UX is approved.
+  // Do not delete or rewrite existing episodes/sources when hiding the UI.
+  workEpisode: { enabled: false },
   calendarBackground: 'list', // list|theme|system
   isCalendarBackgroundUserSelected: false,
   enableSecurityLock: false,

@@ -8,7 +8,7 @@
            text below and get read out; the store side also announces explicit phase sentences -->
       <div class="tb-row">
         <template v-if="attachName">
-          <app-icon name="link" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : 'var(--tt-work-accent)'}"/>
+          <app-icon name="link" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : isWork ? 'var(--danger-strong)' : 'var(--tt-work-accent)'}"/>
           <!-- State-aware: idle + attached = "ready to start: X", no longer always "focusing" (residual-state bug after giving up, caught in dual-Persona testing) -->
           {{ isRest ? $t('statsE.TomatoBar.restAttach', { name: attachName }) : (isWork ? $t('statsE.TomatoBar.workAttach', { name: attachName }) : $t('statsE.TomatoBar.readyPrefix') + attachName) }}
           <button type="button" class="tb-unlink"
@@ -17,7 +17,7 @@
           </button>
         </template>
         <template v-else>
-          <app-icon name="timer" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : 'var(--tt-work-accent)'}"/>
+          <app-icon name="timer" :size="14" :style="{color: isRest ? 'var(--tt-rest-accent)' : isWork ? 'var(--danger-strong)' : 'var(--tt-work-accent)'}"/>
           <!-- J1 (2026-10-22 journey audit): the no-attach branch hardcoded readyStatus, so a FREE
                focus/rest showed the READY label for its whole run while panel/float/taskbar showed
                the phase copy (focusing/resting). statusText (the existing computed) carries the
@@ -79,7 +79,7 @@
 /**
  * Bottom pomodoro focus bar -- bottom pomodoro focus bar
  * Structure: __status (left 40% z1) | __right (absolute full-width column = timer + noise centered) | __play (right 25px 138x48)
- * Three states: default -> pomodoro focus (teal) | startTomatoTime -> abandon focus (teal, 2026-09-03 user decision; the copy carries the abandon semantics) | startRestTime -> abandon break (#fe9933)
+ * Three states: default -> start focus (brand green) | startTomatoTime -> abandon focus (red, user feedback 2026-11-18) | startRestTime -> abandon break (orange)
  */
 import {dayjs, FMT } from '../utils/core.js'
 import { formatMMSS } from '../utils/tomatoShared.js'
@@ -368,7 +368,8 @@ export default {
   background-color: var(--tomato-bg);
   transition: all var(--dur-fast, .2s);
 }
-.tomato-timer--work { background-color: var(--tomato-bg); }
+.tomato-timer--work { background-color: var(--danger-soft); }
+.tomato-timer--work .tomato-timer__status { color: var(--danger-strong); }
 .tomato-timer--rest { background-color: #f6e8d1; }
 .tomato-timer__status {
   position: relative;
@@ -457,11 +458,11 @@ export default {
 }
 .tb-unlink:hover { opacity: 1; }
 .tb-unlink:focus-visible { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
-/* 专注中「■ 放弃专注」同为品牌青(2026-09-03用户拍板:砖红攻击性太强与品牌不符,放弃语义由文案承载) */
-.tomato-timer__play--work { background-color: #0c8172; }
-.tomato-timer__play--work:focus { outline: 0; box-shadow: 0 0 0 3px rgba(0,140,142,.25); }
-.tomato-timer__play--work:hover { background-color: #008284; }
-.tomato-timer__play--work:active { background-color: #00787a; }
+/* Focus active: red state, using the existing semantic danger palette (2026-11-18). */
+.tomato-timer__play--work { background-color: var(--danger-strong); }
+.tomato-timer__play--work:focus-visible { outline: 0; box-shadow: 0 0 0 3px var(--danger); }
+.tomato-timer__play--work:hover { background-color: var(--danger); }
+.tomato-timer__play--work:active { background-color: var(--danger-strong); }
 /* 休息中：橙色按钮 */
 .tomato-timer__play--rest { background-color: #fe9933; }
 .tomato-timer__play--rest:focus { outline: 0; box-shadow: 0 0 0 3px rgba(254,153,51,.25); }

@@ -34,8 +34,8 @@ test('ProjectView mounts the handoff section as a same-source component inside t
   assert.match(viewSrc, /components: \{[^}]*ProjectHandoff[^}]*\}/, 'component registered')
   // inside the overview proj-body branch, before the todo groups (not a new page/route)
   const overview = viewSrc.indexOf('v-else class="proj-body"')
-  const mount = viewSrc.indexOf('<project-handoff :cat-id="catId"/>')
-  assert.ok(mount > overview, 'section mounts in the overview body')
+  const mount = viewSrc.indexOf('<project-handoff v-if="settings.developerMode === true && (settings.workEpisode || {}).enabled" :cat-id="catId"/>')
+  assert.ok(mount > overview, 'section mounts in the overview body only with explicit preview')
   assert.ok(!/ProjectHandoff/.test(viewSrc.match(/<template>[\s\S]*?<\/template>/)[0].split('proj-tabs')[0]), 'not hoisted above the tabs (overview-tab-only surface)')
 })
 

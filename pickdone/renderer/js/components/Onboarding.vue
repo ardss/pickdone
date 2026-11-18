@@ -191,15 +191,6 @@ export default {
 .ob-btn--primary:hover { background: var(--brand-hover); color: #fff; }
 .td-item:hover .td-meta .td-ico, .td-item.selected .td-meta .td-ico { opacity: .75; }
 .td-item:hover .td-meta .td-snow, .td-item.selected .td-meta .td-snow { opacity: 1; }
-.td-tom__start {
-  padding: 2px 3px 2px 7px;
-  display: inline-flex; align-items: center; color: var(--text-3);
-}
-.td-tom__count {
-  display: inline-flex; align-items: center; gap: var(--space-1); padding: 0 7px 0 3px;
-  font-size: var(--fs-xs); color: var(--text-3); border-left: 1px solid var(--line);
-  font-variant-numeric: tabular-nums;
-}
 /* ==================== 预览模式（浏览器/主应用访问小组件路由） ====================
    桌面小组件窗口本体保持深色玻璃（贴桌面壁纸）；浏览器/主应用预览时套用项目 tokens。 */
 

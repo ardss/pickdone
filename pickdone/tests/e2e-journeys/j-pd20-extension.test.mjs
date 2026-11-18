@@ -521,7 +521,7 @@ test('E6 offline queue + retry: app down → capture queues; app restart → pop
 
 test('E7 app-side closed loop: captured task → episode via the real form → handoff carries capture://', { skip: !CHROME }, async () => {
   const taskId = globalThis.__pd20TaskId
-  await evalJson(app.ctx, `(() => { const s = ${storeQ}; return s.dispatch('settings/update', { workEpisode: { enabled: true } }).then(() => 'ok') })()`)
+  await evalJson(app.ctx, `(() => { const s = ${storeQ}; return s.dispatch('settings/update', { developerMode: true, workEpisode: { enabled: true } }).then(() => 'ok') })()`)
   await sleep(1200)
   // open the captured task's edit panel through the real list row
   const rows = await evalJson(app.ctx, `(async () => {

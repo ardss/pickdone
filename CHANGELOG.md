@@ -4,6 +4,14 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/). The 0.x series is the initial-development band: from 0.4.0 on, any user-visible new feature bumps MINOR; PATCH is fixes/internal hardening only. 1.0.0 marks stable data format + sync. Historical versions (≤0.3.7) are not retro-renumbered.
 
+## [0.4.0-beta.31] - 2026-11-18
+
+### Fixed
+- UI acceptance regression: the unfinished Work Continuity / Continue Work editor section no longer appears by default. Developer preview plus explicit module opt-in are required, including for profiles retaining old enabled settings; project handoff follows the same visibility gate. All previously stored episodes, findings, decisions and sources remain intact.
+- Task-row pomodoro selection capsule now centers its icon in all selection/count states, with styles owned by TodoItem rather than leaking from Onboarding.
+- Active focus bar and Abandon Focus button now use semantic red; Ready to Focus remains brand green and rest phase remains orange.
+- Added dedicated UI regression assertions and updated real-Electron default-off, opt-in, CRUD, restart acceptance checks. This candidate is local-only until release gates and installed-app verification pass.
+
 ## [0.4.0-beta.30] - 2026-11-16
 
 ### Fixed

@@ -62,7 +62,7 @@
       <div v-if="devMode" class="ep-cat-wrap">
         <ep-dependencies ref="depBlock" :task="e" @patch="patchPreds"/>
       </div>
-      <ep-work v-if="($store.state.settings.workEpisode || {}).enabled" :task-id="(e && e.taskId) || 0" :task-title="(e && e.title) || ''"/>
+      <ep-work v-if="$store.state.settings.developerMode === true && ($store.state.settings.workEpisode || {}).enabled" :task-id="(e && e.taskId) || 0" :task-title="(e && e.title) || ''"/>
 
       <ep-tags :tags="taskTags" @add="addTag" @remove="removeTag"/>
 

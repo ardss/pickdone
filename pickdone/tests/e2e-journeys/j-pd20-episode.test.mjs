@@ -5,7 +5,7 @@
  *
  *   Session A (fresh isolated userData):
  *   T1 boot: dedicated spawnApp instance, en-US locale, onboarding dismissed (real store).
- *   T2 gate: workEpisode section visible BY DEFAULT (default ON, pd20 2026-11-05) → explicit OFF hides → ON restores
+ *   T2 gate: workEpisode section is hidden by default, including any historical synced enabled:true until developerMode is explicitly ON.
  *      on the real EditPanel of a UI-created task.
  *   T3 episode CRUD through the REAL form (EditPanelWork): type goal/outcome/nextAction →
  *      click Save → the persisted state line shows only after the commit resolves → dbCall
@@ -173,26 +173,25 @@ test('T1 boot: dedicated isolated instance, en-US, onboarding dismissed', async 
   await boot()
 })
 
-test('T2 gate: section visible by DEFAULT (default ON since pd20 2026-11-05) → explicit OFF hides it → ON restores (LS persist)', async () => {
+test('T2 gate: continue-work hidden by default; opt-in still requires developerMode', async () => {
   const name = 'pd20 T2 gate journey ' + Math.random().toString(36).slice(2, 6)
   await quickAdd(name)
   await openEditPanel(name)
-  // DEFAULT-ON doctrine (P0-2): the declared default (settings-schema workEpisode.enabled=true)
-  // means a fresh user SEES the work-handoff section — the old undeclared-key default (unset →
-  // OFF) hid the whole surface from non-developers. A fresh isolated instance has no stored
-  // settingsState, so what renders here IS the default.
-  assert.ok(await untilJson(`!!document.querySelector('${section('')}')`, 8, 500),
-    'the work-episode section did not render by default (default-ON doctrine broken)')
-  const updOff = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s ? s.dispatch('settings/update', { workEpisode: { enabled: false } }) : null })()`)
-  assert.ok(updOff && updOff.ok !== false, 'settings/update(false) dispatch failed: ' + JSON.stringify(updOff))
-  assert.ok(await untilJson(`(() => { try { const v = JSON.parse(localStorage.getItem('settingsState') || '{}'); return !!(v.workEpisode && v.workEpisode.enabled === false) } catch { return false } })()`, 12, 500),
-    'the explicit OFF did not persist to localStorage settingsState (it would die on the next boot)')
   assert.ok(await untilJson(`!document.querySelector('${section('')}')`, 8, 500),
-    'the work-episode section did not hide after workEpisode.enabled=false')
-  const updOn = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s ? s.dispatch('settings/update', { workEpisode: { enabled: true } }) : null })()`)
-  assert.ok(updOn && updOn.ok !== false, 'settings/update(true) dispatch failed: ' + JSON.stringify(updOn))
+    'work-episode section must be hidden for fresh profiles')
+  const on = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s.dispatch('settings/update', { workEpisode: { enabled: true } }) })()`)
+  assert.ok(on && on.ok !== false, 'workEpisode opt-in failed')
+  assert.ok(await untilJson(`!document.querySelector('${section('')}')`, 8, 500),
+    'stored enabled:true must not expose unapproved UI without developerMode')
+  const dev = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s.dispatch('settings/update', { developerMode: true }) })()`)
+  assert.ok(dev && dev.ok !== false, 'developer opt-in failed')
   assert.ok(await untilJson(`!!document.querySelector('${section('')}')`, 8, 500),
-    'the work-episode section did not re-appear after workEpisode.enabled=true')
+    'explicit opt-in did not reveal work episodes')
+  const off = await evalJson(ctx, `(async () => { const s = ${storeQ}; return s.dispatch('settings/update', { developerMode: false }) })()`)
+  assert.ok(off && off.ok !== false, 'developer opt-out failed')
+  assert.ok(await untilJson(`!document.querySelector('${section('')}')`, 8, 500),
+    'developer opt-out should hide work UI even with saved enabled:true')
+  await evalJson(ctx, `(async () => { const s = ${storeQ}; return s.dispatch('settings/update', { developerMode: true }) })()`)
 })
 
 test('T3 episode CRUD through the REAL form: create → state line → read-back → edit keeps id/startedAt → delete', async () => {

@@ -70,13 +70,16 @@ test('i18n: graduated label + tip exist in both locales (no experimental wording
     'the graduated row must no longer advertise itself as experimental')
 })
 
-test('work-handoff entry stays wired: EditPanel EpWork gate reads the (default-on) workEpisode switch', () => {
+test('work-handoff preview stays wired but is hidden until explicit developer opt-in', () => {
   const ep = read('renderer/js/components/EditPanel.vue')
-  assert.ok(ep.includes('<ep-work v-if="($store.state.settings.workEpisode || {}).enabled"'),
-    'the task-level work-history entry must keep its default-on gate')
+  assert.ok(ep.includes('<ep-work v-if="$store.state.settings.developerMode === true && ($store.state.settings.workEpisode || {}).enabled"'),
+    'the task-level work-history entry requires both developer mode and explicit opt-in')
+  const project = read('renderer/js/views/ProjectView.vue')
+  assert.ok(project.includes('<project-handoff v-if="settings.developerMode === true && (settings.workEpisode || {}).enabled"'),
+    'project-level work handoff should not leak into daily users without explicit preview mode')
   const schema = read('renderer/js/store/settings-schema.js')
-  assert.ok(schema.includes('workEpisode: { enabled: true }'),
-    'work episodes stay default-on for every user')
+  assert.ok(schema.includes('workEpisode: { enabled: false }'),
+    'work episodes must be default-off pending user UX acceptance')
 })
 
 test('project empty states stay honest (no fabricated records)', () => {

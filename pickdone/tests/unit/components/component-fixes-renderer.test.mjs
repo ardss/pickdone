@@ -109,13 +109,13 @@ test('EditPanel: deadline clear button has an aria-label (parity with reminder c
   assert.ok(m && m[0].includes(':aria-label="$t(\'statsJ.EditPanel.clearDueDate\')"'), 'deadline clear lacks aria-label')
 })
 
-test('TomatoBar: work (give-up) button uses the brand teal family, no brick red left', () => {
+test('TomatoBar: active focus uses semantic red while idle stays brand green', () => {
   const src = read('renderer/js/components/TomatoBar.vue')
   assert.ok(!src.includes('#bd401e'), 'brick red #bd401e must be gone')
-  // U-21 honesty: the exact-CSS-text anchor was brittle (any reformat false-red). The work-state teal
-  // is a visual-gate concern; here we only assert the rule still carries a brand token/teal value.
+  // U-21 honesty: avoid brittle exact-CSS-text anchors. The active-focus palette
+  // must use a semantic danger token rather than retaining the idle green.
   const workRule = (src.match(/\.tomato-timer__play--work\s*\{[^}]*\}/) || [''])[0]
-  assert.ok(workRule && /#0c8172|var\(--brand/.test(workRule), 'work state stays in the brand teal family')
+  assert.ok(workRule && /var\(--danger-strong\)/.test(workRule), 'active focus must use the red semantic danger token')
   assert.ok(!/番茄无暂停语义[\s\S]*cursor:\s*pointer/.test(src), 'timer text must not advertise pause')
   const time = src.match(/\.tomato-timer__time \{[\s\S]*?\}/)[0]
   assert.ok(!time.includes('cursor: pointer'), 'timer time block must not claim clickability')

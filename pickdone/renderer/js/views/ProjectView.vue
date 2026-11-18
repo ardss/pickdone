@@ -127,7 +127,7 @@
       <div v-else class="proj-body">
         <!-- pd20 P1-01 work-handoff overview: collapsible same-source section (component owns
              its read op + filter toggle; keeps this view under the size ratchet) -->
-        <project-handoff :cat-id="catId"/>
+        <project-handoff v-if="settings.developerMode === true && (settings.workEpisode || {}).enabled" :cat-id="catId"/>
         <!-- pd20 P1 multi-view (2026-11-06): the PRD's user-selectable list/board/timeline.
              One switcher, persisted per profile; every branch reads the SAME store/op source. -->
         <div class="proj-taskviews" role="group" :aria-label="$t('statsB.ProjectView.viewsAria')">
