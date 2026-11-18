@@ -97,11 +97,7 @@ export function formatTaskHandoff (task, options = {}) {
     options.focusRecords ? JSON.stringify(options.focusRecords, null, 2) : '无',
     '',
     '## 已启用的工作连续性内容',
-    options.work ? JSON.stringify(options.work, null, 2) : '未启用',
-    '',
-    '## 给执行者',
-    '如可访问 PickDone，请先读取最新任务：pickdone get ' + task.taskId + ' --json；按任务描述执行，完成后回写并核验。',
-    ...(asArray(images).length || asArray(files).length ? ['附件仅含引用，文件本体需从原设备获取。'] : [])
+    options.work ? JSON.stringify(options.work, null, 2) : '未启用'
   ]
   return lines.join('\n')
 }

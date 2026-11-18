@@ -73,15 +73,21 @@ test('copy includes every visible detail section including focus, repeat rule, a
   ]) assert.ok(text.includes(value), value)
 })
 
-test('executor instructions are concise and attachment notes appear only when needed', () => {
-  const noAttachments = formatTaskHandoff({taskId:'tid_test', taskContent:'发布内容', taskDescribe:'原文内容'})
-  const tail = noAttachments.split('## 给执行者')[1]
-  assert.ok(tail.includes('pickdone get tid_test --json'))
-  assert.ok(tail.includes('按任务描述执行'))
-  assert.ok(!tail.includes('附件仅含引用'))
-  assert.ok(!tail.includes('本卡是复制时的任务快照'))
-  assert.ok(!tail.includes('图片和附件只记录受控引用'))
-  assert.equal(tail.trim().split('\n').length, 1)
+test('handoff faithfully copies data without adding executor instructions or attachment disclaimers', () => {
+  const original = '成品见 内容运营/2026-10-25/01；公众号+知乎；用户执行'
+  const noAttachments = formatTaskHandoff({taskId:'tid_test', taskContent:'发布内容', taskDescribe:original})
+  assert.ok(noAttachments.includes('任务ID: tid_test'))
+  assert.ok(noAttachments.includes('复制时间:'))
+  assert.ok(noAttachments.includes(original))
   const withAttachments = formatTaskHandoff({taskId:'tid_img', taskContent:'有附件', image:[{name:'图.png',url:'local://demo.png'}]})
-  assert.ok(withAttachments.includes('附件仅含引用，文件本体需从原设备获取。'))
+  assert.ok(withAttachments.includes('图.png'))
+  assert.ok(withAttachments.includes('local://demo.png'))
+  for (const text of [noAttachments, withAttachments]) {
+    assert.ok(!text.includes('## 给执行者'))
+    assert.ok(!text.includes('pickdone get '))
+    assert.ok(!text.includes('按任务描述执行'))
+    assert.ok(!text.includes('图片和附件只记录受控引用'))
+    assert.ok(!text.includes('附件仅含引用，文件本体需从原设备获取'))
+    assert.ok(text.trimEnd().endsWith('未启用'))
+  }
 })
