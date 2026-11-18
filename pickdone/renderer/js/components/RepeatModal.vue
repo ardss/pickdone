@@ -3,7 +3,7 @@
   <div class="modal-container" @click.self="close">
     <!-- --body centered in the full viewport: the default tablecloth insets (left:235px/bottom:110px) exist to make room for the sidebar/tomato bar for the settings half-screen dialog; the repeat dialog landing on them would skew over the edit bar (user-reported occlusion + skew) -->
     <div class="modal-tablecloth modal-tablecloth--body" @click.self="close">
-      <div class="modal" role="dialog" aria-modal="true" :aria-label="$t('statsD.RepeatModal.aria')" style="width:520px;max-height:100%" @keydown.esc="close">
+      <div class="modal repeat-rule-modal" role="dialog" aria-modal="true" :aria-label="$t('statsD.RepeatModal.aria')" style="width:520px;max-height:100%" @keydown.esc="close">
         <div class="modal__header"><span>{{ $t('statsD.RepeatModal.title') }}</span><button type="button" class="modal__close close-x" :aria-label="$t('statsD.RepeatModal.close')" :disabled="generating" @click="close"></button></div>
         <div class="modal__body">
           <template v-if="templateTodo">
@@ -312,6 +312,10 @@ export default {
 }
 </script>
 <style>.form { max-width: 100%; }
+/* The shared .rm-row uses min-content, which collapses CJK labels to one glyph.
+   Limit the correction to this dialog so other modals retain their layout. */
+.repeat-rule-modal .rm-row { grid-template-columns: max-content minmax(0, 1fr); }
+.repeat-rule-modal .rm-row > .rl { white-space: nowrap; }
 /* 帮助提示「?」(hint-q):F-D4 降级为 role=img + aria-label(去假按钮语义),聚焦可见(与 EditPanel 同规则;renderer 无 base.css,各自持一份) */
 .hint-q { cursor: help; }
 .hint-q:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; border-radius: var(--radius-sm); }
