@@ -147,6 +147,8 @@ export default {
   'statsJ.EditPanel.removeFile': 'Remove file',
   'statsJ.EditPanel.deleteBtn': 'Delete',
   'statsJ.EditPanel.deleteTask': 'Delete task',
+  'statsJ.EditPanel.deleteConfirmMsg': 'Move this task to the recycle bin? You can restore it later.',
+  'statsJ.EditPanel.deleteCancel': 'Cancel',
   'statsJ.EditPanel.imagePreview': 'Image preview',
   'statsJ.EditPanel.todayOption': 'Today',
   'statsJ.EditPanel.tomorrowOption': 'Tomorrow',

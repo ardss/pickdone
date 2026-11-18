@@ -187,8 +187,10 @@
   border-top: 1px solid var(--line);
 }
 .ep-tool { cursor: pointer; font-size: 16px; opacity: .75; display: inline-flex; }
-.ep-tool.ep-copy { align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); }
+.ep-tool.ep-copy, .ep-tool.ep-delete { align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); transition: color var(--dur-fast), background var(--dur-fast); }
 .ep-tool.ep-copy:hover { background: var(--brand-light); color: var(--brand); }
+.ep-tool.ep-delete:hover, .ep-tool.ep-delete:focus-visible { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); opacity: 1; }
+.ep-tool.ep-delete:focus-visible { outline-color: var(--danger); }
 .ep-tool:hover { opacity: 1; }
 .ep-tool img { width: 16px; height: 16px; }
 .ep-tool.hash { font-weight: 700; }

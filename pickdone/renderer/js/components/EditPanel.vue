@@ -134,9 +134,10 @@
         </button>
         <span class="ml-auto"></span>
         <!-- [maint-0925 A5] delete is a no-op on a recycle-state row and purge belongs to RecycleBinView — hide, same rule as the complete/repeat rows -->
-        <span v-if="!inRecycle" class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown="onDelTaskKey">
-          <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
-        </span>
+        <button v-if="!inRecycle" type="button" class="ep-tool ep-delete danger"
+                :title="$t('statsJ.EditPanel.deleteTask')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click.stop="delTask">
+          <app-icon name="trash" :size="16"/>
+        </button>
       </div>
     </div>
 
@@ -395,7 +396,6 @@ export default {
     onDoneRowKey: roleCheckboxActivate(function () { this.toggleComplete() }),
     onRepeatRowKey: roleButtonActivate(function () { this.askRepeatEdit() }),
     onDeadlineRowKey: roleButtonActivate(function () { this.openDeadlinePick() }),
-    onDelTaskKey: roleButtonActivate(function () { this.delTask() }),
     copyTaskFull () { return copyTaskFull(this) },
     markDirty (k) { if (this._save) this._save.markDirty(k) },
     // W21 split: drag-sort mechanics moved to editpanel/subtaskOps.initSubSortable (verbatim)
@@ -689,11 +689,26 @@ export default {
         setTimeout(deleteFromDisk, 5500)
       }
     },
-    delTask () {
-      // Recurring tasks share the context-menu semantics: ask the scope first (this instance only / the whole series)
-      if (this.isRepeat && this.task) return this.askRepeatDelete()
-      // Same semantics as the list/todo box/quadrant matrix: no confirmation dialog, 5s undo toast after delete (consistency consolidated 2026-08-31)
-      deleteWithUndo(this, this.$store, this.task).then(ok => { if (ok) this.close() }).catch(() => {})
+    async delTask () {
+      const task = this.task
+      if (!task || this.inRecycle) return
+      // RepeatDeleteModal already asks for scope and requires explicit confirmation.
+      if (this.isRepeat) return this.askRepeatDelete()
+      try {
+        await this.$confirm(
+          this.$t('statsJ.EditPanel.deleteConfirmMsg'),
+          this.$t('statsJ.EditPanel.deleteTask'),
+          {
+            type: 'warning',
+            confirmButtonText: this.$t('statsJ.EditPanel.deleteBtn'),
+            cancelButtonText: this.$t('statsJ.EditPanel.deleteCancel')
+          }
+        )
+      } catch { return } // Cancel/close never deletes.
+      // Do not delete an unrelated task if the editor switched during confirmation.
+      if (!this.task || this.task.taskId !== task.taskId || this.inRecycle) return
+      const ok = await deleteWithUndo(this, this.$store, task)
+      if (ok) this.close()
     },
     /* ===== Repeat (impl: edit-panel/repeat.js) ===== */
     askRepeatEdit () { return repeat.askRepeatEdit(this) },

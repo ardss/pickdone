@@ -56,6 +56,7 @@ export async function copyTaskFull (ctx) {
       categoryColor: ctx.curCat && ctx.curCat.categoryColor,
       estimate: ctx.tomatoEstimateN, actual: ctx.tomatoActual,
       repeatCount: ctx.repeatCount, repeatRule, work,
+      copiedAt: Date.now(),
       focusRecords: (((ctx.$store.state.tomato || {}).tomatoRecordList) || [])
         .filter(record => record && record.focusTaskId === taskId)
     })

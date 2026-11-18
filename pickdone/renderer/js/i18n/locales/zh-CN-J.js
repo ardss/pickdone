@@ -146,6 +146,8 @@ export default {
   'statsJ.EditPanel.removeFile': '移除文件',
   'statsJ.EditPanel.deleteBtn': '删除',
   'statsJ.EditPanel.deleteTask': '删除任务',
+  'statsJ.EditPanel.deleteConfirmMsg': '确定将此任务移入回收站吗？删除后仍可恢复。',
+  'statsJ.EditPanel.deleteCancel': '取消',
   'statsJ.EditPanel.imagePreview': '图片预览',
   'statsJ.EditPanel.todayOption': '今天',
   'statsJ.EditPanel.tomorrowOption': '明天',

@@ -49,7 +49,7 @@ test('UI adds just the copy icon to existing footer and still has delete control
   assert.ok(footer.includes('class="ep-tool ep-copy"'))
   assert.ok(footer.includes('name="copy"'))
   assert.ok(footer.includes('copyTaskFull'))
-  assert.ok(footer.includes('class="ep-tool danger"'))
+  assert.ok(footer.includes('class="ep-tool ep-delete danger"'))
   assert.ok(!footer.includes('复制给AI'))
 })
 

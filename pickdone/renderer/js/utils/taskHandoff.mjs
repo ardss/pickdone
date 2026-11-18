@@ -50,8 +50,13 @@ export function formatTaskHandoff (task, options = {}) {
   const extra = edit.reminderExtra ?? task.reminderExtra
   const tags = tagsOf(String(title || '') + '\n' + String(description || ''))
   const subs = subtaskLines(subtasks)
+  // Copy time is provenance for this exported snapshot, never a modification to the task.
+  const copiedAt = new Date((options.copiedAt ?? Date.now()) + 8 * 60 * 60 * 1000)
+  if (!Number.isFinite(copiedAt.getTime())) throw new Error('Invalid copy timestamp')
+  const copiedAtText = copiedAt.toISOString().slice(0, 19).replace('T', ' ') + ' (UTC+08:00)'
   const lines = [
     '[PickDone-Task-Handoff/v1]',
+    '复制时间: ' + copiedAtText,
     '任务ID: ' + task.taskId,
     '标题: ' + field(title),
     '状态: ' + (task.complete ? '已完成' : '未完成'),
