@@ -1,3 +1,10 @@
+## [0.4.0-beta.39] - 2026-11-19
+
+### Changed
+- Project V2 independent project identities, explicit task membership, archive/recovery and original-ID legacy quarantine; existing tasks, categories and tags remain unchanged.
+- Project editor, overview, CLI, timeline, handoff, and LAN refresh use authoritative V2 records. Project deadlines, documents, milestones and assignments are preserved in scoped backups; client type contracts and browser shim updated.
+- Regression tests cover project lifecycle, legacy migration and sync/backup compatibility. Beta candidate remains local until complete release verification.
+
 # Changelog
 
 All notable changes to this project are documented in this file.

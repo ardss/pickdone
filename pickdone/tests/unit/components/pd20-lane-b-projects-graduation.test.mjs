@@ -72,7 +72,7 @@ test('i18n: graduated label + tip exist in both locales (no experimental wording
 
 test('work-handoff preview stays wired but is hidden until explicit developer opt-in', () => {
   const ep = read('renderer/js/components/EditPanel.vue')
-  assert.ok(ep.includes('<ep-work v-if="$store.state.settings.developerMode === true && ($store.state.settings.workEpisode || {}).enabled"'),
+  assert.match(ep, /<ep-work\b[^>]*v-if="\$store\.state\.settings\.developerMode === true && \(\$store\.state\.settings\.workEpisode \|\| \{\}\)\.enabled"/,
     'the task-level work-history entry requires both developer mode and explicit opt-in')
   const project = read('renderer/js/views/ProjectView.vue')
   assert.ok(project.includes('<project-handoff v-if="settings.developerMode === true && (settings.workEpisode || {}).enabled"'),

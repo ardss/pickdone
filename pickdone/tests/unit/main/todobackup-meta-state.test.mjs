@@ -25,6 +25,10 @@ beforeEach(() => {
   metaRows = {}
   globalThis.window = { todoAPI: {
     getMetaMany: async keys => keys.map(k => ({ key: k, value: metaRows[k] ?? null })),
+    dbCall: async op => {
+      assert.equal(op, 'projectV2Keys')
+      return Object.keys(metaRows).filter(k => k.startsWith('pd.project.v2:') || k.startsWith('pd.taskProject.v2:') || /^project(?:Docs|Milestones|Deadline|Status):prj_[a-zA-Z0-9_-]+$/.test(k))
+    },
     runAutoBackup: async () => ({ ok: true })
   } }
 })
@@ -78,4 +82,20 @@ test('end to end shape: collect → dump carries the same segment the restore si
   const dump = todoBackup.buildBackupDump(rootState, STATE, { metaState: seg })
   const parsed = JSON.parse(dump.backup.metaState)
   assert.deepEqual(parsed.entries, [{ key: 'repeatRule:r1', value: '{"freq":"daily"}' }])
+})
+
+
+test('independent native-project milestone/document metadata survives snapshot without category rows', async () => {
+  const projectId = 'prj_native_test001'
+  metaRows = {
+    ['pd.project.v2:' + projectId]: JSON.stringify({schemaVersion:1, projectId, name:'Native', status:'active'}),
+    ['pd.taskProject.v2:tid_native_test']: projectId,
+    ['projectDocs:' + projectId]: '[{"id":"doc1","title":"Test"}]',
+    ['projectMilestones:' + projectId]: '[{"id":"ms1","title":"Milestone","date":1763683200000}]'
+  }
+  const backup = await todoBackup.collectMetaState({category:{list:[]}}, {todoList:[],recycleList:[]})
+  assert.ok(backup)
+  const entries = Object.fromEntries(JSON.parse(backup).entries.map(({key,value}) => [key,value]))
+  assert.deepEqual(Object.keys(metaRows).sort(), Object.keys(entries).sort())
+  assert.equal(entries['projectDocs:' + projectId], metaRows['projectDocs:' + projectId])
 })

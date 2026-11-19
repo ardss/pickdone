@@ -38,36 +38,71 @@ async function bindADiscovery (deviceId) {
   return disc
 }
 
-test('C4: three consecutive ASYNC send-callback errors declare the channel dead', async () => {
-  const disc = await bindADiscovery('d20-async')
-  const sock = disc._udpSocket()
-  // Async error path: the callback fires with an error (pre-fix: silently dropped).
-  sock.send = (...args) => {
-    const cb = args[args.length - 1]
-    setImmediate(() => cb(new Error('simulated async send failure')))
+// Drive the UDP sweep deterministically. The full test pool can saturate the Windows
+// event loop for seconds; wall-clock polling at a 60ms cadence can time out even when
+// all three async callback failures are counted correctly.
+async function bindControlledDiscovery (deviceId) {
+  const original = globalThis.setInterval
+  let sweep
+  globalThis.setInterval = (callback, interval, ...args) => {
+    if (interval === 60) {
+      sweep = () => callback(...args)
+      return original(callback, 3600000, ...args) // real timer retained for clearInterval
+    }
+    return original(callback, interval, ...args)
   }
-  const deadline = Date.now() + 5000
-  while (disc._udpAdvertiseActive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-  assert.equal(disc._udpAdvertiseActive(), false, 'channel declared dead after 3 async-failed sweeps (red before the fix: stayed active forever)')
-  assert.equal(disc._udpSocket(), null, 'the dead channel socket is released (D15 C5 leak guard)')
-  disc.stop()
+  try {
+    const disc = await bindADiscovery(deviceId)
+    assert.equal(typeof sweep, 'function', 'advertise sweep registered after bind')
+    return {
+      disc,
+      async drive () {
+        sweep()
+        await new Promise(resolve => setImmediate(resolve))
+      },
+      restore () { globalThis.setInterval = original }
+    }
+  } catch (e) {
+    globalThis.setInterval = original
+    throw e
+  }
+}
+
+test('C4: three consecutive ASYNC send-callback errors declare the channel dead', async () => {
+  const { disc, drive, restore } = await bindControlledDiscovery('d20-async')
+  try {
+    const sock = disc._udpSocket()
+    sock.send = (...args) => {
+      const cb = args[args.length - 1]
+      setImmediate(() => cb(new Error('simulated async send failure')))
+    }
+    await drive()
+    assert.equal(disc._udpAdvertiseActive(), true, 'one failed sweep must not close the socket')
+    await drive()
+    assert.equal(disc._udpAdvertiseActive(), true, 'two failed sweeps must not close the socket')
+    await drive()
+    assert.equal(disc._udpAdvertiseActive(), false, 'third callback-error sweep closes the channel')
+    assert.equal(disc._udpSocket(), null, 'dead-channel socket released')
+  } finally {
+    disc.stop()
+    restore()
+  }
 })
 
 test('C4: post-bind socket error events feed the sweep budget (3 in a row = dead)', async () => {
-  const disc = await bindADiscovery('d20-sockerr')
+  const { disc, drive, restore } = await bindControlledDiscovery('d20-sockerr')
   try {
     const sock = disc._udpSocket()
+    sock.send = (...args) => setImmediate(() => args[args.length - 1](null))
     const emitErr = () => sock.emit('error', Object.assign(new Error('simulated post-bind failure'), { code: 'EFAKE' }))
-    emitErr()
-    await new Promise((r) => setTimeout(r, 150))
-    assert.equal(disc._udpAdvertiseActive(), true, 'one failed sweep does NOT kill the channel')
-    // The streak must be CONSECUTIVE failed sweeps: emit an error inside every sweep window
-    // (interval is 60ms; 50ms gaps keep each sweep's consumed flag fresh).
-    for (let i = 0; i < 5; i++) { emitErr(); await new Promise((r) => setTimeout(r, 50)) }
-    const deadline = Date.now() + 5000
-    while (disc._udpAdvertiseActive() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50))
-    assert.equal(disc._udpAdvertiseActive(), false, 'red before the fix: post-bind errors only logged and never counted — the channel stayed active forever')
+    for (let i = 1; i <= 3; i++) {
+      emitErr()
+      await drive()
+      assert.equal(disc._udpAdvertiseActive(), i < 3, 'consecutive error sweep ' + i)
+    }
+    assert.equal(disc._udpSocket(), null, 'socket released after third post-bind error')
   } finally {
     disc.stop()
+    restore()
   }
 })

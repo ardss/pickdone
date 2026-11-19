@@ -158,13 +158,25 @@ function makeGit (root) {
   }
   return {
     git,
-    // repo-root-relative prefix for a ROOT-relative path (ROOT may be a nested pickdone/)
-    toRel (rel) {
+    // Repo-root-relative prefix of ROOT (e.g. "pickdone/"). Derived from `--show-prefix` instead of
+    // path.relative(cachedTop, ...) on purpose: on a mapped network drive git canonicalises
+    // --show-toplevel to a UNC path (//host/share/...) that is not byte-comparable with the drive-letter
+    // ROOT, so path.relative() returned an absolute UNC string. Every baseline lookup and every
+    // limitFor() tier then missed, which silently DISABLED grandfathering and the rhetorical check
+    // (false green) — the exact opposite of the fail-closed intent. --show-prefix is purely textual
+    // and therefore root-representation agnostic.
+    prefix () {
       if (failed) return null
       try {
-        if (cachedTop == null) cachedTop = git(['rev-parse', '--show-toplevel']).trim()
-        return path.relative(cachedTop, path.join(root, rel)).replace(/\\/g, '/')
+        if (cachedTop == null) cachedTop = git(['rev-parse', '--show-prefix']).trim().replace(/\\/g, '/')
+        return cachedTop
       } catch { failed = true; return null }
+    },
+    // repo-root-relative prefix for a ROOT-relative path (ROOT may be a nested pickdone/)
+    toRel (rel) {
+      const p = this.prefix()
+      if (p == null) return null
+      return (p + String(rel).replace(/\\/g, '/')).replace(/\/{2,}/g, '/')
     },
     trackedSet () {
       // W27 fix (2026-11-01): quotePath=false pin — without it git emits non-ASCII tracked
@@ -223,7 +235,17 @@ function main () {
     // the real worktree root, so every joined path missed and the gate refused (caught live in
     // the relay worktree, 2026-10-10). Strip the injected git env for BOTH calls: git then
     // discovers the repo upward from cwd (pickdone → worktree .git), toplevel stays truthful.
-    const top = g.git(['rev-parse', '--show-toplevel']).trim()
+    // Textual prefix of ROOT inside the repo (e.g. "pickdone/"). See makeGit().prefix() for why this
+    // cannot be path.relative(ROOT, path.join(toplevel, ...)): on a mapped network drive the
+    // toplevel is a UNC path while ROOT is a drive-letter path, so the join/relative round-trip
+    // produced an absolute UNC string — every file then missed its baseline entry and its tier
+    // limit (silent false green).
+    const prefix = (g.prefix() || '')
+    const toRootRel = f => {
+      const s = String(f).replace(/\\/g, '/')
+      if (!prefix) return s
+      return s.startsWith(prefix) ? s.slice(prefix.length) : null
+    }
     // W16 fix(#2): ACMR — git mv 只产生 R 条目,ACM 漏掉改名文件(与 lint-staged.mjs 对齐)
     // W17 fix(2026-10-28): quotePath=false — git 默认把非 ASCII 路径打成带引号八进制串,扩展名
     // 正则(尾引号不匹配)会静默剔除,staged 扫描面塌缩回 0 假绿。pre-commit 的 `-c` 是单次性的,
@@ -232,24 +254,31 @@ function main () {
     // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
     // inside the repo root): resolving them against ROOT silently matched nothing and the
     // staged gate checked ZERO files for its whole life (the 2026-10-10 ratchet-red-on-main
-    // root cause). Resolve against the toplevel and refuse to fake-green on a mismatch.
+    // root cause). Strip the textual prefix and refuse to fake-green on a mismatch.
     const names = out.split('\n').filter(Boolean)
     stagedAdded = new Set(g.git(['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=A']).split('\n').filter(Boolean))
     // Match the full walker source extensions (exclude generated JSON lockfiles).
     const sourceNames = names.filter(n => /\.(?:js|cjs|mjs|vue)$/.test(n))
+    const escaped = sourceNames.filter(f => toRootRel(f) === null)
+    if (escaped.length) {
+      // Staged source outside this project's ROOT is not this gate's scan surface; say so out loud
+      // instead of dropping it silently (the shrink-to-fake-green policy applies to scope too).
+      console.error('! [file-size] 以下 staged 源文件不在本项目 ROOT 内，按设计不参与本门禁:\n  ' + escaped.join('\n  '))
+    }
+    const rootNames = sourceNames.map(toRootRel).filter(v => v !== null)
     // W21 fix(#2): a staged file that vanished from the worktree used to be SILENTLY dropped
     // from the scan (.existsSync filter) — a shrink-to-fake-green hole. Name and red each one
     // (same policy as check-boot-order.cjs' staged missing-file tripwire).
-    const missing = sourceNames.filter(f => !fs.existsSync(path.join(top, f)))
+    const missing = rootNames.filter(f => !fs.existsSync(path.join(ROOT, f)))
     if (missing.length) {
       console.error('✗ [file-size] staged 文件在工作区已不存在——扫描面会静默塌缩，拒绝假绿:\n  ' + missing.join('\n  '))
       process.exit(1)
     }
-    files = sourceNames.map(f => path.join(top, f))
+    files = rootNames.map(f => path.join(ROOT, f))
     // W21 fix(#2) regression guard (2026-10-30): an empty sourceNames is NORMAL (docs-only commit —
     // the extension filter already removed them); red only when source files were staged but none
     // resolved, which the per-file missing tripwire above has by then already named exactly.
-    if (!files.length && sourceNames.length) {
+    if (!files.length && sourceNames.length && !escaped.length) {
       console.error('✗ [file-size] staged names resolved to zero existing files (toplevel mismatch) — refusing to pass blindly')
       process.exit(1)
     }

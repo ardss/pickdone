@@ -214,7 +214,7 @@ const V1_CSS = `
 .day-rail .dr-plan-x { margin-left: auto; } /* Visuals (X shape/hover danger) are owned by the unified close-x system */
 .day-rail .dr-plan-chk { width: 12px; height: 12px; flex-shrink: 0; border: 1.5px solid currentColor; border-radius: 50%; background: transparent; cursor: pointer; padding: 0; position: relative; opacity: .8; }
 .day-rail .dr-plan-chk:hover { opacity: 1; background: var(--hover-bg, rgba(255,255,255,.35)); }
-.day-rail .dr-plan-tom { border: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; padding: 1px; border-radius: 4px; opacity: .75; }
+.day-rail .dr-plan-tom { border: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; flex-shrink: 0; border-radius: 4px; opacity: .75; }
 .day-rail .dr-plan-tom:hover, .day-rail .dr-plan-tom.pd-is-active { opacity: 1; background: color-mix(in srgb, var(--brand, #0f9d8f) 16%, transparent); }
 /* Selected state (2026-09-02 second-round final): dropped solid brand teal + white text (white text clashed on dark backgrounds / white-block hover overlay was incoherent),
    switched to the pill's own language: "brand outline + 18% tint + bold" — same color family as the normal state with just more intensity, works in both light and dark themes */

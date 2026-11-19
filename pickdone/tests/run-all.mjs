@@ -84,10 +84,18 @@ const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
 // runs. Exclusion is by bare FILENAME across all suites (same doctrine as EXCLUDE above):
 // never reuse these names elsewhere.
 const DEEP_FILES = new Set([
+  // Real resident PowerShell + interactive Windows desktop. Under the parallel core pool
+  // its subprocess startup can exceed the live adapter's timeout; run as an isolated
+  // deep/live acceptance test instead (still discovered by full and deep runs).
+  'adapter-live.test.mjs',
   // live Electron, boots the real app twice (exit-mode quit + tray-mode hide)
   'e2e-exit-close.test.mjs',
   // two real paired instances, multi-minute journey (J4 reconnect lives here)
   'lan-sync-journey.test.mjs',
+  // two real paired instances, episode-level W1-W5 (boot + CDP + two-way pairing) — same live
+  // Electron class as lan-sync-journey; on mapped network drives CDP eval exceeds the 10s
+  // ceiling under core-pool contention. Routed to deep tier (2026-11-19 takeover audit).
+  'lan-sync-episode.test.mjs',
   // loopback server suites — bind real ports / long socket lifecycles
   'lan-sync-loopback.test.mjs',
   'v2-acceptance-drill.test.mjs',

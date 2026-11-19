@@ -83,21 +83,24 @@ export default defineComponent({
       // preview must agree (the badge used to count deleted rows and read inflated)
       return this.$store.getters['todo/byCategory'](id).filter(t => !t.complete && !t.delete).length
     },
-    isProject (id) { return this.$store.state.category.projectIds.includes(id) },
-    /** Set/unset as project (secondary path; the primary entry is "New Project" on the project overview page) */
+    isProject (id) { return !!this.$store.getters['projectV2/byId']('prj_legacy_' + id) },
+    /** Conversion creates a V2 project identity; never writes a legacy project flag. */
     async toggleProject (c) {
       const flag = !this.isProject(c.categoryId)
-      this.$store.commit('category/setProject', { id: c.categoryId, flag })
-      // [F3 fix] same confirmed-write gate as ProjectView.removeFromProject: setProject is a SYNC
-      // mutation (Vuex commit discards the handler's return) whose durable flag write settles
-      // asynchronously; the store's onFail revert of the in-memory projectIds is its failure
-      // signal. Wait out the immediate-failure window, then only toast success when the in-memory
-      // list agrees with the requested flag (a later rejection still reverts via the store).
-      await new Promise(r => setTimeout(r, 0))
-      if (this.$store.state.category.projectIds.includes(c.categoryId) !== flag) {
-        return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+      try {
+        if (flag) {
+          await this.$store.dispatch('projectV2/fromCategory', { categoryId: c.categoryId })
+        } else {
+          await this.$store.dispatch('projectV2/update', {
+            projectId: 'prj_legacy_' + c.categoryId, patch: { deleted: true }
+          })
+        }
+        this.$message.success(flag
+          ? this.$t('statsG.SideNav.setProject', { name: c.categoryName })
+          : this.$t('statsG.SideNav.unsetProject', { name: c.categoryName }))
+      } catch (e) {
+        this.$message.error(this.$t('statsH.main.actionFailedMsg') + ': ' + (e && e.message ? e.message : e))
       }
-      this.$message.success(flag ? this.$t('statsG.SideNav.setProject', { name: c.categoryName }) : this.$t('statsG.SideNav.unsetProject', { name: c.categoryName }))
     },
     startMgrEdit (c) {
       this.mgrEditing = c.categoryId

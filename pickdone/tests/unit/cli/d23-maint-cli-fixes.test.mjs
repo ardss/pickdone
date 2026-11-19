@@ -69,11 +69,14 @@ test('d23 P1: settings set preserves securityLock secrets and doneGroupsFoldMigr
 })
 
 /* ---------- P3: milestone task fetch raised to App parity ---------- */
-test('d23 P3: milestone listing fetches up to 5000 tasks (pin, D19 parity)', () => {
+test('d23 P3: milestone listing uses all explicitly linked project tasks without an artificial cap', () => {
   const src = fs.readFileSync(new URL('../../../cli/lib-taxonomy.cjs', import.meta.url), 'utf8')
-  const milestoneFetch = src.match(/runMilestone[\s\S]*?listTodos\(\{[^}]*limit:\s*(\d+)/)
-  assert.ok(milestoneFetch, 'runMilestone must call listTodos')
-  assert.equal(Number(milestoneFetch[1]), 5000, 'red before the fix: milestone task fetch stayed at the old 500 cap')
+  const milestone = src.slice(src.indexOf('function runMilestone ('), src.indexOf('function runView ('))
+  assert.match(milestone, /lib\.milestoneTasks\(name\)/, 'read via authoritative project membership')
+  assert.doesNotMatch(milestone, /listTodos\(\{[^}]*limit:\s*(?:500|5000)/, 'no task count cutoff')
+  const model = fs.readFileSync(new URL('../../../cli/lib-project-v2.cjs', import.meta.url), 'utf8')
+  assert.match(model, /function projectTasks \(projectId\)/)
+  assert.match(model, /lib\.liveTasks\(\)\.filter\(t => ids\.has\(t\.taskId\)\)/, 'uncapped project membership')
 })
 
 /* ---------- P3: record fix --rest strict parse ---------- */

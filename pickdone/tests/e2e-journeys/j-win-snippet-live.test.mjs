@@ -15,11 +15,13 @@ import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execSync } from 'node:child_process'
 import { spawnApp, stopApp, connectCdp, evalJson, send, sleep } from '../lib/runtime.mjs'
 
 const RUN = process.env.TODO_WIN_SNIPPET_LIVE === '1'
-const ART = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), 'artifacts')
+// fileURLToPath, not new URL(...).pathname — see tests/unit/cli/d19-dom2-cli.test.mjs (UNC → K:\K\...).
+const ART = path.join(path.dirname(fileURLToPath(import.meta.url)), 'artifacts')
 fs.mkdirSync(ART, { recursive: true })
 const storeQ = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;return a&&a._instance&&a._instance.proxy?a._instance.proxy.$store:null})()`
 

@@ -155,7 +155,7 @@ export async function collectMetaState (rootState, state) {
     const allMetaKeys = await window.todoAPI.dbCall('projectV2Keys')
     if (!Array.isArray(allMetaKeys)) throw new Error('meta key enumeration unavailable')
     for (const key of allMetaKeys) {
-      if (typeof key === 'string' && (key.startsWith('pd.project.v2:') || key.startsWith('pd.taskProject.v2:'))) keys.add(key)
+      if (typeof key === 'string' && (key.startsWith('pd.project.v2:') || key.startsWith('pd.taskProject.v2:') || /^project(?:Docs|Milestones|Deadline|Status):prj_[a-zA-Z0-9_-]+$/.test(key))) keys.add(key)
     }
     if (!keys.size) return null
     const rows = await window.todoAPI.getMetaMany([...keys])

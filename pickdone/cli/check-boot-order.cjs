@@ -193,15 +193,23 @@ function main () {
     const out = execFileSync('git', ['-c', 'core.quotePath=false', 'diff', '--cached', '--name-only', '--diff-filter=ACMR'], gitOpts)
     // git prints paths relative to the REPO toplevel, which is NOT this dir (pickdone/ nests
     // inside the repo root): the raw toplevel-relative paths never matched the src/main regex
-    // and --staged scanned ZERO files for its whole life while exiting green. Resolve every
-    // staged name against the toplevel, then re-express it relative to ROOT before matching
-    // (mirrors the 2026-10-10 check-file-size.cjs toplevel fix).
-    const top = execFileSync('git', ['rev-parse', '--show-toplevel'], gitOpts).trim()
+    // and --staged scanned ZERO files for its whole life while exiting green. Strip the textual
+    // prefix git reports for ROOT (`--show-prefix`) and refuse to fake-green on a mismatch.
+    // Deliberately NOT path.relative(top, ...): on a mapped network drive --show-toplevel comes
+    // back as a UNC path (//host/share/...) that is not byte-comparable with the drive-letter
+    // ROOT, so the relative() round-trip yielded an absolute UNC string and every staged src/main
+    // file fell out of the scan surface (false red here, silent skip in check-file-size.cjs).
+    const prefix = execFileSync('git', ['rev-parse', '--show-prefix'], gitOpts).trim().replace(/\\/g, '/')
+    const toRootRel = f => {
+      const s = String(f).replace(/\\/g, '/')
+      if (!prefix) return s
+      return s.startsWith(prefix) ? s.slice(prefix.length) : null
+    }
     const names = out.split('\n').filter(Boolean)
     const stagedMain = names
       .filter(f => /\.(?:js|cjs|mjs)$/.test(f))
-      .map(f => path.relative(ROOT, path.join(top, f)))
-      .filter(rel => !rel.startsWith('..') && /^src[\\/]main[\\/]/.test(rel))
+      .map(toRootRel)
+      .filter(rel => rel && /^src[\\/]main[\\/]/.test(rel))
     // diff-filter=ACM only yields added/copied/modified paths, so every listed file MUST exist on
     // disk; silently dropping a missing one would shrink the scan surface to a fake-green.
     const missing = stagedMain.filter(f => !fs.existsSync(path.join(ROOT, f)))

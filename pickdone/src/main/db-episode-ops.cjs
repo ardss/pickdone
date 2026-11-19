@@ -142,15 +142,25 @@ const parseNoteFields = note => {
 }
 
 exports.queryEpisodesByCategory = (db, categoryId) => {
-  if (categoryId == null || categoryId === '' || !isFinite(Number(categoryId))) return { tasks: [], recent: [], timeline: [] }
-  const catId = Number(categoryId)
-  const rollup = db.prepare(
-    'SELECT t.id AS taskId, t.content AS taskContent, COUNT(e.id) AS episodeCount,' +
-    ' MAX(e.startedAt) AS lastEpisodeAt' +
-    ' FROM todos t LEFT JOIN work_episodes e ON e.taskId = t.id AND e.deleted = 0' +
-    ' WHERE t.categoryId = @catId AND t.deleted = 0' +
-    ' GROUP BY t.id ORDER BY lastEpisodeAt DESC, t.id ASC'
-  ).all({ catId })
+  const pid = String(categoryId || '')
+  const independent = /^prj_[a-zA-Z0-9_-]{1,100}$/.test(pid)
+  if (!independent && (categoryId == null || categoryId === '' || !isFinite(Number(categoryId)))) return { tasks: [], recent: [], timeline: [] }
+  const rollup = independent
+    ? db.prepare(
+      'SELECT t.id AS taskId, t.content AS taskContent, COUNT(e.id) AS episodeCount,' +
+      ' MAX(e.startedAt) AS lastEpisodeAt' +
+      " FROM todos t JOIN meta m ON m.key = ('pd.taskProject.v2:' || t.id)" +
+      ' LEFT JOIN work_episodes e ON e.taskId = t.id AND e.deleted = 0' +
+      ' WHERE m.value = @pid AND t.deleted = 0' +
+      ' GROUP BY t.id ORDER BY lastEpisodeAt DESC, t.id ASC'
+    ).all({ pid })
+    : db.prepare(
+      'SELECT t.id AS taskId, t.content AS taskContent, COUNT(e.id) AS episodeCount,' +
+      ' MAX(e.startedAt) AS lastEpisodeAt' +
+      ' FROM todos t LEFT JOIN work_episodes e ON e.taskId = t.id AND e.deleted = 0' +
+      ' WHERE t.categoryId = @catId AND t.deleted = 0' +
+      ' GROUP BY t.id ORDER BY lastEpisodeAt DESC, t.id ASC'
+    ).all({ catId: Number(categoryId) })
   if (!rollup.length) return { tasks: [], recent: [], timeline: [] }
   // Batched second pass: every live episode of these tasks (newest first) — the first hit per
   // taskId in JS is that task's latest episode, and the same list yields the project-level

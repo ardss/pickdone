@@ -130,10 +130,18 @@ test('F3-5: the todo tool button rule no longer zeroes the focus ring and adds a
 
 /* F3-6/F3-7: FMT contract for date labels */
 test('F3-6: ProjectView trend labels use FMT.cnDate, not a hardcoded MM-DD', () => {
+  // The label-format contract is what matters, not which file holds the loop. Since 2026-11-19 the
+  // 7-day loop lives in projectViewDerived.js (buildProjectTrend7) to satisfy the structure ratchet,
+  // while ProjectView keeps a `trend7` getter that delegates to it. Accept either site, but still
+  // require: the loop goes through FMT.cnDate and never re-hardcodes 'MM-DD'.
+  const derived = read('renderer/js/utils/projectViewDerived.js')
   const trend = PROJECT.match(/trend7 \(\) \{[\s\S]*?\n\s{4}\},/)
   assert.ok(trend, 'trend7 present')
-  assert.match(trend[0], /FMT\.cnDate/)
-  assert.doesNotMatch(trend[0], /format\('MM-DD'\)/)
+  const impl = trend[0].match(/FMT\.cnDate/) ? trend[0] : derived
+  assert.match(impl, /FMT\.cnDate/, 'trend label must go through FMT.cnDate')
+  assert.doesNotMatch(impl, /format\('MM-DD'\)/, 'trend label must not hardcode MM-DD')
+  // delegation must stay wired: the getter has to actually call the extracted builder
+  assert.match(trend[0], /buildProjectTrend7\(/, 'trend7 getter must delegate to buildProjectTrend7')
 })
 
 test('F3-7: TaskAccountModal record-row abbreviation uses FMT.cnDate for the current year', () => {

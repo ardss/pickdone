@@ -55,7 +55,7 @@ import EmptyState from './EmptyState.vue'
 export default {
   name: 'ProjectHandoff',
   components: { EmptyState },
-  props: { catId: { type: Number, required: true } },
+  props: { catId: { type: [Number, String], required: true } },
   data () {
     return {
       open: true,

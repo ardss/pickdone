@@ -79,6 +79,8 @@ export function createExternalReloader ({ store, reloadEstimates = () => Promise
     if (hasDataKind) store.dispatch('todo/init', preserveHistory ? { preserveHistory: true } : undefined).catch(() => {})
     // CLI can write categories too — keep them appearing without a restart (category rounds only).
     if (!kinds || kinds.includes('category')) store.dispatch('category/init').catch(() => {})
+    // Project-v2 entities and task links are independently synced meta records.
+    if (!kinds || kinds.includes('category') || kinds.includes('meta')) store.dispatch('projectV2/refresh').catch(() => {})
     // F1a: inbound filter rounds previously needed an app restart for new smart lists to show.
     // Absent kinds → reload (cheap, conservative).
     if (!kinds || kinds.includes('filter')) store.dispatch('filters/load').catch(() => {})

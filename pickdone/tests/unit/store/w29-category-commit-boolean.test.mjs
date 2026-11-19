@@ -77,11 +77,12 @@ test('w29 P1: store.commit still swallows the return (documenting WHY the dispat
   assert.equal(viaCommit, undefined, 'commit() must return undefined — the boolean only survives through dispatch')
 })
 
-test('w29 P1: user-facing call sites dispatch (not commit) category/updateCategory', () => {
+test('w29 P1: category edits and project edits both await their authoritative actions', () => {
   const pv = fs.readFileSync(path.join(ROOT, 'renderer/js/views/ProjectView.vue'), 'utf8')
   const sn = fs.readFileSync(path.join(ROOT, 'renderer/js/components/side-nav/SnManageCategoriesModal.vue'), 'utf8')
-  for (const [name, src] of [['ProjectView.vue', pv], ['SnManageCategoriesModal.vue', sn]]) {
-    assert.ok(!src.includes("$store.commit('category/updateCategory'"), `${name}: no commit() on updateCategory (return value would be swallowed)`)
-    assert.ok(src.includes("$store.dispatch('category/updateCategory'"), `${name}: renames/colors go through the awaited action`)
-  }
+  assert.ok(!pv.includes("$store.commit('category/updateCategory'"))
+  assert.ok(!sn.includes("$store.commit('category/updateCategory'"))
+  assert.match(pv, /await this\.\$store\.dispatch\('projectV2\/update'/, 'projects persist independently of categories')
+  assert.match(sn, /await this\.\$store\.dispatch\('category\/updateCategory'/, 'category name/color retain their own durable action')
+  assert.match(sn, /await this\.\$store\.dispatch\('projectV2\/fromCategory'/, 'explicit conversion to project is still an awaited action')
 })

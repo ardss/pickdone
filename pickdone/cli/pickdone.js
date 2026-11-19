@@ -148,7 +148,7 @@ async function main () {
     const sub = opts._[0]
     if (cmd === 'tomato' && sub === 'record') return true // record fix/rm mutate the ledger directly
     if (cmd === 'project') return !!(opts.on || opts.off || opts.status !== undefined || opts.deadline !== undefined)
-    if (cmd === 'project-v2') return sub === 'migrate' && !!opts.yes && !opts['dry-run']
+    if (cmd === 'project-v2') return ['add','rename','status','archive','restore','assign','unassign','recover'].includes(sub) || (sub === 'migrate' && !!opts.yes && !opts['dry-run'])
     // EVERY sync form writes: even `sync status` inserts a cliSyncCmd command row via
     // lib.writeSyncCmd for the running App to consume (adversarial round: bare `sync status`
     // created todos.db/db.key in the default dir), so the whole family is gated
@@ -297,14 +297,7 @@ async function main () {
       return runCategory({ opts, lib, emit })
     case 'tag': return runTag({ opts, lib, emit })
     case 'projects': return runProjects({ opts, lib, emit })
-    case 'project-v2': {
-      const api = require('./lib-project-v2.cjs')({ lib })
-      const sub = opts._[0] || 'list'
-      if (sub === 'list') return emit(api.list())
-      if (sub === 'audit') return emit(api.audit())
-      if (sub === 'migrate') return emit(api.migrate({ yes: !!opts.yes && !opts['dry-run'] }))
-      throw new lib.CliError('usage: project-v2 [list|audit|migrate [--dry-run|--yes --yes-i-know]]', 'USAGE')
-    }
+    case 'project-v2': return require('./run-project-v2.cjs')({ opts, lib, emit })
     case 'project': return runProject({ opts, lib, emit })
     case 'milestone': return runMilestone({ opts, lib, emit })
     case 'stats': {

@@ -79,6 +79,11 @@ export default {
       "memorialKept": "{n} days kept"
     },
     "ProjectsView": {
+      "archivedTitle": "Archived projects ({n})",
+      "archivedRestore": "Restore project",
+      "recoveryRename": "Confirm original name and recover",
+      "recoveryPrompt": "Enter the verified original project name. IDs and tasks are unchanged.",
+      "recoveryFailed": "Project recovery failed",
       "recoveryTitle": "Projects awaiting recovery ({n})",
       "recoveryExplain": "These project names are damaged, but their original IDs and task links remain. Expand to inspect and open tasks. No names are guessed and no tasks are reclassified.",
       "recoveryItem": "Original project ID {id} · {count} tasks ({open} unfinished)",
@@ -173,6 +178,7 @@ export default {
       "deadlineTitle": "Project deadline",
       "deadlineSet": "Deadline set",
       "deadlineCleared": "Deadline cleared",
+      "archivedProject": "Project archived; tasks and categories are unchanged",
       "unprojectConfirm": "Remove \"{name}\" as a project? Tasks are kept, it will just no longer show as a project",
       "restored": "Restored to a regular category",
       "rescheduled": "Overdue unfinished tasks have been rescheduled to today",

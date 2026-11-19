@@ -282,6 +282,12 @@
         broadcast()
         return true
       }
+      case 'projectV2Keys': {
+        try {
+          const meta = JSON.parse(localStorage.getItem(META_KEY)) || {}
+          return Object.keys(meta).filter(k => k.startsWith('pd.project.v2:') || k.startsWith('pd.taskProject.v2:') || /^project(?:Docs|Milestones|Deadline|Status):prj_[a-zA-Z0-9_-]+$/.test(k))
+        } catch { return [] }
+      }
       case 'getMeta': {
         const { key } = normalizeMetaArgs(params)
         try { return JSON.parse(localStorage.getItem(META_KEY))?.[key] ?? null } catch { return null }

@@ -148,8 +148,36 @@ function msPersist (categoryId, mutated, firstRaw) {
   return mutated
 }
 
+function findIndependentProject (input) {
+  const q = String(input || '')
+  for (const key of open().call('listMetaKeys') || []) {
+    if (!String(key).startsWith('pd.project.v2:')) continue
+    try {
+      const p = JSON.parse(open().call('getMeta', key))
+      if (!p || p.deleted || !p.projectId) continue
+      if (q === p.projectId || q === p.name || (p.legacyCategoryId && q === String(p.legacyCategoryId))) return p
+    } catch { /* a damaged project record cannot be mistaken for a valid one */ }
+  }
+  return null
+}
+function resolveMilestoneScope (input) {
+  const p = findIndependentProject(input)
+  if (p) return p.legacyCategoryId || p.projectId
+  return resolveCategory(input)
+}
+function milestoneTasks (input) {
+  const p = findIndependentProject(input)
+  if (!p) return open().call('queryTodos', { deleted: 0, categoryId: resolveCategory(input) })
+  const ids = new Set()
+  for (const key of open().call('listMetaKeys') || []) {
+    if (!String(key).startsWith('pd.taskProject.v2:')) continue
+    if (open().call('getMeta', key) === p.projectId) ids.add(String(key).slice('pd.taskProject.v2:'.length))
+  }
+  return (open().call('queryTodos', { deleted: 0 }) || []).filter(t => ids.has(t.taskId))
+}
+
 function getMilestones (categoryInput) {
-  const id = resolveCategory(categoryInput)
+  const id = resolveMilestoneScope(categoryInput)
   const { list } = msParseRaw(id)
   return { categoryId: id, milestones: msNormalize(list) }
 }
@@ -161,7 +189,7 @@ function parseMilestoneDate (input) {
 }
 
 function addMilestone (categoryInput, title, dateInput) {
-  const categoryId = resolveCategory(categoryInput)
+  const categoryId = resolveMilestoneScope(categoryInput)
   if (!title || !String(title).trim()) throw new CliError('milestone title required', 'EMPTY_CONTENT')
   const date = parseMilestoneDate(dateInput)
   if (!date) throw new CliError(`cannot parse date: "${dateInput}" (supported: YYYY-MM-DD / MM-DD / today / +14d)`, 'BAD_DATE')
@@ -182,7 +210,7 @@ function addMilestone (categoryInput, title, dateInput) {
 }
 
 function removeMilestone (categoryInput, index) {
-  const categoryId = resolveCategory(categoryInput)
+  const categoryId = resolveMilestoneScope(categoryInput)
   const { raw, list } = msParseRaw(categoryId)
   const milestones = msNormalize(list)
   const i = parseInt(index, 10) - 1
@@ -197,7 +225,7 @@ function removeMilestone (categoryInput, index) {
 
 /** Link/unlink a task to a milestone (N2): progress = completion ratio of linked tasks, same source as the UI */
 function linkMilestone (categoryInput, index, taskInput, link = true) {
-  const categoryId = resolveCategory(categoryInput)
+  const categoryId = resolveMilestoneScope(categoryInput)
   const { raw, list } = msParseRaw(categoryId)
   const milestones = msNormalize(list)
   const i = parseInt(index, 10) - 1
@@ -214,12 +242,12 @@ function linkMilestone (categoryInput, index, taskInput, link = true) {
     targets: [{ taskId: 'cat:' + categoryId, content: ms.title }, t],
     note: (link ? 'link task to milestone (' : 'unlink task from milestone (') + ms.title + ')'
   })
-  return { categoryId, milestone: ms, progress: msProgress(ms, open().call('queryTodos', { deleted: 0, categoryId })) }
+  return { categoryId, milestone: ms, progress: msProgress(ms, milestoneTasks(categoryInput)) }
 }
 
 /** Project deadline (meta projectDeadline:<id>, same source as the UI). Pass none/empty in dateInput to clear */
 function setProjectDeadline (input, dateInput) {
-  const id = resolveCategory(input)
+  const id = resolveMilestoneScope(input)
   const cat = open().call('getAllCategories').find(c => c.categoryId === id)
   const key = 'projectDeadline:' + id
   let deadline = 0
@@ -283,7 +311,7 @@ function setProjectStatus (input, status) {
     getProjects, getProjectIds, setProjectFlag, projectStatus,
     // key builders re-exported: lib.js deleteCategory still scrubs/backups these meta keys (U-4 parity)
     PROJECT_IDS_KEY, projectFlagKey, projectStatusKey, MS_KEY,
-    getMilestones, parseMilestoneDate, addMilestone, removeMilestone, linkMilestone, msProgress,
+    getMilestones, parseMilestoneDate, addMilestone, removeMilestone, linkMilestone, msProgress, resolveMilestoneScope, milestoneTasks,
     setProjectDeadline, getProjectDeadline,
     PROJECT_STATUS_VALUES, explicitStatus, setProjectStatus,
   }

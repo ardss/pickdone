@@ -27,6 +27,7 @@ export async function copyTaskFull (ctx) {
       draft: ctx.e, subtasks: ctx.subList, images: ctx.imgList,
       files: ctx.fileList, categoryName: ctx.curCat && ctx.curCat.categoryName,
       categoryColor: ctx.curCat && ctx.curCat.categoryColor,
+      projectName: ctx.$store.getters['projectV2/byId'](ctx.$store.getters['projectV2/forTask'](taskId))?.name || '',
       estimate: ctx.tomatoEstimateN, actual: ctx.tomatoActual,
       repeatCount: ctx.repeatCount, repeatRule,
       copiedAt: Date.now()

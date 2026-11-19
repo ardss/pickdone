@@ -30,8 +30,11 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const APP_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../..')
+// fileURLToPath, not new URL(...).pathname — see tests/unit/cli/d19-dom2-cli.test.mjs
+// (a UNC worktree turned the old form into K:\K\... and broke every spawned CLI process).
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const CLI = path.join(APP_ROOT, 'cli', 'pickdone.js')
 
 const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pd20-j1-fd-'))

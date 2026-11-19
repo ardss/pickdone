@@ -3,6 +3,7 @@
  *  FilterView. The view's conds are now pushed into the query (dateMode/category/done, limit 500). */
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'module'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -16,7 +17,8 @@ const dayjs = require_('dayjs')
 
 db.init(process.env.TODO_DB_DIR)
 
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../..')
+// fileURLToPath, not new URL(...).pathname — see d19-dom2-cli.test.mjs (UNC worktree → K:\K\...).
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const today0 = +dayjs().startOf('day')
 
 let seq = 0

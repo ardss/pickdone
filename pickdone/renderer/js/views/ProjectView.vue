@@ -119,7 +119,7 @@
         <button class="proj-tab" :class="{on: tab === 'docs'}" type="button" :aria-pressed="tab === 'docs'" @click="tab = 'docs'">{{ $t('statsB.ProjectView.tabDocs') }}</button>
       </div>
       <div v-if="tab === 'deps' && settings.developerMode && settings.showDepsModule" ref="boardEl" class="proj-body proj-body--deps">
-        <pd-dep-view :fixed-project-id="catId"/>
+        <pd-dep-view :fixed-project-id="projectId"/>
       </div>
       <div v-else-if="tab === 'docs'" class="proj-body">
         <project-docs :cat-id="catId"/>
@@ -127,7 +127,7 @@
       <div v-else class="proj-body">
         <!-- pd20 P1-01 work-handoff overview: collapsible same-source section (component owns
              its read op + filter toggle; keeps this view under the size ratchet) -->
-        <project-handoff v-if="settings.developerMode === true && (settings.workEpisode || {}).enabled" :cat-id="catId"/>
+        <project-handoff v-if="settings.developerMode === true && (settings.workEpisode || {}).enabled" :cat-id="projectId"/>
         <!-- pd20 P1 multi-view (2026-11-06): the PRD's user-selectable list/board/timeline.
              One switcher, persisted per profile; every branch reads the SAME store/op source. -->
         <div class="proj-taskviews" role="group" :aria-label="$t('statsB.ProjectView.viewsAria')">
@@ -136,8 +136,8 @@
                   :data-task-view="v"
                   @click="setTaskView(v)">{{ $t('statsB.ProjectView.view' + v[0].toUpperCase() + v.slice(1)) }}</button>
         </div>
-        <project-board v-if="taskView === 'board'" :cat-id="catId" :tasks="inCat"/>
-        <project-timeline v-else-if="taskView === 'timeline'" :cat-id="catId"/>
+        <project-board v-if="taskView === 'board'" :cat-id="projectId" :tasks="inCat"/>
+        <project-timeline v-else-if="taskView === 'timeline'" :cat-id="projectId"/>
         <template v-else>
           <empty-state v-if="!groups.length"><template #text>{{ $t('statsB.ProjectView.empty') }}</template></empty-state>
           <div v-else class="todo-list-item-group-list">
@@ -158,12 +158,10 @@
 <script lang="ts">
 /**
  * Project view (route todo-list-project /project/:id)
- * Project = a category flagged as a project (category/projectIds, persisted via meta).
- * The header answers four questions: when it started (earliest task creation time) / how it progresses (progress bar) / how much was invested (focus minutes = sum of estimate) / when it was last advanced.
- * Task list reuses the category list view's grouping semantics (past completed/expired uncompleted/today/tomorrow/day after tomorrow/later/no date) + a fully collapsed final "completed" group.
+ * Project identity and task membership use the independent projectV2 model.
  */
 import {dayjs, DAY_MS, rescheduleExpired, FMT, rangeDays } from '../utils/core.js'
-import { dayShift } from '../utils/todayBounds.js'
+import { buildProjectTrend7, buildProjectTimeline, calculateProjectStats } from '../utils/projectViewDerived.js'
 import { batchMoveWithUndo } from '../utils/confirm.js'
 import { crossDayRevertPatch } from '../utils/crossDayMove.js' // [reschedule-undo-reminder fix]
 import { buildExpiryGroups, staleDoneExclusive } from '../utils/expiryGroups.js'
@@ -183,7 +181,6 @@ import ProjectTimeline from '../components/ProjectTimeline.vue'
 // keeps it per profile across restarts without adding a settings-manifest surface.
 const TASK_VIEW_KEY = 'pd20-project-taskview'
 const TASK_VIEWS = ['list', 'board', 'timeline']
-import { commit as commitCommand } from "../utils/commandBus.js"
 
 // [navgate-fix] pure-start (extracted by tests/unit-navgate-fix-ui.test.mjs)
 /** Entrance-animation target for a freshly added milestone: saveMilestones returns the list sorted
@@ -212,8 +209,9 @@ export default {
     }
   },
   created () {
-    this.reloadMilestones()
-    this.reloadDeadline()
+    this.$store.dispatch('projectV2/refresh')
+      .then(() => { this.reloadMilestones(); this.reloadDeadline() })
+      .catch(() => { this.reloadMilestones(); this.reloadDeadline() })
     // pd20 P1 multi-view: restore the persisted task-area view (default list)
     try {
       const saved = window.localStorage.getItem(TASK_VIEW_KEY)
@@ -242,7 +240,7 @@ export default {
         try {
           this.reloadMilestones()
           this.reloadDeadline()
-          this.$store.dispatch('category/loadProjectMeta')
+          this.$store.dispatch('projectV2/refresh')
         } catch { /* keep current view state */ }
       })
     }
@@ -266,13 +264,23 @@ export default {
     }
   },
   computed: {
-    catId () { return Number(this.$route.params.id) || 0 },
-    cat () { return this.$store.getters['category/byId'](this.catId) },
+    projectId () {
+      const input = String(this.$route.params.id || '')
+      return /^\d+$/.test(input) ? 'prj_legacy_' + input : input
+    },
+    project () { return this.$store.getters['projectV2/byId'](this.projectId) },
+    catId () { return (this.project && this.project.legacyCategoryId) || this.projectId },
+    cat () {
+      const p = this.project
+      if (!p) return null
+      const old = p.legacyCategoryId ? this.$store.getters['category/byId'](p.legacyCategoryId) : null
+      return { categoryId: this.catId, categoryName: p.name, categoryColor: p.color || (old && old.categoryColor) || 'var(--brand)' }
+    },
     settings () { return this.$store.state.settings },
     todayTs () { return this.$store.state.todo.todayTimestamp },
     /* ---- Lifecycle status (meta projectStatus:<id>, contract shared with the CLI); selector sits next to the deadline pill ---- */
     statusOptions () { return PROJECT_STATUSES },
-    projStatus () { return this.$store.getters['category/projectStatus'](this.catId) },
+    projStatus () { return (this.project && this.project.status) || 'active' },
     /* ---- Deadline (meta projectDeadline:<id>, same source as the CLI); daysLeft<0 means overdue ---- */
     daysLeft () {
       if (!this.deadlineTs) return null
@@ -304,19 +312,9 @@ export default {
     deadlineState () { return this.deadlineTs ? dueStateOf(this.deadlineTs, this.todayTs) : 'ok' },
     /* ---- N4 last-7-days completion mini trend (completedAt distribution, today at the far right) ---- */
     trend7 () {
-      const days = []
-      for (let i = 6; i >= 0; i--) {
-        const d0 = dayShift(this.todayTs, -i)
-        const d1 = dayShift(d0, 1)
-        days.push({
-          n: this.inCat.filter(t => t.complete && t.completedAt >= d0 && t.completedAt < d1).length,
-          // [FMT contract] was hardcoded 'MM-DD', bypassing the locale-aware FMT system (cf. DayDeck fmtMd)
-          label: i === 0 ? this.$t('statsB.ProjectView.today') : dayjs(d0).format(FMT.cnDate)
-        })
-      }
-      return days
+      return buildProjectTrend7({ todayTs: this.todayTs, tasks: this.inCat, t: (...args) => this.$t(...args) })
     },
-    /* ---- Milestone timeline: projects start/today/milestones onto the same horizontal axis (positioned proportionally by date) ---- */
+        /* ---- Milestone timeline: projects start/today/milestones onto the same horizontal axis (positioned proportionally by date) ---- */
     currentMilestone () {
       // Current focus = the nearest future milestone (Linear mode: one glance shows which stage you're at)
       const t = this.todayTs
@@ -332,51 +330,21 @@ export default {
       return { pos: ts => Math.min(98, Math.max(2, (ts - lo) / span * 100)) }
     },
     timeline () {
-      const ms = this.milestones
-      const start = this.stats.startedAt || this.todayTs
-      const pos = this.msScale.pos
-      const cur = this.currentMilestone
-      return {
-        todayPct: pos(this.todayTs),
-        marks: [
-          { type: 'start', pct: pos(start), label: this.$t('statsB.ProjectView.startWith', { d: this.fmtDate(start) }) },
-          ...ms.map(m => {
-            const state = milestoneState(m, this.todayTs, this.inCat.filter(t => !t.delete))
-            const focus = cur && cur.id === m.id && state !== 'done'
-            return {
-              type: focus ? 'focus' : state,
-              id: m.id,
-              pct: pos(m.date),
-              label: (focus ? this.$t('statsB.ProjectView.currentTag') : '') + m.title + ' · ' + this.fmtDate(m.date) + this.$t('statsB.ProjectView.msEditHint'),
-              ms: m
-            }
-          }),
-          ...(this.deadlineTs ? [{ type: 'deadline', pct: pos(this.deadlineTs), label: this.$t('statsB.ProjectView.deadlineWith', { d: this.fmtDate(this.deadlineTs) }) }] : []),
-          { type: 'today', pct: pos(this.todayTs), label: this.$t('statsB.ProjectView.today'), tip: this.$t('statsB.ProjectView.today') }
-        ]
-      }
+      return buildProjectTimeline({
+        milestones: this.milestones, startedAt: this.stats.startedAt,
+        todayTs: this.todayTs, deadlineTs: this.deadlineTs,
+        pos: this.msScale.pos, currentMilestone: this.currentMilestone,
+        tasks: this.inCat, t: (...args) => this.$t(...args),
+        fmtDate: ts => this.fmtDate(ts)
+      })
     },
-    inCat () {
-      const id = this.catId
-      return this.$store.getters['todo/byCategory'](id)
+        inCat () {
+      if (!this.project) return []
+      return this.$store.getters['projectV2/tasksOf'](this.projectId, this.$store.state.todo.todoList)
     },
     /* ---- Header's four questions ---- */
-    stats () {
-      const list = this.inCat
-      const done = list.filter(t => t.complete)
-      const live = list.filter(t => !t.delete)
-      const startedAt = live.reduce((m, t) => Math.min(m, t.createTime || m), Infinity)
-      const lastAct = done.reduce((m, t) => Math.max(m, t.completedAt || 0), 0)
-      return {
-        total: live.length,
-        doneCount: done.length,
-        progress: live.length ? Math.round(done.length / live.length * 100) : 0,
-        focusMinutes: live.reduce((s, t) => s + (t.estimate || 0), 0),
-        startedAt: isFinite(startedAt) ? startedAt : 0,
-        lastActivity: lastAct
-      }
-    },
-    groups () {
+    stats () { return calculateProjectStats(this.inCat) },
+        groups () {
       // Wave-5 dedup: same 7-bucket expiry grouping as CategoryView (single source in
       // utils/expiryGroups.js); ProjectView adds the full-completed fallback group (projDone,
       // collapsed by default — "past completed" above only covers the last N days, this is the
@@ -422,7 +390,7 @@ export default {
       // status back), and this caller must surface that failure — swallowing the rejection
       // showed the optimistic status while the write silently reverted on the next launch.
       try {
-        await this.$store.dispatch('category/setProjectStatus', { id: this.catId, status })
+        await this.$store.dispatch('projectV2/update', { projectId: this.projectId, patch: { status } })
       } catch (e) {
         if (this.$message) this.$message.error(this.$t('projQ.statusChangeFailed', { m: (e && e.message) ? e.message : e }))
       }
@@ -440,6 +408,7 @@ export default {
     setCol (key, val) { this.collapsedMap[key] = val },
     async reloadMilestones () { this.milestones = await loadMilestones(this.catId) },
     async reloadDeadline () {
+      if (this.project && this.project.deadline != null) { this.deadlineTs = Number(this.project.deadline) || 0; return }
       try { this.deadlineTs = Number(await window.todoAPI.dbCall('getMeta', 'projectDeadline:' + this.catId)) || 0 } catch { this.deadlineTs = 0 }
     },
     /** Add milestone: ONE dialog (title + date together) — the old two-step prompt chain made
@@ -532,71 +501,59 @@ export default {
       try {
         // [w29 P2] dispatch (not commit): store.commit() discards the mutation's persist
         // boolean, so a failed SQLite write read as ok === undefined and toasted success.
-        const ok = await this.$store.dispatch('category/updateCategory', { categoryId: this.catId, categoryName: name })
+        const ok = await this.$store.dispatch('projectV2/update', { projectId: this.projectId, patch: { name } })
         if (ok === false) return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
         this.$message.success(this.$t('statsB.ProjectView.renamed'))
       } catch (e) {
-        if (e && e.code === 'CATEGORY_EXISTS') { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
+        if (e && (e.code === 'CATEGORY_EXISTS' || e.message === 'PROJECT_V2_DUPLICATE_NAME')) { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
         this.$message.error(this.$t('statsH.main.actionFailedMsg') + ((e && e.message) ? e.message : e))
       }
     },
     async setColor (color) {
-      // [A4 fix] same confirmed-write contract as renameProject: surface a failed persist
-      // [w29 P2] dispatch: commit() swallows the persist boolean (see renameProject)
-      const ok = await this.$store.dispatch('category/updateCategory', { categoryId: this.catId, categoryColor: color })
-      if (ok === false) this.$message.error(this.$t('statsH.main.actionFailedMsg'))
+      try {
+        await this.$store.dispatch('projectV2/update', { projectId: this.projectId, patch: { color } })
+      } catch (e) {
+        this.$message.error(this.$t('statsH.main.actionFailedMsg') + ': ' + (e && e.message ? e.message : e))
+      }
     },
     async setDeadline () {
+      let value
       try {
-        const { value } = await this.$prompt(this.$t('statsB.ProjectView.deadlinePrompt') + ' ' + this.$t('statsB.ProjectView.dateFmtHint'), this.$t('statsB.ProjectView.deadlineTitle'), {
-          inputValue: this.deadlineTs ? dayjs(this.deadlineTs).format(FMT.date) : '', inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectView.dateRequired'),
-          // [maint-0924 A10] live validation under the input (ElMessageBox prompt inputValidator):
-          // every keystroke reports unparseable dates instead of failing only after OK
+        ({ value } = await this.$prompt(this.$t('statsB.ProjectView.deadlinePrompt') + ' ' + this.$t('statsB.ProjectView.dateFmtHint'), this.$t('statsB.ProjectView.deadlineTitle'), {
+          inputValue: this.deadlineTs ? dayjs(this.deadlineTs).format(FMT.date) : '',
+          inputPattern: /\\S/, inputErrorMessage: this.$t('statsB.ProjectView.dateRequired'),
           inputValidator: v => (parseMilestoneDate(v) ? true : this.$t('statsB.ProjectView.badDate'))
-        })
-        const date = parseMilestoneDate(value)
-        if (!date) return this.$message.warning(this.$t('statsB.ProjectView.badDate'))
-        this.deadlineTs = date
-        // [R3] the meta write used to be fire-and-forget (.catch(() => {})) so the "Deadline set"
-        // success toast fired even when persistence failed and the value silently vanished on
-        // reload. Await the commit; on failure drop the optimistic value and surface the error.
-        try {
-          await commitCommand('meta', 'put', ['projectDeadline:' + this.catId, String(date)])
-        } catch (e) {
-          this.deadlineTs = 0
-          this.$message.error(this.$t('statsB.ProjectView.deadlineSet') + ': ' + (e && e.message ? e.message : e))
-          return
-        }
-        this.$store.dispatch('category/loadProjectMeta')
+        }))
+      } catch { return }
+      const deadline = parseMilestoneDate(value)
+      if (!deadline) return this.$message.warning(this.$t('statsB.ProjectView.badDate'))
+      try {
+        await this.$store.dispatch('projectV2/update', { projectId: this.projectId, patch: { deadline } })
+        this.deadlineTs = deadline
         this.$message.success(this.$t('statsB.ProjectView.deadlineSet'))
-      } catch { /* cancelled */ }
+      } catch (e) {
+        await this.reloadDeadline()
+        this.$message.error(this.$t('statsH.main.actionFailedMsg') + ': ' + (e && e.message ? e.message : e))
+      }
     },
     async clearDeadline () {
-      this.deadlineTs = 0
-      // [R3] same false-success path as setDeadline: only toast success once the write persisted.
-      // Clear = put '0', same op/shape as the CLI's setProjectDeadline(none) path (parity kept).
       try {
-        await commitCommand('meta', 'put', ['projectDeadline:' + this.catId, '0'])
+        await this.$store.dispatch('projectV2/update', { projectId: this.projectId, patch: { deadline: 0 } })
+        this.deadlineTs = 0
+        this.$message.success(this.$t('statsB.ProjectView.deadlineCleared'))
       } catch (e) {
-        this.$message.error(this.$t('statsB.ProjectView.deadlineCleared') + ': ' + (e && e.message ? e.message : e))
-        return
+        await this.reloadDeadline()
+        this.$message.error(this.$t('statsH.main.actionFailedMsg') + ': ' + (e && e.message ? e.message : e))
       }
-      this.$store.dispatch('category/loadProjectMeta')
-      this.$message.success(this.$t('statsB.ProjectView.deadlineCleared'))
     },
     async removeFromProject () {
       try { await this.$confirm(this.$t('statsB.ProjectView.unprojectConfirm', { name: this.cat.categoryName }), this.$t('statsB.ProjectView.tip'), { type: 'warning' }) } catch { return }
-      this.$store.commit('category/setProject', { id: this.catId, flag: false })
-      // [F2 fix] setProject is a SYNC mutation (Vuex commit discards the handler's return), whose
-      // durable flag write settles asynchronously; the store's onFail revert of the in-memory
-      // projectIds is its failure signal. Wait out the immediate-failure window, then only toast
-      // success + navigate when the in-memory list actually dropped the id. A rejection arriving
-      // later than this window is still reverted by the store's own error-safety path.
-      await new Promise(r => setTimeout(r, 0))
-      if (this.$store.state.category.projectIds.includes(this.catId)) {
+      try { await this.$store.dispatch('projectV2/update', { projectId: this.projectId, patch: { deleted: true } }) }
+      catch (e) { this.$message.error(this.$t('statsH.main.actionFailedMsg') + ': ' + (e && e.message ? e.message : e)); return }
+      if (this.$store.getters['projectV2/byId'](this.projectId)) {
         return this.$message.error(this.$t('statsH.main.actionFailedMsg'))
       }
-      this.$message.success(this.$t('statsB.ProjectView.restored'))
+      this.$message.success(this.$t('statsB.ProjectView.archivedProject'))
       this.$router.push({ name: 'todo-list-projects' }).catch(() => {})
     },
     /** "Reschedule": expired uncompleted in this project -> today */

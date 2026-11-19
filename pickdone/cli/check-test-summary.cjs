@@ -18,6 +18,18 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
+// UNC-normalize for mapped network drives (2026-11-19 takeover): when the worktree sits
+// on a mapped drive, __dirname is UNC (\\host\share\...). Node's ESM resolver calls
+// fileURLToPath on import.meta.url which ERRORS with "File URL path must be absolute"
+// for UNC-hosted modules — every test spawned from a UNC cwd dies at module load.
+// Convert \\host\share\... → share:\... when the share name is a bare drive letter.
+function toLocalPath (p) {
+  if (process.platform !== 'win32') return p
+  const m = /^\\\\[^\\]+\\([^\\]+)\\/.exec(p)
+  if (m && /^[A-Za-z]$/.test(m[1])) return m[1].toUpperCase() + ':' + p.slice(m[0].length - 1)
+  return p
+}
+
 // skip 棘轮基线 —— 2026-09-13 全平台收紧并由 CI 实证校准:
 //   linux:7 = 2(见下) + 5(2026-10-30 e2e-exit-close 遵循 CHECK_ALL_SKIP_LIVE 的 CI 守卫:
 //             该套件是真拉起 Electron、断言托盘行为的 live 测试,xvfb 无托盘无法满足其验收,
@@ -207,7 +219,7 @@ if (arg) {
     // run-all is streaming now: the tap file grows live, so a hung/budget-killed run leaves
     // diagnostics instead of a 0-byte mystery.
     const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
-      cwd: path.join(__dirname, '..'),
+      cwd: toLocalPath(path.join(__dirname, '..')),
       stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部
     })
     fs.closeSync(fd)

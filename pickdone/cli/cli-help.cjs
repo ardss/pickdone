@@ -25,7 +25,12 @@ Read commands:
   tag    [list]                   list tags (derived from #tag in titles/descriptions)
   tag rename <old> <new>          rewrite #old → #new across all tasks
   tag rm <name>                   strip a tag from all tasks
-  project-v2 [list|audit|migrate [--dry-run|--yes --yes-i-know]]    independent project identities, explicit task links and unresolved legacy-project audit
+  project-v2 list|audit|migrate [--yes]                    read, audit, or migrate verified legacy records
+  project-v2 add <name> [--color hex]                     create independent project
+  project-v2 rename|status|archive|restore <projectId> [value]     edit independent project
+  project-v2 assign <taskId> <projectId> | unassign <taskId>        explicit task ownership
+  project-v2 recover <legacyCategoryId> <confirmedName>   recover legacy project by original ID
+        Write operations require TODO_DB_DIR (isolated) or --yes-i-know (real data).
   projects [--status active|paused|done|cancelled]        list projects (progress/focus minutes/overdue/next 7 days)
   project <name|id> [--on|--off] [--deadline date|none] [--status active|paused|done|cancelled|none]  details / set project / set deadline / set lifecycle status (none clears)
   view list                       saved smart lists (same filters table the App's filter views use)

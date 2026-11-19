@@ -40,7 +40,8 @@
                     :title="$t('statsE.TodayView.overdueSince', { d: dayjs(t.dayStart).format(FMT.cnDate) })"
                     :aria-label="$t('statsE.TodoItem.openEditor')"
                     @click.stop="openEdit(t)" @keydown="onTitleKey(t, $event)">{{ t.taskContent || $t('statsE.TodayView.untitled') }}</span>
-              <button class="pd-day-deck__tomato" :class="{ghost: t.complete}"
+              <button class="pd-day-deck__tomato"
+                      :class="{ ghost: t.complete, 'pd-is-active': $store.state.tomato.attachTodo && $store.state.tomato.attachTodo.taskId === t.taskId }"
                       :tabindex="t.complete?-1:0"
                       :title="$t('statsE.TodoItem.togglePomodoroFocus')" :aria-label="$t('statsE.TodoItem.togglePomodoroFocus')"
                       @click.stop="setTomato(t)">
@@ -468,7 +469,9 @@ export default {
 .pd-day-deck__list li.done .pd-day-deck__chk::after { content: '✓'; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: #fff; font-size: var(--fs-2xs); line-height: 1; }
 .pd-day-deck__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .pd-day-deck__list li.done .pd-day-deck__title { color: var(--text-4); text-decoration: line-through; }
-.pd-day-deck__tomato { border: 0; background: none; color: var(--text-3); cursor: pointer; display: inline-flex; padding: 2px; border-radius: var(--radius-sm, 4px); }
+/* 番茄按钮：与 .pd-day-deck__del 同构的方形盒子，icon 必须严格居中——inline-flex 默认 stretch，
+   14px 图标会带行盒留白导致视觉偏上/偏左，高亮底色也跟着不同心（U02 真机复现）。 */
+.pd-day-deck__tomato { border: 0; background: none; color: var(--text-3); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 19px; height: 19px; padding: 0; flex-shrink: 0; border-radius: var(--radius-sm, 4px); }
 /* 卡片行删除：与列表页同语义（软删+撤销 toast），行 hover 显现、hover 变红 */
 .pd-day-deck__del {
   border: 0; background: none; color: var(--text-4); cursor: pointer;

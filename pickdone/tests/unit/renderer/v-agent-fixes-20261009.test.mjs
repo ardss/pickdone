@@ -72,27 +72,18 @@ test('[V1] behavior: weekGridStart aligns any first-of-month to the week grid ho
 
 /* ===== [V2] ProjectView renameProject CATEGORY_EXISTS ===== */
 
-test('[V2] renameProject catches CATEGORY_EXISTS around the updateCategory commit; cancel-catch scoped to the dialog (F3)', () => {
+test('[V2] renameProject catches duplicate V2 name; prompt-cancel and write errors are separated', () => {
   const i = src.proj.indexOf('async renameProject () {')
-  assert.ok(i > -1, 'renameProject found')
+  assert.ok(i > -1)
   const body = src.proj.slice(i, src.proj.indexOf('async setColor', i))
-  assert.ok(body.includes("e.code === 'CATEGORY_EXISTS'"), 'a dedicated catch branch checks CATEGORY_EXISTS')
-  assert.ok(body.includes('catNameExistsWarn'), 'it surfaces the same warning key as ProjectOverviewView.createProject')
-  // [F3 fix] contract updated: the old OUTER `catch { /* cancelled */ }` around prompt AND persist
-  // swallowed real persistence errors as user cancels. Cancel handling is now scoped to the
-  // $prompt await ONLY; the CATEGORY_EXISTS guard lives in the persist try, and any other
-  // rejection surfaces via actionFailedMsg instead of dying as a "cancel".
-  const iPromptCancel = body.indexOf('catch { return } // user cancelled the dialog')
-  const iGuard = body.indexOf('CATEGORY_EXISTS')
-  assert.ok(iPromptCancel > -1, 'cancel handling is scoped to the dialog await')
-  assert.ok(iGuard > -1 && iGuard > iPromptCancel, 'the guard lives in the persist try AFTER the cancel-only catch')
-  assert.ok(body.includes('statsH.main.actionFailedMsg'), 'non-duplicate persistence rejections surface (no cancel swallow)')
-  // the updateCategory commit now sits inside its OWN try (the inner guard), not bare in the
-  // cancel-only try scope: the line right before `const ok = await ...updateCategory` must be a try opener
-  const iCommit = body.indexOf("const ok = await this.$store.dispatch('category/updateCategory'")
-  assert.ok(iCommit > -1)
-  const before = body.slice(Math.max(0, iCommit - 400), iCommit)
-  assert.ok(/try \{[^}]*$/.test(before), 'the commit is wrapped in its own inner try block')
+  assert.ok(body.includes('PROJECT_V2_DUPLICATE_NAME'))
+  assert.ok(body.includes('catNameExistsWarn'))
+  const iPromptCancel = body.indexOf('catch { return }')
+  const iGuard = body.indexOf('PROJECT_V2_DUPLICATE_NAME')
+  assert.ok(iPromptCancel > -1 && iGuard > iPromptCancel)
+  assert.ok(body.includes('statsH.main.actionFailedMsg'))
+  const iWrite = body.indexOf("await this.$store.dispatch('projectV2/update'")
+  assert.ok(iWrite > iPromptCancel && iWrite < iGuard, 'V2 write is in an independent error scope')
 })
 
 /* ===== [V3] duplicate-name rename channels ===== */

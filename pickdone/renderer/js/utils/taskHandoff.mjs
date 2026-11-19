@@ -65,6 +65,7 @@ export function formatTaskHandoff (task, options = {}) {
     '完成时间: ' + when(task.completedAt),
     '分类: ' + field(options.categoryName || task.categoryName),
     '分类颜色: ' + field(options.categoryColor),
+    '所属项目: ' + (options.projectName || '无'),
     '标签: ' + (tags.length ? tags.map(t => '#' + t).join(' ') : '无'),
     '优先级: ' + field(priority),
     '重要: ' + (important ? '是' : '否') + '；紧急: ' + (task.urgent ? '是' : '否'),

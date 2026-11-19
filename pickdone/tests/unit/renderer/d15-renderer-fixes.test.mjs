@@ -93,10 +93,15 @@ test('A5+B12: the estimate pill and project stats present estimate as focus MINU
   assert.doesNotMatch(todo, /pomodoroInvested/, 'old tomato-rounds label is gone')
   const zh = read('renderer/js/i18n/locales/zh-CN-E.js')
   assert.match(zh, /focusMinutesTitle.*专注投入 \{n\} 分钟/)
-  // both project surfaces sum the same field with a minutes label
-  for (const v of ['renderer/js/views/ProjectOverviewView.vue', 'renderer/js/views/ProjectView.vue']) {
-    assert.match(read(v), /t\.estimate \|\| 0\), 0\)/)
-  }
+  // both project surfaces sum the same field with a minutes label. ProjectView's summation moved to
+  // projectViewDerived.js on 2026-11-19 (structure ratchet); accept that site only when the view
+  // really delegates, so the "single semantic" lock cannot be satisfied by a dead code path.
+  assert.match(read('renderer/js/views/ProjectOverviewView.vue'), /t\.estimate \|\| 0\), 0\)/)
+  const pv = read('renderer/js/views/ProjectView.vue')
+  const derived = read('renderer/js/utils/projectViewDerived.js')
+  const site = /t\.estimate \|\| 0\), 0\)/.test(pv) ? pv : derived
+  assert.match(site, /t\.estimate \|\| 0\), 0\)/, 'estimate must be summed as focus minutes somewhere ProjectView uses')
+  if (site === derived) assert.match(pv, /calculateProjectStats\(/, 'ProjectView must delegate stats to the derived module')
 })
 
 test('A6: the undated 生成 button explains itself inline (same key generate() rejects with)', () => {

@@ -78,6 +78,11 @@ export default {
       memorialKept: '已坚持 {n} 天'
     },
     ProjectsView: {
+      archivedTitle: '已归档项目（{n}）',
+      archivedRestore: '恢复项目',
+      recoveryRename: '确认原项目名称并恢复',
+      recoveryPrompt: '请输入已确认的原项目名称；原 ID 和任务不会改变。',
+      recoveryFailed: '项目恢复失败',
       recoveryTitle: '待恢复项目记录（{n}）',
       recoveryExplain: '这些项目的原始名称损坏，但项目 ID 和关联任务仍在。展开可查看并打开任务；不自动猜测名称，也不改变任务分类。',
       recoveryItem: '原项目 ID {id} · {count} 条任务（未完成 {open}）',
@@ -172,6 +177,7 @@ export default {
       deadlineTitle: '项目截止日',
       deadlineSet: '截止日已设置',
       deadlineCleared: '已清除截止日',
+      archivedProject: '项目已归档，任务与分类保持不变',
       unprojectConfirm: '取消项目「{name}」？任务保留，仅不再作为项目展示',
       restored: '已恢复为普通分类',
       rescheduled: '过期未达成事件已重新安排到今天',

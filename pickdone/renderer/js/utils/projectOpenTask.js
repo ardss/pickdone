@@ -1,16 +1,21 @@
-/** pd20 P1 multi-view (2026-11-06) — the ONE project-page "open this task" path.
- *
- *  Every project-page row/card (handoff rows, board cards, timeline entries) must open the
- *  same EditPanel with the SAME store row. The byCategory cache can briefly lag a freshly
- *  synced row (external writes ride todos-changed → async refresh), so a miss refreshes the
- *  store once via the canonical todo/init and retries — the click is never a silent no-op.
- *  Extracted from ProjectHandoff.openTask so the board/timeline views share the exact
- *  behavior instead of re-implementing it. */
-export async function openProjectTask (store, catId, taskId) {
-  let raw = store.getters['todo/byCategory'](catId).find(t => t.taskId === taskId)
+/** Shared project-page open door (list, board, timeline, handoff).
+ * Project-v2 membership is authoritative. A category is NEVER substituted for an
+ * explicit project link. Numeric legacy routes remain supported during transition.
+ */
+export async function openProjectTask (store, projectOrCategoryId, taskId) {
+  const scope = String(projectOrCategoryId || '')
+  const find = () => {
+    if (scope.startsWith('prj_')) {
+      const links = (store.state.projectV2 || {}).taskProjects || {}
+      return (store.state.todo.todoList || []).find(t =>
+        t && !t.delete && t.taskId === taskId && links[t.taskId] === scope)
+    }
+    return store.getters['todo/byCategory'](projectOrCategoryId).find(t => t.taskId === taskId)
+  }
+  let raw = find()
   if (!raw) {
-    try { await store.dispatch('todo/init') } catch { /* keep the cache verdict */ }
-    raw = store.getters['todo/byCategory'](catId).find(t => t.taskId === taskId)
+    try { await store.dispatch('todo/init') } catch { /* preserve original cache verdict */ }
+    raw = find()
   }
   if (raw) store.commit('ui/openEdit', raw)
   return !!raw

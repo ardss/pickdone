@@ -276,6 +276,7 @@ async function bootstrap () {
     drainPendingUpsertsAtBoot().catch(e => console.error('[todo] boot drain of the pending-write queue failed:', e))
     await store.dispatch('category/init') // Categories unified into SQLite (CLI and UI share one source; auto-migrates localStorage on first run)
     bootMark('category/init')
+    try { await store.dispatch('projectV2/refresh') } catch (e) { console.error('[ProjectV2] read failed, legacy data stays untouched:', e) }
     // Primary-data mirror restore: backfill settings/habits/tomato records from the DB archive when it is newer than LS (no more loss when LS is cleared)
     store.dispatch('settings/initFromDb').catch(() => {})
     store.dispatch('auth/initGamification').catch(e => console.warn('[auth] gamification init failed:', e)) // Y10: fold synced gamification deltas into the LS totals

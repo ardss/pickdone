@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'module'
 import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
@@ -34,7 +35,11 @@ const core = require_('../../../src/main/core/todo-core.js')
 const dayjs = require_('dayjs')
 
 db.init(process.env.TODO_DB_DIR)
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../..')
+// fileURLToPath, not new URL(...).pathname: on a worktree reached through a UNC path the URL
+// host carries the machine name, pathname comes back as /K/... (no drive colon), and the old
+// regex never matched — path.resolve then produced K:\K\AIControl\... (a phantom "K" segment),
+// so every spawned CLI subprocess died with MODULE_NOT_FOUND.
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
 let _seq = 0
 function seed (over = {}) {

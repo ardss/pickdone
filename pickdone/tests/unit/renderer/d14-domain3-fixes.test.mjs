@@ -244,6 +244,6 @@ test('A14: EpAttachments invoke-level open failure toasts', () => {
 
 test('C4: an abandoned cross-project docs write flips saveFailed instead of vanishing silently', () => {
   const src = read('renderer/js/components/ProjectDocs.vue')
-  assert.match(src, /keyCat !== this\._docsCatId\) \{ this\.saveFailed = true; return \}/,
+  assert.match(src, /keyProject !== String\(this\._docsCatId\)\) \{ this\.saveFailed = true; return \}/,
     'ownership mismatch marks the honest failed state (retryable via the next queueSave)')
 })

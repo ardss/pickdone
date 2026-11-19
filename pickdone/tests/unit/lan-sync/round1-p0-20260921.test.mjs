@@ -17,6 +17,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
@@ -28,7 +29,8 @@ const { __test: boot } = require('../../../src/main/lan-sync-bootstrap.js')
 const { createSyncCmdHandler } = require('../../../src/main/cli-sync-channel.js')
 const fixUtil = require('../../../src/main/fix-util.js')
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../..')
+// fileURLToPath, not new URL(...).pathname — see d19-dom2-cli.test.mjs (UNC worktree → K:\K\...).
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const read = p => readFileSync(path.join(ROOT, p), 'utf8')
 
 function fakeDiscovery() {

@@ -6,6 +6,7 @@
  *  5. main-process audit: recordCustom lands + rotation-window retry keeps the line */
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import { createRequire } from 'module'
 import { test } from 'node:test'
@@ -18,7 +19,8 @@ const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
 
 db.init(process.env.TODO_DB_DIR)
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../..')
+// fileURLToPath, not new URL(...).pathname — see d19-dom2-cli.test.mjs (UNC worktree → K:\K\...).
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const ENV = { ...process.env, TODO_DB_DIR: process.env.TODO_DB_DIR }
 const run = (args) => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8', env: ENV, timeout: 120000 }))
 
@@ -43,6 +45,7 @@ test('P2-1: category add --folder --parent is rejected (nested folders invisible
 test('P2-2: project --status and --deadline apply in one invocation', () => {
   lib.addCategory('P2Proj')
   lib.setProjectFlag('P2Proj', true)
+  run(['project', 'P2Proj', '--on', '--json']) // explicit V2 conversion
   const r = run(['project', 'P2Proj', '--status', 'paused', '--deadline', '+14d', '--json'])
   assert.equal(r.ok, true)
   assert.equal(r.data.status, 'paused')
