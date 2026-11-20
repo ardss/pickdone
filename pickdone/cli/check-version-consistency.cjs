@@ -67,7 +67,13 @@ const pkg = parse(pkgRaw, 'package.json')
 const lock = parse(lockRaw, 'package-lock.json')
 
 if (!pkg) {
-  console.error('✗ 版本一致性: 读不到 package.json —— 拒绝放行')
+  // 两个清单都不存在 = 这不是应用仓库（hook 夹具、别的 git 仓库调用同一个钩子）→ 没东西可查。
+  // 只缺 package.json 却留着 lockfile 才是异常态（删了清单没删 lock）→ 仍然 fail-closed。
+  if (!lockRaw) {
+    console.log('✓ 版本一致性: 无清单文件，跳过')
+    process.exit(0)
+  }
+  console.error('✗ 版本一致性: 读不到 package.json，但 package-lock.json 存在 —— 拒绝放行')
   process.exit(1)
 }
 if (!lock) {

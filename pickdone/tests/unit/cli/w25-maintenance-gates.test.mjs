@@ -67,10 +67,14 @@ afterEach(() => {
 // —— Fix 1 leg A: pre-commit stage 1 checks the STAGED blob, not the worktree file ——
 
 function runHook (root) {
-  // The full hook now invokes the source-boundary gate. Reproduce that entrypoint
-  // inside the disposable Git fixture rather than disabling its fail-closed rule.
+  // The full hook now invokes the source-boundary gate and the manifest/lockfile version gate.
+  // Reproduce those entrypoints inside the disposable Git fixture rather than disabling their
+  // fail-closed rules. (The version gate exits 0 when neither manifest exists — this fixture
+  // carries no package.json, so it is a no-op here, but the entrypoint must be present.)
   const gate = path.join(root, 'pickdone/cli/check-environment-boundary.mjs')
   fs.copyFileSync(path.join(CLI, 'check-environment-boundary.mjs'), gate)
+  const vgate = path.join(root, 'pickdone/cli/check-version-consistency.cjs')
+  fs.copyFileSync(path.join(CLI, 'check-version-consistency.cjs'), vgate)
   const r = spawnSync('sh', [HOOK], { cwd: root, env: GIT_SAFE_ENV, encoding: 'utf8', timeout: 180000 })
   return { code: r.status, out: (r.stdout || '') + (r.stderr || '') }
 }
