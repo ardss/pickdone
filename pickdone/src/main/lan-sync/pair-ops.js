@@ -102,6 +102,52 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     return { ...getSettingsPayload(), unpaired: deviceId }
   }
 
+  /* ---------- beta.41: forget one stale peer record WITHOUT touching the shared secret ---------- */
+  /** Why this exists: `sync unpair` rotates the single shared pairing secret, so ONE dead record
+   *  could only be removed by disconnecting every real device. The record left behind by an old
+   *  dev instance (203.0.113.9:58472, state=hibernating, pending=324) then re-dialled on every
+   *  round: ECONNREFUSED in the log forever, and neither the Device Center nor the CLI could drop
+   *  just it. `forget` is unpair's bookkeeping — manual-peer mirror, paired record, tomato-announce
+   *  row, push watermark — minus the three steps that hurt healthy devices: no secret rotation, no
+   *  node restart, no notifyUnpaired (there is nobody left to notify). */
+  async function syncForgetPeerOp (p) {
+    const state = getState()
+    const deviceId = String((p && p.deviceId) || '').trim()
+    if (!deviceId) throw new Error('syncForgetPeer: deviceId is required')
+    // Unlike unpair this is legal with sync disabled: cleaning a record must not require a live node.
+    let host = null
+    let port = null
+    try {
+      const peer = (state.node && state.node.getStatus().peers || []).find(x => x && x.deviceId === deviceId)
+      if (peer) { host = peer.host; port = peer.port }
+    } catch { /* status read is best-effort; the persisted record still goes */ }
+    if (host && state.node) {
+      const rest = manualPeers().filter(x => !(x.host === host && Number(x.port) === Number(port)))
+      settingPut(K_MANUAL_PEERS, JSON.stringify(rest))
+      try { state.node.removePeer(String('manual-' + host + ':' + port)) } catch { /* older nodes */ }
+    }
+    if (state.node) { try { state.node.removePeer(deviceId) } catch { /* older nodes */ } }
+    removePairedPeer(deviceId)
+    try { busWrite('deleteMeta', require('../tomato-announce').keyFor(deviceId)) } catch (e) { log.warn('[LanSync] announce row drop failed:', e && e.message) }
+    try {
+      if (state.peerWatermarks && typeof state.peerWatermarks.revoke === 'function') {
+        state.peerWatermarks.revoke(deviceId)
+        persistPeerWatermarks()
+      } else {
+        const wm = loadPeerWatermarks()
+        if (wm[deviceId] != null) {
+          delete wm[deviceId]
+          settingPut(K_PEER_WATERMARKS, JSON.stringify(wm))
+          if (state.peerWatermarks && typeof state.peerWatermarks.delete === 'function') state.peerWatermarks.delete(deviceId)
+        }
+      }
+    } catch (e) { log.warn('[LanSync] watermark drop failed:', e.message) }
+    notifyRenderers('peer-unpaired') // same refresh signal: the card must disappear
+    emitSyncEvent('peer-unpaired', { deviceId, host })
+    log.info('[LanSync] forgot peer', deviceId, '- shared secret kept (no other device is affected)')
+    return { ...getSettingsPayload(), forgotten: deviceId }
+  }
+
   const syncPairWithCode = async p => {
     const state = getState()
     const code = String((p && p.code) || '').trim()
@@ -243,5 +289,5 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     return getSettingsPayload()
   }
 
-  return { syncUnpairPeerOp, syncPairWithCode, syncPairRespond, syncPairRequest, syncSetPeerAlias, syncGetPairingCode, syncSetName }
+  return { syncUnpairPeerOp, syncForgetPeerOp, syncPairWithCode, syncPairRespond, syncPairRequest, syncSetPeerAlias, syncGetPairingCode, syncSetName }
 }

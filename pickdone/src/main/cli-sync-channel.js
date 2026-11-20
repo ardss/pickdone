@@ -96,6 +96,13 @@ function createSyncCmdHandler ({ dispatch, setMeta, log, getMeta, deleteMeta }) 
         const result = dispatch('syncUnpairPeer', { deviceId: cmd.deviceId })
         return respond(seq, { ok: true, action, result })
       }
+      // beta.41: record-only cleanup for a peer that no longer exists. Distinct from unpair on
+      // purpose — unpair rotates the shared secret and disconnects EVERY device, which is exactly
+      // what you cannot do to get rid of one dead dev-instance record.
+      if (action === 'forget') {
+        const result = await dispatch('syncForgetPeer', { deviceId: cmd.deviceId })
+        return respond(seq, { ok: true, action, result })
+      }
       // 2026-10-09 real-device drill: enable/disable the LAN-sync node headlessly — the only
       // pre-existing paths were the settings UI (needs the window driven) and nothing at all
       // for SSH/CLI hosts. Same dispatch the settings toggle uses, so lifecycle (start/stop

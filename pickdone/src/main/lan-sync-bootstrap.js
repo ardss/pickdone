@@ -692,7 +692,6 @@ const pairOps = require('./lan-sync/pair-ops')({
 })
 const syncUnpairPeerOp = pairOps.syncUnpairPeerOp
 
-
 function registerOps () {
   syncOps.register({
     // main-internal (not renderer-callable): one-time legacy-row oplog backfill, see startSync.
@@ -728,6 +727,7 @@ function registerOps () {
     // P1-3: unpair a device (Device Center peer card). Deletes the peer record + push watermark
     // and revokes the shared pairing secret — every previously paired device must re-pair.
     syncUnpairPeer: p => syncUnpairPeerOp(p),
+    syncForgetPeer: p => pairOps.syncForgetPeerOp(p), // beta.41: record-only (no secret rotation)
     syncSetPeerAlias: pairOps.syncSetPeerAlias,
     syncGetPairingCode: pairOps.syncGetPairingCode,
     syncSetName: pairOps.syncSetName,

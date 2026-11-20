@@ -107,6 +107,7 @@ Write commands:
   sync pair --host <ip> [--port N] [--timeout S]   initiate two-way pairing with a peer (prints our 6-digit code too; waits for the peer to accept)
   sync pair-respond [--code NNNNNN] [--reject]     accept a pending pair request; with no pending request, pair via the peer's 6-digit code
   sync unpair --device <id>      unpair a peer (rotates the shared secret — every remaining peer must re-pair)
+  sync forget --device <id>      drop a stale peer record only (dead instance cleanup; keeps the shared secret, other devices unaffected)
   sync relay status|enable|sync|disable|forget   OPTIONAL remote relay transport (enable needs --account + --base-url, optional --root-key; remote relay also needs TODO_RELAY_ALLOW_REMOTE=1)
   open   [--dev]                  launch App (brings existing window to front if already running)
   doctor                          environment self-check (data dir/driver/rw scale)
