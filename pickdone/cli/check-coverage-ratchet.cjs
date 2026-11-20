@@ -251,7 +251,19 @@ if (measuredFromSummary) {
     if (tail.length) console.error(tail.map(l => '  | ' + l).join('\n'))
     process.exit(1)
   }
-  measured = parseAllFiles(out)
+  // 2026-11-21 (CI 44788318716): prefer the summary THIS run just wrote over scraping the TAP
+  // table. node's raw table also accounts the TEST files themselves, so its "all files" row sank
+  // to 60/70/49 on the Windows leg while the exclude-correct, suite-tagged summary of the very
+  // same run read 79.16/83.67/75.51. Scraping is now only the fallback for a runner that wrote
+  // no summary at all — comparing an instrument that counts tests against a baseline calibrated
+  // without them is a false red that no amount of new tests can clear.
+  const ownSummary = loadFreshSummary(startedAt)
+  if (ownSummary) {
+    measured = { lines: ownSummary.lines, branches: ownSummary.branches, functions: ownSummary.functions }
+    console.log(`[check-coverage-ratchet] own run produced coverage-summary.json (suite=${summarySuite(ownSummary) || 'unknown/legacy'}): ${measured.lines}/${measured.branches}/${measured.functions}`)
+  } else {
+    measured = parseAllFiles(out)
+  }
 }
 if (!measured) {
   console.error('✗ [check-coverage-ratchet] no "# all files" coverage summary found — reporter output changed?')

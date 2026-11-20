@@ -8,6 +8,8 @@
 - 自动更新不再对「没有更新源」的安装反复重试。`electron-builder --dir` 打的包不含 `app-update.yml`，而 `autoUpdater.isUpdaterActive()` 只判断是否为打包态，于是每 4 小时的检查照常发起、抛 `ENOENT ... resources\app-update.yml`，又被归为网络瞬时故障——每次唤醒重试 3 次，一个永远无法自更新的包每天白写 4 行日志。现在更新源文件缺失时更新器直接静默停用（`active:false`，不检查、不重试、设置页不显示入口），同时把「更新源文件缺失」归类为更新源缺失而不是网络故障。
 
 ### 工具链
+- 覆盖率棘轮改为读本轮自己写出的 `coverage-summary.json`，不再从 node 的原始 TAP 表里抠数字。那张表把测试文件本身也算进分母，于是 Windows 腿读成 60/70/49，而基线 79/83/75 是在不含测试文件的仪器下校准的——这是一条再怎么补测试也消不掉的假红。TAP 抠取只保留为"本轮没写摘要"时的兜底。
+- 备份同秒冲突测试不再把墙上时钟当夹具：CI 里第三次写在第一次之后 3.7 分钟才落地，根本没有冲突，实现正确却被判红。`-dup1`/`-dup2` 链改由私有目录 + 固定 stamp 直接调用 `uniqueSnapshotName` 证明（`handlers/backup.js` 已把它导出为测试缝）。
 - 新增 `cli/check-version-consistency.cjs`：`package.json` 与 `package-lock.json` 必须报同一个版本。手工改清单版本号时漏改 lockfile，而提交门禁把两个文件都判为"版本中性"（清单仅差 version 字段、lockfile 完全没动），单测阶段被整体跳过，漂移只以 P1-4h 单测的形式存在——而那条单测正好被同一个门禁 DEFERRED 掉了。新门禁进 pre-commit（毫秒级，读 staged blob）与 `check:all`；同时 `lockVersionOnly()` 在两侧版本不一致时不再给出中性判定。
 
 ## [0.4.0-beta.40] - 2026-11-20
