@@ -95,12 +95,14 @@ test('pre-lock delay applies only to retry launches', () => {
 // relaunch used to quit with no window and no log.
 
 test('stale lockfile clear: no file reports cleared immediately', () => {
-  const { execSync } = require('node:child_process')
-  const dir = execSync('powershell -NoProfile -Command "[System.IO.Path]::GetRandomFileName()"', { encoding: 'utf8' }).trim()
+  // Nonce must be portable: the Linux CI leg has no powershell, and the old
+  // `powershell ... GetRandomFileName()` nonce made this test fail there before it ever
+  // reached the function under test (run 44777391947, ubuntu-latest).
+  const nonce = require('node:crypto').randomUUID().slice(0, 8)
   const os = require('node:os')
   const path = require('node:path')
   const fs = require('node:fs')
-  const ud = path.join(os.tmpdir(), 'mi-lock-none-' + dir)
+  const ud = path.join(os.tmpdir(), 'mi-lock-none-' + nonce)
   fs.mkdirSync(ud, { recursive: true })
   try {
     const res = clearStaleSingletonLockFileSync(ud, { maxWaitMs: 1000, pollMs: 100 })
@@ -108,15 +110,45 @@ test('stale lockfile clear: no file reports cleared immediately', () => {
   } finally { fs.rmSync(ud, { recursive: true, force: true }) }
 })
 
-test('stale lockfile clear: an unreferenced stale file is removed', () => {
-  const { execSync } = require('node:child_process')
-  const nonce = execSync('powershell -NoProfile -Command "[System.IO.Path]::GetRandomFileName()"', { encoding: 'utf8' }).trim()
+test('stale lockfile clear: POSIX branch refuses a PROVEN-LIVE holder and drops a dead one', () => {
+  // Exercised with an explicit platform override so the Linux semantics are covered on the
+  // Windows leg too — the ubuntu CI leg is the only place this branch used to run at all.
+  const fs = require('node:fs')
   const os = require('node:os')
   const path = require('node:path')
+  const nonce = require('node:crypto').randomUUID().slice(0, 8)
+
+  const liveDir = path.join(os.tmpdir(), 'mi-lock-live-' + nonce)
+  fs.mkdirSync(liveDir, { recursive: true })
+  fs.writeFileSync(path.join(liveDir, 'lockfile'), `host-${process.pid}`)
+  try {
+    const res = clearStaleSingletonLockFileSync(liveDir, { platform: 'posix' })
+    assert.equal(res.cleared, false, 'unlink-success is not staleness evidence on POSIX')
+    assert.equal(res.liveHolder, true)
+    assert.equal(fs.existsSync(path.join(liveDir, 'lockfile')), true, 'a live holder file must survive')
+  } finally { fs.rmSync(liveDir, { recursive: true, force: true }) }
+
+  const deadDir = path.join(os.tmpdir(), 'mi-lock-dead-' + nonce)
+  fs.mkdirSync(deadDir, { recursive: true })
+  fs.writeFileSync(path.join(deadDir, 'lockfile'), 'host-999999')
+  try {
+    const res = clearStaleSingletonLockFileSync(deadDir, { platform: 'posix' })
+    assert.equal(res.cleared, true)
+    assert.equal(fs.existsSync(path.join(deadDir, 'lockfile')), false)
+  } finally { fs.rmSync(deadDir, { recursive: true, force: true }) }
+})
+
+test('stale lockfile clear: an unreferenced stale file is removed', () => {
   const fs = require('node:fs')
+  const os = require('node:os')
+  const path = require('node:path')
+  const nonce = require('node:crypto').randomUUID().slice(0, 8)
   const ud = path.join(os.tmpdir(), 'mi-lock-stale-' + nonce)
   fs.mkdirSync(ud, { recursive: true })
-  fs.writeFileSync(path.join(ud, 'lockfile'), 'gone-host-1234')
+  // pid 999999 is above every platform's pid_max in practice, so the POSIX staleness probe
+  // (which refuses to unlink a PROVEN-LIVE holder) sees a dead pid on both Windows and Linux.
+  // The old literal 1234 could be a live runner process on a shared CI box.
+  fs.writeFileSync(path.join(ud, 'lockfile'), 'gone-host-999999')
   try {
     const res = clearStaleSingletonLockFileSync(ud, { maxWaitMs: 2000, pollMs: 100 })
     assert.equal(res.cleared, true)
