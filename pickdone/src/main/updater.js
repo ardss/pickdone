@@ -1,6 +1,7 @@
 /** Auto-update (electron-updater + GitHub Releases)
  *  The feed is provided by app-update.yml generated at electron-builder package time (publish: github draft);
- *  dev builds / portable versions have no app-update.yml, isUpdaterActive()=false, and all entry points degrade safely.
+ *  installs without that file (unpacked `--dir` builds, portable, dev) report active:false via feedConfigured()
+ *  below and every entry point degrades safely.
  *  Process convention: CI builds on tag → GitHub Draft Release → manually add changelog then Publish →
  *  installed users get a silent check at startup and optional background download; installation requires an explicit "restart to update" action.
  *
@@ -9,6 +10,8 @@
  *  will-quit 500ms flush window ALWAYS loses that race — the debounced dbMirror writes and the reminder
  *  dedup ledger must already be on disk before the installer starts, not while it is killing us.
  */
+const fs = require('fs')
+const path = require('path')
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
@@ -17,8 +20,26 @@ const { readConfig, isReadFailed } = require('./config-store')
 // Portable versions (PORTABLE_EXECUTABLE_DIR injected by the electron-builder portable runtime) do not participate in in-app updates:
 // otherwise it would launch the NSIS installer and overwrite the install, breaking the portable single-file semantics
 const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR
+// beta.41 — "unpacked build with no feed" was NOT actually degrading safely. electron-builder --dir
+// (what `npm run pack` produces, and what both dev machines run) ships no app-update.yml, while
+// autoUpdater.isUpdaterActive() only looks at app.isPackaged and still returns true; the check then
+// throws `ENOENT ... resources\app-update.yml`, which classifyUpdateError() called TRANSIENT and so
+// earned the full bounded backoff (3 retries) on every 4h wake — 12 log lines a day, free, forever
+// (main.log 17:52 / 21:52 on 2026-11-20).
+// The feed file is the ground truth for "can this install update itself".
+// Unknown-environment policy: when process.resourcesPath is absent (node --test, ad-hoc dev runs)
+// we cannot judge and answer true, leaving isUpdaterActive() as the only gate there — otherwise
+// every existing updater unit test would have to materialise a fake resources tree.
+function feedConfigured () {
+  try {
+    if (!process.resourcesPath) return true
+    if (fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'))) return true
+    // dev-app-update.yml is the electron-updater dev-mode feed (cwd); honour it if someone set it up
+    return fs.existsSync(path.join(process.cwd(), 'dev-app-update.yml'))
+  } catch { return true } // a throwing fs probe must not silently disable updates
+}
 // PICKDONE_NO_AUTOUPDATE=1: reserved for managed distribution channels such as MS Store / portable — a store build self-updating would conflict with the store's distribution mechanism; a blanket env-var disable
-const isActive = () => !isPortable && process.env.PICKDONE_NO_AUTOUPDATE !== '1' && autoUpdater.isUpdaterActive()
+const isActive = () => !isPortable && process.env.PICKDONE_NO_AUTOUPDATE !== '1' && feedConfigured() && autoUpdater.isUpdaterActive()
 
 let win = null
 // Issue #224: lastCheckError carries the CLASSIFIED failure (kind FEED_MISSING vs TRANSIENT +
@@ -46,6 +67,10 @@ function classifyUpdateError (e) {
   const msg = String((e && e.message) || e)
   const code = (e && e.statusCode) || (e && e.code) || ''
   if (code === 404 || /\b404\b/.test(msg) || /no published versions/i.test(msg)) return 'FEED_MISSING'
+  // beta.41: a missing feed FILE is the same class as a missing feed ASSET — retrying in 30s cannot
+  // create app-update.yml. Reachable when feedConfigured() loses its race (file removed after boot)
+  // or when the probe answered true in an environment we could not judge.
+  if (/app-update\.yml/i.test(msg) && /ENOENT/i.test(msg)) return 'FEED_MISSING'
   // DNS/proxy outages do not prove that release assets are missing. Retry them
   // only through the existing bounded transient budget and show network failure.
   return 'TRANSIENT'

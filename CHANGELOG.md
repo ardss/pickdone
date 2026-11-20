@@ -1,3 +1,8 @@
+## [0.4.0-beta.41] - 2026-11-20
+
+### Fixed
+- Auto-update no longer retries against an install that has no feed. `electron-builder --dir` builds ship no `app-update.yml`, but `autoUpdater.isUpdaterActive()` only checks whether the app is packaged, so the four-hourly check still ran, threw `ENOENT ... resources\app-update.yml`, and the failure was classified as transient — three backoff retries every wake, four log lines a day on a build that can never self-update. The updater is now inert when the feed file is absent (`active:false`, no check, no retries, settings entry hidden), and a missing-feed `ENOENT` is classified as a missing feed rather than a network fault.
+
 ## [0.4.0-beta.40] - 2026-11-20
 
 ### Added
