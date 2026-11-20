@@ -60,6 +60,7 @@ const GROUPS = [
     name: '② 静态门禁+类型+单元（并行 3 道,与③池同时起跑）', parallel: 3, retry: 0,
     stages: [
       ['Public/private environment boundary and PR conventions', 'node', ['cli/check-environment-boundary.mjs']],
+      ['版本一致性（package.json ↔ package-lock.json：只改一侧会让单测阶段被整体跳过，beta.41 实测漂移）', 'node', ['cli/check-version-consistency.cjs']],
       ['指纹脱敏', 'node', ['cli/check-fingerprint.js']],
       ['依赖许可证', 'node', ['cli/check-licenses.js']],
       ['token 纪律', 'node', ['cli/check-tokens.js']],

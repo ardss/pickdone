@@ -6,6 +6,9 @@
 ### 修复
 - 自动更新不再对「没有更新源」的安装反复重试。`electron-builder --dir` 打的包不含 `app-update.yml`，而 `autoUpdater.isUpdaterActive()` 只判断是否为打包态，于是每 4 小时的检查照常发起、抛 `ENOENT ... resources\app-update.yml`，又被归为网络瞬时故障——每次唤醒重试 3 次，一个永远无法自更新的包每天白写 4 行日志。现在更新源文件缺失时更新器直接静默停用（`active:false`，不检查、不重试、设置页不显示入口），同时把「更新源文件缺失」归类为更新源缺失而不是网络故障。
 
+### 工具链
+- 新增 `cli/check-version-consistency.cjs`：`package.json` 与 `package-lock.json` 必须报同一个版本。手工改清单版本号时漏改 lockfile，而提交门禁把两个文件都判为"版本中性"（清单仅差 version 字段、lockfile 完全没动），单测阶段被整体跳过，漂移只以 P1-4h 单测的形式存在——而那条单测正好被同一个门禁 DEFERRED 掉了。新门禁进 pre-commit（毫秒级，读 staged blob）与 `check:all`；同时 `lockVersionOnly()` 在两侧版本不一致时不再给出中性判定。
+
 ## [0.4.0-beta.40] - 2026-11-20
 
 ### 新增

@@ -171,13 +171,39 @@ function pkgVersionOnly () {
   return versionOnlyChange(blob(':0:pickdone/package.json'), blob('HEAD:pickdone/package.json'))
 }
 
+/** version field of a staged manifest, or null when unreadable */
+function stagedVersion (name) {
+  const raw = blob(`:0:pickdone/${name}`)
+  if (raw == null) return null
+  try {
+    const o = JSON.parse(raw)
+    return o.version || null
+  } catch {
+    return null
+  }
+}
+
 /** package-lock.json is neutral when it did not change at all, or when the only change is the
- *  version fields riding a version-only manifest bump */
+ *  version fields riding a version-only manifest bump.
+ *
+ *  2026-11-21 (beta.41 drift): an UNTOUCHED lockfile used to be neutral unconditionally, so
+ *  "hand-edited package.json bump, lockfile left at the old version" was neutral on both sides
+ *  (pkg: version-only; lock: unchanged) → the unit stage was skipped wholesale and the skew only
+ *  existed as a P1-4h assertion that the same gate had deferred. Neutrality now requires the two
+ *  manifests to AGREE; a skew fails wide, and cli/check-version-consistency.cjs blocks it outright. */
 function lockVersionOnly () {
   const staged = blob(':0:pickdone/package-lock.json')
   const head = blob('HEAD:pickdone/package-lock.json')
   if (staged == null || head == null) return false
-  if (staged === head) return true // untouched lockfile alongside a version bump
+  const pkgV = stagedVersion('package.json')
+  let lockV = null
+  try {
+    lockV = JSON.parse(staged).version || null
+  } catch {
+    return false // unparseable lockfile is a real surface problem, not a neutral bump
+  }
+  if (pkgV && lockV && pkgV !== lockV) return false
+  if (staged === head) return true // untouched lockfile that still agrees with the manifest
   return pkgVersionOnly() && versionOnlyChange(staged, head, true)
 }
 
