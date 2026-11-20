@@ -46,6 +46,8 @@ export default {
       syncAria: 'Sync',
       settingsTitle: 'Settings',
       settingsAria: 'Settings',
+      themeToDark: 'Switch to dark mode',
+      themeToLight: 'Switch to light mode',
       catMgrTip: 'Drag rows to reorder (guide line shows insertion point) · Click a name to rename · Click the count to preview contents',
       unfinishedHeader: 'Unfinished',
       opsHeader: 'Actions',

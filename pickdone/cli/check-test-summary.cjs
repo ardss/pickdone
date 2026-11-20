@@ -214,6 +214,10 @@ if (arg) {
     ...(!withCoverage && core ? ['--tier=core'] : []),
   ]
   if (cov.dirs) extra.push(`--dirs=${cov.dirs.join(',')}`)
+  // --max-files=N (2026-11-20 commit-speed): forward the commit-stage pool budget to run-all.
+  // Forwarded only when the caller asked for it, so check:all / coverage runs stay unlimited.
+  const maxFiles = (/^--max-files=(\d+)$/.exec(process.argv.find(a => a.startsWith('--max-files='))) || [])[1]
+  if (maxFiles && !withCoverage) extra.push(`--max-files=${maxFiles}`)
   const runOnce = tapPath => {
     const fd = fs.openSync(tapPath, 'w')
     // run-all is streaming now: the tap file grows live, so a hung/budget-killed run leaves
@@ -250,6 +254,15 @@ if (exitCode !== 0) red(`单测进程 exit code = ${exitCode}(非 0 即红,不�
 
 // 校验二: TAP 摘要 fail=0, cancelled=0, skip ≤ 基线
 const tap = fs.readFileSync(tapFile, 'utf8')
+// 2026-11-20 commit-speed: --max-files 让 run-all 在池超预算时打出 DEFERRED 标记并 exit 0。
+// 这里必须显式识别它——否则 TAP 里 0 条用例会被读成"plan 缺失/空摘要"的一次假绿或假红。
+// 它是**明示的推迟**，不是跳过：run-all 已打印等价命令，check:all / CI 仍跑全池。
+const deferred = /^# DEFERRED (\d+) files \(max (\d+)\)/m.exec(tap)
+if (deferred) {
+  console.log(`⏭ [check-test-summary] 本次提交未跑单测：受影响池 ${deferred[1]} 个文件超出提交预算 ${deferred[2]}`)
+  console.log('   本地全量：npm run check:core   |   push 后 CI 跑全量（check:all 口径）')
+  process.exit(0)
+}
 const { pass, fail, skip, cancelled, plan } = parseSummary(tap)
 // W32 fix(#1) 2026-11-03 live-pool skip intake: tests/run-interactions-shared.mjs's 9-target
 // live pool is NOT a TAP stream — its internal t.skip() counts were invisible to every plan-

@@ -99,7 +99,7 @@ echo "[pre-commit] 3/4 ESLint（0 error 才放行，warning 不阻塞；--cache 
 node cli/lint-staged.mjs || exit 1
 echo "  ✓ 通过"
 
-echo "[pre-commit] 4/4 单元测试（core 层=纯进程内规格;深潜层套件——真 Electron/双实例 lan-sync/loopback 演练——归 check:all 全量）"
+echo "[pre-commit] 4/4 单元测试（core 层受影响范围；池超预算则明示推迟，不阻塞提交）"
 # 2026-09-13 堵假绿:不再 `npm test | grep "# fail 0"`(管道吞 exit code + 任意来源字符串即假绿)。
 # 改由 cli/check-test-summary.cjs 统一校验:exit code 非 0 即红 + TAP 摘要 fail=0 + skip 棘轮(≤基线,超线提示"新增 skip 需要说明+降基线")
 # 2026-10-23 效率波:改跑 --core 层。深潜层套件慢(分钟级/个)且负载敏感(宿主高载时级联出
@@ -107,7 +107,22 @@ echo "[pre-commit] 4/4 单元测试（core 层=纯进程内规格;深潜层套�
 # 合并门禁 check:all 仍跑全池兜底。
 # w29(2026-11-01): --retry-once 已退役（check-all.js 同款策略 2026-10-24 退役）——run-all 现内建 per-file
 # 精准重试，外层整套重跑只会在红路径上双倍放大耗时，且与内建重试叠加成两次重试。
-node cli/check-test-summary.cjs --core --affected || exit 1
+#
+# 2026-11-20 提交速度波（实测根因，两处）：
+#  1) 受影响范围是"目录粒度"的，一个组件改动就会选中 tests/unit/components + renderer + cli
+#     ≈ 340 个文件；而本机 ~12 CPU 秒/文件（源码扫描类 spec 要读上百个文件，且工作区在 SMB 网络盘上，
+#     同一组用例在本地盘快 2.7–4.5 倍），并发 2 时就是 1 小时。
+#  2) package.json / package-lock.json 未进映射表，任何版本号自增都"unmapped → 全量 983 文件"。
+#     该漏洞已在 cli/check-test-scope.cjs 修掉（仅版本字段不同 → 不触发单测）。
+# 现在的策略：受影响池 ≤ PICKDONE_COMMIT_TEST_MAX（默认 60 个文件）才在提交时跑，并发默认 8；
+# 超预算由 run-all 打出 DEFERRED 并明示"本地全量 npm run check:core / push 后 CI 跑全池"，
+# 提交不再被挂死。要恢复旧行为（无论多大都跑）：PICKDONE_COMMIT_TESTS=strict git commit ...
+COMMIT_TEST_MAX="${PICKDONE_COMMIT_TEST_MAX:-60}"
+if [ "${PICKDONE_COMMIT_TESTS:-}" = "strict" ]; then
+  node cli/check-test-summary.cjs --core --affected || exit 1
+else
+  TEST_CONCURRENCY="${TEST_CONCURRENCY:-8}" node cli/check-test-summary.cjs --core --affected --max-files="$COMMIT_TEST_MAX" || exit 1
+fi
 echo "  ✓ 通过"
 
 echo "[pre-commit] 全部通过 ✓"

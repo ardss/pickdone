@@ -1,3 +1,8 @@
+## [0.4.0-beta.40] - 2026-11-20
+
+### Added
+- Sidebar foot: a light/dark quick toggle after sync, recycle bin and settings, in both the expanded account row and the collapsed stack. The icon shows the current theme (sun while dark, moon while light) and one click switches to the opposite explicit mode, so choosing "follow system" in Settings still works and one footer click always produces a visible theme. The four foot icons now use their own tighter cluster gap, so the account name is no longer ellipsized.
+
 ## [0.4.0-beta.39] - 2026-11-19
 
 ### Changed

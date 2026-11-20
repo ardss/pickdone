@@ -1,6 +1,6 @@
 {
   "name": "pickdone",
-  "version": "0.4.0-beta.39",
+  "version": "0.4.0-beta.40",
   "private": true,
   "description": "PickDone — local-first todos, schedule and pomodoro focus desktop app",
   "productName": "PickDone",
@@ -41,7 +41,9 @@
     "typecheck": "vue-tsc --noEmit --incremental",
     "test:pilot": "node tests/run-pilot.mjs",
     "check:boundary": "node cli/check-environment-boundary.mjs",
-    "release:tag": "node scripts/release-tag.mjs"
+    "release:tag": "node scripts/release-tag.mjs",
+    "check:core": "node tests/run-all.mjs --tier=core",
+    "check:deep": "node tests/run-all.mjs --tier=deep"
   },
   "engines": {
     "node": ">=22.12"

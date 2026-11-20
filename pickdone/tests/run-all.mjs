@@ -98,6 +98,11 @@ const DEEP_FILES = new Set([
   'lan-sync-episode.test.mjs',
   // loopback server suites — bind real ports / long socket lifecycles
   'lan-sync-loopback.test.mjs',
+  // 2026-11-20 (commit-speed wave, measured): its F2 case advertises two real UDP sockets and
+  // polls up to 6s for a cross-socket discovery — under the core pool's load it timed out in 2 of
+  // 3 runs (twice in isolation, once under load), i.e. a false red that blocks commits. Live-network
+  // class: same treatment as the other lan-sync drills, still exercised by check:all / CI.
+  'round2-p1-20260921.test.mjs',
   'v2-acceptance-drill.test.mjs',
   'd9-loopback-mesh-scale.test.mjs',
   'd9-loopback-two-machine-drill.test.mjs',
@@ -178,8 +183,8 @@ if (tierArg && !['core', 'deep'].includes(tierArg)) {
   console.error(`✗ [run-all] unknown --tier=${tierArg} (valid: core|deep)`)
   process.exit(1)
 }
-// drop the --suite/--tier/--dirs args before forwarding the rest to node --test
-const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=') || a.startsWith('--dirs=')))
+// drop the --suite/--tier/--dirs/--max-files args before forwarding the rest to node --test
+const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=') || a.startsWith('--dirs=') || a.startsWith('--max-files=')))
 // discovery follows appRoot too (GATE_META_APP_ROOT sandboxing): scanning the script's own
 // tests/ would drag the real corpus into a meta-test sandbox run. The sibling dir is
 // tolerated missing — sandbox fixtures don't carry it.
@@ -237,6 +242,23 @@ if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites
 if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} -> ${files.length} file(s)`)
 if (tierArg) console.error(`[run-all] tier=${tierArg}: ${files.length} file(s)${tierNote}`)
 else if (dirsArg) console.error(`[run-all] scope: ${files.length} file(s)${tierNote}`)
+
+// --max-files=N (2026-11-20 commit-speed wave): the commit gate must never sit on a huge pool.
+// Measured on this repo: ~12 CPU-seconds per test file on the network worktree (source-scanning
+// specs read hundreds of files over SMB), so a 983-file core tier is ~1h at concurrency 2 and the
+// coarsened affected-scope map routinely selects 90-340 files for a one-line UI change. Deferral is
+// LOUD and repeatable, never a silent skip: the exact equivalent command is printed, the TAP stream
+// carries a machine-readable marker that check-test-summary turns into a note instead of a green
+// "0 tests passed", and CI on push still runs the full pool.
+const maxFilesArg = (/^--max-files=(\d+)$/.exec(process.argv.find(a => a.startsWith('--max-files='))) || [])[1]
+if (maxFilesArg && +maxFilesArg > 0 && files.length > +maxFilesArg) {
+  const deferredCmd = `node tests/run-all.mjs --tier=${tierArg || 'core'}${dirsArg ? ` --dirs=${dirsArg}` : ''}`
+  console.error(`[run-all] DEFERRED: 选中 ${files.length} 个测试文件 > --max-files=${maxFilesArg}（提交门禁预算）`)
+  console.error(`[run-all]           本地全量：npm run check:core   |   push 后 CI 也会跑全量`)
+  console.error(`[run-all]           等价命令：${deferredCmd}`)
+  console.log(`# DEFERRED ${files.length} files (max ${maxFilesArg})`)
+  process.exit(0)
+}
 
 // With shell:true, unquoted file paths explode when the project path contains spaces (e.g. D:My Projects): the argument string is cut at the space;
 // executing the binary inside the electron package does not rely on shell lookup, so shell can be safely dropped here
