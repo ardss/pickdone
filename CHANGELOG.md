@@ -4,6 +4,7 @@
 - `sync forget --device <id>`: drop a stale peer record only. A device that no longer exists (an old dev instance on a second port) used to be unremovable without harm — `sync unpair` rotates the single shared pairing secret, so every healthy device would have to re-pair. `forget` removes the peer entry, its manual-address mirror, its running-tomato announcement row and its push watermark, and keeps the secret, so nobody else notices.
 
 ### Fixed
+- Sidebar theme toggle no longer borrows the settings button's class. Six live UI suites locate the settings entry with `.sn-account-gear:not(.sn-account-trash)`, so the new toggle (DOM order before the gear) swallowed the click and the settings modal never opened — invisible to the commit gate because the live pool is deferred, caught by the branch's first CI run. The toggle keeps its own `sn-theme-toggle` identity and shares the button styling through a joint rule.
 - Auto-update no longer retries against an install that has no feed. `electron-builder --dir` builds ship no `app-update.yml`, but `autoUpdater.isUpdaterActive()` only checks whether the app is packaged, so the four-hourly check still ran, threw `ENOENT ... resources\app-update.yml`, and the failure was classified as transient — three backoff retries every wake, four log lines a day on a build that can never self-update. The updater is now inert when the feed file is absent (`active:false`, no check, no retries, settings entry hidden), and a missing-feed `ENOENT` is classified as a missing feed rather than a network fault.
 
 ### Tooling

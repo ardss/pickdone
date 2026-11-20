@@ -107,7 +107,18 @@ test('E2E: settings modal opens (regression: an unclosed template div once broke
   // Data Management — a deliberate feature tab, not broken UI; expectation updated accordingly.
   // Mobile / Web sync bridge tab added (Lane A cross-platform, 94d4d585): between Sync and Capture —
   // QA S8 2026-11-10 caught this fixture rotting again; same deliberate-tab doctrine.
-  assert.deepEqual(st.tabs, ['General', 'Appearance', 'Calendar', 'Shortcuts', 'Pomodoro', 'Sync', 'Mobile / Web sync', 'Capture', 'Data Management', 'Feedback & About'])
+  // 2026-11-21 (CI run 44781550015): the label list is asserted in BOTH locales. The suite forces
+  // `appLocale=en-US` in localStorage, but the locale is also persisted in settings and the boot
+  // settings hydration wins over the localStorage seed, so a fresh isolated DB renders zh-CN. The
+  // contract this test owns is "the deliberate tab set", not "the language" — pinning English only
+  // made it fail for a locale, not for a UI regression.
+  const EXPECTED_EN = ['General', 'Appearance', 'Calendar', 'Shortcuts', 'Pomodoro', 'Sync', 'Mobile / Web sync', 'Capture', 'Data Management', 'Feedback & About']
+  const EXPECTED_ZH = ['通用', '外观', '日历', '快捷键', '番茄钟', '同步', '手机 / 网页同步', '采集', '数据管理', '反馈与关于']
+  const same = (a, b) => a.length === b.length && a.every((v, i) => v === b[i])
+  assert.ok(
+    same(st.tabs, EXPECTED_EN) || same(st.tabs, EXPECTED_ZH),
+    `unexpected settings tabs (locale drift or a tab was added/removed): ${JSON.stringify(st.tabs)}`
+  )
 })
 
 test('E2E: settings tab underline strictly aligns with text (regression: EP nth-child(2)/last-child padding misalignment)', { skip: !available || !isolated }, async () => {

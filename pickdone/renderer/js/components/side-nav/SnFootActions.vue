@@ -25,7 +25,10 @@
         <app-icon name="trash" :size="14"/>
         <em v-if="recycleCount" class="sn-badge">{{ recycleCount }}</em>
       </button>
-      <button class="sn-account-gear sn-theme-toggle" data-act="theme"
+      <!-- 自有 class，不复用 .sn-account-gear：六个活体 UI 测试用
+           `.sn-account-gear:not(.sn-account-trash)` 点"设置"，复用一个已存在的类会让
+           它们先命中主题按钮（CSS 由 .sn-account-gear, .sn-theme-toggle 联合规则提供）。 -->
+      <button class="sn-theme-toggle" data-act="theme"
               :title="$t(themeToggleLabelKey)" :aria-label="$t(themeToggleLabelKey)"
               :aria-pressed="isDark ? 'true' : 'false'" @click="toggleTheme" @keydown.enter.prevent="toggleTheme">
         <app-icon :name="isDark ? 'sun' : 'moon'" :size="14"/>

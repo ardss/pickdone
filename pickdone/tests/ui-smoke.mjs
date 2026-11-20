@@ -188,7 +188,13 @@ console.log('[2] sidebar single highlight (regression: uncategorized once leaked
 // First switch to the inbox, once the worst-hit area
 await send('Runtime.evaluate', { expression: `location.hash='#/todo-list/todo-box'` }); await sleep(1000)
 const hl2 = await evalJson(`[...document.querySelectorAll('.sn-nav-item.active, .sn-cat-item.active')].map(e => e.textContent.trim())`)
-ok('inbox page has a single highlight', hl2.length === 1 && hl2[0].includes('Todo box'), JSON.stringify(hl2))
+// [locale 2026-11-21] Labels are matched bilingually: the app's locale comes from persisted
+// settings and defaults to the OS locale, so the same suite renders en-US on CI runners and
+// zh-CN on a Chinese-locale dev box. Pinning English made three checks fail for the language,
+// not for a UI regression (settings modal fixture rot, CI run 44781550015).
+const LABEL = { todoBox: ['Todo box', '待办箱'], timeBlocks: ['Time blocks', '时间块'], month: ['Month', '月'] }
+const isLabel = (text, key) => LABEL[key].includes(String(text || '').trim())
+ok('inbox page has a single highlight', hl2.length === 1 && isLabel(hl2[0], 'todoBox'), JSON.stringify(hl2))
 
 console.log('[3] data review')
 // Self-seeding defense (same rationale as ui-interactions [9]): the isolated instance is an empty DB and the
@@ -203,7 +209,11 @@ const seedRes = await send('Runtime.evaluate', {
     el.focus(); var set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
     set.call(el, '冒烟_统计播种任务'); el.dispatchEvent(new Event('input', { bubbles: true }))
     el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await new Promise(r => setTimeout(r, 900))
-    var c = document.querySelector('.td-item .td-check, .td-item [role="checkbox"]'); if (!c) return 'no-check'
+    // [2026-11-21] The today board renders a priority MATRIX (.matrix-quadrant__list), not
+    // td-item rows — this helper kept looking only for td-item checkboxes, found nothing, and
+    // reported no-check even though the task had been created and was visibly on screen.
+    // (No backticks in this comment: it lives inside a template literal.)
+    var c = document.querySelector('.td-item .td-check, .td-item [role="checkbox"], .matrix-quadrant__list .td-check, .today-list [role="checkbox"]'); if (!c) return 'no-check'
     c.click(); await new Promise(r => setTimeout(r, 1200))
     return 'seeded'
   })()`,
@@ -305,7 +315,7 @@ await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.pd
 const matrix = await evalJson(`({quads: document.querySelectorAll('.matrix-quadrant').length})`)
 ok('quadrant: all four quadrants render', matrix.quads === 4)
 await gotoHash('#/todo-list/calendar', '.cal-seg button')
-await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === 'Time blocks')?.click()` })
+await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => ['Time blocks','时间块'].includes(b.textContent.trim()))?.click()` })
 for (let i = 0; i < 30; i++) { await sleep(1000); if (await evalJson(`document.querySelectorAll('.cal-tb__cell').length > 0`)) break } // 10s→30s:并行满载下 FC 网格首渲染可超 10s(2026-09-25 check:all 实锤 got 0)
 const tb = await evalJson(`({cells: document.querySelectorAll('.cal-tb__cell').length, pool: !!document.querySelector('.cal-tb__pool')})`)
 // D15 A1 (2026-10-03): the time-block grid renders the full 0-23 day (TB_HOURS contract in
@@ -315,7 +325,7 @@ ok('time blocks: unscheduled task pool exists', tb.pool)
 // Month-view ‹/› pagination: both the internal date and the visible grid must keep up (regression defense: Vue's reactive proxy wrapping the FC instance made renders never reach the DOM)
 await gotoHash('#/todo-list/calendar', '.cal-nav-group button')
 // Force back to month view first: leftover time-block view from the previous section would send nav() down the tbWeekStart branch without touching the month calendar
-await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => b.textContent.trim() === 'Month')?.click()` })
+await send('Runtime.evaluate', { expression: `[...document.querySelectorAll('.cal-seg button')].find(b => ['Month','月'].includes(b.textContent.trim()))?.click()` })
 await sleep(800)
 const navTitle = () => evalJson(`(document.querySelector('.cal-title')||{textContent:''}).textContent.trim()`)
 const t0 = await navTitle()
