@@ -125,7 +125,8 @@ const evalAwait = async expression => {
   return r.result?.result?.value ?? null
 }
 // Poll until a DOM/DB probe turns truthy (bounded retries; the probe result is returned for failure detail)
-const until = async (expression, tries = waitTries(12), gap = 400) => {
+const until = async (expression, tries = 12, gap = 400) => {
+  tries = waitTries(tries) // CI: scale whatever budget the call site asked for (explicit ones too)
   for (let i = 0; i < tries; i++) {
     const v = await evalJson(expression)
     if (v) return v

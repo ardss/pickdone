@@ -101,7 +101,8 @@ const chromeEvalRaw = async (expr, target = 'sw') => {
 const chromeTargets = async () => {
   try { return await (await fetch(chromeCdp + '/json')).json() } catch { return [] } // chrome not up yet
 }
-const until = async (fn, tries = waitTries(20), gap = 700) => {
+const until = async (fn, tries = 20, gap = 700) => {
+  tries = waitTries(tries) // CI: scale whatever budget the call site asked for (explicit ones too)
   for (let i = 0; i < tries; i++) {
     const v = await fn()
     if (v) return v

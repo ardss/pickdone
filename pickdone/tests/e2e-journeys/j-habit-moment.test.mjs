@@ -114,7 +114,8 @@ const evalAwait = async expression => {
 const STORE_Q = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;const p=a&&a._instance&&a._instance.proxy;if(p&&p.$store)return p.$store;return null})()`
 
 // Poll an expression until truthy (toast latency / async persist under pool load)
-const pollFor = async (expression, tries = waitTries(15), gap = 400) => {
+const pollFor = async (expression, tries = 15, gap = 400) => {
+  tries = waitTries(tries) // CI: scale whatever budget the call site asked for (explicit ones too)
   for (let i = 0; i < tries; i++) {
     const v = await evalJson(expression)
     if (v) return v

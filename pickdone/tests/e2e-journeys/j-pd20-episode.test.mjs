@@ -41,7 +41,8 @@ let ctx = null
 let userDataDir = null
 const storeQ = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;return a&&a._instance&&a._instance.proxy?a._instance.proxy.$store:null})()`
 
-const untilJson = async (expr, tries = waitTries(12), gap = 500) => {
+const untilJson = async (expr, tries = 12, gap = 500) => {
+  tries = waitTries(tries) // CI: scale whatever budget the call site asked for (explicit ones too)
   for (let i = 0; i < tries; i++) {
     const v = await evalJson(ctx, expr)
     if (v) return v

@@ -98,7 +98,8 @@ const evalAwait = async expression => {
   if (r.exceptionDetails) throw new Error('page eval failed: ' + ((r.exceptionDetails.exception?.description || r.exceptionDetails.text) + '').slice(0, 300))
   return r.result?.result?.value ?? null
 }
-const until = async (expression, tries = waitTries(12), gap = 400) => {
+const until = async (expression, tries = 12, gap = 400) => {
+  tries = waitTries(tries) // CI: scale whatever budget the call site asked for (explicit ones too)
   for (let i = 0; i < tries; i++) {
     const v = await evalJson(expression)
     if (v) return v
