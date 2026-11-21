@@ -130,7 +130,7 @@ export default {
     // (TomatoAbandonModal.focusedMin / TomatoFloatPage.focusedMinText).
     attachCandidates () {
       // No cap: the list is already in memory and truncating silently made tasks beyond the limit unattachable
-      return [...this.$store.state.todo.views.todayTodoList].filter(t => !t.complete)
+      return [...this.$store.getters['todo/views'].todayTodoList].filter(t => !t.complete)
     },
     playText () {
       if (this.isWork) return this.$t('statsE.TomatoBar.giveUpFocusBtn')

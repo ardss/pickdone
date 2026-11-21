@@ -259,7 +259,7 @@ export default {
       return visibleNavRoutes(this.$store.state.settings, NAV_ORDER)
     },
     user () { return this.$store.state.auth.user },
-    todoBoxCount () { return this.$store.state.todo.views.todoBoxCount },
+    todoBoxCount () { return this.$store.getters['todo/views'].todoBoxCount },
     /* Recycle bin badge: count of soft-deleted entries (the original footer button migrated to the account row, user-finalized) */
     recycleCount () { return this.$store.state.todo.todoList.filter(t => t.delete).length },
 

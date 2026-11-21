@@ -148,10 +148,12 @@ test('ownsAttachmentFile / purgeAttachmentFiles: prefix task id no longer eats t
   assert.equal(ownsAttachmentFile('noise-custom.mp3', 'a'), false)
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'r17-att-'))
   for (const f of ['a_1737000000000_x.png', 'a_b_1737000000000_y.png']) fs.writeFileSync(path.join(dir, f), 'x')
-  purgeAttachmentFiles(() => dir, ['a'])
+  // rows: [] — an empty live row set (this case is about prefix ownership, not sharing); omitting
+  // it means "row set unknown", which keeps every file by design.
+  purgeAttachmentFiles(() => dir, ['a'], { rows: [] })
   assert.ok(fs.existsSync(path.join(dir, 'a_b_1737000000000_y.png')), "purging 'a' must keep task 'a_b''s attachment")
   assert.ok(!fs.existsSync(path.join(dir, 'a_1737000000000_x.png')))
-  purgeAttachmentFiles(() => dir, ['a_b'])
+  purgeAttachmentFiles(() => dir, ['a_b'], { rows: [] })
   assert.ok(!fs.existsSync(path.join(dir, 'a_b_1737000000000_y.png')))
 })
 

@@ -20,6 +20,7 @@
 import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { buildViews } from '../../../renderer/js/store/helpers/todoComputeViews.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -336,8 +337,7 @@ test('[12] an overdue task completed today appears in todayDoneList only (not re
     rootState: { settings: { expiredCompletedTodoRange: '7d', expiredUncompletedTodoRange: '30d', upcomingTodoRange: '30d', todoBoxCategoryId: -1, todoBoxSortMethod: 'created', todoBoxSortOrder: 'desc', sortMode: 'custom', showNoDate: true } }
   }
   const fakeThis = { state: { todo: st } }
-  await todo.actions.computeViews.call(fakeThis, ctx)
-  const views = committed.find(([n]) => n === 'setViews')[1]
+  const views = buildViews(fakeThis.state.todo, ctx.rootState.settings) // derived groups, same call the getter makes
   assert.ok(views.todayDoneList.some(t => t.taskId === 'dup1'), 'completed-today overdue task is in today done')
   assert.ok(!views.recent.expiredCompleted.some(t => t.taskId === 'dup1'), 'and NOT duplicated in recent expired completed')
   assert.ok(views.recent.expiredCompleted.some(t => t.taskId === 'old1'), 'an earlier-completed overdue task still lists there')

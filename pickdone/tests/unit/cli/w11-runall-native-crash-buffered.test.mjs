@@ -36,7 +36,9 @@ test('run-all: every REBUILT-capable pass is spawned buffered (native rerun + fl
   assert.ok(/let r = await spawnRunner\(\)/.test(code),
     'pass1 must be spawned live (spawnRunner() with no { live } override) — 0-byte-TAP contract')
   const calls = (code.match(/await spawnRunner\(/g) || []).length
-  const buffered = (code.match(/await spawnRunner\([\s\S]*?\{ live: false \}\)/g) || []).length
+  // The contract is "this pass is buffered", not "the options object has exactly one key": the
+  // flake-retry call also pins `concurrency: '1'` (2026-11-21 — serial retry, see run-all.mjs).
+  const buffered = (code.match(/await spawnRunner\([\s\S]*?\{[^}]*live: false[^}]*\}/g) || []).length
   assert.ok(calls >= 2, 'spawnRunner call sites must exist')
   assert.equal(buffered, calls - 1,
     'every spawnRunner call EXCEPT pass1 must pass { live: false } (rebuilt/appended streams stay buffered)')

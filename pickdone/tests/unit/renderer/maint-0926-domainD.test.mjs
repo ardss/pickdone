@@ -530,6 +530,6 @@ test('[nan-comparator] todayDoneList and recycleBin comparators carry the ||0 Na
   const todo = read('renderer/js/store/helpers/todoComputeViews.js')
   assert.match(todo, /todayDoneList: todayDoneList\.sort\(\(a, b\) => \(b\.completedAt \|\| b\.updateTime \|\| 0\) - \(a\.completedAt \|\| a\.updateTime \|\| 0\)\)/,
     'a completed row with NaN completedAt/updateTime keeps a deterministic position')
-  assert.match(todo, /recycleBin: \[\.\.\.store\.state\.todo\.recycleList\]\.sort\(\(a, b\) => \(b\.deletedAt \|\| b\.updateTime \|\| 0\) - \(a\.deletedAt \|\| a\.updateTime \|\| 0\)\)/,
+  assert.match(todo, /recycleBin: \[\.\.\.todoState\.recycleList\]\.sort\(\(a, b\) => \(b\.deletedAt \|\| b\.updateTime \|\| 0\) - \(a\.deletedAt \|\| a\.updateTime \|\| 0\)\)/,
     'a binned row with NaN deletedAt/updateTime keeps a deterministic position')
 })

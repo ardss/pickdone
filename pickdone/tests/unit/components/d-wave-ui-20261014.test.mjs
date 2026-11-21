@@ -123,7 +123,8 @@ async function mountRecycleBin (storeStub) {
 test('recycle bin: Enter on a row opens the edit panel with the row TASK (not the KeyboardEvent)', async () => {
   const commits = []
   const store = {
-    state: { todo: { views: { recycleBin: [] } } },
+    state: { todo: { todoList: [], recycleList: [] } },
+    getters: { 'todo/views': { recycleBin: [] } },
     dispatch () { return Promise.resolve() },
     commit (type, payload) { commits.push([type, payload]) }
   }
@@ -139,7 +140,8 @@ test('recycle bin: Enter on a row opens the edit panel with the row TASK (not th
 test('recycle bin: openEdit is a no-op on a non-task argument (type guard)', async () => {
   const commits = []
   const store = {
-    state: { todo: { views: { recycleBin: [] } } },
+    state: { todo: { todoList: [], recycleList: [] } },
+    getters: { 'todo/views': { recycleBin: [] } },
     dispatch () { return Promise.resolve() },
     commit (type, payload) { commits.push([type, payload]) }
   }
@@ -163,7 +165,8 @@ test('recycle bin: template binds the row task into onEditKey (wiring check)', (
 test('recycle bin: pickDate double-fire dispatches restoreFromRecycle once (restore() guard parity)', async () => {
   const dispatched = []
   const store = {
-    state: { todo: { views: { recycleBin: [] } } },
+    state: { todo: { todoList: [], recycleList: [] } },
+    getters: { 'todo/views': { recycleBin: [] } },
     dispatch (type, payload) {
       dispatched.push([type, payload])
       return new Promise(resolve => setTimeout(resolve, 0))

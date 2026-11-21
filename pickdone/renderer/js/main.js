@@ -147,8 +147,7 @@ store.registerModule('_rt', {
       // mass-tombstone the freshly restored rows on the first Ctrl+Z — and sync those deletions to the
       // peer. Same generation guard as purgeIds/purgeAllRecycle: history must not cross a table replace.
       store.commit('todo/historyClear')
-      store.commit('todo/setAllRows', rows)
-      store.dispatch('todo/computeViews').catch(e => console.warn('[rt] computeViews failed:', e))
+      store.commit('todo/setAllRows', rows) // views are a getter over the rows: replacing them is enough
     }
   }
 })
@@ -222,29 +221,14 @@ window.appUI = null
 // utils/auxWindow.js now — one copy had drifted to miss __quick-add.
 import { isAuxWindow, isFloatWindow } from './utils/auxWindow.js'
 import { installSyncEventToasts } from './utils/syncDegradedToast.js'
+import { registerFloatAutoShow } from './utils/floatAutoShow.js'
 const isMainShell = !isAuxWindow()
 
-// W23 (P1): auto-show armed as bootstrap()'s FIRST statement — the old tail-of-chain registration was silently skipped when anything above it threw ("小窗没弹出来"); gates fire-time evaluated.
-function registerFloatAutoShow () {
-  try {
-    if (!isMainShell) return // quick-add/float windows also load this file; popping would "revive" a closed float
-    setTimeout(() => {
-      if (!window.todoAPI) return
-      if (store.state.settings.enableTomatoFloating === false) { // W23 (P2): legitimate, but no longer a SILENT return (get-settings type-cleanses residue)
-        console.info('[float-auto-show] skipped: enableTomatoFloating ===', store.state.settings.enableTomatoFloating, '(switch off, or stale config.json residue)'); return
-      }
-      let markerRead = null // db unavailable below: default to showing
-      try { markerRead = window.todoAPI.dbCall('getMeta', 'tomatoFloatClosedByUser') } catch { }
-      Promise.resolve(markerRead).then(v => {
-        if (v === '1') return // the user explicitly closed the float last run: keep it closed
-        Promise.resolve(window.todoAPI.showTomatoFloat()).catch(e => console.warn('[float-auto-show] invoke rejected:', e)) // W23 (P3): the rejection used to be swallowed
-      }).catch(() => { /* marker read failed: err on the visible side */ })
-    }, 6000)
-  } catch (e) { console.error('[float-auto-show] registration failed:', e && e.stack || e) } // W23: failure-proof + loud
-}
-
 async function bootstrap () {
-  registerFloatAutoShow() // W23 (P1): armed BEFORE anything that can throw
+  // W23 (P1): auto-show armed as bootstrap()'s FIRST statement — the old tail-of-chain registration
+  // was silently skipped when anything above it threw ("小窗没弹出来"). The chain itself lives in
+  // utils/floatAutoShow.js (gates are still fire-time evaluated; isMainShell is injected, not read).
+  registerFloatAutoShow({ isMainShell, store })
   // 2026-09-02 measurement verdict: keep it serial. Tried settings∥category in parallel; measured total time actually rose ~50ms
   // (category's DB IPC contended with settings, todo/init went from ~57ms to ~150ms), reverted.
   // First frame paints at mount (+11ms); the data pipeline reacts in within 350ms, so serial is enough.
@@ -286,10 +270,12 @@ async function bootstrap () {
     store.dispatch('tomatoAnnounce/init').catch(() => {})
     import('./utils/tomatoEstimate.js').then(m => m.initFromDb(store.state.todo.todoList.map(t => t.taskId))).catch(() => {}) // Estimated tomatoes: backfill from meta when newer (same ledger as CLI setEstimate, 2026-09-03; Y: per-task key union over live ids)
     // U-6 (2026-09-20): the todoBox difficulty sort reads estimates lazily (ensureEstimate read-through).
-    // When an async fetch lands, rebuild views once so the order corrects instead of staying stale until
-    // an unrelated rebuild (guarded by the sort mode — other sorts never read estimates).
+    // Estimates live in a module-level cache, NOT in Vuex state, so the `views` getter has no dependency
+    // to invalidate on. The explicit token is the honest way to say "something outside state changed":
+    // bump it and every reader of the box order recomputes (guarded by the sort mode — other sorts never
+    // read estimates).
     import('./utils/tomatoEstimate.js').then(m => m.onEstimateFetched(() => {
-      if (store.state.settings.todoBoxSortMethod === 'difficulty') store.dispatch('todo/computeViews').catch(() => {})
+      if (store.state.settings.todoBoxSortMethod === 'difficulty') store.commit('todo/bumpViewEpoch')
     })).catch(() => {})
     store.dispatch('filters/load').catch(() => {}) // Saved filters (smart lists)
     // Statutory holiday table (data source for repeat tasks "skip holidays / weekdays only") + lunar calendar library injection (lunar yearly repeats)
@@ -632,7 +618,7 @@ async function bootstrap () {
         if (modalOpen()) break
         const id = store.state.ui.rightSidebarTodoEdit.taskId || selectedTaskId()
         const t = id && store.state.todo.todoList.find(x => x.taskId === id)
-        if (t) deleteWithUndo(window.appUI, store, t).then(ok => { if (ok) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] undo-refresh computeViews failed:', e)) })
+        if (t) deleteWithUndo(window.appUI, store, t) // undo restores the row; the derived views follow on their own
         else window.appUI && window.appUI.$message && window.appUI.$message.info(i18n.global.t('statsH.main.deleteNoSelection'))
         break
       }
@@ -764,7 +750,9 @@ async function bootstrap () {
         if (store.state.ui.daySelectedTs !== +t0) store.commit('ui/setDaySelected', 0)
       }
       // .catch: an async action rejection here would surface as an unhandled promise rejection every minute
-      if (store.state.todo.viewsDirty || dayChanged) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] periodic computeViews failed:', e))
+      // Views need no periodic rebuild anymore; what the tick still owns is the daylight-rollover
+      // bookkeeping (todayTimestamp + the once-a-day recycle purge), so it only runs when the day flips.
+      if (dayChanged) store.dispatch('todo/computeViews').catch(e => console.warn('[todo] periodic computeViews failed:', e))
     }, 60 * 1000)
   }
 

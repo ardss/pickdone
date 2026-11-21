@@ -137,7 +137,7 @@ export default {
     return { drawerOpen: false, tick: 0, tickTimer: null }
   },
   computed: {
-    v () { return this.$store.state.todo.views },
+    v () { return this.$store.getters['todo/views'] },
     tomato () { return this.$store.state.tomato },
     today0 () { return this.$store.state.todo.todayTimestamp },
     /* ---- Now ---- */

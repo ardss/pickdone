@@ -194,7 +194,6 @@ export async function undoStep ({ state, commit, dispatch }) {
     // Round-5 P0: stale-epoch baselines must not tombstone ids the snapshot never saw (peer-created rows)
     allowDeletes: (prev._e === undefined ? 0 : prev._e) === (state._histEpoch || 0)
   })) || []
-  dispatch('computeViews')
   dispatch('writeCriticalBackup')
   // label reuses the diff result; no more two rounds of full stringify over both snapshots
   return { ok: true, label: changedRows.length === 1 ? (changedRows[0].taskContent || '') : '' }
@@ -217,7 +216,6 @@ export async function redoStep ({ state, commit, dispatch }) {
     to: next,
     allowDeletes: (next._e === undefined ? 0 : next._e) === (state._histEpoch || 0)
   })) || []
-  dispatch('computeViews')
   dispatch('writeCriticalBackup')
   return { ok: true, label: changedRows.length === 1 ? (changedRows[0].taskContent || '') : '' }
 }

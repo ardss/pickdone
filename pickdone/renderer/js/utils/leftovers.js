@@ -70,19 +70,13 @@ export async function maybeAskLeftovers (store) {
       return { id: t.taskId, orig: JSON.parse(JSON.stringify(t)), patch }
     })
     for (const s of snap) {
-      // _deferViews: one view rebuild after the loop instead of one per row (each was an O(n) computeViews)
       // [leftover-move-wipes-time fix] the raw {todoTime: todayStart} patch wiped the task's
       // time-of-day (a 14:30 schedule moved to today 00:00) and orphaned reminderTime/reminderExtra
       // on the old day — same single-source crossDayMovePatch the drag/batch moves use.
-      const patch = { ...s.patch, _deferViews: true }
+      const patch = { ...s.patch }
       await store.dispatch('todo/updateTodoFields', { taskId: s.id, patch })
     }
     markAsked(todayStr)
-    // [w30 P3] .catch on the bare dispatch (same convention as main.js's periodic computeViews):
-    // an async action rejection here surfaced as an unhandled promise rejection and could reject
-    // past batchMoveWithUndo — the move itself has already landed, so a view-rebuild failure must
-    // not break the undo toast chain.
-    store.dispatch('todo/computeViews').catch(e => console.warn('[leftovers] computeViews after batch move failed (non-blocking):', e))
     // Batch move = reversible op: success toast carries group undo (plain success before; consolidated 2026-09-01)
     batchMoveWithUndo(vm, {
       label: tt('statsA.core.movedNToToday', { n: list.length }),

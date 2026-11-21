@@ -38,7 +38,11 @@ const eMain = { sender: MAIN_WC }
 const handlers = attachmentHandlers({
   isLocked: () => false,
   isSafeExternal: u => false,
-  getMainWindow: () => ({ webContents: MAIN_WC, isDestroyed: () => false })
+  getMainWindow: () => ({ webContents: MAIN_WC, isDestroyed: () => false }),
+  // The shared-reference scan is fail-CLOSED (a refused delete on an unread row set), so a ctx
+  // without dbm can never delete a file. These cases are about alias bookkeeping, not sharing:
+  // an empty row set says "nothing else references this key".
+  dbm: { call: () => [] }
 })
 
 const FILES = path.join(TMP, 'files')

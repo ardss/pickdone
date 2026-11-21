@@ -40,10 +40,14 @@ test('filterSharedAttachmentFiles: tombstone rows count (recycle-bin restore is 
   assert.deepEqual(out, [], 'a binned sharer still keeps the file')
 })
 
-test('filterSharedAttachmentFiles: rows=null fails open (candidates unchanged, legacy behavior)', () => {
+test('filterSharedAttachmentFiles: rows=null fails CLOSED — an unread row set unlinks nothing', () => {
   const files = [KEY]
-  assert.deepEqual(filterSharedAttachmentFiles(files, { rows: null, excludeIds: ['a'] }), files)
-  assert.deepEqual(filterSharedAttachmentFiles(files, {}), files)
+  // null = "the caller could not read the rows" (dbm.call threw). Skipping the check here is how a
+  // transient read error deleted exactly the shared files this guard exists to protect.
+  assert.deepEqual(filterSharedAttachmentFiles(files, { rows: null, excludeIds: ['a'] }), [])
+  assert.deepEqual(filterSharedAttachmentFiles(files, {}), [])
+  // An empty row set is a different statement — the DB really is empty — and keeps the old unlink.
+  assert.deepEqual(filterSharedAttachmentFiles(files, { rows: [], excludeIds: ['a'] }), files)
 })
 
 test('filterSharedAttachmentFiles: image field and path-form/encoded local:// urls resolve like the serve boundary', () => {
@@ -65,10 +69,10 @@ test('purgeAttachmentFiles: shared file kept, private file removed, aliases prun
   assert.equal(fs.existsSync(privateFile), false, 'task a private file must be removed')
 })
 
-test('purgeAttachmentFiles: without opts.rows the legacy unconditional unlink is preserved (fail-open)', () => {
+test('purgeAttachmentFiles: an unreadable row snapshot keeps every file (row delete still proceeds)', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'w30-purge-legacy-'))
   const f = path.join(dir, KEY)
   fs.writeFileSync(f, 'x')
-  purgeAttachmentFiles(() => dir, ['a'])
-  assert.equal(fs.existsSync(f), false, 'legacy callers (no rows) keep the old behavior')
+  purgeAttachmentFiles(() => dir, ['a'], { rows: null })
+  assert.equal(fs.existsSync(f), true, 'unknown row set -> keep the file (an orphan is reclaimable, a shared file is not)')
 })

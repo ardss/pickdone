@@ -18,6 +18,7 @@ const mintId = prefix => prefix + '_' + Date.now().toString(36) + Math.random().
 // pd20 P0 (2026-11-07): freshness semantics single source (also consumed by handoff export).
 // shared/*.mjs is the repo convention — CJS consumes it via require(esm) (Node >= 22.12).
 const { isKnownLevel, sourceFreshness } = require('../../shared/source-freshness.mjs')
+const { tombstoneStamps, tombstoneId } = require('./tombstone') // shared delete-stamp rule
 
 // pd20 (2026-11-08): episode attribution family — WHO produced this work round. Closed set
 // (human / agent / qa) so the handoff's A→B→QA loop is honest: an out-of-family value is a
@@ -289,17 +290,19 @@ exports.sourceFindPair = (db, row) => db.prepare('SELECT id, updatedAt, deleted 
 exports.taskSourceFindPair = (db, row) => db.prepare('SELECT id, updatedAt, deleted FROM task_source_links WHERE taskId = ? AND sourceRefId = ?').get(String(row && row.taskId), String(row && row.sourceRefId)) || null
 
 // Shared tombstone core (planRemoveIds shape): row-granular changed-id list, stamp opts honored.
+// Stamp/id resolution comes from tombstone.js — the rule is identical for plan chips, the tomato
+// ledger and every table here; this used to be a third hand-copied template.
 function removeByIds (db, table, ids, opts = {}) {
   const list = Array.isArray(ids) ? ids : [ids]
   const now = Date.now()
-  const dAt = (opts && opts.deletedAt) || now
-  const stamp = (opts && opts.updatedAt) || dAt
+  const fallback = { deletedAt: (opts && opts.deletedAt) || now, updatedAt: (opts && opts.updatedAt) || null }
   const del = db.prepare(`UPDATE ${table} SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ? AND deleted=0`)
   const changed = []
   const tr = db.transaction(() => list.forEach(i => {
-    const o = (i && typeof i === 'object') ? i : null
-    const r = del.run((o && o.deletedAt) || dAt, (o && o.updatedAt) || stamp, String(o ? o.id : i))
-    if (r.changes > 0) changed.push(String(o ? o.id : i))
+    const id = tombstoneId(i)
+    if (id == null) return
+    const st = tombstoneStamps(i, fallback)
+    if (del.run(st.deletedAt, st.updatedAt, id).changes > 0) changed.push(id)
   }))
   tr()
   return changed

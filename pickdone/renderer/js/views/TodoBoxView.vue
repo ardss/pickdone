@@ -173,7 +173,7 @@ export default {
     sortMethodLabel () { const o = this.sortMethodOptions.find(x => x.value === this.settings.todoBoxSortMethod); return o ? o.label : this.$t('statsC.TodoBox.sortByCreate') }, // [J3] legacy 'due' labels as created, never the raw key
     sortOrderLabel () { const o = this.sortOrderOptions.find(x => x.value === this.settings.todoBoxSortOrder); return o ? o.label : this.settings.todoBoxSortOrder },
     cats () { return this.$store.state.category.list.filter(c => !c.delete) },
-    list () { return this.$store.state.todo.views.todoBox },
+    list () { return this.$store.getters['todo/views'].todoBox },
     selectedId () { const ed = this.$store.state.ui.rightSidebarTodoEdit; return ed.visible ? ed.taskId : null }
   },
   methods: {
@@ -237,7 +237,7 @@ export default {
        row container's own Enter activation never double-fires the edit */
     onContentKey (t, e) { roleButtonActivate(function () { this.openEdit(t) }, { stop: true }).call(this, e) },
     taskContextMenu (t, e) { taskContextMenu(this, t, e) },
-    set (patch) { this.$store.commit('settings/updateSettings', patch); this.$store.dispatch('todo/computeViews') },
+    set (patch) { this.$store.commit('settings/updateSettings', patch) }, // the box order reads settings directly: the views getter re-derives
     setSort (v) { this.set({ todoBoxSortMethod: v }) },
     setOrder (v) { this.set({ todoBoxSortOrder: v }) },
     setCat (v) { this.set({ todoBoxCategoryId: v }) },

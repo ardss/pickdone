@@ -189,7 +189,7 @@ export default {
       // delete/dayStart filters internally
       return this.fitProj(this.$store.state.todo.todoList)
     },
-    v () { return this.$store.state.todo.views },
+    v () { return this.$store.getters['todo/views'] },
     settings () { return this.$store.state.settings },
     // Project-type categories (flagged via category/projectIds) — drives both the toolbar filter and the row badges
     projects () { return this.$store.getters['category/projects'] || [] },

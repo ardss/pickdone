@@ -62,6 +62,9 @@ const ctx = {
   getMainWindow: () => MAIN,
   broadcastWhiteNoiseUpdated: () => {},
   notifySyncChange: () => {},
+  // delete-file scans live rows before unlinking and REFUSES when that scan is impossible
+  // (fail-closed). Empty set: nothing else references the keys in these cases.
+  dbm: { call: () => [] }
 }
 const api = attachmentHandlers(ctx)
 const b64 = (buf) => buf.toString('base64')

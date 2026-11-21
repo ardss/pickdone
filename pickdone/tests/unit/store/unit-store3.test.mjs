@@ -53,14 +53,12 @@ const makeCtx = (todoState, settingsPatch = {}) => {
       if (n === 'upsertLocal') todo.mutations.upsertLocal(todoState, p)
       else if (n === 'hardRemove') todo.mutations.hardRemove(todoState, p)
       else if (n === 'setAllRows') todo.mutations.setAllRows(todoState, p)
-      else if (n === 'setViews') todo.mutations.setViews(todoState, p)
       else if (n === 'setMeta') todo.mutations.setMeta(todoState, p)
       else if (n === 'historyPush') todo.mutations.historyPush(todoState, p)
       else if (n === 'historyPushKeepRedo') todo.mutations.historyPushKeepRedo(todoState, p)
       else if (n === 'historyRestore') todo.mutations.historyRestore(todoState, p)
       else if (n === 'historyRedoPop') todo.mutations.historyRedoPop(todoState)
       else if (n === 'historyUndoPop') todo.mutations.historyUndoPop(todoState)
-      else if (n === 'viewsClean') todo.mutations.viewsClean(todoState)
       else if (n === 'setLoaded') todoState.loaded = true
       else if (n === 'setRecentlyAdded') todoState.recentlyAddedTaskId = p
     },
@@ -87,7 +85,7 @@ const makeCtx = (todoState, settingsPatch = {}) => {
 const freshState = (todoList = [], recycleList = []) => ({
   todoList, recycleList, todayTimestamp: Date.now(), holidayList: [],
   undoStack: [], redoStack: [], _histLastPushAt: 0, isSyncing: false,
-  loaded: false, viewsDirty: true, recentlyAddedTaskId: null,
+  loaded: false, recentlyAddedTaskId: null,
   todosVersion: 0, version: 1, search: ''
 })
 
@@ -203,9 +201,10 @@ test('todo mutations: setMeta / removeLocal / hardRemove', () => {
   assert.equal(st.recycleList.length, 0)
 })
 
-test('todo getters: todayTodoList reads views directly', () => {
-  const views = { todayTodoList: [{ taskId: 'z' }] }
-  assert.equal(todo.getters.todayTodoList({ views })[0].taskId, 'z')
+test('todo getters: todayTodoList projects the derived views group', () => {
+  // todayTodoList is a thin projection of getters.views (which is itself derived from the rows),
+  // so it takes the resolved views as its second argument — Vuex's getters object.
+  assert.equal(todo.getters.todayTodoList({}, { views: { todayTodoList: [{ taskId: 'z' }] } })[0].taskId, 'z')
 })
 
 /* ---------- the today page's three sort modes (pure logic extracted into utils/sortMode) ---------- */

@@ -91,17 +91,17 @@
                     <el-option v-for="o in enumOptions('sortMode')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showCompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showComplete" @change="v=>{set({showComplete:v});$store.dispatch('todo/computeViews')}"/></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showNoDateLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showNoDate" @change="v=>{set({showNoDate:v});$store.dispatch('todo/computeViews')}"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showCompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showComplete" @change="v=>{set({showComplete:v})}"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showNoDateLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showNoDate" @change="v=>{set({showNoDate:v})}"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.keepExpiredCompletedLabel') }}</span>
                 <div class="form-item__control">
-                  <el-select size="small" :model-value="st.expiredCompletedTodoRange" @change="v=>{set({expiredCompletedTodoRange:v});$store.dispatch('todo/computeViews')}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredCompletedLabel')">
+                  <el-select size="small" :model-value="st.expiredCompletedTodoRange" @change="v=>{set({expiredCompletedTodoRange:v})}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredCompletedLabel')">
                     <el-option v-for="o in enumOptions('expiredCompletedTodoRange')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.keepExpiredUncompletedLabel') }}</span>
                 <div class="form-item__control">
-                  <el-select size="small" :model-value="st.expiredUncompletedTodoRange" @change="v=>{set({expiredUncompletedTodoRange:v});$store.dispatch('todo/computeViews')}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredUncompletedLabel')">
+                  <el-select size="small" :model-value="st.expiredUncompletedTodoRange" @change="v=>{set({expiredUncompletedTodoRange:v})}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredUncompletedLabel')">
                     <el-option v-for="o in enumOptions('expiredUncompletedTodoRange')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
@@ -175,7 +175,7 @@
               <div class="form-label">{{ $t('statsE.SettingsModal.retentionSection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.upcomingRangeLabel') }}</span>
                 <div class="form-item__control">
-                  <el-select size="small" :model-value="st.upcomingTodoRange" @change="v=>{set({upcomingTodoRange:v});$store.dispatch('todo/computeViews')}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.upcomingRangeLabel')">
+                  <el-select size="small" :model-value="st.upcomingTodoRange" @change="v=>{set({upcomingTodoRange:v})}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.upcomingRangeLabel')">
                     <el-option v-for="o in enumOptions('upcomingTodoRange')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
@@ -198,7 +198,7 @@
                    implemented), so this control visibly did nothing. Re-add it together with the
                    actual holiday-badge implementation. -->
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.blurScheduleLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isShowCalendarPrivacyMode" @change="v=>set({isShowCalendarPrivacyMode:v})"/></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dimUncompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCalendarDimUncompleted" @change="v=>{set({isCalendarDimUncompleted:v});$store.dispatch('todo/computeViews')}"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dimUncompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCalendarDimUncompleted" @change="v=>{set({isCalendarDimUncompleted:v})}"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.fontSizeLabel') }}</span>
                 <div class="form-item__control">
                   <el-radio-group size="small" :model-value="st.calendarFontSize" @change="v=>set({calendarFontSize:v})" :aria-label="$t('statsE.SettingsModal.fontSizeLabel')">
@@ -246,7 +246,7 @@
                   <el-input-number size="small" class="ctl-sm" :min="1" :max="60" :model-value="Number(st.restTime)||5" :aria-label="$t('statsE.SettingsModal.breakLengthLabel')"
                                    @change="v=>set({restTime:v})"/>
                 </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.floatingWindowLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableTomatoFloating !== false" @change="setTomatoFloat"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.floatingWindowLabel') }}</span><div class="form-item__control"><el-switch :model-value="floatShown === null ? st.enableTomatoFloating !== false : floatShown" @change="setTomatoFloat"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.customSoundLabel') }}</span>
                 <div class="form-item__control">
                   <button class="mini" @click="pickCustomAudio">{{isCustomNoise?$t('statsE.SettingsModal.selectedCount'):$t('statsH.SettingsModal.chooseAudio')}}</button>
@@ -322,6 +322,7 @@ import { appVersion } from '../utils/core.js'; import { buildFingerprint as buil
 import { CONFIRM_SOUNDS, confirmUrl } from '../utils/mediaRegistry.js'
 import { SETTING_ENUMS } from '../store/settings.js'
 import dialogA11y from '../utils/dialogA11y.js'
+import floatToggle from '../utils/floatToggleMixin.js'
 import { CITY_OPTIONS, CITY_PATH_MAP } from '../utils/chinaRegions.js'
 import { SUPPORTED, getLocale, setLocale } from '../i18n/index.js'
 import SettingsShortcutsTab from './settings/SettingsShortcutsTab.vue'
@@ -333,7 +334,7 @@ import { filterSettingsPanels } from './settings/settingsSearch.js'
 
 export default {
   name: 'SettingsModal',
-  mixins: [dialogA11y],
+  mixins: [dialogA11y, floatToggle],
   components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab, SettingsCrossTab },
   data () {
     let tab0 = 'general'
@@ -355,6 +356,7 @@ export default {
   },
   watch: {
     userName: { immediate: true, handler (v) { this.nameDraft = v } },
+    // The tomato-tab re-read of the float's real visibility lives in floatToggleMixin's own watcher.
     tab (v) { try { localStorage.setItem('settingsTab', v) } catch (e) { /* ignored */ } }
   },
   computed: {
@@ -550,11 +552,7 @@ export default {
        owned (not a TOMATO_LEDGER_KEY, never read from settings state) and tomato/patch persists the
        whole runtime blob every write — no J4-style mirrored-settings drift possible here. */
     async setTomatoNoti (v) { this.$store.commit('tomato/patch', { enableNotification: v }) },
-    /** Desktop float window toggle: writes the setting and immediately opens/closes the independent window (browser debugging has no todoAPI, only the setting is stored) */
-    async setTomatoFloat (v) {
-      this.set({ enableTomatoFloating: v })
-      if (window.todoAPI) { v ? window.todoAPI.showTomatoFloat() : window.todoAPI.hideTomatoFloat() }
-    },
+    /* The desktop-float switch lives in utils/floatToggleMixin.js (mirrors the WINDOW, not the setting). */
     pickCustomAudio () {
       window.todoAPI.pickAudioFile().then(r => {
         if (!r) return

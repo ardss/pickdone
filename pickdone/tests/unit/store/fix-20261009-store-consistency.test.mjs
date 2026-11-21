@@ -18,6 +18,7 @@
 import '../../setup.mjs'
 import { test, beforeEach } from 'node:test'
 import assert from 'node:assert/strict'
+import { buildViews } from '../../../renderer/js/store/helpers/todoComputeViews.js'
 import { todayMidnightMs } from '../../lib/clock.mjs'
 
 const LS = globalThis.localStorage
@@ -155,7 +156,6 @@ test('[2] undo replay: clear-date then undo brings the schedule chips back', asy
 /* ---------------- [3] due-today completed-yesterday stays in recentExpiredCompleted ---------------- */
 
 test('[3] a task due today completed yesterday appears in recentExpiredCompleted (not vanished)', async () => {
-  const todo = (await import('../../../renderer/js/store/todo.js?fix1009')).default
   const today0 = todayMidnightMs()
   const st = {
     todoList: [
@@ -169,8 +169,7 @@ test('[3] a task due today completed yesterday appears in recentExpiredCompleted
     state: st,
     rootState: { settings: { expiredCompletedTodoRange: '7d', expiredUncompletedTodoRange: '30d', upcomingTodoRange: '30d', todoBoxCategoryId: -1, todoBoxSortMethod: 'created', todoBoxSortOrder: 'desc', sortMode: 'custom', showNoDate: true } }
   }
-  await todo.actions.computeViews.call({ state: { todo: st } }, ctx)
-  const views = committed.find(([n]) => n === 'setViews')[1]
+  const views = buildViews(st, ctx.rootState.settings) // derived groups, same call the getter makes
   assert.ok(!views.todayDoneList.some(t => t.taskId === 'due1'), 'not in today done (completed yesterday, not today)')
   assert.ok(views.recent.expiredCompleted.some(t => t.taskId === 'due1'), 'due-today/yesterday-completed row is in recent expired completed')
 })

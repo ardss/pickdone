@@ -106,26 +106,35 @@ test('P1-2: applied settings rows fold into the blob AND hot-apply to the render
 })
 
 test('P1-2 regression (two writers, one field changed each): fold keeps blob==rows so the bridge stamps nothing', () => {
-  // Simulates the churn: A changed weekStartDay locally, B changed colorMode. B's colorMode row
-  // arrives here. After the fold, the LOCAL blob no longer differs from settings_rows on
-  // colorMode, so a later whole-blob mirror of the blob produces no re-stamped (newer-ts) rows.
-  const blob = JSON.stringify({ weekStartDay: 'sun', colorMode: 'light' })
+  // Simulates the churn: A changed weekStartDay locally, B changed whiteNoiseVolume. B's
+  // whiteNoiseVolume row arrives here. After the fold, the LOCAL blob no longer differs from
+  // settings_rows on whiteNoiseVolume, so a later whole-blob mirror produces no re-stamped rows.
+  // (This used to be colorMode; it became machine-local on 2026-11-21 — ingress drops it outright,
+  // so it cannot demonstrate LWW any more. The drop has its own guard at the end of this case.)
+  const blob = JSON.stringify({ weekStartDay: 'sun', whiteNoiseVolume: 0.5 })
   const m = fresh({
     ...EMPTY_TABLES,
     getMeta: k => (k === 'db.settingsState' ? blob : null),
-    // settings_rows: local weekStartDay='sun' (local edit), colorMode='dark' (older local value)
+    // settings_rows: local weekStartDay='sun' (local edit), whiteNoiseVolume=0.2 (older local value)
     settingsRowsAll: () => ([
       { key: 'weekStartDay', value: 'sun', updatedAt: 100, deleted: false, deletedAt: 0 },
-      { key: 'colorMode', value: 'dark', updatedAt: 90, deleted: false, deletedAt: 0 },
+      { key: 'whiteNoiseVolume', value: '0.2', updatedAt: 90, deleted: false, deletedAt: 0 },
     ]),
   })
-  // Inbound: B's newer colorMode='light' row wins LWW (200 > 90)
-  __test.applyRow({ entity: 'setting', id: 'colorMode', seq: 11, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { key: 'colorMode', value: '"light"' } })
+  // Inbound: B's newer whiteNoiseVolume row wins LWW (200 > 90)
+  __test.applyRow({ entity: 'setting', id: 'whiteNoiseVolume', seq: 11, ts: 200, updatedAt: 200, deleted: false, deletedAt: 0, data: { key: 'whiteNoiseVolume', value: '0.8' } })
   __test.emitAppliedRound()
   const setMeta = m.calls.find(c => c.op === 'setMeta' && c.params[0] === 'db.settingsState')
   const folded = JSON.parse(setMeta.params[1])
-  assert.equal(folded.colorMode, 'light')
+  assert.equal(folded.whiteNoiseVolume, 0.8)
   assert.equal(folded.weekStartDay, 'sun', 'the local user\'s own changed field is untouched by the fold')
+
+  // Machine-local guard: an inbound colorMode row must never fold — otherwise two machines keep
+  // overwriting each other's appearance (the defect the machine-local list exists for).
+  __test.applyRow({ entity: 'setting', id: 'colorMode', seq: 12, ts: 300, updatedAt: 300, deleted: false, deletedAt: 0, data: { key: 'colorMode', value: '"dark"' } })
+  __test.emitAppliedRound()
+  const later = [...m.calls].reverse().find(c => c.op === 'setMeta' && c.params[0] === 'db.settingsState')
+  if (later) assert.notEqual(JSON.parse(later.params[1]).colorMode, 'dark', 'machine-local colorMode must not arrive by sync')
 })
 
 test('P1-3: unpair deletes the peer record + watermark and revokes the shared secret', async () => {

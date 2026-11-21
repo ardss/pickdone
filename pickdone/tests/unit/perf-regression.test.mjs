@@ -6,7 +6,7 @@
 import '../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import todo from '../../renderer/js/store/todo.js'
+import { buildViews } from '../../renderer/js/store/helpers/todoComputeViews.js'
 
 const DAY = 86400000
 const N = 5000
@@ -37,7 +37,7 @@ function bigState () {
 
 function fakeCtx (todoList) {
   const s = {
-    todoList, recycleList: [], views: {}, viewsDirty: true,
+    todoList, recycleList: [],
     todosVersion: 0, version: 1, remoteVersion: 0, isSyncing: false,
     recentlyAddedTaskId: null, lastCreatedTodoTaskId: null, holidayList: []
   }
@@ -50,20 +50,20 @@ test(`perf: ${N} tasks computeViews full grouping computation`, async () => {
   const rootState = { settings, todo: s }
   const ctx = {
     state: s, rootState,
-    commit: (type, p) => { if (type === 'setViews') s.views = p },
+    commit: () => {},
     dispatch: async () => {}
   }
   // best-of-3 (2026-09-25 pre-commit 实锤:满载机器单次测量撞 3s 天花板,同 review-metrics 的
   // 暂停噪声问题)——min() 剔除 GC/JIT/并行负载暂停,真实量级退化每次都慢,天花板仍有效
+  let built = null
   const runOnce = async () => {
     const t0 = performance.now()
-    // Inside a Vuex action this points to the store instance (computeViews reads this.state.todo)
-    await todo.actions.computeViews.call({ state: { todo: s } }, ctx)
+    built = buildViews(s, ctx.rootState.settings) // the store's `views` getter is the only caller; same cost
     return performance.now() - t0
   }
   const cost = Math.min(await runOnce(), await runOnce(), await runOnce())
-  const total = Object.values(s.views).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0)
-  assert.ok(total > 0, `view arrays non-empty (the computation really happened), keys=${Object.keys(s.views).join(',')}`)
+  const total = Object.values(built).reduce((n, v) => n + (Array.isArray(v) ? v.length : 0), 0)
+  assert.ok(total > 0, `view arrays non-empty (the computation really happened), keys=${Object.keys(built).join(',')}`)
   assert.ok(cost < 3000, `computeViews took ${Math.round(cost)}ms for ${N} tasks, over the 3s ceiling (order-of-magnitude degradation)`)
   console.log(`    computeViews(${N}) = ${Math.round(cost)}ms`)
 })

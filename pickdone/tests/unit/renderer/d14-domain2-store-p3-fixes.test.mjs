@@ -138,15 +138,14 @@ test('B11 a no-date completion from yesterday lands in recent.expiredCompleted (
   ]
   const store = createStore({
     modules: {
-      todo: { ...todo, state: () => ({ ...todo.state(), todoList: rows, viewsDirty: true }) },
+      todo: { ...todo, state: () => ({ ...todo.state(), todoList: rows }) },
       settings: {
         namespaced: true,
         state: { recycleBinAutoDeleteDays: 0, showNoDate: false, todoBoxCategoryId: -1, todoBoxSortOrder: 'asc', todoBoxSortMethod: 'created', sortMode: 'default' }
       }
     }
   })
-  await store.dispatch('todo/computeViews')
-  const views = store.state.todo.views
+  const views = store.getters['todo/views'] // derived from the rows; no rebuild call needed
   assert.ok(views.recent.expiredCompleted.some(t => t.taskId === 'nd1'),
     'yesterday\'s no-date completion is bucketed like the dated path (pre-fix: present nowhere but the uncapped global list)')
   assert.ok(views.todayDoneList.some(t => t.taskId === 'nd2'), "today's no-date completion stays in today-done")

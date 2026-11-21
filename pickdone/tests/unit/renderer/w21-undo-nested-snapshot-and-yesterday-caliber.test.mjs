@@ -89,7 +89,7 @@ const today = +dayjs().startOf('day')
 
 const buildStore = rows => createStore({
   modules: {
-    todo: { ...todo, state: () => ({ ...todo.state(), todoList: rows, viewsDirty: true }) },
+    todo: { ...todo, state: () => ({ ...todo.state(), todoList: rows }) },
     settings: {
       namespaced: true,
       state: { recycleBinAutoDeleteDays: 0, showNoDate: false, todoBoxCategoryId: -1, todoBoxSortOrder: 'asc', todoBoxSortMethod: 'created', sortMode: 'default' }
@@ -114,14 +114,13 @@ test('w21-2: drifted yesterday dayStart lands in yesterdayTodoList AND the expir
     row('exact-yesterday', { dayStart: today - DAY_MS }),
     row('today', { dayStart: today })
   ])
-  await store.dispatch('todo/computeViews')
-  const yIds = store.state.todo.views.yesterdayTodoList.map(t => t.taskId)
+  const yIds = store.getters['todo/views'].yesterdayTodoList.map(t => t.taskId)
   assert.ok(yIds.includes('drift-early'), 'drifted-early row is grouped as yesterday (was silently dropped by the strict ===)')
   assert.ok(yIds.includes('drift-late'), 'drifted-late row stays grouped as yesterday')
   assert.ok(yIds.includes('exact-yesterday'), 'exact yesterday row unchanged')
   assert.ok(!yIds.includes('today'), 'today row not misfiled into yesterday')
   // Consistency with the loop's coarse buckets: a coarse -1 row must not appear in today/tomorrow
-  const views = store.state.todo.views
+  const views = store.getters['todo/views']
   const allGrouped = [
     ...views.recent.today.map(t => t.taskId),
     ...views.recent.tomorrow.map(t => t.taskId),

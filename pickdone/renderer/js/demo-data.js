@@ -22,7 +22,6 @@ async function purgeOld (store, reg) {
   // purgeIds has no corresponding channel in the 5175 shim; hardDelete clears the shim storage, removeLocal clears the Vuex side, then recompute views
   await commitCommand("todo", "hardDelete", alive)
   for (const id of alive) store.commit('todo/removeLocal', id)
-  await store.dispatch('todo/computeViews')
 }
 
 export async function seed () {
@@ -38,7 +37,6 @@ export async function seed () {
   if (recycleIds.length) {
     await commitCommand("todo", "hardDelete", recycleIds)
     for (const id of recycleIds) store.commit('todo/removeLocal', id)
-    await store.dispatch('todo/computeViews')
   }
   const taskIds = []
 

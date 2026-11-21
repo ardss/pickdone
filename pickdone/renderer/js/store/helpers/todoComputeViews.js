@@ -1,8 +1,17 @@
 /**
- * computeViews implementation, extracted verbatim from store/todo.js (structure-size ratchet).
- * Pure relocation: the action is now a thin wrapper (`computeViews (ctx) { return computeViewsCore(this, ctx) }`),
- * and tests that drive the action with a fake `this` keep working unchanged (the store/fake-this
- * is passed in as the first argument). Grouping semantics are unchanged.
+ * The view groups, as a PURE function of (todo rows, recycle rows, settings).
+ *
+ * It used to be an action that COMMITTED its result into `state.todo.views`, which made the
+ * groups a piece of mutable state that every writer had to remember to refresh — 32 hand-written
+ * `dispatch('todo/computeViews')` calls, plus a `viewsDirty` flag and a 600ms debounce to keep
+ * the rebuild from running on every keystroke. Forgetting one dispatch was a silent stale-UI bug
+ * (find one: the day-rollover "hidden no-date" toggle). Nothing here needs to be stored: it is
+ * derived data, so the store exposes it as a cached getter and Vue invalidates it exactly when
+ * the rows it read have changed.
+ *
+ * The side effects the old action carried (setTodayTs / purgeExpiredRecycle) are NOT part of
+ * computing views — they live in the store's `computeViews` action, which the day tick calls.
+ * Grouping semantics are unchanged (this is the same code, with commit/dispatch removed).
  */
 import { dayjs, DAY_MS } from '../../utils/core.js'
 import { sortByMode } from '../../utils/sortMode.js'
@@ -10,14 +19,11 @@ import { getEstimate } from '../../utils/tomatoEstimate.js'
 import { daysRangeTs } from './todoPendingUpserts.js'
 import { showNoDateFilter, buildCalendarList } from './todoViews.js'
 
-export function computeViewsCore (store, { commit, rootState, dispatch }) {
-  // After crossing midnight, keep the global todayTimestamp consistent with the grouping basis (main.js dirt-checks every 60s)
-  commit('setTodayTs', Date.now())
-  dispatch('purgeExpiredRecycle')
-  const settings = rootState.settings
+/** @param {{todoList: Array, recycleList: Array}} todoState @param {object} settings */
+export function buildViews (todoState, settings) {
   const { expCompletedDays, expUncompletedDays, upcomingDays } = daysRangeTs(settings)
   const today = dayjs().startOf('day').valueOf()
-  const live = store.state.todo.todoList.filter(t => !t.delete)
+  const live = todoState.todoList.filter(t => !t.delete)
 
   const recentExpiredCompleted = []
   const recentExpiredUncompleted = []
@@ -130,7 +136,7 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
     return Math.round((dsNum - today) / DAY_MS) === -1
   })
 
-  commit('setViews', {
+  return {
     recent: {
       expiredCompleted: recentExpiredCompleted.sort((a, b) => a.dayStart - b.dayStart),
       expiredUncompleted: recentExpiredUncompleted.sort((a, b) => a.dayStart - b.dayStart),
@@ -158,7 +164,6 @@ export function computeViewsCore (store, { commit, rootState, dispatch }) {
     todoBox: box,
     todoBoxCount: box.length, // Same source as box above (category filter/sort share one chain); previously computed independently here too — fixing one but not the other made the number and list disagree
     completed: completedList,
-    recycleBin: [...store.state.todo.recycleList].sort((a, b) => (b.deletedAt || b.updateTime || 0) - (a.deletedAt || a.updateTime || 0))
-  })
-  commit('viewsClean')
+    recycleBin: [...todoState.recycleList].sort((a, b) => (b.deletedAt || b.updateTime || 0) - (a.deletedAt || a.updateTime || 0))
+  }
 }

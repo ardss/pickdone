@@ -15,6 +15,11 @@ function normalizeContent (s) {
 // Named accessor for callers needing the truncating form (todoToRow description, H2 2026-09-16)
 function sanitizeText (s, maxLen) { return require('./sanitize').sanitizeText(s, maxLen) }
 
+// electron-log exists only inside the packaged app; the standalone CLI bundle has none. Same
+// try/fallback shape as the other db-* modules.
+let log
+try { log = require('electron-log') } catch { log = { warn () {} } }
+
 /** Extra reminder offsets (minutes, negative = earlier) JSON parsing; fault tolerance: invalid/out-of-range values are dropped outright.
  *  The reminders column has two shapes: old = [offset...] numeric array; new = {o:[offsets], x:[absolute ts...]} (multiple reminders) */
 function parseOffsets (s) {
@@ -22,15 +27,26 @@ function parseOffsets (s) {
   return v.o
 }
 
+/** Parse the reminders column. A value we cannot understand is NOT "no reminders": the old
+ *  `catch { return empty }` turned a corrupt column (or a shape written by a newer version) into
+ *  "this task has none", and the next ordinary edit re-packed that empty set as NULL — one
+ *  unreadable read became a real deletion, and sync then pushed it to every peer. The corrupt
+ *  flag lets the caller keep the raw column (rowToTodo → remindersRaw → todoToRow). */
 function parseReminders (s) {
   const empty = { o: [], x: [] }
   if (!s) return empty
   try {
     const a = JSON.parse(s)
     if (Array.isArray(a)) return { o: normOffsets(a), x: [] }
-    if (a && typeof a === 'object') return { o: normOffsets(a.o), x: normAbs(a.x) }
-    return empty
-  } catch { return empty }
+    // An object is the multi-reminder shape ONLY if it carries one of its two keys. Anything else
+    // is a shape this build does not understand (a newer version's column) — reading it as
+    // "no reminders" is what let an unrelated edit write the empties back as NULL.
+    if (a && typeof a === 'object') {
+      if (!('o' in a) && !('x' in a)) return { ...empty, corrupt: true }
+      return { o: normOffsets(a.o), x: normAbs(a.x) }
+    }
+    return { ...empty, corrupt: true } // a bare number/string: neither known shape
+  } catch { return { ...empty, corrupt: true } }
 }
 
 function normOffsets (a) {
@@ -64,6 +80,8 @@ function rowToTodo (r) {
   // main reminderTime at read time (packReminders is shape-agnostic and stays so).
   const reminderTime = r.remindAt || 0
   const reminderExtra = reminderTime ? rm.x.filter(ts => ts !== reminderTime) : rm.x
+  // Corrupt column: keep the verbatim value so the write path can put it back instead of NULLing it.
+  if (rm.corrupt) log.warn('[db] unreadable reminders column (kept verbatim until the user edits reminders):', r.id, String(r.reminders).slice(0, 80))
   return {
     taskId: r.id,
     userId: r.userId,
@@ -105,7 +123,10 @@ function rowToTodo (r) {
     handoffTo: r.handoffTo || null,
     handoffFrom: r.handoffFrom || null,
     handoffNote: r.handoffNote || null,
-    handoffAckedAt: r.handoffAckedAt || 0
+    handoffAckedAt: r.handoffAckedAt || 0,
+    // Present ONLY on a corrupt column: todoToRow writes this back instead of NULL when the
+    // reminder arrays are still empty (i.e. nobody has touched reminders since the failed read).
+    ...(rm.corrupt ? { remindersRaw: String(r.reminders) } : {})
   }
 }
 
@@ -215,7 +236,12 @@ function todoToRow (t) {
       ? (Number.isFinite(+t.dayStart) && +t.dayStart > 0 ? +t.dayStart : +dayjs(todoTime).startOf('day'))
       : 0,
     remindAt: t.reminderTime || 0,
-    reminders: packReminders(t.reminderOffsets, t.reminderExtra),
+    // A row whose reminders column could not be read carries its raw value; re-packing the empty
+    // arrays it was shown as would overwrite the column with NULL. Keep the original until the
+    // caller actually supplies reminders (then the new value is what the user meant).
+    reminders: (t.remindersRaw != null && !(t.reminderOffsets && t.reminderOffsets.length) && !(t.reminderExtra && t.reminderExtra.length))
+      ? String(t.remindersRaw)
+      : packReminders(t.reminderOffsets, t.reminderExtra),
     sort: t.taskSort != null ? t.taskSort : 0,
     focusMinutes: t.estimate || 0,
     difficulty: t.difficulty != null ? t.difficulty : null,

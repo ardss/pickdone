@@ -28,7 +28,7 @@ test('F-B1: settingsSet write-back never carries habits/moments/savedAt into the
   // Simulate the App's renderer habits persist (whole-blob setMeta → the db-sync bridge mirrors
   // the habits-family fields into the SHARED settings_rows table)
   db.call('setMeta', ['db.habitsState', JSON.stringify({ schemaV: 1, habits: [{ id: 'h1' }], moments: [{ id: 'm1' }], savedAt: Date.now() })])
-  const r = lib.settingsSet('colorMode', 'dark')
+  const r = lib.settingsSet('colorMode', 'dark', { force: true }) // colorMode is machine-local now; the blob-shape contract is the subject here
   assert.equal(r.value, 'dark')
   const blob = JSON.parse(db.call('getMeta', 'db.settingsState'))
   for (const k of ['habits', 'moments', 'savedAt']) {

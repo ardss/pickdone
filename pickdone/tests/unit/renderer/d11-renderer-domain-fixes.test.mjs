@@ -108,7 +108,7 @@ test('leftovers: move-to-today keeps time-of-day and re-anchors reminders; legac
   assert.equal(patch.dayStart, today, 'dayStart moves to today')
   assert.equal(patch.reminderTime, at(today, 9), 'reminder re-anchored to the new day (was orphaned on yesterday)')
   assert.deepEqual(patch.reminderExtra, [at(today, 8)], 'extra reminders re-anchored too')
-  assert.equal(patch._deferViews, true, 'view rebuild stays deferred for the batch')
+  assert.equal(patch._deferViews, undefined, 'no defer flag any more: views are derived, there is nothing to batch')
   assert.ok(!dispatches.some(x => x[0] === 'todo/updateTodoFields' && x[1].taskId === 'rep'), 'real repeating instances stay excluded')
   // undo reverts exactly the touched fields with the original values
   const todo = await import('../../../renderer/js/store/todo.js') // ensure no circular-import surprise in host env
