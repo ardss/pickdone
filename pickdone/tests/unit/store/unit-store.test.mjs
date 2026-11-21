@@ -12,6 +12,7 @@ import { todayMidnightMs } from '../../lib/clock.mjs'
 import settings from '../../../renderer/js/store/settings.js'
 import ui from '../../../renderer/js/store/ui.js'
 import todo from '../../../renderer/js/store/todo.js'
+import { buildViews } from '../../../renderer/js/store/helpers/todoComputeViews.js'
 
 const DAY = 86400000
 const today0 = todayMidnightMs() // D4 clock determinism: noon-anchored via tests/lib/clock.mjs
@@ -61,15 +62,17 @@ test('ui: toggleSettings set-true/toggle/string-arg safety', () => {
 function makeTodoCtx (todoState, settingsPatch = {}) {
   const committed = []
   const dispatched = []
+  const resolved = { ...settings.state, recycleBinAutoDeleteDays: 30, ...settingsPatch }
   const ctx = {
     commit (name, payload) { committed.push([name, payload]) },
     dispatch (name, payload) { dispatched.push([name, payload]) },
-    // Note: actions like purgeExpiredRecycle destructure state from ctx, while computeViews takes state via this
     state: { todo: todoState, recycleList: todoState.recycleList },
-    rootState: { settings: { ...settings.state, recycleBinAutoDeleteDays: 30, ...settingsPatch } }
+    rootState: { settings: resolved }
   }
   const fakeThis = { state: { todo: todoState } }
-  return { committed, dispatched, run: () => todo.actions.computeViews.call(fakeThis, ctx) }
+  // The groups are a pure function now (they used to arrive as a `setViews` commit), so a test
+  // reads them the same way the store's getter does.
+  return { committed, dispatched, views: () => buildViews(todoState, resolved), run: () => todo.actions.computeViews.call(fakeThis, ctx) }
 }
 
 const baseTodoState = (todoList, recycleList = []) => ({
@@ -81,7 +84,6 @@ const T = (over = {}) => ({
   updateTime: Date.now(), complete: false, delete: false, taskSort: 0,
   ...over
 })
-const viewsOf = (committed) => committed.find(([n]) => n === 'setViews')[1]
 
 test('todo: computeViews - groups today/tomorrow/day-after/future/no-date/overdue-incomplete', async () => {
   const list = [
@@ -92,9 +94,9 @@ test('todo: computeViews - groups today/tomorrow/day-after/future/no-date/overdu
     T({ taskId: 'e', dayStart: 0 }),                       // no date
     T({ taskId: 'f', dayStart: today0 - 3 * DAY })         // overdue, incomplete
   ]
-  const { committed, dispatched, run } = makeTodoCtx(baseTodoState(list))
+  const { dispatched, views, run } = makeTodoCtx(baseTodoState(list))
   await run()
-  const v = viewsOf(committed)
+  const v = views()
   assert.deepEqual(v.todayTodoList.map(t => t.taskId), ['a'])
   assert.equal(v.recent.tomorrow[0].taskId, 'b')
   assert.equal(v.recent.dayAfterTomorrow[0].taskId, 'c')
@@ -111,9 +113,9 @@ test('todo: today-completed grouped by completedAt (due yesterday, completed tod
     T({ taskId: 'done-today', dayStart: today0 - DAY, complete: true, completedAt: today0 + 3600000 }),
     T({ taskId: 'done-old', dayStart: today0 - 5 * DAY, complete: true, completedAt: today0 - 4 * DAY })
   ]
-  const { committed, run } = makeTodoCtx(baseTodoState(list))
+  const { views, run } = makeTodoCtx(baseTodoState(list))
   await run()
-  const v = viewsOf(committed)
+  const v = views()
   assert.deepEqual(v.todayDoneList.map(t => t.taskId), ['done-today'])
   // Expired-completed: dayStart < today and completion time within the retention window.
   // D5 2026-09-20 dedupe: done-today is already in todayDoneList, so it is excluded here.
@@ -122,13 +124,13 @@ test('todo: today-completed grouped by completedAt (due yesterday, completed tod
 
 test('todo: retention range "today" semantics (previously misparsed as 7 days by a NaN fallback)', async () => {
   const twoDaysAgoDone = T({ taskId: 'old', dayStart: today0 - 2 * DAY, complete: true, completedAt: today0 - 2 * DAY })
-  const { committed, run } = makeTodoCtx(baseTodoState([twoDaysAgoDone]), { expiredCompletedTodoRange: 'today' })
+  const { views, run } = makeTodoCtx(baseTodoState([twoDaysAgoDone]), { expiredCompletedTodoRange: 'today' })
   await run()
-  assert.equal(viewsOf(committed).recent.expiredCompleted.length, 0)
+  assert.equal(views().recent.expiredCompleted.length, 0)
 
-  const { committed: c2, run: r2 } = makeTodoCtx(baseTodoState([twoDaysAgoDone]), { expiredCompletedTodoRange: '7d' })
-  await r2()
-  assert.equal(viewsOf(c2).recent.expiredCompleted.length, 1)
+  const second = makeTodoCtx(baseTodoState([twoDaysAgoDone]), { expiredCompletedTodoRange: '7d' })
+  await second.run()
+  assert.equal(second.views().recent.expiredCompleted.length, 1)
 })
 
 test('todo: recycle-bin view sorted by update time descending + soft-deleted tasks stay out of live views', async () => {
@@ -137,9 +139,9 @@ test('todo: recycle-bin view sorted by update time descending + soft-deleted tas
     T({ taskId: 'r1', delete: true, updateTime: 100 }),
     T({ taskId: 'r2', delete: true, updateTime: 200 })
   ]
-  const { committed, run } = makeTodoCtx(baseTodoState(list, recycle))
+  const { views, run } = makeTodoCtx(baseTodoState(list, recycle))
   await run()
-  const v = viewsOf(committed)
+  const v = views()
   assert.deepEqual(v.recycleBin.map(t => t.taskId), ['r2', 'r1'])
   assert.ok(!v.todayTodoList.some(t => t.taskId.startsWith('r')))
 })
@@ -168,9 +170,9 @@ test('todo: inbox sorting (by creation date descending) and count stats', async 
     T({ taskId: 'n2', dayStart: 0, createTime: 300 }),
     T({ taskId: 'n3', dayStart: 0, createTime: 200 })
   ]
-  const { committed, run } = makeTodoCtx(baseTodoState(list), { todoBoxCategoryId: -1 })
+  const { views, run } = makeTodoCtx(baseTodoState(list), { todoBoxCategoryId: -1 })
   await run()
-  const v = viewsOf(committed)
+  const v = views()
   assert.deepEqual(v.todoBox.map(t => t.taskId), ['n2', 'n3', 'n1'])
   assert.equal(v.todoBoxCount, 3)
 })

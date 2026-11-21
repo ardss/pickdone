@@ -151,10 +151,8 @@ export default {
     click (it) {
       if (it.toggle) {
         this.$store.commit('settings/updateSettings', { [it.toggle]: !this.$store.state.settings[it.toggle] })
-        this.$store.dispatch('todo/computeViews')
       } else if (it.group === 'sort') {
         this.$store.commit('settings/updateSettings', { sortMode: SORT_VALUE[it.labelKey] })
-        this.$store.dispatch('todo/computeViews')
       }
       // [R13] same focus-return close path as Escape (item activation used to strand focus)
       this.closeMenu()

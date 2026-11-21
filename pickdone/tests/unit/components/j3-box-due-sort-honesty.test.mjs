@@ -13,6 +13,7 @@
 import '../../setup.mjs'
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { buildViews } from '../../../renderer/js/store/helpers/todoComputeViews.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -124,7 +125,6 @@ test('j3: a legacy persisted todoBoxSortMethod "due" labels as 按创建时间, 
 })
 
 test('j3: legacy persisted "due" sorts the box by createTime (created contract)', async () => {
-  const todo = (await import('../../../renderer/js/store/todo.js')).default
   const settings = (await import('../../../renderer/js/store/settings.js')).default
   const T = over => ({
     taskId: 't' + Math.random().toString(36).slice(2),
@@ -138,18 +138,11 @@ test('j3: legacy persisted "due" sorts the box by createTime (created contract)'
       T({ taskId: 'd1', todoTime: 300, createTime: 2 }),
       T({ taskId: 'd3', todoTime: 100, createTime: 3 })
     ],
-    recycleList: [], undoStack: [], redoStack: [], viewsDirty: true
+    recycleList: [], undoStack: [], redoStack: []
   }
-  const committed = []
-  const ctx = {
-    commit (n, p) { committed.push([n, p]); if (n === 'upsertLocal') todo.mutations.upsertLocal(todoState, p) },
-    state: { todo: todoState, todoList: todoState.todoList, recycleList: todoState.recycleList },
-    rootState: { settings: { ...settings.state, recycleBinAutoDeleteDays: 30, todoBoxCategoryId: -1, todoBoxSortMethod: 'due', todoBoxSortOrder: 'asc' } }
-  }
-  ctx.dispatch = async () => {}
-  const fakeThis = { state: { todo: todoState } }
-  todo.actions.computeViews.call(fakeThis, ctx)
-  const v = committed.filter(([n]) => n === 'setViews').pop()[1]
+  // no store plumbing: buildViews is a pure (state, settings) function — the same call the getter makes
+  const boxSettings = { ...settings.state, recycleBinAutoDeleteDays: 30, todoBoxCategoryId: -1, todoBoxSortMethod: 'due', todoBoxSortOrder: 'asc' }
+  const v = buildViews(todoState, boxSettings)
   const byCreated = v.todoBox.map(t => t.createTime)
   assert.deepEqual(byCreated, [...byCreated].sort((a, b) => a - b),
     "legacy 'due' must sort by createTime (the created contract) — the old case honored orphaned drifted todoTime that DB hydration never produces")

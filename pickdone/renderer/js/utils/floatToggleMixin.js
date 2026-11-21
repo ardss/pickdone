@@ -26,6 +26,11 @@ export default {
   beforeUnmount () {
     if (this._onFloatVisPing) window.removeEventListener('storage', this._onFloatVisPing)
   },
+  watch: {
+    // Entering the tomato tab re-reads the float's real visibility (tray, the float's own ✕, other
+    // windows). It lives here so the host component does not have to remember the call.
+    tab (v) { if (v === 'tomato') this.refreshFloatShown() }
+  },
   methods: {
     async refreshFloatShown () {
       const api = window.todoAPI

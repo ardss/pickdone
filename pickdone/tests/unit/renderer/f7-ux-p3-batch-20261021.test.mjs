@@ -126,10 +126,12 @@ test('F7-7: TomatoBar transitions are token-driven and the named 放弃 button s
 })
 
 /* F7-8: viewsDirty on remove */
-test('F7-8: removeLocal marks views dirty (UNIQUE-loser ghost-row contract)', () => {
+test('F7-8: removeLocal drops the ghost row from whichever table holds it (UNIQUE-loser contract)', () => {
+  // (views are derived now, so there is no dirty flag to set — what matters is that the row is gone)
   const m = TODO_STORE.match(/removeLocal \(s, taskId\) \{([\s\S]*?)\n[ ]{4}\},/)
   assert.ok(m, 'removeLocal mutation found')
-  assert.match(m[1], /s\.viewsDirty = true/, 'sets viewsDirty like upsertLocal/hardRemove')
+  assert.match(m[1], /s\.todoList\.splice/, 'removes from the live table')
+  assert.match(m[1], /s\.recycleList\.splice/, 'and from the recycle table')
   // and the addTodo UNIQUE-loser path removes through this mutation
   assert.match(TODO_STORE, /UNIQUE constraint failed[\s\S]*?commit\('removeLocal', t\.taskId\)/)
 })

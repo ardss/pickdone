@@ -19,10 +19,10 @@ import { historyPush, historyPushKeepRedo, historyClear, historyBreakMerge, hist
 import { writeEventBackupCore, writeAutoBackupCore, writeCriticalBackupCore } from './helpers/todoBackup.js'
 import { commit as commitCommand } from "../utils/commandBus.js"
 import { safeUpsert, flushPendingUpserts, queuePendingUpsert, pendingUpserts, supersedePendingRow, adoptDuplicateWinnerRow } from './helpers/todoPendingUpserts.js'
-import { DEFAULT_VIEWS, VIEW_AFFECTING_FIELDS, VIEWS_DEBOUNCE_MS, deproxyRows } from './helpers/todoViews.js'
+import { deproxyRows } from './helpers/todoViews.js'
 import { snapshotString } from './helpers/snapshotString.js'
 // View-computation + sync cores (pure relocation, structure-size ratchet — actions below are thin wrappers)
-import { computeViewsCore } from './helpers/todoComputeViews.js'
+import { buildViews } from './helpers/todoComputeViews.js'
 import { syncTodosCore } from './helpers/todoSync.js'
 import { countTags } from '../utils/search.js'
 // Re-export: unit tests import the quit-flush retry contract straight from store/todo.js
@@ -49,14 +49,24 @@ export default {
     _histEpoch: 0, // Round-5 P0: reload epoch — bumped once per preserveHistory reload (see undo.js header)
     // Timestamp of the last local write: for todosChanged broadcast echoes (our own write broadcast back to us), skip full re-reads based on it, without clearing the undo stack
     _lastLocalWriteAt: 0,
-    viewsDirty: true, // tasks changed, views pending recompute (the day-rollover timer decides recomputes based on this)
-    views: DEFAULT_VIEWS(),
+    // Explicit invalidation token for data the view groups read from OUTSIDE Vuex state (the lazily
+    // fetched pomodoro estimates that order the todo box). Everything else in `views` is a real
+    // state dependency; this is the one honest exception, and it beats a hand-called rebuild.
+    viewEpoch: 0,
     isSyncing: false,
     holidayList: []          // statutory holiday cache (empty offline)
   }),
   getters: {
-    todayTodoList: s => s.views.todayTodoList,
-    yesterdayTodoList: s => s.views.yesterdayTodoList,
+    /* The view groups are DERIVED, not stored (see helpers/todoComputeViews.js). Vuex caches a
+       getter until one of the rows it read changes, which is exactly the invalidation signal the
+       old `viewsDirty` + debounce + 32 manual dispatches were approximating by hand. Measured
+       rebuild cost on this machine: 0.97ms at 1,000 rows, 1.9ms at 3,000. */
+    views: (s, _g, rootState) => {
+      s.viewEpoch // dependency only: bumping it invalidates the grouping (see state.viewEpoch)
+      return buildViews(s, (rootState && rootState.settings) || {})
+    },
+    todayTodoList: (_s, g) => g.views.todayTodoList,
+    yesterdayTodoList: (_s, g) => g.views.yesterdayTodoList,
     /* Wave-5 dedup: tag count aggregation was kept verbatim in THREE components (SideNav /
        SnTagPanel / SnManageTagsModal). Pure derivation from state; Vuex caches it for free.
        The counting core lives in utils/search.js countTags (next to extractTags). */
@@ -77,7 +87,6 @@ export default {
       s.recycleList = rows.filter(r => r.delete)
     },
     upsertLocal (s, todo) {
-      s.viewsDirty = true
       const list = todo.delete ? s.recycleList : s.todoList
       const i = list.findIndex(t => t.taskId === todo.taskId)
       if (i >= 0) Object.assign(list[i], todo)
@@ -88,8 +97,6 @@ export default {
       if (j >= 0) other.splice(j, 1)
     },
     removeLocal (s, taskId) {
-      // [F7 P3] list membership changed, so views are stale: mark dirty, same contract as upsertLocal/hardRemove. Without this, the addTodo UNIQUE-loser fall-through (remove a ghost optimistic row, adopt failed, queued-retry) left a stale rendered row until the 60s viewsDirty day-rollover sweep recomputed.
-      s.viewsDirty = true
       const i = s.todoList.findIndex(t => t.taskId === taskId)
       if (i >= 0) s.todoList.splice(i, 1)
       else {
@@ -97,7 +104,7 @@ export default {
         if (j >= 0) s.recycleList.splice(j, 1)
       }
     },
-    hardRemove: (s, ids) => { s.viewsDirty = true; s.recycleList = s.recycleList.filter(t => !ids.includes(t.taskId)) },
+    hardRemove: (s, ids) => { s.recycleList = s.recycleList.filter(t => !ids.includes(t.taskId)) },
 /* ---------- Undo/redo (snapshots pushed by index.js's subscribeAction before mutation-type actions) ---------- */
 /* History bookkeeping lives in undo.js (pure state-transform functions); these mutations are thin adapters. */
     historyPush (s, snapRaw) { historyPush(s, snapRaw) },
@@ -113,11 +120,10 @@ export default {
     historyUndoPop (s) { historyUndoPop(s) },
     historyRedoPop (s) { historyRedoPop(s) },
     historyRedoPush (s, snap) { historyRedoPush(s, snap) },
-    viewsClean (s) { s.viewsDirty = false },
     /* Echo-suppression stamp: the single writer of _lastLocalWriteAt (previously two direct cross-module writes: index.js subscribeAction-after and tomato.js bumpSnow). Consumers: main.js todosChanged echo gate (1500ms window, protects the undo stack from our own broadcast echo's todo/init historyClear). */
     stampLocalWrite (s) { s._lastLocalWriteAt = Date.now() },
     setSyncing (s, v) { s.isSyncing = v },
-    setViews (s, views) { s.views = views },
+    bumpViewEpoch (s) { s.viewEpoch++ },
     setTodayTs (s, ts) { s.todayTimestamp = +dayjs(ts || Date.now()).startOf('day') },
     setMeta (s, { todosVersion }) { if (todosVersion != null) { s.todosVersion = todosVersion; s.version = Math.max(s.version, todosVersion + 1) } },
     setRecentlyAdded: (s, id) => { s.recentlyAddedTaskId = id; s.lastCreatedTodoTaskId = id },
@@ -276,7 +282,6 @@ export default {
               const existing = await adoptDuplicateWinnerRow(t)
               if (existing) {
                 commit('upsertLocal', existing)
-                dispatch('computeViews')
                 return existing // the other trigger's instance wins; both callers resolve to the same row
               }
             } catch (e2) { /* fall through to the queued-retry path below */ }
@@ -287,13 +292,11 @@ export default {
         safeUpsert(t)
       }
       dispatch('scheduleReminder', t)
-      dispatch('computeViews')
       dispatch('writeCriticalBackup')
       return t
     },
     async updateTodoFields ({ state, commit, dispatch }, { taskId, patch }) {
       const unlocked = patch._unlocked; if (unlocked) delete patch._unlocked // advisory payload, never persisted
-      const deferViews = patch._deferViews; if (deferViews) delete patch._deferViews // advisory: caller batches the view rebuild (bulk reschedule/migration)
       if (patch.predecessors !== undefined) {
         // write-time cycle guard (dependencies are devMode-gated): a dep set that closes a loop is rejected outright
         const next = Array.isArray(patch.predecessors)
@@ -315,17 +318,9 @@ export default {
       commit('upsertLocal', merged)
       safeUpsert(merged)
       dispatch('scheduleReminder', merged)
-      // Group-membership fields (complete/delete/date/category) rebuild views immediately — list membership changed, so it must change at once;
-      // plain-text/metadata edits take the lightweight path: the row object is already reactively updated, so the component itself refreshes the UI in place;
-      // the full computeViews (O(n) rebuild of 8 groups + purgeExpiredRecycle) is debounced/merged,
-      // otherwise every 350ms-debounced title save in EditPanel would trigger the whole chain, making typing a full recompute at thousand-task scale
-      if (!deferViews && VIEW_AFFECTING_FIELDS.some(f => patch[f] !== undefined)) {
-        clearTimeout(this._viewsDebounceTimer)
-        dispatch('computeViews')
-      } else {
-        clearTimeout(this._viewsDebounceTimer)
-        this._viewsDebounceTimer = setTimeout(() => { dispatch('computeViews') }, VIEWS_DEBOUNCE_MS)
-      }
+      // No view refresh call belongs here. `views` is a getter over todoList/recycleList, so the
+      // commit above already invalidated exactly the groups this row belongs to — a group-membership
+      // edit and a pure text edit take the same path, and there is no debounce to miss.
       // Schedule chips follow (after the storage-layer root fix, via db row ops, broadcast-driven full-end sync): reschedule → migrate; remove date/delete → clear.
       // Placed after commit, based on merged (new state); serialized per taskId to prevent migration disorder from EditPanel's 350ms debounced bursts
       if (patch.todoTime !== undefined || patch.delete === true) {
@@ -485,7 +480,6 @@ export default {
       }
       // Discrete op: break the 400ms undo merge so a following edit doesn't fuse into the drag step
       commit('historyBreakMerge')
-      dispatch('computeViews')
       dispatch('writeCriticalBackup')
     },
 
@@ -508,7 +502,6 @@ export default {
       // Cleanup of related attachments is left to manual action; deleting is a local-dialect UI flag, not a schema column: strip before persisting (else it spreads forever via undo snapshots/sync)
       const row = { ...merged }; delete row.deleting
       safeUpsert(row)
-      dispatch('computeViews')
       dispatch('writeCriticalBackup')
     },
 
@@ -566,7 +559,6 @@ export default {
         reportError('upsertMany', err)
         try { queuePendingUpsert({ op: 'upsertMany', params: deproxyRows(clean) }) } catch { /* keep the UI flow alive */ }
       }
-      dispatch('computeViews')
       dispatch('writeCriticalBackup')
       if (notFoundIds.length) console.warn('[todo] deleteTodosMany: ids absent from both memory and the durable store:', notFoundIds) // [TL-5] surfaced, not silently skipped
       return ids
@@ -701,7 +693,6 @@ export default {
         // persistSnapshotDiffCore (durable-existence read) makes replaying even a stale baseline safe.
         commit('historyBarrier')
       }
-      dispatch('computeViews')
       dispatch('writeCriticalBackup')
       // QC r1: return what actually succeeded so views can converge their toasts on reality
       // (purgeIds swallows per-id failures by design — the return value is the only failure signal)
@@ -724,7 +715,7 @@ export default {
         // [J15 2026-10-22] main returns the PURGED IDS ARRAY (live j14b/j14c), never `true` — any array (incl. empty) is an ACK; only a rejection is failure
         purged = res === true || Array.isArray(res)
       } catch (err) { reportError('purgeRecycleBin', err) }
-      if (!purged) { dispatch('computeViews'); return false }
+      if (!purged) return false
       // Attachment cleanup aligned with per-item permanent deletion (main's purgeRecycleBin deletes rows only, not files);
       // [C15, same class as purgeIds] cleanup failures are logged, not swallowed
       // Perf (purge batch): ONE delete-todo-files-many IPC for the whole bin instead of a per-id readdir+unlink IPC each.
@@ -742,7 +733,6 @@ export default {
       // Same resurrect guard as purgeIds: rows + files + snapshots are gone, undo must not cross this
       // generation. [TL-6] historyBarrier (see purgeIds): targeted re-baseline instead of a whole-stack wipe.
       commit('historyBarrier')
-      dispatch('computeViews')
       dispatch('writeCriticalBackup')
       return true // QC r1: boolean success flag — RecycleBinView.clearAll toasts error instead of false success
     },
@@ -789,9 +779,14 @@ export default {
     scheduleReminder (_, todo) {/* the main process rebuilds the schedule automatically after dbCall */},
 
     /* ---------- View computation (grouping semantics follow common practice) ----------
-       Implementation extracted verbatim to helpers/todoComputeViews.js; the action stays the
-       public surface (tests drive it with a fake `this`, which is forwarded as the store). */
-    async computeViews (ctx) { return computeViewsCore(this, ctx) },
+       The groups are a GETTER now — `views` derives from state + settings, so Vuex's own dependency
+       tracking invalidates it exactly when a grouping input changes (no dirty flag, no debounce, no
+       manual dispatch). Only the non-derived side effects remain here as an action. */
+    /** Side effects that used to ride on the view rebuild: keep `todayTimestamp` in step with the
+        grouping basis and purge expired recycle-bin rows. The groups themselves are a getter, so
+        this no longer computes or stores anything — call sites that only wanted a fresh `views`
+        can be deleted outright (the day tick still calls it). */
+    async computeViews ({ commit, dispatch }) { commit('setTodayTs', Date.now()); dispatch('purgeExpiredRecycle') },
 
     /** Trigger a "cloud sync" action — offline implementation: increment the local version and mark everything sync.
         Implementation extracted verbatim to helpers/todoSync.js (structure-size ratchet). */

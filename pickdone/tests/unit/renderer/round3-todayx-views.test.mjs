@@ -34,7 +34,7 @@ const today = +dayjs().startOf('day')
 
 const buildStore = (rows, settings = {}) => createStore({
   modules: {
-    todo: { ...todo, state: () => ({ ...todo.state(), todoList: rows, viewsDirty: true }) },
+    todo: { ...todo, state: () => ({ ...todo.state(), todoList: rows }) },
     settings: {
       namespaced: true,
       state: { recycleBinAutoDeleteDays: 0, showNoDate: false, todoBoxCategoryId: -1, todoBoxSortOrder: 'asc', todoBoxSortMethod: 'created', sortMode: 'default', ...settings }
@@ -59,8 +59,7 @@ function oldGroups (todoList, today0) {
 
 async function viewsFor (rows, settings) {
   const store = buildStore(rows, settings)
-  await store.dispatch('todo/computeViews')
-  return store.state.todo.views
+  return store.getters['todo/views'] // derived from the rows — no rebuild dispatch to wait for
 }
 
 test('x-next + x-open via store views are identical to the old direct-filter composition', async () => {

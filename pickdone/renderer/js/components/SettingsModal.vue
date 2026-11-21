@@ -91,17 +91,17 @@
                     <el-option v-for="o in enumOptions('sortMode')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showCompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showComplete" @change="v=>{set({showComplete:v});$store.dispatch('todo/computeViews')}"/></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showNoDateLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showNoDate" @change="v=>{set({showNoDate:v});$store.dispatch('todo/computeViews')}"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showCompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showComplete" @change="v=>{set({showComplete:v})}"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.showNoDateLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showNoDate" @change="v=>{set({showNoDate:v})}"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.keepExpiredCompletedLabel') }}</span>
                 <div class="form-item__control">
-                  <el-select size="small" :model-value="st.expiredCompletedTodoRange" @change="v=>{set({expiredCompletedTodoRange:v});$store.dispatch('todo/computeViews')}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredCompletedLabel')">
+                  <el-select size="small" :model-value="st.expiredCompletedTodoRange" @change="v=>{set({expiredCompletedTodoRange:v})}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredCompletedLabel')">
                     <el-option v-for="o in enumOptions('expiredCompletedTodoRange')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.keepExpiredUncompletedLabel') }}</span>
                 <div class="form-item__control">
-                  <el-select size="small" :model-value="st.expiredUncompletedTodoRange" @change="v=>{set({expiredUncompletedTodoRange:v});$store.dispatch('todo/computeViews')}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredUncompletedLabel')">
+                  <el-select size="small" :model-value="st.expiredUncompletedTodoRange" @change="v=>{set({expiredUncompletedTodoRange:v})}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.keepExpiredUncompletedLabel')">
                     <el-option v-for="o in enumOptions('expiredUncompletedTodoRange')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
@@ -175,7 +175,7 @@
               <div class="form-label">{{ $t('statsE.SettingsModal.retentionSection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.upcomingRangeLabel') }}</span>
                 <div class="form-item__control">
-                  <el-select size="small" :model-value="st.upcomingTodoRange" @change="v=>{set({upcomingTodoRange:v});$store.dispatch('todo/computeViews')}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.upcomingRangeLabel')">
+                  <el-select size="small" :model-value="st.upcomingTodoRange" @change="v=>{set({upcomingTodoRange:v})}" class="ctl-sm" :aria-label="$t('statsE.SettingsModal.upcomingRangeLabel')">
                     <el-option v-for="o in enumOptions('upcomingTodoRange')" :key="o.v" :label="$t(o.l)" :value="o.v"/>
                   </el-select>
                 </div></div>
@@ -198,7 +198,7 @@
                    implemented), so this control visibly did nothing. Re-add it together with the
                    actual holiday-badge implementation. -->
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.blurScheduleLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isShowCalendarPrivacyMode" @change="v=>set({isShowCalendarPrivacyMode:v})"/></div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dimUncompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCalendarDimUncompleted" @change="v=>{set({isCalendarDimUncompleted:v});$store.dispatch('todo/computeViews')}"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.dimUncompletedLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.isCalendarDimUncompleted" @change="v=>{set({isCalendarDimUncompleted:v})}"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.fontSizeLabel') }}</span>
                 <div class="form-item__control">
                   <el-radio-group size="small" :model-value="st.calendarFontSize" @change="v=>set({calendarFontSize:v})" :aria-label="$t('statsE.SettingsModal.fontSizeLabel')">
@@ -356,11 +356,8 @@ export default {
   },
   watch: {
     userName: { immediate: true, handler (v) { this.nameDraft = v } },
-    tab (v) {
-      try { localStorage.setItem('settingsTab', v) } catch (e) { /* ignored */ }
-      // Entering the tomato tab re-reads the float's real visibility (tray, the float's own ✕, other windows).
-      if (v === 'tomato') this.refreshFloatShown()
-    }
+    // The tomato-tab re-read of the float's real visibility lives in floatToggleMixin's own watcher.
+    tab (v) { try { localStorage.setItem('settingsTab', v) } catch (e) { /* ignored */ } }
   },
   computed: {
     /** Note: the computed name collides with the appVersion function in utils/core.js -- {{ appVersion }} in the template is a string;
