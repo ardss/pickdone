@@ -222,29 +222,14 @@ window.appUI = null
 // utils/auxWindow.js now — one copy had drifted to miss __quick-add.
 import { isAuxWindow, isFloatWindow } from './utils/auxWindow.js'
 import { installSyncEventToasts } from './utils/syncDegradedToast.js'
+import { registerFloatAutoShow } from './utils/floatAutoShow.js'
 const isMainShell = !isAuxWindow()
 
-// W23 (P1): auto-show armed as bootstrap()'s FIRST statement — the old tail-of-chain registration was silently skipped when anything above it threw ("小窗没弹出来"); gates fire-time evaluated.
-function registerFloatAutoShow () {
-  try {
-    if (!isMainShell) return // quick-add/float windows also load this file; popping would "revive" a closed float
-    setTimeout(() => {
-      if (!window.todoAPI) return
-      if (store.state.settings.enableTomatoFloating === false) { // W23 (P2): legitimate, but no longer a SILENT return (get-settings type-cleanses residue)
-        console.info('[float-auto-show] skipped: enableTomatoFloating ===', store.state.settings.enableTomatoFloating, '(switch off, or stale config.json residue)'); return
-      }
-      let markerRead = null // db unavailable below: default to showing
-      try { markerRead = window.todoAPI.dbCall('getMeta', 'tomatoFloatClosedByUser') } catch { }
-      Promise.resolve(markerRead).then(v => {
-        if (v === '1') return // the user explicitly closed the float last run: keep it closed
-        Promise.resolve(window.todoAPI.showTomatoFloat()).catch(e => console.warn('[float-auto-show] invoke rejected:', e)) // W23 (P3): the rejection used to be swallowed
-      }).catch(() => { /* marker read failed: err on the visible side */ })
-    }, 6000)
-  } catch (e) { console.error('[float-auto-show] registration failed:', e && e.stack || e) } // W23: failure-proof + loud
-}
-
 async function bootstrap () {
-  registerFloatAutoShow() // W23 (P1): armed BEFORE anything that can throw
+  // W23 (P1): auto-show armed as bootstrap()'s FIRST statement — the old tail-of-chain registration
+  // was silently skipped when anything above it threw ("小窗没弹出来"). The chain itself lives in
+  // utils/floatAutoShow.js (gates are still fire-time evaluated; isMainShell is injected, not read).
+  registerFloatAutoShow({ isMainShell, store })
   // 2026-09-02 measurement verdict: keep it serial. Tried settings∥category in parallel; measured total time actually rose ~50ms
   // (category's DB IPC contended with settings, todo/init went from ~57ms to ~150ms), reverted.
   // First frame paints at mount (+11ms); the data pipeline reacts in within 350ms, so serial is enough.

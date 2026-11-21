@@ -246,7 +246,7 @@
                   <el-input-number size="small" class="ctl-sm" :min="1" :max="60" :model-value="Number(st.restTime)||5" :aria-label="$t('statsE.SettingsModal.breakLengthLabel')"
                                    @change="v=>set({restTime:v})"/>
                 </div></div>
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.floatingWindowLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.enableTomatoFloating !== false" @change="setTomatoFloat"/></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.floatingWindowLabel') }}</span><div class="form-item__control"><el-switch :model-value="floatShown === null ? st.enableTomatoFloating !== false : floatShown" @change="setTomatoFloat"/></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.customSoundLabel') }}</span>
                 <div class="form-item__control">
                   <button class="mini" @click="pickCustomAudio">{{isCustomNoise?$t('statsE.SettingsModal.selectedCount'):$t('statsH.SettingsModal.chooseAudio')}}</button>
@@ -322,6 +322,7 @@ import { appVersion } from '../utils/core.js'; import { buildFingerprint as buil
 import { CONFIRM_SOUNDS, confirmUrl } from '../utils/mediaRegistry.js'
 import { SETTING_ENUMS } from '../store/settings.js'
 import dialogA11y from '../utils/dialogA11y.js'
+import floatToggle from '../utils/floatToggleMixin.js'
 import { CITY_OPTIONS, CITY_PATH_MAP } from '../utils/chinaRegions.js'
 import { SUPPORTED, getLocale, setLocale } from '../i18n/index.js'
 import SettingsShortcutsTab from './settings/SettingsShortcutsTab.vue'
@@ -333,7 +334,7 @@ import { filterSettingsPanels } from './settings/settingsSearch.js'
 
 export default {
   name: 'SettingsModal',
-  mixins: [dialogA11y],
+  mixins: [dialogA11y, floatToggle],
   components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab, SettingsCrossTab },
   data () {
     let tab0 = 'general'
@@ -355,7 +356,11 @@ export default {
   },
   watch: {
     userName: { immediate: true, handler (v) { this.nameDraft = v } },
-    tab (v) { try { localStorage.setItem('settingsTab', v) } catch (e) { /* ignored */ } }
+    tab (v) {
+      try { localStorage.setItem('settingsTab', v) } catch (e) { /* ignored */ }
+      // Entering the tomato tab re-reads the float's real visibility (tray, the float's own ✕, other windows).
+      if (v === 'tomato') this.refreshFloatShown()
+    }
   },
   computed: {
     /** Note: the computed name collides with the appVersion function in utils/core.js -- {{ appVersion }} in the template is a string;
@@ -550,11 +555,7 @@ export default {
        owned (not a TOMATO_LEDGER_KEY, never read from settings state) and tomato/patch persists the
        whole runtime blob every write — no J4-style mirrored-settings drift possible here. */
     async setTomatoNoti (v) { this.$store.commit('tomato/patch', { enableNotification: v }) },
-    /** Desktop float window toggle: writes the setting and immediately opens/closes the independent window (browser debugging has no todoAPI, only the setting is stored) */
-    async setTomatoFloat (v) {
-      this.set({ enableTomatoFloating: v })
-      if (window.todoAPI) { v ? window.todoAPI.showTomatoFloat() : window.todoAPI.hideTomatoFloat() }
-    },
+    /* The desktop-float switch lives in utils/floatToggleMixin.js (mirrors the WINDOW, not the setting). */
     pickCustomAudio () {
       window.todoAPI.pickAudioFile().then(r => {
         if (!r) return

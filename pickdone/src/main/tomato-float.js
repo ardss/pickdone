@@ -263,8 +263,8 @@ function setBounds () {
 }
 
 function defaultBounds () {
-  const { width, height } = screen.getPrimaryDisplay().bounds
-  return { x: width - W - 40, y: height - 124 - H, width: W, height: H }  // card bottom edge sits 124 (DIP) above the taskbar
+  const { x, y, width, height } = screen.getPrimaryDisplay().bounds
+  return { x: x + width - W - 40, y: y + height - 124 - H, width: W, height: H }  // card bottom edge sits 124 (DIP) above the taskbar
 }
 
 function create () {
@@ -631,6 +631,7 @@ module.exports = {
     setUserClosed(false) // every open path converges here (SettingsModal/TomatoPanel/TomatoBar IPC, auto-show): clear the close marker
     let w = win
     if (!w || w.isDestroyed()) w = create()
+    safeReclamp() // recover float stranded outside the connected displays
     if (!w.webContents.isLoadingMainFrame()) { w.showInactive(); flushPaint(w) }
     else {
       // M2 P3 (2026-10-09): bound single handler — remove the previous did-finish-load closure

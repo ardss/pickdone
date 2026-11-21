@@ -32,37 +32,79 @@ const settingsHandlerSrc = read('src/main/handlers/settings.js')
 
 /* ---------- P1-1: auto-show registration is failure-proof ---------- */
 
-test('W23 P1-1: registerFloatAutoShow is a named function armed as bootstrap() first statement', () => {
-  assert.match(mainSrc, /function registerFloatAutoShow \(\)/, 'named registration function exists')
-  // armed BEFORE the first await of the serial chain (any statement may throw; the timer must not)
+test('W23 P1-1: bootstrap arms the float auto-show before its first await', () => {
   const iBoot = mainSrc.indexOf('async function bootstrap ()')
-  const iCall = mainSrc.indexOf('registerFloatAutoShow()', iBoot)
+  const iCall = mainSrc.indexOf('registerFloatAutoShow({', iBoot)
   const iFirstAwait = mainSrc.indexOf('await', iBoot)
-  assert.ok(iCall > 0, 'bootstrap calls registerFloatAutoShow()')
+  assert.ok(iCall > 0, 'bootstrap registers the float auto-show')
   assert.ok(iCall < iFirstAwait, 'registration precedes the first await — earlier failures cannot skip it')
-  // the call is wrapped so even the registration itself cannot break the boot chain silently
-  const registerBody = mainSrc.slice(mainSrc.indexOf('function registerFloatAutoShow'), iBoot)
-  assert.match(registerBody, /try \{[\s\S]*setTimeout\(/, 'timer registration inside try')
-  assert.match(registerBody, /console\.error\('/, 'registration failure is loud, not silent')
+  assert.ok(mainSrc.indexOf('function registerFloatAutoShow') === -1, 'the chain itself now lives in utils/floatAutoShow.js')
 })
 
-test('W23 P1-1: gate semantics preserved (isMainShell / 6s / todoAPI / enableTomatoFloating / marker)', () => {
-  const body = mainSrc.slice(mainSrc.indexOf('function registerFloatAutoShow'), mainSrc.indexOf('async function bootstrap'))
-  assert.match(body, /if \(!isMainShell\) return/, 'aux shells never register')
-  assert.match(body, /setTimeout\(/, 'timer present')
-  assert.match(body, /, 6000\)/, '6s delay unchanged')
-  assert.match(body, /if \(!window\.todoAPI\) return/, 'todoAPI presence gate kept')
-  assert.match(body, /enableTomatoFloating === false/, 'settings gate kept (strict boolean false)')
-  assert.match(body, /getMeta', 'tomatoFloatClosedByUser'/, 'user-closed marker gate kept (F12)')
-  assert.match(body, /v === '1'\) return/, 'marker value check kept')
+/* The chain is exercised as behaviour (it used to be regex-matched inside main.js's source text).
+   Every case drives the real registerFloatAutoShow with an injected timer/api/store. */
+const { registerFloatAutoShow, FLOAT_AUTO_SHOW_DELAY_MS } = await import('../../../renderer/js/utils/floatAutoShow.js')
+
+function armFloatAutoShow ({ marker, enabled = true, hasApi = true, mainShell = true, dbCallThrows = false } = {}) {
+  const actions = []
+  const timers = []
+  const record = kind => (...a) => actions.push(kind + ': ' + a.map(String).join(' '))
+  registerFloatAutoShow({
+    isMainShell: mainShell,
+    store: { state: { settings: { enableTomatoFloating: enabled } } },
+    api: () => hasApi
+      ? {
+          dbCall: () => {
+            if (dbCallThrows) throw new Error('bridge gone')
+            return typeof marker === 'function' ? marker() : marker
+          },
+          showTomatoFloat: () => { actions.push('show'); return Promise.resolve() }
+        }
+      : null,
+    timer: (fn, ms) => timers.push({ fn, ms }),
+    log: { info: record('info'), warn: record('warn'), error: record('error') }
+  })
+  return {
+    actions,
+    timers,
+    async fire () {
+      for (const t of timers) t.fn()
+      for (let i = 0; i < 4; i++) await new Promise(resolve => setImmediate(resolve))
+      return actions
+    }
+  }
+}
+
+test('W23 P1-1: only the main shell arms the timer, and the 6s delay is unchanged', () => {
+  const aux = armFloatAutoShow({ mainShell: false, marker: Promise.resolve(null) })
+  assert.equal(aux.timers.length, 0, 'quick-add/float windows never auto-show (would revive a closed float)')
+  const main = armFloatAutoShow({ marker: Promise.resolve(null) })
+  assert.equal(main.timers.length, 1, 'one timer in the main shell')
+  assert.equal(main.timers[0].ms, FLOAT_AUTO_SHOW_DELAY_MS, 'delay constant is what the timer got')
+  assert.equal(FLOAT_AUTO_SHOW_DELAY_MS, 6000, 'delay unchanged at 6s')
 })
 
-test('W23 P1-1/P3: gate skip logs its reason; show invoke rejection is warned, not swallowed', () => {
-  const body = mainSrc.slice(mainSrc.indexOf('function registerFloatAutoShow'), mainSrc.indexOf('async function bootstrap'))
-  assert.match(body, /console\.info\('\[float-auto-show\] skipped/, 'enableTomatoFloating=false skip is observable (W23 P2)')
-  assert.match(body, /showTomatoFloat\(\)\)\.catch\(e => console\.warn\(/, 'invoke rejection recorded (W23 P3)')
-  const bodyCode = body.split('\n').filter(l => !l.trim().startsWith('//')).join('\n')
-  assert.doesNotMatch(bodyCode, /\.catch\(\(\) => \{\}\)/, 'no silent catch remains in the registration block')
+test('W23 P1-1: marker semantics — explicit close suppresses, everything else shows', async () => {
+  assert.deepEqual(await armFloatAutoShow({ marker: Promise.resolve('1') }).fire(), [], "marker '1' means the user closed it: stay closed")
+  assert.deepEqual(await armFloatAutoShow({ marker: Promise.resolve(null) }).fire(), ['show'], 'no marker: show')
+  assert.deepEqual(await armFloatAutoShow({ marker: Promise.resolve('') }).fire(), ['show'], 'empty marker: show')
+})
+
+test('W23 P1-1: a failed marker read shows (it must not read as "user closed it")', async () => {
+  const rejected = await armFloatAutoShow({ marker: Promise.reject(new Error('DB temporarily unavailable')) }).fire()
+  assert.ok(rejected.includes('show'), 'rejected getMeta still opens the enabled float')
+  assert.ok(rejected.some(a => a.startsWith('warn:')), 'the failure is logged, not swallowed')
+  const thrown = await armFloatAutoShow({ marker: null, dbCallThrows: true }).fire()
+  assert.ok(thrown.includes('show'), 'a synchronous bridge throw is treated the same way')
+  assert.ok(thrown.some(a => a.startsWith('warn:')), 'and logged too')
+})
+
+test('W23 P1-1: the off switch and a missing bridge both suppress, the switch loudly', async () => {
+  const off = await armFloatAutoShow({ marker: () => Promise.reject(new Error('x')), enabled: false }).fire()
+  assert.deepEqual(off.filter(a => a === 'show'), [], 'enableTomatoFloating === false always wins')
+  assert.ok(off.some(a => a.startsWith('info:') && a.includes('enableTomatoFloating')), 'the skip states its reason (W23 P2)')
+  const noApi = await armFloatAutoShow({ marker: Promise.resolve(null), hasApi: false }).fire()
+  assert.deepEqual(noApi, [], 'no todoAPI: nothing happens, nothing is logged as failure')
 })
 
 test('W23 P1-3: cross-machine restore of enableTomatoFloating is observable', () => {
@@ -183,3 +225,4 @@ test('W23 P3: --no-focus suppression logs instead of silently skipping show', ()
   assert.match(block, /--no-focus/, 'the log names the flag as the cause')
   assert.match(block, /tomatoFloat\.show\(\)/, 'non-suppressed path still shows')
 })
+
