@@ -59,6 +59,14 @@ module.exports = {
       rules: { 'no-loop-func': 'off', 'no-constant-condition': 'off', 'no-return-assign': 'off' }
     },
     {
+      // 源码契约（tests/**/*.contracts.mjs，2026-11-21 从单测池迁到 cli/check-source-contracts.cjs）：
+      // 断言块是从原 .test.mjs 原样搬过来的，文件头也原样保留（ROOT/read/import 一旦逐个手删，
+      // 下一个锚点搬进来时又会缺一半，正是这类文件最常见的腐坏方式）。头部里只服务行为用例的
+      // 声明必然在这里显示为 unused —— 断言本身（read + assert.match）仍受全部其它规则约束。
+      files: ['tests/**/*.contracts.mjs'],
+      rules: { 'no-unused-vars': 'off' }
+    },
+    {
       // VS Code 扩展宿主是 CommonJS + Node globals（vscode 注入 require/module）
       files: ['vscode-extension/**/*.js'],
       parserOptions: { ecmaVersion: 2022, sourceType: 'script' },

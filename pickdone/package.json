@@ -5,6 +5,7 @@
   "description": "PickDone — local-first todos, schedule and pomodoro focus desktop app",
   "productName": "PickDone",
   "main": "src/main/index.js",
+  "imports": { "#contracts": "./cli/lib/source-contract-harness.mjs" },
   "scripts": {
     "start": "node scripts/app-dev.mjs",
     "dev": "node scripts/app-dev.mjs --dev",

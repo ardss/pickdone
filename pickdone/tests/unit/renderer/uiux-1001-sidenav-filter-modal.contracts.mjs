@@ -4,9 +4,10 @@
  * render returns a Promise — Vue coerces it to the literal text '[object Promise]' injected into
  * the sidebar and the dialog never mounts. The wiring fix (defineAsyncComponent) is present on
  * this branch; this test is the regression lock so the bare-arrow registration cannot come back.
- * Run: node --test tests/unit/renderer/uiux-1001-sidenav-filter-modal.test.mjs
+ * Run: node cli/check-source-contracts.cjs
  */
-import { test } from 'node:test'
+// 静态门禁跑（cli/check-source-contracts.cjs）：本文件只做源码锚点断言，不需要 `node --test` 进程
+import test from '#contracts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
