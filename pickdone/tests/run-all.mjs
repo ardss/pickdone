@@ -322,7 +322,14 @@ const TEST_TIMEOUT_MS = 300000
 // green and roughly halves the unit wall (measured acceptance run in the commit that flipped
 // this). DEEP keeps 4 on purpose — it holds the live-Electron / real-socket / real-clock work,
 // exactly the class that multiplies under file-level parallelism. Env still overrides both tiers.
-const DEFAULT_CONCURRENCY = tierArg === 'deep' ? '4' : '8'
+// 2026-11-21 (CI red, first real 8-way full-pool run): the expression was `tierArg === 'deep' ? 4 : 8`,
+// which also handed 8 to the NO-TIER pool — and that pool is a SUPERSET of DEEP_FILES, i.e. the exact
+// live-socket / real-clock class the paragraph above keeps at 4. windows-latest (2 vCPU, unit pool and
+// the UI journey pool sharing the box) then blew the fixed 45s convergence budgets of the loopback
+// drills (three-node mesh / restart / bidirectional, v2 S1 clock skew), while ubuntu-latest (4 vCPU)
+// stayed green on the same commit — a load artifact, not a product regression. Only the CORE tier is
+// free of that class, so only core gets 8; deep AND the untiered full pool stay at 4.
+const DEFAULT_CONCURRENCY = tierArg === 'core' ? '8' : '4'
 const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || DEFAULT_CONCURRENCY
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits

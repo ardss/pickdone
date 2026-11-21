@@ -302,8 +302,11 @@ async function runPool (stages, limit, { retry = 0, onLastStage, workerGate, sil
       if (!r.ok && r.out.trim()) {
         say(r.out.trim().split('\n').slice(-25).map(l => '    ' + l).join('\n'))
         // tail 25 行常吞掉 node:test 的 "not ok N - <name>"（失败名在输出中段），单独抽失败用例行
-        const diag = r.out.split('\n').filter(l => /✖|not ok \d|AssertionError|FAIL:|✗ /.test(l)).slice(0, 20)
-        if (diag.length) say('  [diag] failing cases:\n' + diag.map(l => '    ' + l.trim().slice(0, 150)).join('\n'))
+        // 2026-11-21: the TAP error block (error:/expected:/actual:/operator:) is what makes a red
+        // ATTRIBUTABLE — without it the diag said only `name: 'AssertionError'` and the failing
+        // assertion had to be guessed (that exact hole cost a CI round-trip on PR #232).
+        const diag = r.out.split('\n').filter(l => /✖|not ok \d|AssertionError|FAIL:|✗ |^\s*(error|expected|actual|operator|code): /.test(l)).slice(0, 24)
+        if (diag.length) say('  [diag] failing cases:\n' + diag.map(l => '    ' + l.trim().slice(0, 200)).join('\n'))
       }
     }
   }
