@@ -48,7 +48,7 @@ test('h3-1: settingsSet merges the single key onto a FRESH doc when the App chan
       }
       return r
     }
-    const r = lib.settingsSet('colorMode', 'dark') // must NOT throw and NOT clobber the App's package
+    const r = lib.settingsSet('colorMode', 'dark', { force: true }) // machine-local since 2026-11-21 → needs force; the merge contract itself is what this case pins
     assert.equal(r.value, 'dark')
   } finally {
     db.call = orig

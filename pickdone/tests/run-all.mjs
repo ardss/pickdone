@@ -112,6 +112,12 @@ const DEEP_FILES = new Set([
   'relay-413-forceexit-teardown.test.mjs',
   // cross-process relay drill, self-declared 120s timeout (unit/main)
   'relay-cross-process-outbox.test.mjs',
+  // 2026-11-21 (core 4→8 wave): both files assert a REAL elapsed wall time (sleepBackoff's capped
+  // busy-spin fallback: "elapsed is a real delay, but capped"). These are the fixed-budget asserts
+  // that turned the 2026-10-23 evening full gate red at concurrency 8 — not product bugs, just a
+  // stopwatch under a busy box. Routed to deep so the core tier can run at 8.
+  'd15-c10-c14-peer-extras-config.test.mjs',
+  'd19-dom1-domain-fixes.test.mjs',
   // D6 (2026-10-23): c1-parse-ux was routed here for the fixture-suite lock/ceiling burn.
   // Root-caused as a SEQUENTIAL-SPAWN WALL-TIME problem, not a db lock: ~40 strictly serial
   // CLI children inflate to 6-23s each under full-suite process-creation contention and the
@@ -310,7 +316,14 @@ const TEST_TIMEOUT_MS = 300000
 // not budget overruns. Tally at 8 across the day: 2 green / 1 red depending on load — not a
 // safe DEFAULT on a family box whose load is uncontrollable; 4 stayed green in every window
 // measured today. The re-raise rationale above stands for quiet windows; flip via env.
-const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
+// 2026-11-21 (core 4→8): tier-aware default — CORE runs at 8, DEEP stays at 4. The 2026-10-23
+// evening red was a handful of stopwatch asserts (the two files routed to DEEP_FILES below the
+// same way), not the unit pool's own stability: with those out of the core pool, core at 8 is
+// green and roughly halves the unit wall (measured acceptance run in the commit that flipped
+// this). DEEP keeps 4 on purpose — it holds the live-Electron / real-socket / real-clock work,
+// exactly the class that multiplies under file-level parallelism. Env still overrides both tiers.
+const DEFAULT_CONCURRENCY = tierArg === 'deep' ? '4' : '8'
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || DEFAULT_CONCURRENCY
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
