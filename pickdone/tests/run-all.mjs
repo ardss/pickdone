@@ -62,6 +62,11 @@ const EXCLUDE = new Set(['e2e.test.mjs', 'integration-ui.test.mjs', 'overlay-vis
   // e2e.test.mjs, never in the quick/pre-commit regression (boots + dev-host state).
   'j-todo-core.test.mjs', 'j-habit-moment.test.mjs', 'j-rail-stats-settings.test.mjs',
   'j-attachment-image.test.mjs', // W29 (2026-11-01) paste-image live journey — same live-Electron pool class
+  'j-pd20-episode.test.mjs', // pd20 (2026-11-03) work-episode live journey — same live-pool class (run-interactions-shared target)
+  'j-pd20-extension.test.mjs', // pd20 (2026-11-04) MV3 capture live journey (real Chrome + unpacked extension) — same live class
+  'j-pd20-deeplink-drop.test.mjs', // pd20 (2026-11-10) S6 deep link + drag-drop live journey (real Electron + synthetic uri-list drop) — same live class; standalone node --test stage
+  'j-pd20-finding-decision.test.mjs', // pd20 (2026-11-10) S1 Finding/Decision J1 journey — CLI-driven on an isolated TODO_DB_DIR library (no Electron), runs standalone via node --test as its own targeted stage; pool-classified here per the e2e-journeys doctrine
+  'j-win-snippet-live.test.mjs', // pd20 (2026-11-04) MANUAL live stage (TODO_WIN_SNIPPET_LIVE=1): real Win+Shift+S SendInput — never in pools (drives the real mouse/keyboard)
   // 2026-09-28 un-excluded: the --test-force-exit + 2min-ceiling harness added after that wave
   // contains exactly the runaway-test scenario the flake feared, so the file re-joins the
   // default pool — an orphaned integration spec is a regression nobody sees.
@@ -79,12 +84,25 @@ const KNOWN_SUITES = new Set(['unit', 'integration', 'visual'])
 // runs. Exclusion is by bare FILENAME across all suites (same doctrine as EXCLUDE above):
 // never reuse these names elsewhere.
 const DEEP_FILES = new Set([
+  // Real resident PowerShell + interactive Windows desktop. Under the parallel core pool
+  // its subprocess startup can exceed the live adapter's timeout; run as an isolated
+  // deep/live acceptance test instead (still discovered by full and deep runs).
+  'adapter-live.test.mjs',
   // live Electron, boots the real app twice (exit-mode quit + tray-mode hide)
   'e2e-exit-close.test.mjs',
   // two real paired instances, multi-minute journey (J4 reconnect lives here)
   'lan-sync-journey.test.mjs',
+  // two real paired instances, episode-level W1-W5 (boot + CDP + two-way pairing) — same live
+  // Electron class as lan-sync-journey; on mapped network drives CDP eval exceeds the 10s
+  // ceiling under core-pool contention. Routed to deep tier (2026-11-19 takeover audit).
+  'lan-sync-episode.test.mjs',
   // loopback server suites — bind real ports / long socket lifecycles
   'lan-sync-loopback.test.mjs',
+  // 2026-11-20 (commit-speed wave, measured): its F2 case advertises two real UDP sockets and
+  // polls up to 6s for a cross-socket discovery — under the core pool's load it timed out in 2 of
+  // 3 runs (twice in isolation, once under load), i.e. a false red that blocks commits. Live-network
+  // class: same treatment as the other lan-sync drills, still exercised by check:all / CI.
+  'round2-p1-20260921.test.mjs',
   'v2-acceptance-drill.test.mjs',
   'd9-loopback-mesh-scale.test.mjs',
   'd9-loopback-two-machine-drill.test.mjs',
@@ -113,7 +131,12 @@ const DEEP_FILES = new Set([
 // passed to the SIBLING_DIR discover() call — they ran on manual discipline alone (2026-09-28).
 // The root-level discover() now takes both extensions too, so *.test.js anywhere under tests/
 // is discovered; suite classification is unchanged (tests/ root = integration).
-const TEST_EXTS = ['.test.mjs', '.test.js']
+// W31 fix (2026-11-01): '.test.cjs' joins the family — three real suites
+// (tests/unit/cli/relay-round-evidence-maintenance-20261015.test.cjs,
+// tests/unit/main/multi-instance-lock.test.cjs, tests/unit/main/multi-instance-port.test.cjs)
+// were silently dropped by the exts filter; node --test runs plain-CJS specs fine, so the
+// extension list — not the runner — was the gap.
+const TEST_EXTS = ['.test.mjs', '.test.js', '.test.cjs']
 const SIBLING_DIR = path.join(dir, '..', 'test')
 const isSiblingSpec = file => file.startsWith(SIBLING_DIR + path.sep)
 
@@ -160,8 +183,8 @@ if (tierArg && !['core', 'deep'].includes(tierArg)) {
   console.error(`✗ [run-all] unknown --tier=${tierArg} (valid: core|deep)`)
   process.exit(1)
 }
-// drop the --suite/--tier/--dirs args before forwarding the rest to node --test
-const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=') || a.startsWith('--dirs=')))
+// drop the --suite/--tier/--dirs/--max-files args before forwarding the rest to node --test
+const forwardArgs = process.argv.slice(2).filter(a => !(a.startsWith('--suite=') || a.startsWith('--tier=') || a.startsWith('--dirs=') || a.startsWith('--max-files=')))
 // discovery follows appRoot too (GATE_META_APP_ROOT sandboxing): scanning the script's own
 // tests/ would drag the real corpus into a meta-test sandbox run. The sibling dir is
 // tolerated missing — sandbox fixtures don't carry it.
@@ -219,6 +242,23 @@ if (!files.length) { console.error(`✗ no *.test.mjs found under tests/${suites
 if (suites.length) console.error(`[run-all] suite filter: ${suites.join(',')} -> ${files.length} file(s)`)
 if (tierArg) console.error(`[run-all] tier=${tierArg}: ${files.length} file(s)${tierNote}`)
 else if (dirsArg) console.error(`[run-all] scope: ${files.length} file(s)${tierNote}`)
+
+// --max-files=N (2026-11-20 commit-speed wave): the commit gate must never sit on a huge pool.
+// Measured on this repo: ~12 CPU-seconds per test file on the network worktree (source-scanning
+// specs read hundreds of files over SMB), so a 983-file core tier is ~1h at concurrency 2 and the
+// coarsened affected-scope map routinely selects 90-340 files for a one-line UI change. Deferral is
+// LOUD and repeatable, never a silent skip: the exact equivalent command is printed, the TAP stream
+// carries a machine-readable marker that check-test-summary turns into a note instead of a green
+// "0 tests passed", and CI on push still runs the full pool.
+const maxFilesArg = (/^--max-files=(\d+)$/.exec(process.argv.find(a => a.startsWith('--max-files='))) || [])[1]
+if (maxFilesArg && +maxFilesArg > 0 && files.length > +maxFilesArg) {
+  const deferredCmd = `node tests/run-all.mjs --tier=${tierArg || 'core'}${dirsArg ? ` --dirs=${dirsArg}` : ''}`
+  console.error(`[run-all] DEFERRED: 选中 ${files.length} 个测试文件 > --max-files=${maxFilesArg}（提交门禁预算）`)
+  console.error(`[run-all]           本地全量：npm run check:core   |   push 后 CI 也会跑全量`)
+  console.error(`[run-all]           等价命令：${deferredCmd}`)
+  console.log(`# DEFERRED ${files.length} files (max ${maxFilesArg})`)
+  process.exit(0)
+}
 
 // With shell:true, unquoted file paths explode when the project path contains spaces (e.g. D:My Projects): the argument string is cut at the space;
 // executing the binary inside the electron package does not rely on shell lookup, so shell can be safely dropped here
@@ -592,6 +632,9 @@ if (r.status !== 0 && !r.error && r.stdout) {
         // fire: fake green on cancelled tests in absorbed runs. Scanning per line is fail-loud
         // by construction (any cancelled line anywhere in the tail is counted).
         const countCancelled = tail => tail.reduce((n, l) => { const m = /^# cancelled\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
+        // W32 fix(#2) 2026-11-03: same per-line anchoring for skip counts, used by the
+        // low-confidence branch below to merge pass1+retry skips into the stream the gate sees.
+        const countSkips = tail => tail.reduce((n, l) => { const m = /^# skip(?:ped)?\s+(\d+)/.exec(l); return n + (m ? Number(m[1]) : 0) }, 0)
         const cancelled1 = countCancelled(p1.tail)
         const cancelled2 = countCancelled(rt.tail)
         if (planOk && keptNotOk === 0 && notOkInRetry === 0 && cancelled1 === 0 && cancelled2 === 0 && rt.blocks.length > 0) {
@@ -702,7 +745,18 @@ if (r.status !== 0 && !r.error && r.stdout) {
             // emitting Buffer.concat([r.stdout, retry.stdout]) again would double-plan. Only the
             // retry tail is appended after a separator, so the LAST plan (the retry's) stays
             // what parseSummary anchors.
-            r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + (retry.stdout || ''), stderr: r.stderr, streamed: false }
+            // W32 fix(#2) 2026-11-03: that LAST-plan anchoring is exactly why pass1's skips
+            // escaped the ratchet here — the gate anchored the RETRY's plan and its `# skip`
+            // counts only the retried files' retry pass; every pass1 skip was invisible and the
+            // live pool could be eroded by skips through this branch with the gate green. A
+            // merged `# skip pass1+retry` line is appended AFTER the retry summary so the
+            // gate's last-match parsing sees the whole corpus's skip count (the stream is not
+            // COMPOSED-marked, so plan-vs-summary drift stays a warning, not a red).
+            const pass1Skips = countSkips(p1.tail)
+            const retrySkips = countSkips(rt.tail)
+            const retryOut = retry.stdout || ''
+            const nl = retryOut.endsWith('\n') || retryOut === '' ? '' : '\n'
+            r = { status: 0, stdout: '# RAW-PASS1-ABOVE; RETRY-TAP-FOLLOWS: consumers anchor the LAST plan\n' + retryOut + nl + `# skip ${pass1Skips + retrySkips}\n`, stderr: r.stderr, streamed: false }
           } else {
             console.error(`[run-all] ⚑FLAKY absorption REFUSED: parse low-confidence AND no clean-retry corroboration (retry exit=${retry.status}, plan-line=${/^1\.\.\d+/m.test(retryTap)}, not-ok-in-retry=${!/^\s*not ok\b/m.test(retryTap) ? 0 : 'present'}) — pass1's RED stands, retry TAP below is evidence only`)
             await recordFlake([{

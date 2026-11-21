@@ -64,7 +64,11 @@ const FINGERPRINT_FIELDS = [
   // template task with the new group's repeatId while its edit panel is open; without it the
   // inbound change classifies as a non-core own-save echo (verdict 'none') and the panel keeps
   // showing "设置重复" with no way back into the rule from the task it was created on.
-  ['repeatId', 'repeatId']
+  ['repeatId', 'repeatId'],
+  // [w33 P2] deadlineTs joins the fingerprint (same J3 rationale as repeatId): a peer edit that
+  // ONLY moves the deadline used to classify as a non-core own-save echo (verdict 'none') — the
+  // panel stayed stale AND its next autosave wrote the old deadline back over the peer's value.
+  ['deadlineTs', 'deadlineTs']
 ]
 
 /** Panel-snapshot keys the own-save-echo fingerprint depends on. Exported for the shape

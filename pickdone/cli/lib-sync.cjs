@@ -78,6 +78,20 @@ module.exports = async function runSync ({ opts, lib, emit }) {
         if (opts.json) return emit({ unpaired: device, result: ack.result || null })
         return console.log(`✓ unpaired ${device} — shared secret rotated, remaining peers must re-pair`)
       }
+      if (op === 'forget') {
+        // beta.41: a record left behind by an instance that no longer exists. `unpair` cannot be
+        // used for it — it rotates the single shared secret, so every healthy device would have to
+        // re-pair. `forget` drops the record (peer entry, manual-peer mirror, announce row, push
+        // watermark) and keeps the secret, so nobody else notices.
+        const device = opts.device != null && opts.device !== true ? String(opts.device) : null
+        if (!device) throw new lib.CliError('usage: sync forget --device <deviceId>  (sync status to list ids; removes the stale record only — the shared secret is kept, other devices unaffected)', 'USAGE')
+        const seq = lib.writeSyncCmd({ action: 'forget', deviceId: device })
+        const ack = await lib.waitForSyncAck(seq)
+        if (!ack) throw new lib.CliError('sync forget failed: App is not running or did not consume the command', 'APP_NOT_RUNNING')
+        if (!ack.ok) throw new lib.CliError('sync forget failed: ' + (ack.error || 'unknown'), 'SYNC_ERROR')
+        if (opts.json) return emit({ forgotten: device, result: ack.result || null })
+        return console.log(`✓ forgot ${device} — record and watermark dropped, shared secret kept, other devices unaffected`)
+      }
       if (op === 'enable' || op === 'disable') {
         // 2026-10-09 real-device drill: headless node toggle over the command bus — the same
         // syncSetEnabled dispatch the settings switch uses, so mDNS advertise/listen lifecycle

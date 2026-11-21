@@ -63,6 +63,8 @@ module.exports = function todoHandlers (ctx) {
     'getById', 'getAll', 'queryTodos', 'getMeta', 'deleteMeta',
     // CONTRACT (2026-09-20, F-UI): batch meta read (read-only, ANY window — replaces per-key getMeta loops)
     'getMetaMany',
+    // Project-v2 only: filtered read-only enumeration for backup, not arbitrary meta key listing.
+    'projectV2Keys',
     'upsert', 'upsertMany', 'commitSyncBatch', 'hardDelete', 'hardDeleteMany', 'setMeta',
     'getAllCategories', 'upsertCategory',
     // Filter CRUD (filterUpsert/filterDelete are user-level safe writes, same as upsertCategory) + count reads
@@ -92,7 +94,27 @@ module.exports = function todoHandlers (ctx) {
     'syncPairRespond', 'syncPairRequest', 'syncUnpairPeer', 'syncConflictBackupsList', 'syncConflictBackupRestore',
     // syncSetPeerAlias (round-2 P1 2026-09-21): machine-local per-peer display alias for Device Center —
     // writes a sync.peerAlias.<deviceId> settings row, main-window-only like the other data-mutating sync ops
-    'syncSetPeerAlias'
+    'syncSetPeerAlias',
+    // queryEpisodesByTask (pd20 S3): read-only episode read for the EditPanel 'continue work'
+    // section (impl db-episode-ops.cjs; read-only → any window, no manifest row — tomatoGetById class)
+    'queryEpisodesByTask',
+    // querySourcesByTask (pd20 handoff copy): read-only source-ref read feeding the Copy-Handoff
+    // button's buildHandoff(sources) input (impl db-episode-ops.cjs; same read-only class as above)
+    'querySourcesByTask',
+    // queryEpisodesByCategory (pd20 P1-01): read-only per-task episode rollup for the ProjectView
+    // 'work handoff' section (impl db-episode-ops.cjs; same read-only class as queryEpisodesByTask
+    // — any window, no manifest row)
+    'queryEpisodesByCategory',
+    // pd20 (2026-11-03): the EditPanelWork 'continue work' forms write episodes + source links
+    // through the SAME bus door — the six domain writes are non-internal manifest rows now.
+    'episodePut', 'episodeRemoveIds', 'sourcePut', 'sourceRemoveByIds', 'taskSourcePut', 'taskSourceRemove',
+    // pd20 S1 closure (migration v14): the EditPanelWork finding/decision forms write through
+    // the SAME bus door — the four domain writes are non-internal manifest rows (episode-family class).
+    'findingPut', 'findingRemoveIds', 'decisionPut', 'decisionRemoveIds',
+    // queryFindingsByTask / queryDecisionsByTask (pd20 S1 closure): read-only finding/decision
+    // view models for the EditPanelWork blocks + handoff (impl db-episode-ops.cjs; same
+    // read-only class as queryEpisodesByTask — any window, no manifest row)
+    'queryFindingsByTask', 'queryDecisionsByTask'
   ])
 
   // Dangerous DB ops: batch write/batch delete/arbitrary meta write. Capability-wise aligned with "dangerous channels main-window only" —

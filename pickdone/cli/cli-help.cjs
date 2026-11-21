@@ -25,6 +25,12 @@ Read commands:
   tag    [list]                   list tags (derived from #tag in titles/descriptions)
   tag rename <old> <new>          rewrite #old → #new across all tasks
   tag rm <name>                   strip a tag from all tasks
+  project-v2 list|audit|migrate [--yes]                    read, audit, or migrate verified legacy records
+  project-v2 add <name> [--color hex]                     create independent project
+  project-v2 rename|status|archive|restore <projectId> [value]     edit independent project
+  project-v2 assign <taskId> <projectId> | unassign <taskId>        explicit task ownership
+  project-v2 recover <legacyCategoryId> <confirmedName>   recover legacy project by original ID
+        Write operations require TODO_DB_DIR (isolated) or --yes-i-know (real data).
   projects [--status active|paused|done|cancelled]        list projects (progress/focus minutes/overdue/next 7 days)
   project <name|id> [--on|--off] [--deadline date|none] [--status active|paused|done|cancelled|none]  details / set project / set deadline / set lifecycle status (none clears)
   view list                       saved smart lists (same filters table the App's filter views use)
@@ -35,6 +41,21 @@ Read commands:
   stats  [--from YYYY-MM-DD --to YYYY-MM-DD]  daily done/focus stats (default: last 7 days)
   recycle                         list recycle bin
   plan   [list] [date]            show schedule chips for a day (default: today)
+  work  <taskId|keyword> [context|episodes|handoff|add-episode|add-source|add-finding|list-finding|add-decision|list-decision]
+                                  work-handoff state (pd20): context = task + episodes + sources +
+                                  findings + decisions + handoff JSON (get_task_context); handoff --out
+                                  <dir> writes handoff.md + handoff.json (export_handoff, carries
+                                  findings/decisions); add-episode records a work round (--goal
+                                  required, --outcome/--next optional); add-source links provenance
+                                  (--uri required, --provider/--title optional);
+                                  add-finding records an observed fact (--statement required,
+                                  --confidence high|medium|low, --level observed|inferred|speculation,
+                                  --refs id,id, --by actor, --status open|confirmed|retracted;
+                                  a speculation can never be confirmed);
+                                  list-finding reads the finding list; add-decision records a choice
+                                  (--choice required, --alternatives a|b, --tradeoffs x|y, --decider,
+                                  --rationale, --findings id,id, --supersedes decisionId);
+                                  list-decision reads the decision list (supersedes/supersededBy shown)
   plan set <taskId|keyword> <HH:mm> [--date D] [--replace]   put a task on the day timeline at HH:mm
   plan rm <taskId|keyword> [--at HH:mm] [--date D]           remove a chip (--at targets one chip; default clears the task's chips that day)
   settings [list|get <key>]       list all known settings with current values
@@ -86,6 +107,7 @@ Write commands:
   sync pair --host <ip> [--port N] [--timeout S]   initiate two-way pairing with a peer (prints our 6-digit code too; waits for the peer to accept)
   sync pair-respond [--code NNNNNN] [--reject]     accept a pending pair request; with no pending request, pair via the peer's 6-digit code
   sync unpair --device <id>      unpair a peer (rotates the shared secret — every remaining peer must re-pair)
+  sync forget --device <id>      drop a stale peer record only (dead instance cleanup; keeps the shared secret, other devices unaffected)
   sync relay status|enable|sync|disable|forget   OPTIONAL remote relay transport (enable needs --account + --base-url, optional --root-key; remote relay also needs TODO_RELAY_ALLOW_REMOTE=1)
   open   [--dev]                  launch App (brings existing window to front if already running)
   doctor                          environment self-check (data dir/driver/rw scale)

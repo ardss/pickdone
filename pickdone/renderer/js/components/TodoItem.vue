@@ -106,6 +106,7 @@
            (setTomatoTimer's attach semantics, clicking again on the same task cancels); ledger detail lives in the edit panel/context menu, one single action per capsule -->
       <span class="td-tom" role="button" tabindex="0"
             :class="{ghost: todo.complete, active: $store.state.tomato.attachTodo && $store.state.tomato.attachTodo.taskId === todo.taskId}"
+            :aria-pressed="$store.state.tomato.attachTodo && $store.state.tomato.attachTodo.taskId === todo.taskId ? 'true' : 'false'"
             :title="$t('statsE.TodoItem.togglePomodoroFocus')"
             @click.stop="setTomatoTimer" @keydown="onTomatoKey">
         <span class="td-tom__start">
@@ -582,7 +583,7 @@ export default {
    (旧td-tomcount无样式继承杂色红#D9534F与删除同色太有攻击性)。hover整舱品牌高亮,
    专注附着中整舱品牌色;账目段显示 pips+0/1 可点开账目弹窗;完成后整舱ghost占位 */
 .td-right .td-tom {
-  display: inline-flex; align-items: stretch;
+  display: inline-flex; align-items: center; min-height: 28px;
   border: 1px solid var(--line); border-radius: var(--radius-pill); background: var(--gray-bg);
   overflow: hidden; cursor: pointer; user-select: none;
   transition: border-color var(--dur-fast), background-color var(--dur-fast);
@@ -591,6 +592,20 @@ export default {
 .td-right .td-tom.active { border-color: var(--brand); background: var(--brand-light); }
 .td-right .td-tom.active .td-tom__start { color: var(--brand); }
 .td-right .td-tom.ghost { visibility: hidden; pointer-events: none; }
+/* The capsule belongs to TodoItem, not Onboarding; make the icon centered
+   with or without its optional ledger count (symmetrical 28px hit area). */
+.td-right .td-tom__start {
+  display: inline-flex; align-items: center; justify-content: center;
+  box-sizing: border-box; width: 28px; min-width: 28px; height: 26px;
+  padding: 0; flex-shrink: 0; color: var(--text-3);
+}
+.td-right .td-tom__start .ico { display: block; flex: 0 0 13px; }
+.td-right .td-tom__count {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  align-self: stretch; padding: 0 7px 0 5px;
+  font-size: var(--fs-xs); color: var(--text-3); border-left: 1px solid var(--line);
+  font-variant-numeric: tabular-nums;
+}
 /* 番茄预估胶囊（自重构分支移植的功能点） */
 .td-right .td-tom-est { display: inline-flex; align-items: center; gap: 2px; font-size: var(--fs-sm); color: var(--brand); background: var(--brand-light); border-radius: var(--radius-pill); padding: 1px 7px; margin-right: 6px; }
 /* ===== Project badge (today view only, opt-in via project-badge prop): chip in the row's meta

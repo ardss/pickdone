@@ -98,7 +98,8 @@ test('[A1] EditPanel routes every listed role control through roleButtonActivate
   assert.ok(/onDoneRowKey: roleCheckboxActivate/.test(src), 'done row (checkbox pattern) via roleCheckboxActivate')
   assert.ok(/onRepeatRowKey: roleButtonActivate/.test(src), 'repeat row via roleButtonActivate')
   assert.ok(/onDeadlineRowKey: roleButtonActivate/.test(src), 'deadline row via roleButtonActivate')
-  assert.ok(/onDelTaskKey: roleButtonActivate/.test(src), 'delete tool via roleButtonActivate')
+  assert.match(src, /<button v-if="!inRecycle" type="button" class="ep-tool ep-delete danger"/, 'delete uses a native keyboard-activatable button')
+  assert.doesNotMatch(src, /role="button"[^>]*@click(?:\.stop)?="delTask"/, 'no custom keyboard synthesis on a native delete button')
 })
 
 test('[A1] TomatoFloatPage knob + remote chip, TomatoPanel remote chip, SideNav brand/search-clear', () => {

@@ -121,6 +121,8 @@ export function metaStateKeys (rootState, state) {
     // chips permanently lost. Binned ids ARE live state (recycleList is concatenated above), so
     // derive-from-live still holds. (catProjectMetaBak.* stays deliberately excluded: transient.)
     if (t.taskId) keys.add('planChipsSnapshot:' + t.taskId)
+    // Independent task membership is not a category or a #tag; keep it in disaster backups.
+    if (t.taskId) keys.add('pd.taskProject.v2:' + t.taskId)
   }
   for (const c of (rootState.category && rootState.category.list) || []) {
     const id = c && c.categoryId
@@ -132,6 +134,8 @@ export function metaStateKeys (rootState, state) {
     // D15-B4: project documents (ProjectDocs.vue persist()) live ONLY in `projectDocs:<id>` —
     // without collecting them a disaster restore brought the project back but its docs were gone.
     keys.add('projectDocs:' + id)
+    // Legacy-project migration ID is stable and remains independent of the category name.
+    if (String(id).match(/^\d+$/)) keys.add('pd.project.v2:prj_legacy_' + id)
   }
   if (((rootState.category && rootState.category.list) || []).some(c => c && c.categoryId != null)) keys.add('projectCategoryIds')
   return [...keys]
@@ -143,9 +147,18 @@ export function metaStateKeys (rootState, state) {
 export async function collectMetaState (rootState, state) {
   try {
     if (!window.todoAPI || !window.todoAPI.getMetaMany) { _degradedSegments.add('metaState'); return null }
-    const keys = metaStateKeys(rootState, state)
-    if (!keys.length) return null
-    const rows = await window.todoAPI.getMetaMany(keys)
+    const keys = new Set(metaStateKeys(rootState, state))
+    // Project identity MUST survive independently of the legacy category list:
+    // enumerate every project-v2 entity and task assignment, including native projects
+    // and links to tasks currently outside the active Vuex list.
+    if (!window.todoAPI.dbCall) throw new Error('meta keys cannot be enumerated')
+    const allMetaKeys = await window.todoAPI.dbCall('projectV2Keys')
+    if (!Array.isArray(allMetaKeys)) throw new Error('meta key enumeration unavailable')
+    for (const key of allMetaKeys) {
+      if (typeof key === 'string' && (key.startsWith('pd.project.v2:') || key.startsWith('pd.taskProject.v2:') || /^project(?:Docs|Milestones|Deadline|Status):prj_[a-zA-Z0-9_-]+$/.test(key))) keys.add(key)
+    }
+    if (!keys.size) return null
+    const rows = await window.todoAPI.getMetaMany([...keys])
     const entries = (rows || []).filter(r => r && typeof r.key === 'string' && r.value != null && r.value !== '')
       .map(r => ({ key: r.key, value: r.value }))
     if (!entries.length) return null

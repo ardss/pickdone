@@ -143,12 +143,13 @@
             </div>
             <!-- Developer mode sinks to the bottom and is de-emphasized (user-finalized): a low-frequency internal switch, one line of hint suffices -->
             <div class="form">
+              <!-- [pd20 lane B 2026-11-07] Projects graduated: always-visible toggle, schema default ON; off keeps the entry hidden -->
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/><span class="tip" style="margin-left:8px">{{ $t('statsE.SettingsModal.sProjectsTip') }}</span></div></div>
               <div class="form-label">{{ $t('statsE.SettingsModal.devSection') }}</div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDev') }}</span><div class="form-item__control"><el-switch :model-value="st.developerMode === true" @change="v=>set({developerMode:v})"/></div></div>
               <div v-show="st.developerMode === true">
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sTodayX') }}</span><div class="form-item__control"><el-switch :model-value="st.showTodayXModule === true" @change="v=>set({showTodayXModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.habitExperimentalLabel') }}</span><div class="form-item__control"><el-switch :model-value="st.showHabitModule !== false" @change="v=>set({showHabitModule:v})"/></div></div>
-                <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sProjects') }}</span><div class="form-item__control"><el-switch :model-value="st.showProjectsModule === true" @change="v=>set({showProjectsModule:v})"/></div></div>
                 <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.sDeps') }}</span><div class="form-item__control"><el-switch :model-value="st.showDepsModule === true" @change="v=>set({showDepsModule:v})"/></div></div>
               </div>
               <div class="form-item form-item--bare"><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.devHint') }}</span></div></div>
@@ -264,11 +265,10 @@
 
           <!-- LAN sync tab (P3a 2026-09-16): v-if keeps its DOM out of the default view (visual
                baseline gate); it also participates in cross-tab search while a query is active -->
-          <settings-sync-tab v-if="tab==='sync' || searching" v-show="searching || tab==='sync'"/>
-
+          <settings-sync-tab v-if="tab==='sync' || searching" v-show="searching || tab==='sync'" @open-updates="tab='about'"/>
+          <settings-capture-tab v-show="searching || tab==='capture'"/> <settings-cross-tab v-if="tab==='cross' || searching" v-show="searching || tab==='cross'"/> <!-- Lane A bridge tab: v-if keeps DOM out of the default view -->
           <!-- Data management tab (child component); the DOM order matches the tab order: tomato → sync → data → about -->
           <settings-data-tab v-show="searching || tab==='data'"/>
-
           <!-- About / feedback (kept last in the DOM to match the visual tab order: ...tomato → data → about) -->
           <div v-show="searching || tab==='about'" class="tab-panel">
             <div class="form">
@@ -279,7 +279,7 @@
                   <button class="mini" v-if="updActive" :disabled="updStatus === 'checking' || updStatus === 'downloading'" @click="checkUpdate">{{ $t('update.checkNow') }}</button>
                   <span v-if="updStatus === 'downloading'" class="upd-hint">{{ $t('update.downloading') }} {{ updPercent }}%</span>
                   <span v-else-if="updStatus === 'available'" class="upd-hint">{{ $t('update.available') }} v{{ updNewVersion }}</span>
-                  <span v-else-if="updStatus === 'error'" class="upd-hint">{{ $t('update.failedReason', { msg: String((updInfo && updInfo.message) || '').slice(0, 120) }) }}</span>
+                  <span v-else-if="updStatus === 'error'" class="upd-hint">{{ updInfo && updInfo._feedMissing ? $t('update.feedMissing') : $t('update.failedReason', { msg: String((updInfo && updInfo.message) || '').slice(0, 120) }) }}</span>
                   <button v-if="updStatus === 'available'" class="mini" @click="downloadNow">{{ $t('update.downloadNow') }}</button>
                   <button v-else-if="updStatus === 'ready'" class="primary mini-lg" @click="restartToUpdate">{{ $t('update.restartNow') }}</button>
                   <button class="mini" v-if="!updActive" @click="openReleases">{{ $t('update.openReleases') }}</button>
@@ -292,11 +292,10 @@
                 <div class="form-item__control"><button class="mini" @click="openLogsDir">{{ $t('statsH.SettingsModal.openLogsDir') }}</button></div></div>
             </div>
             <div class="form">
-              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span>
-                <div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span></div></div>
+              <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutLabel') }}</span><div class="form-item__control"><span class="tip">{{ $t('statsE.SettingsModal.aboutLead', { v: appVersion }) }}</span><!-- W31 P1: build fingerprint (version+SHA+channel), same string as the diagnostic payload --><div><span class="tip">{{ buildFingerprint }}</span></div></div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.syncSurveyLabel') }}</span>
                 <div class="form-item__control">
-                  <button class="mini" @click="openSyncSurvey">{{ $t('statsE.SettingsModal.syncSurveyBtn') }}</button>
+                  <button class="mini" @click="openSyncSettings">{{ $t('statsE.SettingsModal.syncManageBtn') }}</button>
                   <div><span class="tip">{{ $t('statsE.SettingsModal.syncSurveyTip') }}</span></div>
                 </div></div>
               <div class="form-item"><span class="form-item__label">{{ $t('statsE.SettingsModal.aboutSiteLabel') }}</span>
@@ -319,7 +318,7 @@
 /** Settings center -- structure aligned with the reference: full-screen base-modal (modal-container/modal-tablecloth--body)
  *  + el-tabs.setting_tabs tabs in the header + .tab-panel>.form>.form-label+.form-item rows in the body.
  *  All feature bindings are preserved (visual rework only, no functional change). */
-import { appVersion } from '../utils/core.js'
+import { appVersion } from '../utils/core.js'; import { buildFingerprint as buildFingerprintOf, channelFromVersion } from '../../../shared/build-fingerprint.mjs' // W31 P1: same builder as the 'app:build-info' diagnostic payload
 import { CONFIRM_SOUNDS, confirmUrl } from '../utils/mediaRegistry.js'
 import { SETTING_ENUMS } from '../store/settings.js'
 import dialogA11y from '../utils/dialogA11y.js'
@@ -328,17 +327,19 @@ import { SUPPORTED, getLocale, setLocale } from '../i18n/index.js'
 import SettingsShortcutsTab from './settings/SettingsShortcutsTab.vue'
 import SettingsDataTab from './settings/SettingsDataTab.vue'
 import SettingsSyncTab from './settings/SettingsSyncTab.vue'
+import SettingsCaptureTab from './settings/SettingsCaptureTab.vue'
+import SettingsCrossTab from './settings/SettingsCrossTab.vue'
 import { filterSettingsPanels } from './settings/settingsSearch.js'
 
 export default {
   name: 'SettingsModal',
   mixins: [dialogA11y],
-  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab },
+  components: { SettingsShortcutsTab, SettingsDataTab, SettingsSyncTab, SettingsCaptureTab, SettingsCrossTab },
   data () {
     let tab0 = 'general'
     try { tab0 = localStorage.getItem('settingsTab') || 'general' } catch (e) { /* privacy mode etc. */ }
     return {
-      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
+      tab: ['general', 'appearance', 'calendar', 'shortcuts', 'tomato', 'sync', 'cross', 'capture', 'data', 'about'].indexOf(tab0) >= 0 ? tab0 : 'general',
       searchQ: '',
       searching: false,
       searchEmpty: false,
@@ -360,6 +361,7 @@ export default {
     /** Note: the computed name collides with the appVersion function in utils/core.js -- {{ appVersion }} in the template is a string;
      *  writing appVersion() would recursively call itself and report "appVersion is not a function" (this once broke the settings modal render) */
     appVersion () { return appVersion() },
+    buildFingerprint () { /* W31 P1: version+SHA+channel; __APP_BUILD_SHA__/__APP_BUILD_CHANNEL__ are vite-define injected (vite.config.mjs) — undeclared outside vite, try/catch degrades to 'unknown' */ let sha = 'unknown'; let channel = channelFromVersion(appVersion()); try { sha = __APP_BUILD_SHA__ } catch (e) { /* plain node */ } try { channel = __APP_BUILD_CHANNEL__ } catch (e) { /* plain node */ } return buildFingerprintOf({ version: appVersion(), gitSha: sha, channel }) },
     confirmSoundOptions () { return CONFIRM_SOUNDS },
     /** Settings enum options: derived from the SETTING_ENUMS schema in store/settings.js (do not hardcode options in the template) */
     enumOptions () { return key => SETTING_ENUMS[key] || [] },
@@ -370,7 +372,7 @@ export default {
       const u = this.$store.state.auth.user || {}
       return u.userNameDefault ? this.$t('statsA.core.offlineUser') : (u.userName || '')
     },
-    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
+    tabs () { return [['general', this.$t('statsE.SettingsModal.generalTab')], ['appearance', this.$t('statsH.SettingsModal.tabAppearance')], ['calendar', this.$t('statsH.SettingsModal.tabCalendar')], ['shortcuts', this.$t('statsH.SettingsModal.tabShortcuts')], ['tomato', this.$t('statsH.SettingsModal.tabTomato')], ['sync', this.$t('sync.tab')], ['cross', this.$t('crossPlatform.tab')], ['capture', this.$t('statsH.SettingsModal.tabCapture')], ['data', this.$t('statsH.SettingsModal.tabData')], ['about', this.$t('statsE.SettingsModal.aboutTab')]] },
     localDescLines: {
       get () { return this.st.todoDescriptionDisplayLineNumber },
       set (v) { this.set({ todoDescriptionDisplayLineNumber: v }) }
@@ -472,7 +474,7 @@ export default {
     },
     applyUpdStatus (r) {
       this.updStatus = r.status
-      this.updInfo = (r && r.info) || null
+      this.updInfo = r && r.lastCheckError && r.lastCheckError.kind === 'FEED_MISSING' ? { _feedMissing: true } : ((r && r.info) || null)
       if (r.status === 'checking') this.updPercent = 0
       if (r.info && r.info.percent != null) this.updPercent = r.info.percent
       if (r.info && r.info.version) this.updNewVersion = r.info.version
@@ -487,7 +489,7 @@ export default {
         if (r) this.applyUpdStatus(r)
         if (r && r.active === false) this.$message.info(this.$t('update.devEnv'))
         if (r && r.status === 'uptodate') this.$message.success(this.$t('update.upToDate'))
-        if (r && r.status === 'error') this.$message.error(this.$t('update.failedReason', { msg: String((r.info && r.info.message) || '').slice(0, 120) }))
+        if (r && r.status === 'error') r.lastCheckError && r.lastCheckError.kind === 'FEED_MISSING' ? this.$message.info(this.$t('update.feedMissing')) : this.$message.error(this.$t('update.failedReason', { msg: String((r.info && r.info.message) || '').slice(0, 120) }))
         // [D15-A15] a REJECTED check in a packaged build is a real failure (network down, update
         // server unreachable, IPC error) — it used to be swallowed as a benign "dev environment"
         // notice. Only the resolved `active === false` reply means "no updater in this build";
@@ -508,9 +510,7 @@ export default {
     openReleases () {
       if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://github.com/ardss/pickdone/releases/latest')
     },
-    openSyncSurvey () {
-      if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://github.com/ardss/pickdone/discussions/38')
-    },
+    openSyncSettings () { this.clearSearch(); this.tab = 'sync' },
     openOfficialSite () {
       if (window.todoAPI.openExternal) window.todoAPI.openExternal('https://pickdone.app')
     },
@@ -596,7 +596,7 @@ export default {
     if (target) this.$store.commit('ui/consumeSettingsTargetTab')
     this.bindMaskOnce()
     this.loadUpdStatus()
-    if (window.todoAPI.onUpdaterEvent) this._updUn = window.todoAPI.onUpdaterEvent(d => this.applyUpdStatus({ status: d.status, info: d.info }))
+    if (window.todoAPI.onUpdaterEvent) this._updUn = window.todoAPI.onUpdaterEvent(d => this.applyUpdStatus(d))
   },
 
 }

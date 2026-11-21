@@ -61,9 +61,20 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024
 // any file that would overflow the budget and the sender answers it with att-missing.
 const MAX_FILES_PER_ROUND = 20
 const MAX_BYTES_PER_ROUND = 64 * 1024 * 1024
-// Per-session per-peer request cap (rate guard): a pathological library cannot spam a
-// peer with unbounded att-req batches; later sessions reset the budget.
+// Per-peer request cap over a SLIDING ROUND WINDOW (rate guard): a pathological library
+// cannot spam a peer with unbounded att-req batches. The old comment claimed "later sessions
+// reset the budget" but `session` is a NODE-level object shared across every round of the
+// process lifetime — after 200 batches the budget never came back and attachment pulls
+// stalled forever, silently (maybeStart=false let the round finish as a success). The budget
+// is now measured over the last ATT_QUOTA_WINDOW_ROUNDS rounds: entries expire as rounds
+// advance, so a capped pull RESUMES automatically (throttled, with a warn) instead of dying
+// permanently. Normal first syncs (<200 batches) are unchanged.
 const MAX_REQUESTS_PER_SESSION = 200
+// Window width (in rounds) over which the cap applies; deliberately 2x the cap so a
+// continuously pulling peer is throttled to ~1 batch every 2 rounds AFTER the first 200
+// rounds (warned, observable) instead of being stalled forever — every capped round leaves
+// the history untouched, so the budget always recovers as the window slides.
+const ATT_QUOTA_WINDOW_ROUNDS = MAX_REQUESTS_PER_SESSION * 2
 // P2-e (2026-09-19 data-safety round): failed-set entries expire after 24h — a file that failed
 // once (peer offline, transient write error) becomes pullable again the next day instead of
 // being blocked for the whole app-session lifetime.
@@ -428,8 +439,28 @@ function createAttachmentPuller (opts = {}) {
     if (busy || requested) return false
     if (typeof opts.getKeys === 'function') noteMissing(opts.getKeys())
     const peerId = opts.peerId || 'peer'
-    const used = session.requests.get(peerId) || 0
-    if (used >= MAX_REQUESTS_PER_SESSION) return false
+    // Sliding-round-window quota (fix for the never-resetting session counter): `opts.round`
+    // is the caller's monotonic round serial; without one, the session itself provides a
+    // monotonic fallback clock so the window still slides. Legacy callers that pre-stuffed a
+    // plain NUMBER into session.requests keep the old (non-expiring) semantics. Quota is
+    // recorded only AFTER an actual batch leaves — an empty round must not burn budget.
+    const round = Number.isFinite(opts.round)
+      ? opts.round
+      : (session.__attRoundClock = (session.__attRoundClock || 0) + 1)
+    const rawUsed = session.requests.get(peerId)
+    // Sliding-window (round-stamped array) semantics apply when the entry is already an
+    // array OR the caller provides a round clock and no legacy number was stored; a plain
+    // NUMBER entry (legacy shape) keeps the old non-expiring semantics.
+    const windowHistory = Array.isArray(rawUsed)
+      ? rawUsed.filter(r => r > round - ATT_QUOTA_WINDOW_ROUNDS)
+      : (opts.round != null ? [] : null)
+    const quotaExhausted = windowHistory
+      ? windowHistory.length >= MAX_REQUESTS_PER_SESSION
+      : (Number(rawUsed) || 0) >= MAX_REQUESTS_PER_SESSION
+    if (quotaExhausted) {
+      try { require('electron-log').warn('[LanSync] att-req quota window exhausted for', peerId, '- pulls resume as rounds slide') } catch { /* noop */ }
+      return false
+    }
     const batch = []
     while (pending.length && batch.length < maxFiles) {
       const key = pending.shift()
@@ -438,7 +469,7 @@ function createAttachmentPuller (opts = {}) {
       batch.push(key)
     }
     if (!batch.length) return false
-    session.requests.set(peerId, used + 1)
+    session.requests.set(peerId, windowHistory ? [...windowHistory, round] : (Number(rawUsed) || 0) + 1)
     requestedBatch = new Set(batch) // P2-a: only these ids may come back as att-meta
     try {
       opts.send({ type: 'att-req', ids: batch })
@@ -648,6 +679,7 @@ module.exports = {
   MAX_FILES_PER_ROUND,
   MAX_BYTES_PER_ROUND,
   MAX_REQUESTS_PER_SESSION,
+  ATT_QUOTA_WINDOW_ROUNDS,
   FAILED_TTL_MS,
   extractLocalKeys,
   collectMissingKeys,

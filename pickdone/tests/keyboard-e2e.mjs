@@ -8,6 +8,11 @@
  */
 const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
 
+// CI wait budget: the blind 2.5s/1.8s sleeps below were idle-machine numbers — on the loaded
+// runner the today view had not painted when the focus check ran, which read as "no quick-add
+// box" (Windows CI leg 2026-11-21). The sleeps stay, the readiness probe decides.
+import { waitTries } from './lib/wait-budget.mjs'
+
 const watchdog = setTimeout(() => { console.error('FAIL: keyboard e2e did not finish within 60s'); try { ws?.close() } catch {} process.exit(1) }, 60000)
 watchdog.unref?.()
 process.on('exit', () => { try { ws?.close() } catch {} })
@@ -79,6 +84,8 @@ const ok = (name, cond) => { results.push([name, !!cond]); console.log((cond ? '
 
 // --- 1. Create a task via keyboard ---
 const quickSel = '[aria-label*="Quick add"], .quick-add input, .quick-add-bar input, input[placeholder*="回车创建"]'
+// Poll for the box before judging it unreachable (idle-machine sleeps above are only a floor).
+for (let i = 0; i < waitTries(24) && !(await evalJson(`!!document.querySelector(${JSON.stringify(quickSel)})`)); i++) await sleep(250)
 const focused = await evalJson(`(()=>{window.focus();const i=document.querySelector('${quickSel}');if(!i)return false;i.focus();return !!document.activeElement && document.activeElement.tagName==='INPUT'})()`)
 if (focused) {
   const name = '键盘端到端样本' + Date.now() % 10000

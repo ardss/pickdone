@@ -119,12 +119,12 @@ test('A3 views no longer commit the removed mutation (they dispatch the awaited 
   for (const f of ['renderer/js/views/ProjectOverviewView.vue', 'renderer/js/views/ProjectView.vue']) {
     const src = read(f)
     assert.doesNotMatch(src, /commit\('category\/setProjectStatus'/, `${f} must not use the memory-only mutation directly`)
-    assert.match(src, /dispatch\('category\/setProjectStatus'/, `${f} goes through the awaited action`)
+    assert.match(src, /dispatch\('projectV2\/update'/, `${f} writes the independent project entity via the awaited action`)
     // Invariant: the action rethrows after rolling the status back; NO dispatch site of this
     // action may swallow that rejection (.catch(() => {})) — a swallowed failure shows the
     // optimistic UI while the write silently reverts on the next launch.
-    assert.doesNotMatch(src, /dispatch\('category\/setProjectStatus'[^)]*\)\s*\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/, `${f} must not swallow the awaited action's rejection`)
-    assert.match(src, /statusChangeFailed/, `${f} toasts the surfaced failure (same contract as the store action's revert+rethrow)`)
+    assert.doesNotMatch(src, /dispatch\('projectV2\/update'[^)]*\)\s*\.catch\(\s*\(\)\s*=>\s*\{\s*\}\s*\)/, `${f} must not silently swallow a failed project write`)
+    assert.match(src, /statusChangeFailed|actionFailedMsg/, `${f} reports persistent project write failures`)
   }
 })
 

@@ -79,7 +79,11 @@ const dbSrc = fs.readFileSync(path.join(root, 'src/main/db.js'), 'utf8')
 const opsMatch = dbSrc.match(/\nconst OPS = \{([\s\S]*?)\n\}/)
 if (!opsMatch) { bad('db.js 中找不到 OPS 表'); process.exit(1) }
 // OPS 键用 [A-Za-z_]:下划线内部键(_recToRow 等)虽不应进白名单,但正则漏识别会造成误报方向失真;同行键 `}, key:` 形状由格式约定禁止(批1曾实锤漏检 tomatoRemoveByIds,已换行)
-const dbOps = new Set([...opsMatch[1].matchAll(/^ {2}([A-Za-z_]+)(?::|,)/gm)].map(x => x[1]))
+// W33 fix: the key class was [A-Za-z_]+ — a DIGIT-carrying op key (e.g. export_v2) would have
+// been split out of OPS (matching only up to the digit), a dead whitelist entry would pass
+// check (2) falsely. Same identifier class as OP_ID above ([A-Za-z_][A-Za-z0-9_]*), per this
+// file's own consistency requirement.
+const dbOps = new Set([...opsMatch[1].matchAll(/^ {2}([A-Za-z_][A-Za-z0-9_]*)(?::|,)/gm)].map(x => x[1]))
 for (const op of allowed) {
   if (!dbOps.has(op)) bad(`白名单 op "${op}" 在 db.js OPS 中不存在（死条目，调用即抛未知操作）`)
 }

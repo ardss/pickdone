@@ -1,14 +1,17 @@
 /** Auto-update (electron-updater + GitHub Releases)
  *  The feed is provided by app-update.yml generated at electron-builder package time (publish: github draft);
- *  dev builds / portable versions have no app-update.yml, isUpdaterActive()=false, and all entry points degrade safely.
+ *  installs without that file (unpacked `--dir` builds, portable, dev) report active:false via feedConfigured()
+ *  below and every entry point degrades safely.
  *  Process convention: CI builds on tag → GitHub Draft Release → manually add changelog then Publish →
- *  installed users get a silent check at startup, background download, and auto-install on quit (or manual "restart to update" from settings).
+ *  installed users get a silent check at startup and optional background download; installation requires an explicit "restart to update" action.
  *
  *  2026-09-10 P1 — early exit-flush on 'update-downloaded' (see flushOnceOnReady below): the NSIS
  *  installer's customInit taskkill /F-kills any running instance, so once the installer is spawned the
  *  will-quit 500ms flush window ALWAYS loses that race — the debounced dbMirror writes and the reminder
  *  dedup ledger must already be on disk before the installer starts, not while it is killing us.
  */
+const fs = require('fs')
+const path = require('path')
 const { autoUpdater } = require('electron-updater')
 const log = require('electron-log')
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
@@ -17,11 +20,61 @@ const { readConfig, isReadFailed } = require('./config-store')
 // Portable versions (PORTABLE_EXECUTABLE_DIR injected by the electron-builder portable runtime) do not participate in in-app updates:
 // otherwise it would launch the NSIS installer and overwrite the install, breaking the portable single-file semantics
 const isPortable = !!process.env.PORTABLE_EXECUTABLE_DIR
+// beta.41 — "unpacked build with no feed" was NOT actually degrading safely. electron-builder --dir
+// (what `npm run pack` produces, and what both dev machines run) ships no app-update.yml, while
+// autoUpdater.isUpdaterActive() only looks at app.isPackaged and still returns true; the check then
+// throws `ENOENT ... resources\app-update.yml`, which classifyUpdateError() called TRANSIENT and so
+// earned the full bounded backoff (3 retries) on every 4h wake — 12 log lines a day, free, forever
+// (main.log 17:52 / 21:52 on 2026-11-20).
+// The feed file is the ground truth for "can this install update itself".
+// Unknown-environment policy: when process.resourcesPath is absent (node --test, ad-hoc dev runs)
+// we cannot judge and answer true, leaving isUpdaterActive() as the only gate there — otherwise
+// every existing updater unit test would have to materialise a fake resources tree.
+function feedConfigured () {
+  try {
+    if (!process.resourcesPath) return true
+    if (fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'))) return true
+    // dev-app-update.yml is the electron-updater dev-mode feed (cwd); honour it if someone set it up
+    return fs.existsSync(path.join(process.cwd(), 'dev-app-update.yml'))
+  } catch { return true } // a throwing fs probe must not silently disable updates
+}
 // PICKDONE_NO_AUTOUPDATE=1: reserved for managed distribution channels such as MS Store / portable — a store build self-updating would conflict with the store's distribution mechanism; a blanket env-var disable
-const isActive = () => !isPortable && process.env.PICKDONE_NO_AUTOUPDATE !== '1' && autoUpdater.isUpdaterActive()
+const isActive = () => !isPortable && process.env.PICKDONE_NO_AUTOUPDATE !== '1' && feedConfigured() && autoUpdater.isUpdaterActive()
 
 let win = null
-const state = { status: 'idle', info: null } // idle|checking|downloading|available|ready|uptodate|error
+// Issue #224: lastCheckError carries the CLASSIFIED failure (kind FEED_MISSING vs TRANSIENT +
+// message + timestamp) so the settings page can tell "this tag has no published release assets
+// (no latest.yml)" apart from a generic network failure. Cleared by the next successful check.
+const state = { status: 'idle', info: null, lastCheckError: null } // idle|checking|downloading|available|ready|uptodate|error
+
+// Issue #224 fix 1 (P0 404 retry storm): the pre-fix markUpdateError armed a 30s backoff retry
+// whose own checkForUpdates rejection re-fired the autoUpdater 'error' event, which armed ANOTHER
+// backoff — an unbounded timer chain (main.log: a 404 on /releases/download/v0.4.0-beta.24/
+// latest.yml was re-requested every 30s for minutes). Two bounds now apply:
+//   * FEED_MISSING-class failures ("the resource is not published": HTTP 404, no
+//     published GitHub versions) are NEVER retried by the backoff — the next periodic/manual
+//     check cycle is the retry, at its natural cadence.
+//   * TRANSIENT failures (network/proxy jitter) keep the backoff retry but capped at
+//     MAX_ERROR_RETRIES per wake (a wake = an externally-initiated check(): 4h periodic or
+//     manual); the budget resets at every wake and on every timer we stop scheduling.
+const MAX_ERROR_RETRIES = 3
+let _errorRetries = 0 // backoff retries spent in the current wake (reset by each externally-initiated check())
+// Issue #224 fix 2 (P0 feed consistency): classify update failures so a missing feed/release is
+// distinguishable from a transient network fault. electron-updater surfaces the beta.24 case as an
+// HttpError (statusCode 404, message mentions the yml asset / HTTP code), DNS outage as
+// DNS ENOTFOUND is transient; the channel-mismatch case says "No published versions on GitHub".
+function classifyUpdateError (e) {
+  const msg = String((e && e.message) || e)
+  const code = (e && e.statusCode) || (e && e.code) || ''
+  if (code === 404 || /\b404\b/.test(msg) || /no published versions/i.test(msg)) return 'FEED_MISSING'
+  // beta.41: a missing feed FILE is the same class as a missing feed ASSET — retrying in 30s cannot
+  // create app-update.yml. Reachable when feedConfigured() loses its race (file removed after boot)
+  // or when the probe answered true in an environment we could not judge.
+  if (/app-update\.yml/i.test(msg) && /ENOENT/i.test(msg)) return 'FEED_MISSING'
+  // DNS/proxy outages do not prove that release assets are missing. Retry them
+  // only through the existing bounded transient budget and show network failure.
+  return 'TRANSIENT'
+}
 
 // Setting autoDownloadUpdates (default on): when off, only a new-version notice is shown; the user clicks "Download now" in settings
 function syncAutoDownload () {
@@ -118,7 +171,7 @@ function init (mainWin) {
   // points (tray quit in index.js, X-close quit chain, and the "restart to update" IPC in
   // handlers/system.js which now asks the same confirm). No second gate here: this path cannot
   // run without the user having already confirmed the quit.
-  autoUpdater.autoInstallOnAppQuit = true // after download, a normal user quit silently upgrades
+  autoUpdater.autoInstallOnAppQuit = false // an update installs only after explicit Restart to Update; an ordinary quit never upgrades silently
   // P1-4 (2026-09-19): electron-updater derives the feed FILE from the channel — a beta app version
   // implies channel `beta` and fetches `beta.yml`, which electron-builder never publishes for this
   // project (it only emits `latest.yml`). Pinning channel='latest' fixed that 404 but introduced a
@@ -202,10 +255,16 @@ function init (mainWin) {
     armStallWatchdog()
   })
   autoUpdater.on('update-downloaded', i => { clearStallWatchdog(); _downloading = false; state.status = 'ready'; state.info = i; broadcast(); flushOnceOnReady() })
-  // Error handling: besides broadcasting, schedule a single backoff retry (checkForUpdates after 30s).
-  // Only one retry: transient network/proxy jitter self-heals; persistent failures (e.g. 404, certificate issues) are not retried, avoiding a request storm every 30s. During the retry window, a new error overwrites the state directly without queuing.
+  // Error handling: besides broadcasting, schedule a bounded backoff retry (checkForUpdates after 30s).
+  // Issue #224 rework (P0): the old "only one retry" claim was false in practice — electron-updater
+  // ALSO emits the 'error' event for a checkForUpdates rejection, so the retry's own failure re-armed
+  // the backoff forever (a 404 on a missing latest.yml was re-requested every 30s; main.log 02:02-02:04).
+  // Now: FEED_MISSING-class failures (404 / no published versions) never arm the backoff —
+  // the next periodic/manual check is the retry; TRANSIENT failures keep the backoff but capped at
+  // MAX_ERROR_RETRIES per wake. During the retry window, a new error overwrites the state directly
+  // without queuing.
   let _retryTimer = null
-  // F4: the error bookkeeping (status + broadcast + one 30s backoff retry) is shared by the
+  // F4: the error bookkeeping (status + broadcast + backoff retry) is shared by the
   // autoUpdater 'error' event AND the stall watchdog so a stalled download gets the identical
   // retry path instead of hanging in 'downloading' forever.
   function markUpdateError (e) {
@@ -216,17 +275,30 @@ function init (mainWin) {
     // update-downloaded must not downgrade the "restart and install" state; the watchdog is
     // already cleared on success and the manual download settled, so there is nothing to abort.
     if (state.status === 'ready') return
-    state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }; broadcast()
+    const kind = classifyUpdateError(e)
+    const message = String(e && e.message || e).slice(0, 200)
+    const firstSeen = !(state.lastCheckError && state.lastCheckError.kind === kind && state.lastCheckError.message === message)
+    state.status = 'error'; state.info = { message }
+    // #224 fix 3: expose the classified failure + when it happened (getStatus merges state verbatim)
+    state.lastCheckError = { kind, message, at: Date.now() }
+    // #224 fix 2: no error toast storm — a REPEATED identical FEED_MISSING failure (every silent
+    // poll hitting the same 404) is recorded in state but NOT re-broadcast; first occurrence only.
+    if (kind !== 'FEED_MISSING' || firstSeen) broadcast()
     // D2 fix (2026-10-21): if a MANUAL download is hung in flight, settle its promise NOW — the
     // old code left `_manualDownload` holding the dead promise and every later "Download now"
     // click returned the SAME hung promise forever (idempotent-reentry guard with no exit).
     try { if (_manualAbort) _manualAbort() } catch { /* best-effort */ }
-    if (_retryTimer || !isActive()) return
+    if (kind === 'FEED_MISSING') {
+      if (firstSeen) log.warn('[Updater] 更新源缺失（' + message + '）— 不做退避重试，等待下个静默检查周期')
+      return // #224 fix 1: the resource is not there — retrying in 30s cannot help
+    }
+    if (_retryTimer || !isActive() || _errorRetries >= MAX_ERROR_RETRIES) return
+    _errorRetries++
     _retryTimer = setTimeout(() => {
       _retryTimer = null
       if (!isActive() || state.status === 'ready') return
-      log.warn('[Updater] 自动重试检查更新（仅一次）')
-      check().catch(() => {})
+      log.warn('[Updater] 自动重试检查更新（第 ' + _errorRetries + '/' + MAX_ERROR_RETRIES + ' 次）')
+      runCheck().catch(() => {})
     }, RETRY_BACKOFF_MS)
     _retryTimer.unref?.()
   }
@@ -238,24 +310,44 @@ function init (mainWin) {
 
 /** In non-update environments (dev/portable) returns {active:false}; the renderer hides the entry copy accordingly */
 let _inFlight = null
-async function check () {
+// The bare check body (shared by the external check() and the #224 bounded backoff retry — the
+// retry must NOT reset its own budget, or the cap could never bind).
+async function runCheck () {
   if (!isActive()) return { active: false, ...state }
-  if (_inFlight) return _inFlight // 并发重入护栏:4h 定时/手动/30s 错误重试三者可能重叠(2026-09-05 终审 P2)
+  if (_inFlight) return _inFlight // 并发重入护栏:4h 定时/手动/错误重试三者可能重叠(2026-09-05 终审 P2)
   _inFlight = (async () => {
     syncAutoDownload() // align with the settings-page toggle before every check (hot-applied, no restart needed)
-    try { await autoUpdater.checkForUpdates(); return { active: true, ...state } } catch (e) {
+    try {
+      const r = await autoUpdater.checkForUpdates()
+      if (r) state.lastCheckError = null // a successful check clears the stale classified failure (#224 fix 3)
+      return { active: true, ...state }
+    } catch (e) {
       // M2b (P2 2026-10-23): same 'ready' guard as markUpdateError — a check() racing the tail of
       // a completed download must not flip the settled 'ready' into 'error'.
       // W27 (P3): nor may it flip an in-flight download into 'error' — the download's own
       // error/watchdog paths own that transition; respect _downloading like the event handlers.
       if (state.status !== 'ready' && !_downloading) {
-        state.status = 'error'; state.info = { message: String(e && e.message || e).slice(0, 200) }
-        broadcast() // 手动检查失败也要推给设置页状态条(error 事件路径之外的 catch 不经过 autoUpdater 事件)(三轮扫荡 P2)
+        const message = String(e && e.message || e).slice(0, 200)
+        const kind = classifyUpdateError(e)
+        const firstSeen = !(state.lastCheckError &&
+          state.lastCheckError.kind === kind && state.lastCheckError.message === message)
+        state.status = 'error'; state.info = { message }
+        // A direct rejected checkForUpdates() can arrive WITHOUT an updater
+        // 'error' event. Compare the previous error BEFORE replacing it so
+        // the first FEED_MISSING remains visible without repeated toasts.
+        state.lastCheckError = { kind, message, at: Date.now() }
+        if (kind !== 'FEED_MISSING' || firstSeen) broadcast()
       }
       return { active: true, ...state }
     } finally { _inFlight = null }
   })()
   return _inFlight
+}
+/** External check entry (4h periodic / manual / startup): a NEW wake — resets the bounded backoff
+ *  retry budget (#224 fix 1) so each wake gets a fresh, capped set of transient-error retries. */
+async function check () {
+  _errorRetries = 0
+  return runCheck()
 }
 
 /** Manual download (settings page "Download now"): only meaningful in the "new version found but not auto-downloaded" state.
@@ -348,4 +440,5 @@ function getStatus () {
 module.exports = { init, check, downloadUpdate, quitAndInstall, getStatus, flushOnceOnReady, forwardFlushAck,
   preInstallSyncSettle, // W16: pre-install sync-safety settle (unit-testable: flush triggers fire before the installer spawns)
   syncAutoDownload, // updater-config-read-fail-open fix: unit-testable decision (plain node + __setConfigDir)
+  classifyUpdateError, // #224: unit-testable feed-missing vs transient classification
 }

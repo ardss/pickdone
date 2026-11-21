@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">PickDone</string>
+    <string name="title_activity_main">PickDone</string>
+    <string name="package_name">com.pickdone.mobile</string>
+    <string name="custom_url_scheme">com.pickdone.mobile</string>
+</resources>

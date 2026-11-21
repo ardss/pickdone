@@ -157,11 +157,12 @@ test('f3-6c: settingsSet still survives a concurrent App write inside the race w
   // blob at write time (every real writer does: renderer whole-doc mirrors and settingsSet both write
   // _savedAt = Date.now() at write). The pre-W26 hook's artificially ancient _savedAt made the
   // concurrent row read as "authored before the snapshot" and Sync-10 legitimately cleaned it.
-  const raceStamp = Date.now() + 1
   lib.setSettingsRaceHookForTests(() => {
     const concurrent = readBlob()
     concurrent.appConcurrencyKey = 'written-by-app'
-    concurrent._savedAt = raceStamp
+    // Capture at the actual injected App write, not before settingsSet begins;
+    // saturated test pools can delay the CLI pre-read beyond a precomputed +1ms stamp.
+    concurrent._savedAt = Date.now() + 1
     db.call('setMeta', ['db.settingsState', JSON.stringify(concurrent)])
   })
   const r = lib.settingsSet('maxRepeat', '7')

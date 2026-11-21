@@ -326,17 +326,37 @@ function restoreCategoriesFromCriticalBackup (raw, upsertCategory) {
   } catch { return 0 }
 }
 
-/** Task-count of a critical-backup JSON ({backup:{todoState:{todoList,recycleList}}}); 0 when
+/** Row-count of a critical-backup JSON across ALL consumed segments (RESTORE_SEGMENTS set:
+ *  todoState/categoryState/tomatoRecords/filterState/planState/habitsState/metaState); 0 when
  *  anything is missing. Used by the destroy-guard below — plausibility ("parses to an object")
  *  stops garbage bytes but NOT an empty snapshot.
  *  F1 (2026-10-17) shape fix: the REAL dump stores todoState as a NESTED JSON STRING
  *  (todoBackup.buildBackupDump) — the counter always answered 0 on real dumps, making BOTH
- *  empty-snapshot guards silently inert. String segments are parsed before counting. */
+ *  empty-snapshot guards silently inert. String segments are parsed before counting.
+ *  W32 (P2) emptiness fix: the counter used to read ONLY todoState, so a legitimate
+ *  "user deleted every task" snapshot that still carries newer metaState/filter/plan rows
+ *  counted as EMPTY and was quarantined to a side file (only 5 kept) — the main recovery
+ *  source stayed pinned at the pre-deletion state forever. A snapshot is empty only when
+ *  todoState AND every other segment's row arrays are all empty. Segments are counted
+ *  generically: a parsed segment contributes its own array length (tomatoRecords is a bare
+ *  array) plus every array-valued property (todoList/recycleList/entries/list/chips/habits/...). */
 function criticalBackupRowCount (jsonText) {
   try {
-    let t = (JSON.parse(jsonText).backup || {}).todoState || {}
-    if (typeof t === 'string') t = JSON.parse(t)
-    return ((t && t.todoList) || []).length + ((t && t.recycleList) || []).length
+    const backup = (JSON.parse(jsonText).backup) || {}
+    let total = 0
+    for (const segName of RESTORE_SEGMENT_NAMES) {
+      let seg = backup[segName]
+      if (seg == null) continue
+      if (typeof seg === 'string') { try { seg = JSON.parse(seg) } catch { continue } }
+      if (Array.isArray(seg)) { total += seg.length; continue }
+      if (seg && typeof seg === 'object') {
+        for (const k of Object.keys(seg)) {
+          const v = seg[k]
+          if (Array.isArray(v)) total += v.length
+        }
+      }
+    }
+    return total
   } catch { return 0 }
 }
 

@@ -80,7 +80,7 @@ test('tq1[4]: startup reconcile BOOKS a dead renderer\'s expired focus (never si
   const rec = db.tomatoes.find(r => r.tomatoId === 'tmt_a_' + startedAt)
   assert.ok(rec, 'the dead renderer\'s focus is recorded')
   assert.equal(rec.succeed, false, 'booked as an abandoned-focus record (measured time, not a completed tomato)')
-  assert.equal(rec.focusDuration, 30, 'measured minutes (30 elapsed — measured, not the configured 25)')
+  assert.equal(rec.focusDuration, 25, 'W33 F2: booked minutes == the phase budget (configured 25), min(wall clock, tomatoTime)')
   assert.equal(rec.focus, 'Deep work', 'live attach resolved at accounting time')
   assert.equal(rec.focusTaskId, 7)
   assert.ok(rec.dateKey && /^\d{4}-\d{2}-\d{2}$/.test(rec.dateKey), 'dateKey derived from endTime')

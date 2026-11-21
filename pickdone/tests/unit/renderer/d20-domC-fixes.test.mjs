@@ -84,10 +84,10 @@ test('[A3] createProject swallow-catch covers only the prompt; real errors roll 
   assert.ok(m, 'createProject method found')
   const body = m[0]
   // the only bare catch belongs to the prompt block
-  assert.match(body, /catch \{ return \/\* cancelled \*\/ \}/)
-  // real-failure path rolls the placeholder back and toasts an error
-  assert.match(body, /rollbackAdd/)
-  assert.match(body, /createFailed/)
+  assert.match(body, /catch \{ return \}/, 'only cancelled prompt is swallowed')
+  assert.match(body, /projectV2\/create/, 'creates an independent project')
+  assert.doesNotMatch(body, /category\/addCategory/, 'no category placeholder to roll back')
+  assert.match(body, /createFailed/, 'real persistence errors are surfaced')
 })
 
 test('[A3] category store has a rollbackAdd mutation that hard-removes the row', async () => {
@@ -127,8 +127,8 @@ test('[A4] category.updateCategory returns persist() success; ProjectView gates 
     global.window.todoAPI = prevCall
   }
   const pv = read('renderer/js/views/ProjectView.vue')
-  assert.match(pv, /const ok = await this\.\$store\.dispatch\('category\/updateCategory', \{ categoryId: this\.catId, categoryName: name \}\)/)
-  assert.match(pv, /const ok = await this\.\$store\.dispatch\('category\/updateCategory', \{ categoryId: this\.catId, categoryColor: color \}\)/)
+  assert.match(pv, /await this\.\$store\.dispatch\('projectV2\/update', \{ projectId: this\.projectId, patch: \{ name \} \}\)/)
+  assert.match(pv, /await this\.\$store\.dispatch\('projectV2\/update', \{ projectId: this\.projectId, patch: \{ color \} \}\)/)
   // both failure branches toast the shared actionFailedMsg key
   assert.match(pv, /statsH\.main\.actionFailedMsg/)
 })

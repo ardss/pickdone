@@ -110,13 +110,26 @@ test('w29-backup: run-auto-backup — first write, same-second collision dedup, 
   const changed = JSON.stringify({ backup: { todoState: JSON.stringify({ todoList: [{ id: 't1', title: 'changed' }], recycleList: [] }) } })
   const r3 = h['run-auto-backup'](eMain, changed, { recent: 24 })
   assert.equal(r3.ok, true)
-  assert.match(r3.file, /-dup1\.json$/, 'same-second collision gets the -dup1 suffix, never an overwrite')
+  // CI run 44788318716: this used to assert `-dup1.json` on r3, but the wall clock is not a
+  // fixture — under load r3 landed in the NEXT second (021704 vs 021355), no collision happened,
+  // and a correct implementation failed the test. The suffix contract now lives in a pure call
+  // with a fixed stamp; the integration leg only owns "no overwrite, both points survive".
+  assert.notEqual(r3.file, r1.file, 'a changed payload never overwrites the first point')
+  assert.match(r3.file, /^auto-\d{8}-\d{6}(-dup\d+)?\.json$/)
   assert.equal(fs.readdirSync(dir).filter(f => /^(auto|evt)-/.test(f)).length, 2)
-  void stamp
   // evt tag: sanitized lowercase tag rides the name
   const r4 = h['run-auto-backup'](eMain, changed, { tag: 'Test Event #1', recent: 24 })
   assert.equal(r4.ok, true)
   assert.match(r4.file, /^evt-testevent1-\d{8}-\d{6}/, 'the tag is sanitized into the evt namespace')
+  // Same-stamp collision naming proved WITHOUT a wall clock: seed the exact stamp in a private
+  // dir and walk the -dup chain. (The r3 leg above cannot prove it: whether r3 shares r1's
+  // second is up to the scheduler — CI run 44788318716 landed it 3.7 minutes later.)
+  const probe = fs.mkdtempSync(path.join(os.tmpdir(), 'w29-dup-'))
+  dirs.push(probe)
+  fs.writeFileSync(path.join(probe, `auto-${stamp}.json`), '{}')
+  assert.equal(backupHandlers.uniqueSnapshotName(fs.existsSync, probe, 'auto-', stamp), `auto-${stamp}-dup1.json`)
+  fs.writeFileSync(path.join(probe, `auto-${stamp}-dup1.json`), '{}')
+  assert.equal(backupHandlers.uniqueSnapshotName(fs.existsSync, probe, 'auto-', stamp), `auto-${stamp}-dup2.json`)
 })
 
 test('w29-backup: run-auto-backup retention — a failed write never thins the tier; a successful run prunes beyond recent', () => {

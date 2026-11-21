@@ -82,58 +82,70 @@ function runTag ({ opts, lib, emit }) {
 }
 
 function runProjects ({ opts, lib, emit }) {
-  let ps = lib.getProjects()
+  const api = require('./lib-project-v2.cjs')({ lib })
+  let ps = api.list()
   if (opts.status != null && opts.status !== true) {
     if (!lib.PROJECT_STATUS_VALUES.includes(opts.status)) throw new lib.CliError('--status accepts ' + lib.PROJECT_STATUS_VALUES.join('|'), 'USAGE')
     ps = ps.filter(p => p.status === opts.status)
   }
   if (opts.json) return emit(ps)
-  if (!ps.length) return console.log('(no projects — use "set as project" in category manager, or project <category> --on)')
+  if (!ps.length) return console.log('(no projects — use project-v2 add <name> or project <category> --on)')
   console.log('Name\tProgress\tTasks\tFocus (min)\tOverdue\tNext 7 days\tStatus\tStarted')
-  ps.forEach(p => console.log(`${p.name}\t${p.progress}%\t${p.done}/${p.total}\t${p.focusMinutes}\t${p.overdue}\t${p.next7days}\t${p.status}\t${p.startedAt ? dayjs(p.startedAt).format('YYYY-MM-DD') : '—'}`))
-  return
+  ps.forEach(p => console.log(p.name+'\t'+p.progress+'%\t'+p.done+'/'+p.total+'\t'+p.focusMinutes+'\t'+p.overdue+'\t'+p.next7days+'\t'+p.status+'\t'+(p.startedAt ? dayjs(p.startedAt).format('YYYY-MM-DD') : '—')))
 }
 
 function runProject ({ opts, lib, emit }) {
-  const name = opts._[0]
-  if (!name) throw new lib.CliError('usage: project <name|id> [--on|--off] [--deadline YYYY-MM-DD|none] [--status active|paused|done|cancelled|none]; no flag shows details', 'USAGE')
-  if (opts.on || opts.off) {
-    const r = lib.setProjectFlag(name, !!opts.on)
-    if (opts.json) return emit(r)
-    return console.log(`✓ "${r.name}" ${r.isProject ? 'is now a project' : 'restored to plain category'}`)
+  const input = opts._[0]
+  if (!input) throw new lib.CliError('usage: project <name|projectId|legacyCategoryId> [--on|--off] [--status active|paused|done|cancelled] [--deadline YYYY-MM-DD|none]', 'USAGE')
+  const api = require('./lib-project-v2.cjs')({ lib })
+  const resolve = () => api.list().find(p => p.projectId === input || String(p.legacyCategoryId || '') === String(input) || p.name === input)
+  if (opts.on && opts.off) throw new lib.CliError('--on and --off cannot be combined', 'USAGE')
+  if (opts.on) {
+    const id = lib.resolveCategory(input)
+    const converted = api.fromCategory({ categoryId: id })
+    if (opts.json) return emit(converted)
+    return console.log('Project "' + converted.name + '" now uses independent identity ' + converted.projectId)
   }
-  // review P2 (2026-09-10): --status and --deadline used to early-return per flag, silently dropping
-  // the second flag on combined invocations; both now apply in one call
+  const project = resolve()
+  if (!project) throw new lib.CliError('project not found: ' + input, 'PROJECT_V2_NOT_FOUND')
+  if (opts.off) {
+    const result = api.update({ projectId: project.projectId, patch: { deleted: true } })
+    if (opts.json) return emit(result)
+    return console.log('Project archived: ' + project.name)
+  }
   if (opts.status !== undefined || opts.deadline !== undefined) {
-    if (opts.status === true) throw new lib.CliError('--status needs a value: ' + lib.PROJECT_STATUS_VALUES.join('|') + '|none', 'USAGE')
-    let r = {}
-    const parts = []
+    // Validate the entire patch before writing. V2 entity is authoritative.
+    const patch = {}
     if (opts.status !== undefined) {
-      r = lib.setProjectStatus(name, String(opts.status))
-      parts.push(r.cleared ? 'status cleared (falls back to active)' : `status → ${r.status}`)
+      const status = opts.status === 'none' ? 'active' : opts.status
+      if (opts.status === true || !lib.PROJECT_STATUS_VALUES.includes(status)) {
+        throw new lib.CliError('--status accepts '+lib.PROJECT_STATUS_VALUES.join('|')+'|none', 'USAGE')
+      }
+      patch.status = status
     }
     if (opts.deadline !== undefined) {
-      const rd = lib.setProjectDeadline(name, opts.deadline)
-      r = { ...r, deadline: rd.deadline, name: rd.name }
-      parts.push(rd.deadline ? `deadline → ${dayjs(rd.deadline).format('YYYY-MM-DD')}` : 'deadline cleared')
+      const dateInput = opts.deadline
+      if (['none', 'clear', ''].includes(String(dateInput).toLowerCase())) {
+        patch.deadline = 0
+      } else {
+        try { patch.deadline = lib.dayStartOf(lib.parseDate(dateInput)) } catch (e) {
+          throw new lib.CliError('cannot parse date: '+dateInput, 'BAD_DATE')
+        }
+        if (!Number.isSafeInteger(patch.deadline) || patch.deadline <= 0) {
+          throw new lib.CliError('cannot parse date: '+dateInput, 'BAD_DATE')
+        }
+      }
     }
-    if (opts.json) return emit(r)
-    return console.log(`✓ "${r.name}" ` + parts.join(', '))
+    const result = api.update({ projectId: project.projectId, patch })
+    if (opts.json) return emit({ ...result, deadline: result.deadline == null ? project.deadline : result.deadline })
+    return console.log('Project updated: ' + result.name)
   }
-  const id = lib.resolveCategory(name)
-  const c = lib.getCategories().find(x => x.categoryId === id)
-  const p = lib.projectStatus(c)
-  if (opts.json) return emit(p)
-  const dl = p.deadline ? `   deadline ${dayjs(p.deadline).format('YYYY-MM-DD')} (${Math.ceil((p.deadline - Date.now()) / 864e5)} days left)` : ''
-  console.log(`${p.name}  ${p.progress}%  (${p.done}/${p.total})   status ${p.status}${dl}`)
-  console.log(`Started ${p.startedAt ? dayjs(p.startedAt).format('YYYY-MM-DD') : '—'}   Focus ${p.focusMinutes} min   Overdue ${p.overdue}   Next 7 days ${p.next7days}`)
-  // D19-DOM2 (#11): a project can hold more tasks than the old 100-row cap — the App shows all of
-  // them while the CLI truncated its own listing. Raised to 5000 (listTodos still clamps ≤ 5000);
-  // a bound is kept (instead of unbounded) so a pathological library cannot exhaust memory in one
-  // text listing.
-  const list = lib.listTodos({ category: id, limit: 5000 })
-  console.log(list.length ? '\n' + list.map(t => fmtTodoLine(t)).join('\n') : '\n(no tasks)')
-  return
+  const tasks = api.projectTasks(project.projectId)
+  if (opts.json) return emit({ ...project, tasks })
+  const d = project.deadline ? ' deadline ' + dayjs(project.deadline).format('YYYY-MM-DD') : ''
+  console.log(project.name+'  '+project.progress+'%  ('+project.done+'/'+project.total+')   status '+project.status+d)
+  console.log('Started '+(project.startedAt ? dayjs(project.startedAt).format('YYYY-MM-DD') : '—')+'   Focus '+project.focusMinutes+' min   Overdue '+project.overdue+'   Next 7 days '+project.next7days)
+  console.log(tasks.length ? '\n' + tasks.map(t => fmtTodoLine(t)).join('\n') : '\n(no tasks)')
 }
 
 function runMilestone ({ opts, lib, emit }) {
@@ -141,10 +153,9 @@ function runMilestone ({ opts, lib, emit }) {
   if (!name) throw new lib.CliError('usage: milestone <project> [list | add <title> <date> | rm <n>]', 'USAGE')
   if (!op || op === 'list') {
     const { milestones } = lib.getMilestones(name)
-    const pid = lib.resolveCategory(name)
     // maint/d23 P3 (D19 parity): the view/project listings were raised to 5000 for App parity but
     // the milestone task fetch was missed — milestone progress silently ignored tasks past row 500.
-    const tasks = lib.listTodos({ category: pid, limit: 5000, done: null }).filter(t => !t.delete)
+    const tasks = lib.milestoneTasks(name).filter(t => !t.delete)
     if (opts.json) return emit(milestones.map(m => ({ ...m, progress: lib.msProgress(m, tasks) })))
     if (!milestones.length) return console.log('(no milestones)')
     const t0 = +dayjs().startOf('day')

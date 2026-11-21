@@ -110,7 +110,19 @@ export async function waitFor (driver, reader, pred, label) {
 
 export const write = (side, ops) => side.send({ do: 'write', ops })
 export const task = (id, content, updateTime, extra = {}) => ({ op: 'upsertMany', params: [{ taskId: id, taskContent: content, categoryId: null, complete: false, delete: false, updateTime, ...extra }] })
-export const readAll = async side => (await side.send({ do: 'read', op: 'getAll', params: { deleted: null } })).result || []
+/** Snapshot read. A side timeout must NEVER be reported as an empty table: `send` resolves
+ *  with `{error:'side timeout'}` after 45s, and every caller here asserts on the rows — so a
+ *  CPU-starved IPC hiccup used to surface as a semantic red ("row exists" failing with no row
+ *  ever missing; Windows CI leg 2026-11-20, S1 clock-skew drill). Reads are idempotent, so a
+ *  few bounded retries keep a healthy-but-loaded machine green while a real hang still throws. */
+export const readAll = async side => {
+  for (let attempt = 1; ; attempt++) {
+    const r = await side.send({ do: 'read', op: 'getAll', params: { deleted: null } })
+    if (!r.error) return r.result || []
+    if (attempt >= 3) throw new Error(`readAll(${side.deviceId}) failed after ${attempt} attempts: ${r.error}`)
+    await sleep(250 * attempt)
+  }
+}
 export const pair = (a, b) => {
   a.send({ do: 'addPeer', peer: { deviceId: b.deviceId, host: '127.0.0.1', port: b.port } })
   b.send({ do: 'addPeer', peer: { deviceId: a.deviceId, host: '127.0.0.1', port: a.port } })

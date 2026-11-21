@@ -175,13 +175,6 @@ export default {
      *  the [selDayStart, selDayStart+1day) bins and the exact yesterday-label check silently
      *  binned/mis-labeled the wrong local day. */
     selDayStart () { return dayShift(this.$store.state.todo.todayTimestamp, this.tlOffset || 0) },
-    selDayLabel () {
-      const t = this.$store.state.todo.todayTimestamp
-      const d = this.selDayStart
-      if (d === t) return d + this.$t('statsD.TomatoFocusRecord.todaySuffix')
-      if (d === dayShift(t, -1)) return d + this.$t('statsD.TomatoFocusRecord.yesterdaySuffix')
-      return String(d)
-    },
     /** Records of the selected day (sorted by end time, descending) */
     dayRecords () {
       const start = this.selDayStart; const end = dayShift(start, 1)
@@ -318,7 +311,9 @@ export default {
         const end = f.startTs + f.focusTime * 60000
         const task = f.focusTaskId ? this.$store.state.todo.todoList.find(x => x.taskId === f.focusTaskId) : null
         this.$store.commit('tomato/addRecord', {
-          tomatoId: mintTomatoId('tmt_f_', f.startTs), endTime: end, startTime: f.startTs,
+          // [w31 P2] 随机尾:mintTomatoId 的设备盐恒定,同 startTs 两次补录会撞同一 id,被
+          // tomato/addRecord 按 tomatoId 幂等去重静默吞掉而配额照扣——对齐 DayRail/TaskAccountModal 同款
+          tomatoId: mintTomatoId('tmt_f_', f.startTs) + '_' + Math.random().toString(36).slice(2, 7), endTime: end, startTime: f.startTs,
           dateKey: dayjs(end).format(FMT.date),
           focus: task ? task.taskContent : (f.focusText || '').trim(),
           focusTaskId: task ? task.taskId : null,

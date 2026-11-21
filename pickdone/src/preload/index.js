@@ -282,3 +282,15 @@ contextBridge.exposeInMainWorld('todoAPI', {
   syncConflictBackupsList: () => invoke('todo-db:call', 'syncConflictBackupsList', {}),
   syncConflictBackupRestore: payload => invoke('todo-db:call', 'syncConflictBackupRestore', payload || {})
 })
+
+// ---- Cross-platform sync bridge (Lane A, 2026-11-07) ----
+// Settings-surface only: every channel is main-window-gated in the main process and
+// responses are sanitized (no pairing secrets, no tokens, no user rows).
+contextBridge.exposeInMainWorld('crossPlatformAPI', {
+  status: () => invoke('crossplatform:status'),
+  setEnabled: enabled => invoke('crossplatform:set-enabled', { enabled }),
+  setLan: enabled => invoke('crossplatform:set-lan', { enabled }),
+  issuePairing: (deviceId, scope) => invoke('crossplatform:pair-issue', { deviceId, scope }),
+  revoke: deviceId => invoke('crossplatform:revoke', { deviceId }),
+  port: () => invoke('crossplatform:port')
+})

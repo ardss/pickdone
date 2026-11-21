@@ -40,7 +40,7 @@ interface TomatoRecord {
   [key: string]: unknown
 }
 
-type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'deleteMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta' | 'syncGetSettings' | 'syncSetEnabled' | 'syncGetStatus' | 'syncGetPairingCode' | 'syncSetName' | 'syncPairWithCode' | 'getMetaMany' | 'commitSyncBatch' | 'tomatoGetById' | 'settingsRowsAll' | 'settingsRowPut' | 'settingsRowPutMany' | 'settingsRowDelete' | 'syncUnpairPeer' | 'syncPairRespond' | 'syncPairRequest' | 'syncConflictBackupsList' | 'syncConflictBackupRestore' | 'syncSetPeerAlias'
+type DbCallOp = 'getById' | 'getAll' | 'queryTodos' | 'getMeta' | 'deleteMeta' | 'upsert' | 'upsertMany' | 'hardDelete' | 'hardDeleteMany' | 'setMeta' | 'getAllCategories' | 'upsertCategory' | 'filterList' | 'filterUpsert' | 'filterDelete' | 'countAll' | 'countSeedTodos' | 'bumpSnow' | 'planAll' | 'planAddMany' | 'planUpdateChip' | 'planRemoveIds' | 'planMoveTask' | 'planDeleteTask' | 'planDeleteTaskDay' | 'planPrune' | 'tomatoAll' | 'tomatoAppendMany' | 'tomatoUpdateById' | 'tomatoRemoveByIds' | 'tomatoMigrateFromMeta' | 'syncGetSettings' | 'syncSetEnabled' | 'syncGetStatus' | 'syncGetPairingCode' | 'syncSetName' | 'syncPairWithCode' | 'getMetaMany' | 'projectV2Keys' | 'commitSyncBatch' | 'tomatoGetById' | 'settingsRowsAll' | 'settingsRowPut' | 'settingsRowPutMany' | 'settingsRowDelete' | 'syncUnpairPeer' | 'syncPairRespond' | 'syncPairRequest' | 'syncConflictBackupsList' | 'syncConflictBackupRestore' | 'syncSetPeerAlias' | 'queryEpisodesByTask' | 'querySourcesByTask' | 'queryEpisodesByCategory' | 'episodePut' | 'episodeRemoveIds' | 'sourcePut' | 'sourceRemoveByIds' | 'taskSourcePut' | 'taskSourceRemove' | 'queryFindingsByTask' | 'queryDecisionsByTask' | 'findingPut' | 'findingRemoveIds' | 'decisionPut' | 'decisionRemoveIds'
 
 /** T7 win-bind: the ONLY cross-layer window identity shape (six fields, frozen contract).
  *  processName is normalized (lowercase, trailing .exe stripped); hwnd/pidHint are same-session
@@ -176,6 +176,15 @@ interface TodoAPI {
 
 interface Window {
   todoAPI: TodoAPI
+  /** Cross-platform sync bridge (Lane A): main-window-gated, sanitized; exposed in src/preload/index.js */
+  crossPlatformAPI: {
+    status: () => Promise<any>
+    setEnabled: (enabled: boolean) => Promise<any>
+    setLan: (enabled: boolean) => Promise<any>
+    issuePairing: (deviceId: string, scope: string) => Promise<any>
+    revoke: (deviceId: string) => Promise<any>
+    port: () => Promise<any>
+  }
   /** Command bus (renderer/js/utils/commandBus.js): validated/stamped mutation writes via commands:commit */
   commands: {
     commit: (entity: string, verb: string, payload?: any, opts?: any) => Promise<any>

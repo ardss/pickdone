@@ -86,3 +86,4 @@ qa/
 pickdone/.dsh/
 pickdone/qa/
 pickdone/dist-verify-*/
+pickdone/vscode-extension/*.vsix

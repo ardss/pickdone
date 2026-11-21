@@ -42,6 +42,7 @@ export default {
       tabCalendar: '日历',
       tabShortcuts: '快捷键',
       tabTomato: '番茄钟',
+      tabCapture: '采集',
       tabData: '数据管理',
       switchedToZh: '已切换为简体中文',
       exportNo: '否',

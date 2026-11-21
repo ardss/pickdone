@@ -282,6 +282,12 @@
         broadcast()
         return true
       }
+      case 'projectV2Keys': {
+        try {
+          const meta = JSON.parse(localStorage.getItem(META_KEY)) || {}
+          return Object.keys(meta).filter(k => k.startsWith('pd.project.v2:') || k.startsWith('pd.taskProject.v2:') || /^project(?:Docs|Milestones|Deadline|Status):prj_[a-zA-Z0-9_-]+$/.test(k))
+        } catch { return [] }
+      }
       case 'getMeta': {
         const { key } = normalizeMetaArgs(params)
         try { return JSON.parse(localStorage.getItem(META_KEY))?.[key] ?? null } catch { return null }
@@ -586,6 +592,26 @@
         if (params && params.accept) { try { localStorage.setItem('appBrowserShim.syncPaired', '1') } catch {} }
         return { ok: true }
       case 'syncConflictBackupsList':
+        return []
+      case 'queryEpisodesByTask':
+        // pd20 S3 'continue work' read (renderer-shaped view model {episodeId, summary, resources});
+        // the web demo serves one static sample episode so the folded section has something to show.
+        return [{ episodeId: 'ep-demo-1', startedAt: 0, endedAt: 0, summary: 'demo episode', resources: [] }]
+      case 'queryEpisodesByCategory':
+        // pd20 P1-01 project work-handoff rollup (envelope {tasks, recent, timeline}); the web
+        // demo serves an empty envelope — the ProjectHandoff section renders its 'no record'
+        // placeholders and the timeline view its empty state.
+        return { tasks: [], recent: [], timeline: [] }
+      case 'querySourcesByTask':
+        // pd20 handoff copy: read-only source-ref read ({level, canonicalUri, title} view model);
+        // the web demo serves one static sample source so Copy-Handoff has provenance to assemble.
+        return [{ level: 'L0', canonicalUri: 'web-demo://spec-sample', title: 'demo source' }]
+      case 'queryFindingsByTask':
+        // pd20 S1 closure (migration v14): read-only finding view models — the web demo serves
+        // an empty list so the Findings block renders its honest empty state.
+        return []
+      case 'queryDecisionsByTask':
+        // pd20 S1 closure: read-only decision view models — same empty-state doctrine.
         return []
       default:
         // 未实现 op 显式失败(此前返回 null 假成功,调用方把 null 当真结果渲染/入库)。console.warn 曾被 UI 吞掉,排查不到

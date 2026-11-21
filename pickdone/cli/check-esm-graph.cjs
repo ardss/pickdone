@@ -52,6 +52,16 @@ function resolveImport (fromFile, spec) {
   return { file: null }
 }
 
+/** W33 (#3): bare-name resolvability for DYNAMIC imports — extract the package name (scoped
+ *  @a/b aware) and require it to exist under node_modules. This is the minimum existence bar:
+ *  the real bundler resolution (vite) may still differ, but a name with no node_modules entry
+ *  can never resolve. */
+function bareResolvable (spec) {
+  const m = spec.match(/^(@[^/]+\/[^/]+|[^/.@][^/]*)/)
+  if (!m) return false
+  return fs.existsSync(path.join(ROOT, 'node_modules', m[1]))
+}
+
 /** Windows case check: compare each path segment against the real on-disk directory entry */
 function caseMatches (file) {
   let cur = path.parse(file).root
@@ -110,6 +120,27 @@ function walkNames (id, set) {
   else if (id.type === 'ArrayPattern') for (const el of id.elements) walkNames(el, set)
 }
 
+// W33 fix: the old dynamic-import collection only matched top-level body nodes (and, after W28,
+// one hand-unwrapped ExpressionStatement shape) — a dynamic import NESTED inside a function or
+// arrow body (defineAsyncComponent(() => import('./X.vue')), .then(m => ...) chains inside
+// handlers) never produced a graph edge at all. Walk every node reachable from the top-level
+// body and collect ALL ImportExpressions (string-literal sources only; non-literal sources
+// cannot be statically resolved). A node is visited once per file — the top-level loop no
+// longer handles ImportExpression itself, so there is no double-count.
+function collectImportExpressions (node, out, seen) {
+  if (!node || typeof node !== 'object' || seen.has(node)) return
+  seen.add(node)
+  if (node.type === 'ImportExpression') out.push(node)
+  for (const key of Object.keys(node)) {
+    const v = node[key]
+    if (Array.isArray(v)) {
+      for (const c of v) if (c && typeof c === 'object') collectImportExpressions(c, out, seen)
+    } else if (v && typeof v === 'object' && key !== 'loc' && key !== 'range') {
+      collectImportExpressions(v, out, seen)
+    }
+  }
+}
+
 function parse (file, src) {
   let code = vueScript(file, src)
   if (file.endsWith('.vue')) {
@@ -129,21 +160,9 @@ function checkFile (file) {
     return
   }
   for (const node of body) {
-    let spec = null, isDynamic = false, isReexport = false
+    let spec = null, isReexport = false
     if (node.type === 'ImportDeclaration') spec = node.source.value
-    else if (node.type === 'ImportExpression' && typeof node.source.value === 'string') { spec = node.source.value; isDynamic = true }
-    else if (node.type === 'ExpressionStatement') {
-      // W28 fix(#4 anchor): a top-level dynamic import is wrapped in an ExpressionStatement
-      // (`import('./x').then(...)` / `await import('./x')`) — the loop previously matched
-      // node.type === 'ImportExpression' only, which NEVER occurs at top-level body, so the
-      // entire dynamic-import existence check (and the #4 substring escape inside it) was
-      // dead code. Descend into the statement's expression: one `await` unwrap, then one
-      // `.then(...)`/`.catch(...)` member-call unwrap (the dominant repo spelling).
-      let expr = node.expression
-      if (expr.type === 'AwaitExpression') expr = expr.argument
-      if (expr.type === 'CallExpression' && expr.callee.type === 'MemberExpression') expr = expr.callee.object
-      if (expr && expr.type === 'ImportExpression' && typeof expr.source.value === 'string') { spec = expr.source.value; isDynamic = true }
-    } else if (node.type === 'ExportAllDeclaration' && typeof node.source.value === 'string') spec = node.source.value // `export * from './x'` — check the re-export edge too
+    else if (node.type === 'ExportAllDeclaration' && typeof node.source.value === 'string') spec = node.source.value // `export * from './x'` — check the re-export edge too
     else if (node.type === 'ExportNamedDeclaration' && node.source && typeof node.source.value === 'string') {
       // W18 fix: `export { x } from './y'` named re-exports previously created NO
       // graph edge at all — the target's existence/case and the re-exported name's
@@ -155,26 +174,18 @@ function checkFile (file) {
     if (!spec) continue
     const r = resolveImport(file, spec)
     if (r.external) {
-      // W28 (#4 anchor): dynamic imports keep the bare escape (runtime deps outside the module
-      // graph — the original EXTERNAL_PREFIXES intent); STATIC bare imports still need the alias.
-      if (!isDynamic && !ALIAS_BARE.has(spec)) {
+      // STATIC bare imports still need the alias (no bundler in this architecture).
+      if (!ALIAS_BARE.has(spec)) {
         errors.push(`${path.relative(ROOT, file)}: 裸名导入 "${spec}"（本架构无 bundler,禁止 node_modules 裸导入）`)
       }
       continue
     }
     if (!r.file) {
-      // W28 fix(2026-11-01): the escape hatch used a SUBSTRING match
-      // (EXTERNAL_PREFIXES.some(p => spec.includes(p))), so a RELATIVE specifier whose path
-      // merely contains "node_modules" (e.g. '../vendor/node_modules-shim/x.js') was treated
-      // as external and skipped the existence check entirely. An escaping dynamic import must
-      // be a BARE specifier (not starting with '.') — relative specs are always in-graph and
-      // must exist on disk.
-      if (isDynamic && !spec.startsWith('.')) continue
       errors.push(`${path.relative(ROOT, file)}: import 目标不存在 "${spec}"`)
       continue
     }
     if (!caseMatches(r.file)) errors.push(`${path.relative(ROOT, file)}: import 大小写与磁盘不符 "${spec}"`)
-    if (isDynamic) continue // dynamic imports only check existence
+    // (dynamic imports are handled below — collected from the whole file, nested bodies included)
     const exp = collectExports(r.file)
     if (isReexport) {
       // W18 fix: named re-export `export { local as exported } from './y'` — the
@@ -210,6 +221,36 @@ function checkFile (file) {
       }
     }
     checkFile(r.file)
+  }
+
+  // W33 fix (#2): dynamic imports collected from the WHOLE file — nested inside function/arrow
+  // bodies (defineAsyncComponent(() => import('./X.vue')), promise chains in handlers, awaited
+  // imports in store actions) all used to escape the old top-level-only scan. Existence and
+  // Windows-case are checked; export surfaces are not (dynamic imports stay existence-only).
+  const dyn = []
+  collectImportExpressions({ type: 'Program', body }, dyn, new Set())
+  for (const node of dyn) {
+    if (typeof node.source.value !== 'string') continue
+    const spec = node.source.value
+    const r = resolveImport(file, spec)
+    if (r.external) {
+      // W33 fix (#3): dynamic BARE names are no longer unconditionally exempt. The old
+      // `!spec.startsWith('.')` escape never verified existence; a bare name must now resolve
+      // against the vite alias set OR node_modules — anything else is a guaranteed runtime
+      // import failure (same white-screen class as a missing relative target).
+      if (!ALIAS_BARE.has(spec) && !bareResolvable(spec)) {
+        errors.push(`${path.relative(ROOT, file)}: 动态裸名导入 "${spec}" 无法解析（不在别名表且 node_modules 中不存在）`)
+      }
+      continue
+    }
+    if (!r.file) {
+      // Relative specs are always in-graph and must exist on disk (W28 fix stays in force:
+      // a relative path containing "node_modules" is NOT an external escape hatch — it is
+      // checked like any other relative target).
+      errors.push(`${path.relative(ROOT, file)}: import 目标不存在 "${spec}"`)
+      continue
+    }
+    if (!caseMatches(r.file)) errors.push(`${path.relative(ROOT, file)}: import 大小写与磁盘不符 "${spec}"`)
   }
 }
 

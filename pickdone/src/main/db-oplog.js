@@ -127,6 +127,23 @@ module.exports = Object.assign(({ getDb, log, getPurgeChips, onAppendFailure }) 
       case 'planDeleteTaskDay': return result === false ? [] : arr('plan', getDb().prepare('SELECT id FROM plan_chips WHERE taskId = ? AND day = ?')
         .all(String(params && params.taskId), String(params && params.day)).map(r => r.id))
       case 'planPrune': return [one('plan', '*gc*')]
+      // PD20 (2026-11-05): work-episode / source-ref / task-source-link rows sync as their own
+      // entities (manifest sync:'full' — cross-device handoff, P0-3). All six ops are result-aware:
+      // the puts return the minted/upserted id (one pointer) and the removes return the ids
+      // ACTUALLY tombstoned (removeByIds row-granular contract — a ghost or already-dead id is a
+      // no-op and emits no phantom delta, same doctrine as planRemoveIds above).
+      case 'episodePut': return [one('episode', result)]
+      case 'episodeRemoveIds': return arr('episode', result)
+      case 'sourcePut': return [one('source', result)]
+      case 'sourceRemoveByIds': return arr('source', result)
+      case 'taskSourcePut': return [one('tasksource', result)]
+      case 'taskSourceRemove': return arr('tasksource', result)
+      // pd20 S1 closure (migration v14): finding/decision rows capture like the episode family —
+      // puts mint one pointer, removes return the ids ACTUALLY tombstoned (row-granular).
+      case 'findingPut': return [one('finding', result)]
+      case 'findingRemoveIds': return arr('finding', result)
+      case 'decisionPut': return [one('decision', result)]
+      case 'decisionRemoveIds': return arr('decision', result)
       case 'setMeta': return [one('meta', Array.isArray(params) ? params[0] : params)]
       // setMetaMany takes a list of [k, v] pairs — same meta entity, row-granular pointers per key
       case 'setMetaMany': return arr('meta', (Array.isArray(params) ? params : []).map(p => p && p[0]))

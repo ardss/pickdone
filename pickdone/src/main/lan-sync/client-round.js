@@ -125,6 +125,7 @@ function createClientRound(ctx) {
     // the diagnosable message from the round that discovered it.
     if (oversizedSegmentBy.has(peer.deviceId)) return Promise.resolve(false)
     roundsInFlight.add(peer.deviceId)
+    const attRound = ++attRoundSeq // round serial for the puller's sliding-window quota
     bumpRounds(1)
     return new Promise((resolve) => {
       let settled = false
@@ -154,7 +155,7 @@ function createClientRound(ctx) {
       let flushFailedAck = false
       // Attachment FILE puller (post-ack): sendVia needs the RAW SOCKET (socket._lanSend lives on em._socket, not the EventEmitter — wiring `client` here poisoned every round, 2026-09-19 drill).
       // onArrived (P1-8): host callback per file landed on disk -> 'attachments-arrived' syncEvent so open views refresh live.
-      const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId, getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps, onArrived: typeof opts.onAttachmentArrived === 'function' ? opts.onAttachmentArrived : null })
+      const att = createAttachmentPuller({ send: (m) => sendVia(client._socket, m), session: attSession, peerId: peer.deviceId, round: attRound, getKeys: typeof opts.getMissingAttachmentKeys === 'function' ? opts.getMissingAttachmentKeys : null, deps: opts.attachmentPullerDeps, onArrived: typeof opts.onAttachmentArrived === 'function' ? opts.onAttachmentArrived : null })
       const chunkBuf = new Map() // snapshot-chunk index -> rows (assembled at snapshot-end, fallback mode)
       const chunkRowCounts = new Map() // streaming mode: index -> applied row count (rows are NEVER buffered)
       const streamingSnapshot = typeof ingestSnapshotChunk === 'function'
@@ -717,6 +718,10 @@ function createClientRound(ctx) {
   // Round-3 P1: per-peer round mutex — one dial per peer at a time (lives with the only
   // code that reads and releases it).
   const roundsInFlight = new Set()
+  // Monotonic round serial fed to the attachment puller: the quota in att-transfer is a
+  // SLIDING ROUND WINDOW, so it needs a round "clock" that advances every dial. Per-node
+  // (not global) is fine — each node owns its attSession bookkeeping.
+  let attRoundSeq = 0
 
   return { syncWithPeer }
 }

@@ -52,16 +52,16 @@ test('a pure category round dispatches only category/init', async () => {
   const { reload, dispatched, calls } = harness()
   reload({ kinds: ['category'] })
   await flush()
-  assert.deepEqual(dispatched, ['category/init'])
+  assert.deepEqual(dispatched, ['category/init', 'projectV2/refresh'], 'category changes refresh the project compatibility projection')
   assert.equal(count(dispatched, 'todo/init'), 0)
   assert.equal(calls.estimates, 0)
 })
 
-test('a pure meta round dispatches nothing via store.dispatch — only the ledger reloads', async () => {
+test('a pure meta round refreshes only project V2 state and the meta ledgers', async () => {
   const { reload, dispatched, calls } = harness()
   reload({ kinds: ['meta'] })
   await flush()
-  assert.deepEqual(dispatched, [], 'meta rounds are the cheapest kind: no store dispatches')
+  assert.deepEqual(dispatched, ['projectV2/refresh'], 'meta project links must refresh without a full todo/init')
   assert.equal(calls.estimates, 1)
   assert.equal(calls.userTags, 1, 'userTags rides the same meta round + throttle')
 })
@@ -70,7 +70,7 @@ test('mixed cheap kinds (filter + category) refresh both without the full todo/i
   const { reload, dispatched } = harness()
   reload({ kinds: ['category', 'filter'] })
   await flush()
-  assert.deepEqual(dispatched.sort(), ['category/init', 'filters/load'])
+  assert.deepEqual(dispatched.sort(), ['category/init', 'filters/load', 'projectV2/refresh'])
   assert.equal(count(dispatched, 'todo/init'), 0)
 })
 

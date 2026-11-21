@@ -43,19 +43,14 @@ test('R1: chart-h upgrade button is wired to an onUpgrade handler that hands off
 })
 
 /* ---------- R3 projectview-deadline-toast ---------- */
-test('R3: setDeadline/clearDeadline await the meta commit; a failed write must not toast success', () => {
-  // pre-fix: commitCommand(...).catch(() => {}) fire-and-forget, success toast always fired
-  assert.ok(!projectView.includes(".catch(() => {}) } catch { /* degraded"),
-    'fire-and-forget meta write with unconditional success toast must be gone')
+test('R3: setDeadline/clearDeadline await authoritative V2 entity writes; failures never toast success', () => {
   const setFn = projectView.slice(projectView.indexOf('async setDeadline'), projectView.indexOf('async removeFromProject'))
-  assert.match(setFn, /await commitCommand\('meta', 'put', \['projectDeadline:' \+ this\.catId, String\(date\)\]\)/,
-    'setDeadline awaits the persistence round-trip')
-  assert.match(setFn, /this\.deadlineTs = 0[\s\S]*?\$message\.error\(/,
-    'on write failure the optimistic value is dropped and an error is surfaced')
+  assert.match(setFn, /await this\.\$store\.dispatch\('projectV2\/update', \{ projectId: this\.projectId, patch: \{ deadline \} \}\)/)
+  assert.match(setFn, /await this\.reloadDeadline\(\)/, 'failed writes reload persisted deadline')
+  assert.match(setFn, /statsH\.main\.actionFailedMsg/, 'both edits report persistence failures')
   const clearFn = projectView.slice(projectView.indexOf('async clearDeadline'), projectView.indexOf('async removeFromProject'))
-  assert.match(clearFn, /await commitCommand\('meta', 'put', \['projectDeadline:' \+ this\.catId, '0'\]\)/,
-    'clear keeps CLI parity (put \'0\', same as cli setProjectDeadline(none)) and awaits it')
-  assert.match(clearFn, /\$message\.error\(/, 'clearDeadline surfaces write failures too')
+  assert.match(clearFn, /await this\.\$store\.dispatch\('projectV2\/update', \{ projectId: this\.projectId, patch: \{ deadline: 0 \} \}\)/)
+  assert.match(clearFn, /await this\.reloadDeadline\(\)/, 'clear also rolls UI back on failed persistence')
 })
 
 /* ---------- R4 calendar-tbdrop-reminder ---------- */

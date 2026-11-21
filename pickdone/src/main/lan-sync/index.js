@@ -55,9 +55,16 @@ const MAX_SNAPSHOT_CHUNKS = 512
 // Peer-bookkeeping ceiling (round-3 review): mDNS/UDP floods must not grow the peer table,
 // lastSeen map, or Device Center state without limit. LRU-expelled beyond this.
 const MAX_PEERS = 64
-// Device Center: a peer counts as "online" while mDNS saw it (or its last round succeeded)
-// within this window; a 30s sweep flips stale peers offline and emits peer-offline.
-const ONLINE_WINDOW_MS = 90 * 1000
+// LAN sync performs a periodic round every 5 minutes (lan-sync-bootstrap.js).
+// The old 90-second UI liveness window falsely declared a healthy peer "offline"
+// between rounds when multicast discovery was unavailable. Allow one full
+// periodic interval plus 60 seconds of scheduling/network jitter. This is
+// recent authenticated reachability, not a claim of a permanently open socket.
+const ONLINE_WINDOW_MS = 6 * 60 * 1000
+function recentlyReachable (now, seen, lastRound, windowMs = ONLINE_WINDOW_MS) {
+  const fresh = t => Number.isFinite(t) && t > 0 && now >= t && now - t < windowMs
+  return fresh(seen) || fresh(lastRound)
+}
 const SWEEP_INTERVAL_MS = 30 * 1000
 // In-memory rings surfaced by getStatus(): recent sync activity (last 50) and security
 // events (pair throttling / auth rejections, last 20).
@@ -229,6 +236,7 @@ function createLanSyncNode(opts) {
   let lastError = null
   let roundsRunning = 0
   // Device Center bookkeeping (all in-memory, per peer):
+  const peerAppVersions = new Map() // authenticated peer hello app builds (display only; no sync authority)
   const lastSeenBy = new Map() // deviceId -> last mDNS/discovery sighting (ms epoch)
   const lastRoundBy = new Map() // deviceId -> last confirmed round (ms epoch)
   const errorBy = new Map() // deviceId -> last round error message
@@ -243,7 +251,7 @@ function createLanSyncNode(opts) {
   }
   /** Drop every per-peer trace of `id` (LRU eviction + self-dial peer removal share this). */
   function forgetPeer(id) {
-    peers.delete(id); lastSeenBy.delete(id); lastRoundBy.delete(id); errorBy.delete(id)
+    peers.delete(id); peerAppVersions.delete(id); lastSeenBy.delete(id); lastRoundBy.delete(id); errorBy.delete(id)
     const t = retryTimers.get(id)
     if (t) { clearTimeout(t); retryTimers.delete(id) }
     backoffMs.delete(id); onlineNow.delete(id); needSnapshot.delete(id); needSnapshotForce.delete(id)
@@ -353,10 +361,7 @@ function createLanSyncNode(opts) {
   })
 
   function computeOnline(id) {
-    const now = Date.now()
-    const seen = lastSeenBy.get(id)
-    const lastRound = lastRoundBy.get(id)
-    return (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lastRound && now - lastRound < ONLINE_WINDOW_MS)
+    return recentlyReachable(Date.now(), lastSeenBy.get(id), lastRoundBy.get(id))
   }
 
   /** Emit peer-online / peer-offline on offline<->online transitions (sweep + discovery driven). */
@@ -534,6 +539,7 @@ function createLanSyncNode(opts) {
         // destroyed socket, so notifyUnpaired "succeeded" against a dead peer.
         try {
           if (peer && peer.deviceId && socket) {
+            if (typeof peer.appVersion === 'string' && peer.appVersion) peerAppVersions.set(peer.deviceId, peer.appVersion)
             liveServerSockets.set(peer.deviceId, socket)
             socket.once('close', () => {
               if (liveServerSockets.get(peer.deviceId) === socket) liveServerSockets.delete(peer.deviceId)
@@ -597,6 +603,29 @@ function createLanSyncNode(opts) {
       if (peerId) forgetPeer(String(peerId))
     },
 
+    /** F1/F2 (2026-11-11 real two-machine acceptance): a SUCCESSFUL pairing with a peer is the
+     *  ONLY trust-root change event — it must clear that peer's terminal unpaired block AND
+     *  every per-peer poll-backpressure stamp (hibernate streak, dial window, flush stall,
+     *  error). Before this existed, the initiator's post-pair round dialed with the stale
+     *  per-pair secret, was rejected, and the resulting terminal unpaired state stayed stuck
+     *  until a manual sync disable/enable (ab226-acceptance.md steps 6 & 12, repro'd twice).
+     *  Deliberately NOT the same as rememberPeer's re-announce clearance: this is called only
+     *  from genuine pairing-success paths (pair-ops after persist / paired-inbound), never
+     *  from discovery flaps, so a REVOKED pairing stays blocked (see the revocation test). */
+    onPairSuccess(peerId) {
+      const id = String(peerId || '')
+      if (!id) return
+      unpairedBy.delete(id) // terminal auth-rejection block
+      const t = retryTimers.get(id)
+      if (t) { clearTimeout(t); retryTimers.delete(id) }
+      backoffMs.delete(id)
+      failStreakBy.delete(id)
+      dialNotBefore.delete(id)
+      flushStallBy.delete(id) // Layer-2 stalled-push counter (a re-pair re-arms snapshot recovery)
+      errorBy.delete(id) // stale error stamp must not linger in the Device Center card
+      refreshOnline(id)
+    },
+
     /** P1-3: manual retry-now (Device Center "sync now"): clear the dial window and cancel the
      *  pending retry timer so the next startSyncRound dials immediately. The failure streak is
      *  KEPT — a manual dial that fails again must not silently reset the hibernate budget. */
@@ -655,7 +684,7 @@ function createLanSyncNode(opts) {
         name,
         listening: !!(server && server.port),
         port: server ? server.port : null,
-        self: { deviceId, deviceName: name, port: server ? server.port : null },
+        self: { deviceId, deviceName: name, port: server ? server.port : null, appVersion: require('./app-version').ownAppVersion() },
         peers: Array.from(peers.values()).map((p) => {
           const wm = peerProgress.has(p.deviceId) ? peerProgress.get(p.deviceId) : null
           const seen = lastSeenBy.get(p.deviceId)
@@ -679,7 +708,8 @@ function createLanSyncNode(opts) {
             // Round-2 P1: the renderer reads p.deviceName — the raw peer record only carries
             // `name`, so Device Center showed raw UUIDs. Carry both.
             deviceName: p.name,
-            online: (!!seen && now - seen < ONLINE_WINDOW_MS) || (!!lr && now - lr < ONLINE_WINDOW_MS),
+            appVersion: peerAppVersions.get(p.deviceId) || null,
+            online: recentlyReachable(now, seen, lr),
             lastRoundAt: lr || null,
             lastError: errorBy.get(p.deviceId) || null,
             peerState,
@@ -742,4 +772,4 @@ function adoptLiveSocket (map, deviceId, socket) {
   return true
 }
 
-module.exports = { createLanSyncNode, adoptLiveSocket, pickEvictPeerId, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }
+module.exports = { createLanSyncNode, adoptLiveSocket, pickEvictPeerId, recentlyReachable, ONLINE_WINDOW_MS, BACKOFF_BASE_MS, BACKOFF_MAX_MS, DIAL_FAILURE_BUDGET_DEFAULT, HIBERNATE_BACKOFF_MS_DEFAULT }

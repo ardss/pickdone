@@ -98,7 +98,9 @@ const X_CSS = `
 .tx-now__meta{display:flex;gap:14px;margin-top:8px;font-size:12px;opacity:.92}
 .tx-now__side{text-align:center;flex-shrink:0}
 .tx-now__timer{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums}
-.tx-giveup{margin-top:10px;background:rgba(0,0,0,.18);color:#fff;border:0;border-radius:9px;padding:8px 18px;font-size:12px;cursor:pointer}
+/* 专注进行中：主操作是"放弃专注"，必须显式红——此前是 18% 黑压在绿色渐变卡上，视觉仍是墨绿，
+   用户反馈"开始专注后按钮一直还是绿的"（U03）。hover 再压深一档保留点击反馈。 */
+.tx-giveup{margin-top:10px;background:var(--danger-strong, #d9534f);color:#fff;border:0;border-radius:9px;padding:8px 18px;font-size:12px;cursor:pointer}
 .tx-giveup:hover{background:var(--danger, #e9484d)}
 .tx-now__idle{font-size:13px;margin-top:6px}
 .tx-settled{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px 14px}

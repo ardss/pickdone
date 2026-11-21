@@ -41,27 +41,36 @@ function requirePinnedDiscovery (pinnedPort) {
 }
 
 test('UDP fallback fan-out: a host bound to a non-canonical candidate is still discovered by a peer listening on another candidate port', async () => {
-  await withBonjourUnavailable(async () => {
-    const modA = requirePinnedDiscovery(58477)
-    const modB = requirePinnedDiscovery(39071)
-    assert.notEqual(modA.FALLBACK_PORT_CANDIDATES[0], modB.FALLBACK_PORT_CANDIDATES[0], 'staged: the two instances pinned to different candidates')
-    const A = modA.createDiscovery()
-    const B = modB.createDiscovery()
-    try {
-      A.startAdvertising({ deviceId: 'fanout-a', name: 'Fanout-A', port: 58491 })
-      B.startAdvertising({ deviceId: 'fanout-b', name: 'Fanout-B', port: 58492 })
-      B.discover(() => {})
-      const t0 = Date.now()
-      while (Date.now() - t0 < 8000 && !B.getPeers().some(p => p.deviceId === 'fanout-a')) await sleep(200)
-      const peer = B.getPeers().find(p => p.deviceId === 'fanout-a')
-      assert.ok(peer, 'B discovered A across DIFFERENT bound candidate ports (fan-out works)')
-      assert.ok(peer.host && peer.host !== '127.0.0.1', 'host is the real sender address: ' + peer.host)
-      const locals = new Set()
-      for (const l of Object.values(os.networkInterfaces())) for (const ni of l || []) if (ni && ni.address && !ni.internal) locals.add(ni.address)
-      assert.ok(locals.has(peer.host), 'sender address is one of this machine’s own IPs')
-    } finally {
-      try { A.stop() } catch { /* noop */ }
-      try { B.stop() } catch { /* noop */ }
-    }
-  })
+  // Both instances live in THIS process on ONE host, so they broadcast from the same source
+  // address — the per-source upsert floor (500ms, a flood guard aimed at distinct machines)
+  // would then drop one of the two announcements per 2s sweep and the drill flipped red on
+  // timing alone (2/8 locally; once on the Windows CI leg). Disable it for the drill only.
+  process.env.LAN_SYNC_UDP_UPSERT_MIN_INTERVAL_MS = '0'
+  try {
+    await withBonjourUnavailable(async () => {
+      const modA = requirePinnedDiscovery(58477)
+      const modB = requirePinnedDiscovery(39071)
+      assert.notEqual(modA.FALLBACK_PORT_CANDIDATES[0], modB.FALLBACK_PORT_CANDIDATES[0], 'staged: the two instances pinned to different candidates')
+      const A = modA.createDiscovery()
+      const B = modB.createDiscovery()
+      try {
+        A.startAdvertising({ deviceId: 'fanout-a', name: 'Fanout-A', port: 58491 })
+        B.startAdvertising({ deviceId: 'fanout-b', name: 'Fanout-B', port: 58492 })
+        B.discover(() => {})
+        const t0 = Date.now()
+        while (Date.now() - t0 < 8000 && !B.getPeers().some(p => p.deviceId === 'fanout-a')) await sleep(200)
+        const peer = B.getPeers().find(p => p.deviceId === 'fanout-a')
+        assert.ok(peer, 'B discovered A across DIFFERENT bound candidate ports (fan-out works)')
+        assert.ok(peer.host && peer.host !== '127.0.0.1', 'host is the real sender address: ' + peer.host)
+        const locals = new Set()
+        for (const l of Object.values(os.networkInterfaces())) for (const ni of l || []) if (ni && ni.address && !ni.internal) locals.add(ni.address)
+        assert.ok(locals.has(peer.host), 'sender address is one of this machine’s own IPs')
+      } finally {
+        try { A.stop() } catch { /* noop */ }
+        try { B.stop() } catch { /* noop */ }
+      }
+    })
+  } finally {
+    delete process.env.LAN_SYNC_UDP_UPSERT_MIN_INTERVAL_MS
+  }
 })

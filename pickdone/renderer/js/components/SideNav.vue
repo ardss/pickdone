@@ -441,14 +441,15 @@ export default {
   font-size: var(--fs-md); font-weight: 600; color: var(--text-1);
   max-width: 110px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.sn-account-gear {
+/* 主题按钮共用外观，但不共用 .sn-account-gear 身份类（活体 UI 测试靠它认"设置"）。 */
+.sn-account-gear, .sn-theme-toggle {
   position: relative;
   display: flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; border: 0; border-radius: var(--radius-md); padding: 0;
   background: none; color: var(--text-3); cursor: pointer;
   transition: background-color var(--dur-mid), color var(--dur-mid);
 }
-.sn-account-gear:hover { background: rgba(0, 0, 0, .06); color: var(--text-1); }
+.sn-account-gear:hover, .sn-theme-toggle:hover { background: rgba(0, 0, 0, .06); color: var(--text-1); }
 /* 回收站并入账户行(用户定稿):默认灰,hover/拖拽悬停才泛红 */
 .sn-account-trash { position: relative; }
 .sn-account-trash:hover, .sn-account-trash.drag-over { background: var(--danger-soft, rgba(196,85,45,.1)); color: var(--danger-strong, #c4552d); }

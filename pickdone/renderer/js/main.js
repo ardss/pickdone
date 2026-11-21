@@ -15,6 +15,7 @@ window.dayjs = window.dayjs || window.dayJs
 import store from './store/index.js'
 import { onExternalHabitBlob, isStaleExternalRound } from './store/habits.js'
 import { createExternalReloader, kindsFromChangedEvent } from './utils/externalReload.js'
+import { createUpdateChoiceToast } from './utils/updaterNotice.js'
 import { loadRuntime } from './store/helpers/runtimeState.js'
 import { criticalBackupWrite, ackQuitFlushAfterWrite } from './store/helpers/todoBackup.js'
 // D15 (TL-2): boot drain of the crash-proof pending-write queue — entries persisted by a previous
@@ -275,6 +276,7 @@ async function bootstrap () {
     drainPendingUpsertsAtBoot().catch(e => console.error('[todo] boot drain of the pending-write queue failed:', e))
     await store.dispatch('category/init') // Categories unified into SQLite (CLI and UI share one source; auto-migrates localStorage on first run)
     bootMark('category/init')
+    try { await store.dispatch('projectV2/refresh') } catch (e) { console.error('[ProjectV2] read failed, legacy data stays untouched:', e) }
     // Primary-data mirror restore: backfill settings/habits/tomato records from the DB archive when it is newer than LS (no more loss when LS is cleared)
     store.dispatch('settings/initFromDb').catch(() => {})
     store.dispatch('auth/initGamification').catch(e => console.warn('[auth] gamification init failed:', e)) // Y10: fold synced gamification deltas into the LS totals
@@ -565,24 +567,22 @@ async function bootstrap () {
   // Global update-ready notice: users shouldn't have to open settings to learn an update finished — a long-lived toast says quitting installs it (the button in SettingsModal can still restart-update immediately).
   // Kept outside the shortcut-conflict block: it was wrongly nested inside that if, so in environments without the conflict API the updater subscription never ran at all
   if (typeof window.todoAPI.onUpdaterEvent === 'function') {
+    const showUpdateChoice = createUpdateChoiceToast({ h: Vue.h, notify: toastBelowChrome, translate: k => i18n.global.t(k), openSettings: () => store.commit('ui/openSettingsAt', 'about') })
     let _readyToasted = false
-    let _availableToasted = false // one-shot: a new version becomes available (autoDownload off) — the main process may re-broadcast 'available' on every 4h check, the toast must not repeat
+    let _availableToasted = false
     window.todoAPI.onUpdaterEvent(d => {
       if (d) store.commit('ui/setUpdateState', d) // Mirror into the ui store: data source for the red-dot badge on the sidebar settings gear
       if (d && d.status === 'available' && !_availableToasted) {
-        // Promise kept (updater.js: 'when off, only a new-version notice is shown'): with auto-download
-        // off the only consumer of status='available' used to be Settings→About — users who never open
-        // settings never heard about the new version. Same long-lived toast shape as the ready toast.
         _availableToasted = true
         try {
-          toastBelowChrome({ type: 'info', message: i18n.global.t('statsH.update.availableToast'), duration: 12000, showClose: true })
+          showUpdateChoice('info', i18n.global.t('statsH.update.availableToast'))
         } catch { /* Silent if toast fails; Settings→About still offers the download */ }
       }
       if (d && d.status === 'ready' && !_readyToasted) {
         _readyToasted = true
         try {
-          toastBelowChrome({ type: 'success', message: i18n.global.t('update.readyToast'), duration: 12000, showClose: true })
-        } catch { /* Silent if toast fails; the update still installs on quit */ }
+          showUpdateChoice('success', i18n.global.t('update.readyToast'))
+        } catch { /* Settings→About remains available; no install without user confirmation */ }
       }
     })
   }

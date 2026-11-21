@@ -179,6 +179,9 @@ test('project status CLI surface: --status set/clear, projects --json rows + --s
   lib.setProjectFlag('CLI状态甲v2', true)
   const b = lib.addCategory('CLI状态乙v2')
   lib.setProjectFlag('CLI状态乙v2', true)
+  // Convert legacy category flags once; the V2 entity then owns project state.
+  runCli(['project', String(a.categoryId), '--on', '--json'])
+  runCli(['project', String(b.categoryId), '--on', '--json'])
   const set = runCli(['project', 'CLI状态甲v2', '--status', 'paused', '--json'])
   assert.equal(set.data.status, 'paused')
   const all = runCli(['projects', '--json'])

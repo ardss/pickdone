@@ -8,18 +8,31 @@
  *
  *  全程 TODO_DB_DIR 隔离临时库，不碰真实数据。跑法: node tests/parity-cli-ui.test.mjs
  */
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
 import os from 'node:os'
 import path from 'node:path'
 import fs from 'node:fs'
 import { createRequire } from 'module'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-cli-ui-'))
+// W32 fix(#3) 2026-11-03: the tmpdir mkdtemp + TODO_DB_DIR overwrite used to leak both — the
+// dir was never removed and the process-wide env var stayed clobbered after the suite ended
+// (poisoning any sibling test file that reads TODO_DB_DIR in the same worker). The dir is
+// removed and the env restored in an after-hook, with try/finally-class guards (best-effort:
+// a still-open sqlite handle on Windows must not crash the worker over cleanup).
+const prevTodoDbDir = process.env.TODO_DB_DIR
+const tmpDbDir = fs.mkdtempSync(path.join(os.tmpdir(), 'parity-cli-ui-'))
+process.env.TODO_DB_DIR = tmpDbDir
+after(() => {
+  if (prevTodoDbDir === undefined) delete process.env.TODO_DB_DIR
+  else process.env.TODO_DB_DIR = prevTodoDbDir
+  try { db.close() } catch {}
+  try { fs.rmSync(tmpDbDir, { recursive: true, force: true, maxRetries: 3 }) } catch {}
+})
 const require_ = createRequire(import.meta.url)
 const db = require_('../../src/main/db.js')
 const lib = require_('../../cli/lib.js')
-db.init(process.env.TODO_DB_DIR)
+db.init(tmpDbDir)
 
 const dayjs = require_('dayjs')
 const today0 = () => +dayjs().startOf('day')

@@ -44,6 +44,9 @@ dist-fix/
 renderer-dist/
 dist-installer/
 
+# Browser-based Web bridge E2E uses temporary isolated Chromium profiles and logs.
+web/e2e/.run/
+
 # tooling caches (2026-09-06 check:all speedup)
 .eslintcache
 *.tsbuildinfo

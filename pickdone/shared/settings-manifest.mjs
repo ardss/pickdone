@@ -70,7 +70,10 @@ export const SETTINGS_MANIFEST = {
   // managed by App UIs (repeat-defaults modal, onboarding tours) — not CLI-settable primitives, so
   // they deliberately have no boolean/number/enum/string entry. settingsSet's blob write-back
   // whitelist (cli/lib.js) still carries them, or every CLI write would strip them from the blob.
-  blobOnly: ['repeatDefaultSettings', 'onboardingToursSeen'],
+  // pd20 (2026-11-05): workEpisode ({enabled:boolean}) is an App-UI-managed OBJECT map (the
+  // EditPanel 'continue work' switch) — blobOnly like repeatDefaultSettings, so the CLI's
+  // settings write-back whitelist carries it instead of stripping it from the blob.
+  blobOnly: ['repeatDefaultSettings', 'onboardingToursSeen', 'workEpisode'],
   // D19-DOM2 (#5): keys whose LEGAL domain includes -1 — the blanket >= 0 gate in cli/lib-settings
   // settingsSet rejected them, but todoBoxCategoryId's shipped default IS -1 (all-categories;
   // renderer DEFAULT_SETTINGS todoBoxCategoryId: -1, and store/todo.js filters on !== -1).
@@ -85,7 +88,10 @@ export const SETTINGS_MANIFEST = {
     closeActionMinimize: true, isCompleteWithSubtasks: true, isTodoEditModalCloseAutoSave: true,
     isCompleteCheckboxColorFollow: true, runWhenComputerStart: false, hideMainWindowOnStartup: false,
     enableHardwareAcceleration: true, showNoDate: true, showCompleteNoDate: true, showComplete: true,
-    developerMode: false, showTodayXModule: false, showHabitModule: false, showProjectsModule: false,
+    // showProjectsModule mirrors renderer DEFAULT_SETTINGS (pd20 lane B 2026-11-07 graduation):
+    // the CLI's settingsEffective reports the App-run default, so a stale false here would
+    // contradict the visible Project entry on a fresh install.
+    developerMode: false, showTodayXModule: false, showHabitModule: false, showProjectsModule: true,
     showDepsModule: false, isShowSubTask: true, isCalendarDimUncompleted: true, isShowCalendarPrivacyMode: false,
     isDefaultSubTaskFolded: false, showHolidayMarkers: true, showTodoCheckboxOrder: true,
     enableSecurityLock: false, autoBackupEnabled: true, isCalendarBackgroundUserSelected: false,

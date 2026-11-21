@@ -39,11 +39,13 @@ export default {
     upToDate: 'You are on the latest version',
     failed: 'Update check failed. Please try again later.',
     devEnv: 'In-app updates are unavailable in dev/portable mode. Download from GitHub Releases.',
-    readyToast: 'New version downloaded. It will be installed the next time you quit PickDone.',
+    readyToast: 'Update downloaded. Install now or later from Settings.',
     readyBadge: 'Update ready',
+    viewUpdate: 'Review update',
+    feedMissing: 'This test build is not available on the published update channel yet. Wait for a published release.',
     available: 'New version available',
     downloadNow: 'Download Now',
-    autoDownload: 'Download updates automatically',
+    autoDownload: 'Download in background (ask before installing)',
     openReleases: 'Open Download Page',
     switchedToEn: 'Language switched to English'
   }

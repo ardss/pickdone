@@ -12,6 +12,7 @@
  */
 import { execFileSync } from 'node:child_process'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import fs from 'node:fs'
 import os from 'node:os'
 import { createRequire } from 'module'
@@ -25,7 +26,9 @@ const db = require_('../../../src/main/db.js')
 const lib = require_('../../../cli/lib.js')
 
 db.init(process.env.TODO_DB_DIR)
-const ROOT = path.join(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '../../..')
+// fileURLToPath, not new URL(...).pathname — see d19-dom2-cli.test.mjs: on a UNC worktree the
+// old form yields K:\K\... and every CLI subprocess spawn fails.
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const ENV = { ...process.env, TODO_DB_DIR: process.env.TODO_DB_DIR }
 const run = (args) => JSON.parse(execFileSync(process.execPath, [path.join(ROOT, 'cli', 'pickdone.js'), ...args], { encoding: 'utf8', env: ENV, timeout: 120000 }))
 

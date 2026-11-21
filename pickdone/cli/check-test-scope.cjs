@@ -82,6 +82,8 @@ const SURFACE_MAP = [
   // runs both server-side consumers — overshoot by design, never an undershoot
   ['server', ['tests/unit/billing', 'tests/unit/lan-sync', 'tests/unit/cli']],
   ['tests/lib', ['tests/unit']],
+  // the commit gate itself: gate-mechanics self-tests live in cli/ and meta/
+  ['.githooks', ['tests/unit/cli', 'tests/unit/meta']],
 ]
 
 // Changes that cannot affect code behavior. Only these may produce the "skip" verdict.
@@ -126,20 +128,105 @@ function normalize (f) {
   return path.posix.normalize(noRoot)
 }
 
+/* ---- version-only manifest bumps (2026-11-20 commit-speed) -------------------------------
+ * `npm run pack` bumps the version in package.json + package-lock.json; neither file is a code
+ * surface, so both used to hit "unmapped surface → full core tier": a 5-minute-per-commit tax on
+ * a change that cannot alter an assertion. Version-only is recognised by comparing the STAGED
+ * blob with HEAD after stripping the "version" field — any dependency/script/build edit still
+ * fails wide (real surface, real risk).
+ *
+ * Untracked/new manifests (no HEAD blob) and unreadable git → not version-only → fail wide. */
+
+function blob (spec) {
+  try {
+    return execFileSync('git', ['show', spec], { cwd: ROOT, encoding: 'utf8', env: gitEnv(), stdio: ['ignore', 'pipe', 'ignore'] })
+  } catch {
+    return null
+  }
+}
+
+/** Pure: does `staged` differ from `head` ONLY in version fields? Identical content → false
+ *  ("nothing staged" is not a licence to skip tests — the golden self-tests feed synthetic file
+ *  lists against a clean worktree and must keep getting "package.json → fail wide"). Unparseable
+ *  JSON → false (fail wide). */
+function versionOnlyChange (staged, head, isLock = false) {
+  if (staged == null || head == null) return false
+  if (staged === head) return false
+  const strip = s => {
+    try {
+      const o = JSON.parse(s)
+      delete o.version
+      if (isLock && o.packages && o.packages['']) delete o.packages[''].version
+      return JSON.stringify(o)
+    } catch { return s }
+  }
+  return strip(staged) === strip(head)
+}
+
+/** true iff package.json's staged content differs from HEAD ONLY in the version field.
+ *  Path specs are repo-root relative ('pickdone/...'): the worktree root ALSO carries a
+ *  package.json (the workspace manifest), so a bare ':0:package.json' silently reads the
+ *  WRONG manifest — git resolves show paths against the repository root, not the cwd. */
+function pkgVersionOnly () {
+  return versionOnlyChange(blob(':0:pickdone/package.json'), blob('HEAD:pickdone/package.json'))
+}
+
+/** version field of a staged manifest, or null when unreadable */
+function stagedVersion (name) {
+  const raw = blob(`:0:pickdone/${name}`)
+  if (raw == null) return null
+  try {
+    const o = JSON.parse(raw)
+    return o.version || null
+  } catch {
+    return null
+  }
+}
+
+/** package-lock.json is neutral when it did not change at all, or when the only change is the
+ *  version fields riding a version-only manifest bump.
+ *
+ *  2026-11-21 (beta.41 drift): an UNTOUCHED lockfile used to be neutral unconditionally, so
+ *  "hand-edited package.json bump, lockfile left at the old version" was neutral on both sides
+ *  (pkg: version-only; lock: unchanged) → the unit stage was skipped wholesale and the skew only
+ *  existed as a P1-4h assertion that the same gate had deferred. Neutrality now requires the two
+ *  manifests to AGREE; a skew fails wide, and cli/check-version-consistency.cjs blocks it outright. */
+function lockVersionOnly () {
+  const staged = blob(':0:pickdone/package-lock.json')
+  const head = blob('HEAD:pickdone/package-lock.json')
+  if (staged == null || head == null) return false
+  const pkgV = stagedVersion('package.json')
+  let lockV = null
+  try {
+    lockV = JSON.parse(staged).version || null
+  } catch {
+    return false // unparseable lockfile is a real surface problem, not a neutral bump
+  }
+  if (pkgV && lockV && pkgV !== lockV) return false
+  if (staged === head) return true // untouched lockfile that still agrees with the manifest
+  return pkgVersionOnly() && versionOnlyChange(staged, head, true)
+}
+
 function scopeFor (files = stagedFiles()) {
   if (!files || !files.length) return { verdict: 'full', dirs: [], reason: 'no staged files readable — fail wide' }
   const code = []
   let docsOnly = true
+  let manifestNeutral = false
   for (const raw of files) {
     const f = normalize(raw)
     if (DOCS_ONLY.test(f)) continue
+    // version-only manifest bumps cannot alter an assertion (git reads happen only when one of
+    // these two files is actually in the staged set)
+    if (f === 'package.json' && pkgVersionOnly()) { manifestNeutral = true; continue }
+    if (f === 'package-lock.json' && lockVersionOnly()) { manifestNeutral = true; continue }
     docsOnly = false
     if (f.startsWith('tests/') || f.startsWith('test/')) { code.push(f); continue }
     const hit = SURFACE_MAP.find(([prefix]) => f.startsWith(prefix + '/'))
     if (!hit) return { verdict: 'full', dirs: [], reason: `unmapped surface: ${f} — fail wide` }
     code.push(f)
   }
-  if (docsOnly) return { verdict: 'skip', dirs: [], reason: 'docs-only change — unit stage not meaningful' }
+  if (docsOnly && !manifestNeutral) return { verdict: 'skip', dirs: [], reason: 'docs-only change — unit stage not meaningful' }
+  if (!code.length && manifestNeutral) return { verdict: 'skip', dirs: [], reason: 'version-only manifest bump — no test surface' }
   if (!code.length) return { verdict: 'full', dirs: [], reason: 'no code files after filtering — fail wide' }
 
   const dirs = new Set()
@@ -149,8 +236,12 @@ function scopeFor (files = stagedFiles()) {
       // The staged TEST files' own dirs (a changed helper/helper-adjacent spec) — plus, coarse
       // again, tests/lib changes touch everything.
       if (f.startsWith('tests/lib/')) { dirs.add('tests/unit'); continue }
-      const m = /^(tests\/unit\/[^/]+)/.exec(f)
+      // W34 fix: capture the DIR component only. A file DIRECTLY under tests/unit/ (no second
+      // slash) used to make [^/]+ swallow the filename, so the FILE path itself became a --dirs
+      // entry and run-all fail-closed with "entry matching no discovered test file".
+      const m = /^(tests\/unit\/[^/]+)\//.exec(f)
       if (m) { dirs.add(m[1]); continue }
+      if (/^tests\/unit\/[^/]+$/.test(f)) { dirs.add('tests/unit'); continue }
       return { verdict: 'full', dirs: [], reason: `staged non-unit test: ${f} — fail wide` }
     }
     const hit = SURFACE_MAP.find(([prefix]) => f.startsWith(prefix + '/'))
@@ -167,4 +258,4 @@ if (require.main === module) {
   process.exit(0)
 }
 
-module.exports = { scopeFor, stagedFiles, stagedFilesFromGit, stagedFilesFromArgv, SURFACE_MAP, DOCS_ONLY }
+module.exports = { scopeFor, stagedFiles, stagedFilesFromGit, stagedFilesFromArgv, SURFACE_MAP, DOCS_ONLY, versionOnlyChange }

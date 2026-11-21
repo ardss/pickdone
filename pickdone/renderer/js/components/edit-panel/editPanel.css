@@ -187,6 +187,10 @@
   border-top: 1px solid var(--line);
 }
 .ep-tool { cursor: pointer; font-size: 16px; opacity: .75; display: inline-flex; }
+.ep-tool.ep-copy, .ep-tool.ep-delete { align-items: center; justify-content: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--text-3); transition: color var(--dur-fast), background var(--dur-fast); }
+.ep-tool.ep-copy:hover { background: var(--brand-light); color: var(--brand); }
+.ep-tool.ep-delete:hover, .ep-tool.ep-delete:focus-visible { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); opacity: 1; }
+.ep-tool.ep-delete:focus-visible { outline-color: var(--danger); }
 .ep-tool:hover { opacity: 1; }
 .ep-tool img { width: 16px; height: 16px; }
 .ep-tool.hash { font-weight: 700; }
@@ -310,3 +314,26 @@ html[data-theme="dark"] .ep-chip:active, html[data-theme="dark"] .ep-date-chip:a
 @media (max-width: 1080px) {
   .edit-panel { position: absolute; right: 0; top: 0; bottom: 0; z-index: var(--z-panel); box-shadow: -8px 0 24px rgba(0,0,0,.08); }
 }
+
+/* pd20 (2026-11-06) UI-acceptance fix: the work-episode section previously had NO layout
+   rules at all (.ep-work-* existed only as class names), so labels/inputs fell back to
+   inline flow and visually overlapped in the narrow pane (1225x560 screenshot evidence).
+   Minimal vertical-stack layout: every field is a full-width block, blocks separated by
+   token spacing; nothing hardcodes colors (dark-theme safe) and no header sizes change. */
+.ep-work-body { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-2) 0; min-width: 0; }
+.ep-work-block { display: flex; flex-direction: column; gap: var(--space-1); min-width: 0; }
+.ep-work-label { font-size: var(--fs-sm); color: var(--text-3); font-weight: 600; }
+.ep-work-text { font-size: var(--fs-sm); color: var(--text-1); white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.ep-work-list { display: flex; flex-direction: column; gap: var(--space-1); }
+.ep-work-row { display: flex; align-items: center; gap: var(--space-2); min-width: 0; cursor: pointer; }
+.ep-work-row-text { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ep-work-row .mini { flex-shrink: 0; }
+.ep-work-form { display: flex; flex-direction: column; gap: var(--space-2); }
+.ep-work-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ep-work-field-name { font-size: var(--fs-xs); color: var(--text-3); }
+.ep-work-input { width: 100%; min-width: 0; box-sizing: border-box; }
+.ep-work-form-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.ep-work-save-state, .ep-work-copy-state { font-size: var(--fs-xs); color: var(--text-3); min-width: 0; }
+.ep-work-block[data-block="handoff"] { flex-direction: column; align-items: flex-start; gap: var(--space-1); }
+.ep-work-block[data-block="handoff"] .mini + .mini { margin-left: 0; }
+.ep-work-copy, .ep-work-copy-json { margin-top: 2px; }

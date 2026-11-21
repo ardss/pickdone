@@ -152,11 +152,16 @@ test('reconcileDecision: fresh focus → pending, expired focus → book, any re
   assert.deepEqual(reconcileDecision({ status: 'startRestTime', startedAt: T0 }, T0 + 60_000), { action: 'void', startedAt: T0 }, 'rest is voided regardless of elapsed time')
 })
 
-test('reconcileDecision: booked focus measures elapsed minutes, clamped to the ledger cap', () => {
+test('reconcileDecision: booked focus duration is the phase budget (W33 F2: min(wall clock, tomatoTime))', () => {
   const focus = { status: 'startTomatoTime', startedAt: T0, tomatoTime: 25 }
-  assert.equal(reconcileDecision(focus, T0 + 30 * 60_000).focusDuration, 30, 'measured elapsed time, not the configured 25')
-  assert.equal(reconcileDecision(focus, T0 + 8_000 * 60_000).focusDuration, 600, 'booked duration clamped to 600 minutes')
-  assert.equal(reconcileDecision({ status: 'startTomatoTime', startedAt: T0, tomatoTime: 0 }, T0 + 30 * 60_000).focusDuration, 30, 'bogus tomatoTime falls back to the 25-minute expiry window; duration stays measured')
+  // W33 F2: the bookable quantity is bounded by the phase's own budget — a modest wall-clock
+  // overrun still books exactly the stage's tomatoTime (the overshoot is not focus the user did)
+  assert.equal(reconcileDecision(focus, T0 + 30 * 60_000).focusDuration, 25, 'mild wall-clock overrun books the configured 25-minute budget')
+  // a 48h crash/hibernate with the row still armed must NOT book the 600-minute ledger cap of
+  // phantom focus — the cap is the phase budget (tomatoTime), not the wall clock
+  assert.equal(reconcileDecision(focus, T0 + 8_000 * 60_000).focusDuration, 25, 'far-future crash still books exactly the phase budget, never the wall clock')
+  assert.equal(reconcileDecision({ status: 'startTomatoTime', startedAt: T0, tomatoTime: 45 }, T0 + 9_000 * 60_000).focusDuration, 45, 'a larger budget books that budget (== tomatoTime)')
+  assert.equal(reconcileDecision({ status: 'startTomatoTime', startedAt: T0, tomatoTime: 0 }, T0 + 30 * 60_000).focusDuration, 25, 'bogus tomatoTime falls back to the 25-minute default and books it')
   assert.equal(reconcileDecision({ status: 'startTomatoTime', startedAt: T0, tomatoTime: 0 }, T0 + 60_000).action, 'pending', 'bogus tomatoTime uses the 25-minute default expiry window')
 })
 
@@ -178,7 +183,7 @@ test('reconcile: expired focus is booked as an abandoned record and the row is c
   const d = s.reconcile()
   assert.equal(d.action, 'book')
   assert.equal(d.startedAt, startedAt)
-  assert.equal(d.focusDuration, 30)
+  assert.equal(d.focusDuration, 25, 'W33 F2: booked duration == the phase budget (tomatoTime 25), not the 30-min wall clock')
   const rec = db.tomatoes.find(r => r.tomatoId === 'tmt_a_' + startedAt)
   assert.ok(rec, 'ledger row appended with the deterministic idempotent tomatoId')
   assert.equal(rec.succeed, false, 'abandoned focus is not a succeeded tomato')

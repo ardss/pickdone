@@ -18,6 +18,18 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 
+// UNC-normalize for mapped network drives (2026-11-19 takeover): when the worktree sits
+// on a mapped drive, __dirname is UNC (\\host\share\...). Node's ESM resolver calls
+// fileURLToPath on import.meta.url which ERRORS with "File URL path must be absolute"
+// for UNC-hosted modules — every test spawned from a UNC cwd dies at module load.
+// Convert \\host\share\... → share:\... when the share name is a bare drive letter.
+function toLocalPath (p) {
+  if (process.platform !== 'win32') return p
+  const m = /^\\\\[^\\]+\\([^\\]+)\\/.exec(p)
+  if (m && /^[A-Za-z]$/.test(m[1])) return m[1].toUpperCase() + ':' + p.slice(m[0].length - 1)
+  return p
+}
+
 // skip 棘轮基线 —— 2026-09-13 全平台收紧并由 CI 实证校准:
 //   linux:7 = 2(见下) + 5(2026-10-30 e2e-exit-close 遵循 CHECK_ALL_SKIP_LIVE 的 CI 守卫:
 //             该套件是真拉起 Electron、断言托盘行为的 live 测试,xvfb 无托盘无法满足其验收,
@@ -202,12 +214,16 @@ if (arg) {
     ...(!withCoverage && core ? ['--tier=core'] : []),
   ]
   if (cov.dirs) extra.push(`--dirs=${cov.dirs.join(',')}`)
+  // --max-files=N (2026-11-20 commit-speed): forward the commit-stage pool budget to run-all.
+  // Forwarded only when the caller asked for it, so check:all / coverage runs stay unlimited.
+  const maxFiles = (/^--max-files=(\d+)$/.exec(process.argv.find(a => a.startsWith('--max-files='))) || [])[1]
+  if (maxFiles && !withCoverage) extra.push(`--max-files=${maxFiles}`)
   const runOnce = tapPath => {
     const fd = fs.openSync(tapPath, 'w')
     // run-all is streaming now: the tap file grows live, so a hung/budget-killed run leaves
     // diagnostics instead of a 0-byte mystery.
     const r = spawnSync(process.execPath, ['tests/run-all.mjs', ...extra], {
-      cwd: path.join(__dirname, '..'),
+      cwd: toLocalPath(path.join(__dirname, '..')),
       stdio: ['ignore', fd, fd], // TAP 输出全量落盘,失败时回放尾部
     })
     fs.closeSync(fd)
@@ -238,7 +254,31 @@ if (exitCode !== 0) red(`单测进程 exit code = ${exitCode}(非 0 即红,不�
 
 // 校验二: TAP 摘要 fail=0, cancelled=0, skip ≤ 基线
 const tap = fs.readFileSync(tapFile, 'utf8')
+// 2026-11-20 commit-speed: --max-files 让 run-all 在池超预算时打出 DEFERRED 标记并 exit 0。
+// 这里必须显式识别它——否则 TAP 里 0 条用例会被读成"plan 缺失/空摘要"的一次假绿或假红。
+// 它是**明示的推迟**，不是跳过：run-all 已打印等价命令，check:all / CI 仍跑全池。
+const deferred = /^# DEFERRED (\d+) files \(max (\d+)\)/m.exec(tap)
+if (deferred) {
+  console.log(`⏭ [check-test-summary] 本次提交未跑单测：受影响池 ${deferred[1]} 个文件超出提交预算 ${deferred[2]}`)
+  console.log('   本地全量：npm run check:core   |   push 后 CI 跑全量（check:all 口径）')
+  process.exit(0)
+}
 const { pass, fail, skip, cancelled, plan } = parseSummary(tap)
+// W32 fix(#1) 2026-11-03 live-pool skip intake: tests/run-interactions-shared.mjs's 9-target
+// live pool is NOT a TAP stream — its internal t.skip() counts were invisible to every plan-
+// anchored parse and the pool could be eroded by unlimited skips with the gate green. The
+// runner now prints a pool-total `# skip N` in its summary tail; a consumer that wires the
+// pool into this gate forwards it via `--live-pool-skip=N` (or env
+// CHECK_TEST_SUMMARY_LIVE_POOL_SKIP) and the number rides the SAME ratchet as unit skips.
+// Absent/invalid intake => behavior byte-identical to before (backward compatible).
+const livePoolSkipFlag = process.argv.find(a => /^--live-pool-skip=\d+$/.test(a))
+const livePoolSkipEnv = process.env.CHECK_TEST_SUMMARY_LIVE_POOL_SKIP
+const livePoolSkip = livePoolSkipFlag
+  ? Number(livePoolSkipFlag.split('=')[1])
+  : (/^\d+$/.test(livePoolSkipEnv || '') ? Number(livePoolSkipEnv) : null)
+if (livePoolSkipEnv !== undefined && livePoolSkipFlag === undefined && livePoolSkip === null) {
+  console.error(`⚠ [check-test-summary] CHECK_TEST_SUMMARY_LIVE_POOL_SKIP=${livePoolSkipEnv} 非法(须为非负整数),已忽略——活体池 skip 不并入棘轮`)
+}
 if (fail == null || skip == null || cancelled == null) {
   red(`TAP 摘要解析失败(fail=${fail} skip=${skip} cancelled=${cancelled})——未见 plan 行(1..N)或摘要不全,reporter 可能不是 TAP 或输出被截断,不得假绿放行`, tapFile)
 }
@@ -262,17 +302,21 @@ if (plan != null && pass != null && fail != null && skip != null && cancelled !=
     }
   }
 }
-if (skip > SKIP_BASELINE) {
+const skipTotal = skip + (livePoolSkip || 0)
+if (skipTotal > SKIP_BASELINE) {
   // 打出 skip 用例名,定位是哪条测试在跳
   // W25 2026-11-01: `^\s*ok` — node:test nests each file's test points as INDENTED
   // `ok N ... # SKIP` lines inside the file's top-level block (same shape run-all's
   // W15 per-test-point counter matches); the old `^ok\b` replay missed them all.
   const skipNames = tap.split(/\r?\n/).filter(l => /# SKIP|# skipped/i.test(l) && /^\s*ok\b/.test(l)).slice(0, 10)
   if (skipNames.length) console.error('  [skip cases]\n' + skipNames.map(l => `    ${l.trim().slice(0, 150)}`).join('\n'))
-  red(`# skipped = ${skip} > 棘轮基线 ${SKIP_BASELINE}——新增 skip 需要说明+降基线(改 cli/check-test-summary.cjs 的 SKIP_BASELINE)`, tapFile)
+  // W32 2026-11-03: when a live-pool skip total rides in, name both sources in the red.
+  const src = livePoolSkip == null ? `# skipped = ${skip} > 棘轮基线 ${SKIP_BASELINE}`
+    : `# skipped = ${skip}(unit TAP) + ${livePoolSkip}(live pool) = ${skipTotal} > 棘轮基线 ${SKIP_BASELINE}`
+  red(`${src}——新增 skip 需要说明+降基线(改 cli/check-test-summary.cjs 的 SKIP_BASELINE)`, tapFile)
 }
 
-console.log(`✓ [check-test-summary] # pass ${pass ?? '?'} / # fail ${fail} / # cancelled ${cancelled} / # skipped ${skip} ≤ 基线 ${SKIP_BASELINE}`)
+console.log(`✓ [check-test-summary] # pass ${pass ?? '?'} / # fail ${fail} / # cancelled ${cancelled} / # skipped ${skipTotal} ≤ 基线 ${SKIP_BASELINE}`)
 // 临时 TAP:成功即清;失败路径经 red() exit 保留在 tmpdir 供人工回放(有意为之)。
 // W30: --retry-once 的 pass-1 存证(*.prev)同样只在失败路径保留——成功路径必须一并清掉,
 // 否则每次带 retry 的绿跑都在 %TEMP% 泄漏一份全量 TAP(原实现只删了正本)。

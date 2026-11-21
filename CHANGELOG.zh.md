@@ -1,6 +1,65 @@
+## [0.4.0-beta.41] - 2026-11-20
+
+### 新增
+- `sync forget --device <id>`：只删一条失效的设备记录。已经不存在的设备（早前在第二个端口上跑的开发实例）以前没有安全的清理办法——`sync unpair` 会轮换唯一的共享配对密钥，所有正常设备都会被踢下线重配。`forget` 只清掉这台设备的 peer 记录、手动地址镜像、番茄运行公告行和推送水位，保留共享密钥，其他设备无感。
+
+### 修复
+- 侧栏主题按钮不再借用"设置"按钮的类名。六个活体 UI 套件用 `.sn-account-gear:not(.sn-account-trash)` 定位设置入口，而新按钮在 DOM 里排在齿轮之前，于是点击被主题切换吞掉、设置面板打不开——提交门禁看不见（活体池被推迟），是这条分支的第一次 CI 运行抓到的。主题按钮改用自己的 `sn-theme-toggle` 身份，外观由联合规则共享。
+- 自动更新不再对「没有更新源」的安装反复重试。`electron-builder --dir` 打的包不含 `app-update.yml`，而 `autoUpdater.isUpdaterActive()` 只判断是否为打包态，于是每 4 小时的检查照常发起、抛 `ENOENT ... resources\app-update.yml`，又被归为网络瞬时故障——每次唤醒重试 3 次，一个永远无法自更新的包每天白写 4 行日志。现在更新源文件缺失时更新器直接静默停用（`active:false`，不检查、不重试、设置页不显示入口），同时把「更新源文件缺失」归类为更新源缺失而不是网络故障。
+
+### 工具链
+- 覆盖率棘轮改为读本轮自己写出的 `coverage-summary.json`，不再从 node 的原始 TAP 表里抠数字。那张表把测试文件本身也算进分母，于是 Windows 腿读成 60/70/49，而基线 79/83/75 是在不含测试文件的仪器下校准的——这是一条再怎么补测试也消不掉的假红。TAP 抠取只保留为"本轮没写摘要"时的兜底。
+- 备份同秒冲突测试不再把墙上时钟当夹具：CI 里第三次写在第一次之后 3.7 分钟才落地，根本没有冲突，实现正确却被判红。`-dup1`/`-dup2` 链改由私有目录 + 固定 stamp 直接调用 `uniqueSnapshotName` 证明（`handlers/backup.js` 已把它导出为测试缝）。
+- 新增 `cli/check-version-consistency.cjs`：`package.json` 与 `package-lock.json` 必须报同一个版本。手工改清单版本号时漏改 lockfile，而提交门禁把两个文件都判为"版本中性"（清单仅差 version 字段、lockfile 完全没动），单测阶段被整体跳过，漂移只以 P1-4h 单测的形式存在——而那条单测正好被同一个门禁 DEFERRED 掉了。新门禁进 pre-commit（毫秒级，读 staged blob）与 `check:all`；同时 `lockVersionOnly()` 在两侧版本不一致时不再给出中性判定。
+
+## [0.4.0-beta.40] - 2026-11-20
+
+### 新增
+- 左侧栏底部新增深浅色切换图标，位于同步、回收站、设置之后，折叠态同样提供。图标显示当前主题（深色时是太阳），点一下切到相反的明确模式；设置里的「跟随系统」仍然有效并实时跟随 Windows 切换。底部四个图标改为独立紧凑间距，账号名不再被挤成省略号。
+
+## [0.4.0-beta.39] - 2026-11-19
+
+### 更新
+- 独立项目模型与任务显式关联：项目新建、改名、归档及恢复不再混用分类和标签；历史无名项目按原 ID 保留，不猜名称、不改原任务。
+- 桌面项目总览、任务编辑、CLI、工作交接和 LAN 更新统一读取独立项目。项目截止日期、文档和里程碑纳入备份，浏览器与类型接口补齐。
+- 补充跨端与恢复测试；此版本在完整门禁及安装验收前仍为本地候选版本。
+
 # Changelog（中文版）
 
+## [0.4.0-beta.31] - 2026-11-18
+
+### 修复
+- 右侧抽屉：「继续工作」及项目交接实验区不再默认显示；必须明确启用开发者预览和功能开关。旧版本同步过来的开启状态也不会强制向普通用户显示，已保存的工作轮次、发现、决策和来源记录保留不动。
+- 番茄钟列表按钮：统一图标左右空间，修复选中或取消时高亮图标不居中；将样式从新手引导组件迁回任务列表组件。
+- 番茄钟专注条：开始专注后和「放弃专注」按钮恢复语义红色；未开始保持品牌绿色，休息保持橙色。
+- 增加相关界面回归断言，更新隔离 Electron 中默认隐藏、预览开关、记录增删改、交接复制及重启恢复的验收测试。
+
+## [0.4.0-beta.30] - 2026-11-16
+
+### Fixed
+- LAN 同步（QA-R7 P0，真机双机演练）：发起端配对在持久化新 peer 之前就重启了活节点，导致每轮同步 targets=0 直到下次完整重启，删除只能靠对端 5 分钟周期拉取传播。两条配对流程现在都在重启前先持久化 peer（重启时的 restorePeers 是被证实的注册路径），重启失败时回滚刚写入的记录、保住 fail-closed 契约。端到端：配对后首轮立即确认，发起端删除 ≤2 秒到达对端（原约 5 分钟）。
+- LAN 同步发现（QA-R7 §7）：六位码配对跨机失效，根因是 UDP 兜底通道只在 bonjour-service 缺席时才启动——正常安装下发现完全依赖 mDNS，而 mDNS 查询经常跨机无应答（广播却能跨机到达）。UDP 兜底现在无条件与 bonjour 伴跑，广播+监听不再依赖跨机 mDNS 查询回路。
+
+## [0.4.0-beta.29] - 2026-11-10
+
+- PickDone 2.0 工作连续性里程碑（PD20 长程）：Task→Episode→Finding/Decision→SourceRef→Handoff 全链闭环（迁移 v14、CLI、EditPanel UI、handoff 导出）；跨端桥接受理无 Origin 头的已认证原生客户端（loopback 锚定，认证零弱化）并加固错误恢复；Android/Web/扩展三客户端落地（离线 PWA outbox 真桥同步、Capacitor 原生 HTTP 配对、MV3 捕获含用户可见端口冲突哨兵、深链与拖拽互通、VS Code VSIX MVP）；安装链新增五表面身份审计与一键备份/升级/回滚演练；独立 QA 判定候选 GO-READY（候选态 ≠ Publish）。
+- 本线以下为维护分支累积的 [Unreleased] 条目，随本候选一并交付。
 ## [Unreleased]
+
+- 更新链路（W33，#224）：404 重试风暴根治——release feed 缺失（HTTP 404 / ENOTFOUND / 无已发布 release）归类为 FEED_MISSING 且绝不再挂 30s 退避（瞬时错误保留每次唤醒 3 次预算），状态暴露 lastCheckError {kind, at} 使"该 tag 无公开 release 资产"可与网络故障区分，同类 feed 缺失错误只广播一次。回归测试钉死：持续 404 → 零重查；瞬时错误 → 有界。
+
+- 渲染层（W33）：回收站恢复失败会永久丢掉面板里未保存的子任务/附件编辑（takeDirty 排掉脏标记后失败分支无补偿——现在 catch 里补标回）；远端同步指纹漏 deadlineTs，同行只改截止日的入站编辑被判为"无变化"，面板可拿陈旧 UI 值静默覆盖 peer（与 repeatId 同类 J3）；30s nowTick 不再每半分钟销毁重建全部 Chart.js 画布（ChartCard 内容指纹守卫）；DayDeck 注入样式去重；浮窗放弃 ghost 定时器与 SearchView 回显多余 commit 清理。
+- 主进程（W33）：番茄崩溃补偿不再把墙钟时长当专注记账——专注中段宕机两天后只记阶段预算（tomatoTime），不再是 600 分钟幻影账；snowDedup 键帽真正收敛（全键年轻时按年龄删匹配 0 行、表无界增长且每次落账空付 COUNT）；渲染端发起的通知补上锁屏感知 click 路由（原来点了没反应）；浮窗重建后不再继承死窗的握手新鲜度（20s 假健康窗口关闭）；显示器探测全失败时 quick-add 不再落屏外（x=-240）；setMetaMany 补 manifest 行（该写 op 游离在总线契约外——一条路径抛 USAGE、另一条静默绕过盖章门）。
+- 门禁（W33）：ESM 模块图开始下探嵌套动态 import（defineAsyncComponent(() => import(...)) 形态此前完全不受检），动态裸名必须真实可解析而非无条件豁免；IPC OPS 键正则补齐数字类（与其声称镜像的 OP_ID 口径对齐）；check-fingerprint 换共享 TOCTOU 安全 walker，盘符规则覆盖 url()/方括号前缀；结构基线退役低于硬上限的条目（关闭免费回涨空间）；token 自检改 CLI 参数且移到通过行之前（fail-closed）；unit-more3 泄漏清理。
+- 测试（W33）：门禁测试夹具跟随 fingerprint 门禁的 lib 依赖搬家；番茄补偿测试更新为预算封顶语义（远未来 startedAt 用例锁死记账 == tomatoTime）。
+
+- 渲染层（W32）：快速添加小窗三路丢数据——忙碌期提交时粘贴的多行只存在内存队列里被自动隐藏销毁；排水路径把用户排队期间继续打的草稿静默清掉（未创建也未持久化）；焦点不在输入框时 Esc 只清文本、队列残留到下次 Enter 被悄悄创建。现在：排队行持久化 localStorage（唤起还原、排水/显式取消清除）、排水保留草稿、Esc 委托完整取消、成功 toast 读 await 前的日期快照、重唤起不再复活过期的失败横幅。另：backup-degraded 监听器卸载时移除。
+- 主进程（W32）：data:relocate 的 relaunch 路径完全绕过 quit 链——DB 关闭前先做同步 stop/settle（对齐 updater W16）；关键备份"空快照"隔离不再误伤合法删光全部任务的场景（计入全部恢复段而非只数 todoState，主恢复源不再冻结在删除前）；relay enable() 在已注册设备密钥但无记录 relay URL 时拒绝静默换 origin（旧 bearer 与 cursor 可能发往另一主机）；disable-lock 的写失败兜底改为落恢复标记而非假报成功，下次启动可读时补写解锁；数据迁移把目录 symlink 重建为 junction、文件 symlink fail-closed 列出冲突而非中止/错拷。
+- 门禁（W32）：活体池 skip 不再不可见——run-interactions-shared 聚合各目标 TAP skip 计数，check-test-summary 可并入 skip 棘轮（--live-pool-skip / 环境变量；check-all 接线待其结构禁区解锁）；低置信重试流的合成摘要改为合并 pass1+retry 的 skip 数（pass1 新增 skip 不再逃逸）；parity-cli-ui 不再泄漏 tmp 目录与环境变量；boot 日志 fd 在 reap 时关闭。
+
+- 门禁（W31）：三个真实测试套件对所有 runner 不可见——`TEST_EXTS` 缺 `.test.cjs`，多实例 lock/port 与 relay 证据维护套件从未执行过，且 fail-closed 检查看不见这种缺口；现已全部被发现且实测全绿。gate-doctor 的 git 子进程未剥离 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE（换共享 gitEnv）；覆盖率仪器锚测试把任何非零/null 退出都当"预期红"（`notEqual(0)` → 钉死 `equal(1)`）；check-command-bus 的 electron-log `Module._load` stub 在 require 时无条件安装并静默泄漏进三个进程内消费测试（改 require.main 门控）；w30-stopsync 测试质量三连：no-op 用例恒真断言 `ok(true)`、exit 钩子里的装饰性还原永不生效、裸 mkdtemp 泄漏（改断言真实可观察量 + try/finally + isolatedTmpDir）。
+- 渲染层（W31）：番茄记录弹层手动补录用 startTs 确定性生成 id——同一分钟补第二条记录被按 id 幂等去重静默吞掉，但每日限额照扣、成功 toast 照弹（id 加随机尾，与 DayRail/TaskAccountModal 同款）；DayRail 补录卡可把结束时刻存进未来（卡片内 time-picker 可把 startMin 推到 23:59；saveEntry 现在在创建与编辑两条路径都拒绝当日 end>now）；删除死代码 computed `selDayLabel`（毫秒时间戳直接拼"今天"后缀）；dragOverSeg 复位哨兵统一为 null。
+- 主进程（W31）：sync-apply 的 S1 causal-current 覆盖逐行探测 `revisionsList`——主线程同步 better-sqlite3 查询，数千行 relay 首拉会阻塞整个 ingest 期间的 IPC/提醒；现在按 ingest pass 记忆化（每个 distinct id 至多探测一次，per-pass cache 生命周期已核验，保守的 no-head 落 LWW 路径保持不变）。
 
 - 覆盖率仪器统一（W30）：单测门的 run-all 调用从不传 `--suite=unit`，CI 的 coverage summary 标签恒为 suite=all，棘轮拿全量口径读数对 unit 口径基线硬比（只警告不拦）；且 EXCLUDE 出池的 live journey 文件按 0% 计入分母——任何碰同步域的分支都会确定性撞红。现在 check-test-summary 产 unit 池摘要（--core+--with-coverage 组合直接拒绝；--affected dirs 与 unit 池求交），棘轮 12 分钟等待降 3 分钟封顶，基线按平台以 fresh unit 证据重校准（win32@node22 80/83/75、win32@node24 65/74/55；linux@node22 两步走待 CI），四个最差文件落下约 1000 行真实行为覆盖（external-db-watch 9.5→98.8%、backup.js 17.9→98.3%、updater 25.6→99.4%、windows.js 49.7→87.9%）。
 - 附件领域架构第一刀（W30）：EditPanel 保存路径区分「已入队」与「SQLite 已确认」（2 秒 pendingUpserts 探测，双语"保存未确认"弱提示+重试）；附件渲染收敛到共享四态助手（ok/syncing/missing/broken）；protocol 404 打结构化 reason（无用户内容）；启动对账零引用附件文件（默认只审计，TODO_CLI_ATTACH_ORPHAN_SWEEP=1 才删）。
@@ -21,6 +80,37 @@
 - UI 正确性（W27）：番茄时间轴弹层的色块排序比较器对不存在的属性做减法（NaN→色块与时间轴反向）；遗留 `repeatId === 'null'` 哨兵普通任务可能被撤销/回收路径误当续期幽灵实例软删（两个入口加 isRepeatTask/哨兵守卫）；DepView 逾期/今天徽标与统计成就墙用裸墙钟无响应式依赖——跨午夜冻结（todayTimestamp / nowTick）。
 - 主进程（W27）：data:relocate 迁移进度 IPC 永远到不了渲染端（webContents 被二次包裹，TypeError 被吞）；updater 终态守卫放任并发 check 把进行中的自动下载标成已是最新；quit-ack 的 onDone 回调在退出拆除 tick 里裸奔；审计日志轮转的 existsSync→rename 探测可被双进程竞态（POSIX 静默覆盖）——改 ms+pid+seq 唯一目标。
 - 门禁/测试（W27）：check-file-size 的 ls-files 钉 core.quotePath=false（非 ASCII 跟踪文件曾被误判新文件）；lint-staged 的 W25 staged-blob 抽取按原目录镜像（摊平临时路径丢 .eslintrc 目录 overrides——错 env linting）；journey-relay 暂存文件 pid 唯一化、jrelay- 家族进 tmp 清扫器；check-media-lang 可见含空格/尖括号的 markdown 引用（fail-open 封堵）；check-fingerprint 抓正斜杠与 file-URL 形态本机路径；check-i18n 的 bracketDelta 跳过字符串/注释字面量；j-todo-core 的 J1 日期条导航对 ±7 天箭头步进稳健（0.1.0 起的行为）。
+
+## [0.4.0-beta.29-ui2] - 2026-11-06
+
+### 新增
+- 项目页多视图（P1）：任务区可切换 列表 / 看板 / 轻时间线，选择跨重启保留。
+- 看板：按真实完成状态的两列简单看板；卡片点击打开任务详情。
+- 时间线：项目全部工作历程按日分组，突破 recent-8 汇总上限。
+
+### 修复
+- 编辑面板"继续工作"区此前没有任何布局规则（窄窗口字段重叠）；现为清晰纵排。
+- 项目页交接/看板/时间线行点击必开，不再因任务缓存未跟上静默失效。
+
+### 变更
+- 内部候选号 0.4.0-beta.29-ui2（仅验收用未发布构建）。
+
+## [0.4.0-beta.28] - 2026-11-05
+
+- 托管升级恢复（内部 A/B 安装脚本，scripts/windows）：deploy-in-place 预检在任何进程停止之前校验安装包哈希、旧版本、运行中程序根、自启任务与现用加密数据库/密钥；先完整备份旧程序 + 数据库/WAL/SHM + db.key + 配置 + 附件；NSIS 安装失败或装错构建时隔离失败包并用 restore-program.ps1 还原旧程序；回滚永不自动覆盖用户数据（数据库哈希变化时收回自动重开）。
+- 更新源错误分类：缺失的发布源（HTTP 404 / ENOTFOUND / 无已发布 release）归类为 FEED_MISSING 且不再挂在 30 秒退避上反复重试；DNS/网络故障保持瞬态并有界重试；状态暴露 lastCheckError {kind, at}，"该 tag 无公开 release 资产"与网络故障可区分。
+
+## [0.4.0-beta.27] - 2026-11-04
+
+- LAN 同步：对端存活判定改为跟随周期性 LAN 轮次（刚应答过轮次的对端不再被误判下线）；同步状态页反映真实 LAN 节点状态而非过期计划文案。
+
+## [0.4.0-beta.26] - 2026-11-04
+
+- 更新安装确认：进入更新重启需用户显式确认，并加版本感知的 A/B 升级门（候选版本不高于运行中构建时在停止任何进程前拒绝）。
+
+## [0.4.0-beta.25] - 2026-11-04
+
+- 打包门禁：`npm run dist` 末尾接入 verify-packaged（fail-closed）——坏包产物（如 beta.24 那次符号链接事故：代码门禁全绿、app.asar 却静默丢了约 60 个 Electron 运行时包）不再能作为"成功构建"流出流水线；内部验收候选版本升至本版，装机的机器一眼区分新构建与 beta.24。
 
 ## [0.4.0-beta.24] - 2026-11-01
 

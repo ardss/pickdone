@@ -60,6 +60,7 @@ const GROUPS = [
     name: '② 静态门禁+类型+单元（并行 3 道,与③池同时起跑）', parallel: 3, retry: 0,
     stages: [
       ['Public/private environment boundary and PR conventions', 'node', ['cli/check-environment-boundary.mjs']],
+      ['版本一致性（package.json ↔ package-lock.json：只改一侧会让单测阶段被整体跳过，beta.41 实测漂移）', 'node', ['cli/check-version-consistency.cjs']],
       ['指纹脱敏', 'node', ['cli/check-fingerprint.js']],
       ['依赖许可证', 'node', ['cli/check-licenses.js']],
       ['token 纪律', 'node', ['cli/check-tokens.js']],
@@ -415,7 +416,13 @@ if (FAST) {
   const fastStages = GROUPS[1].stages
     .filter(([name]) => !name.startsWith('覆盖率棘轮'))
     .map(([name, cmd, args, env, budget]) =>
-      (name.startsWith('单元测试') ? [name, cmd, [...(args || []), '--core'], env, budget] : [name, cmd, args, env, budget]))
+      // --core must drop --with-coverage: the coverage ratchet's baseline is calibrated on the
+      // FULL unit pool, a unit∩core summary is a different instrument (check-test-summary
+      // rejects the combination fail-loud). Core-tier discipline stays enforced, just without
+      // the ratchet — same doctrine as skipping the 覆盖率棘轮 stage above.
+      (name.startsWith('单元测试')
+        ? [name, cmd, (args || []).filter(a => a !== '--with-coverage').concat('--core'), env, budget]
+        : [name, cmd, args, env, budget]))
   console.log('\n===== [check:fast] 静态门禁+类型+core 层单元（深潜层套件与覆盖棘轮归全量 check:all） =====')
   results.push(...await runPool(fastStages, GROUPS[1].parallel, { retry: GROUPS[1].retry || 0 }))
 } else if (ON_CI) {

@@ -416,6 +416,13 @@ function createRelayAdapter ({
     if (priorAccount && (priorAccount !== account || (priorBaseUrl && priorBaseUrl !== baseUrl))) {
       throw new Error('relay-adapter: different account or relay origin requires explicit forget; refusing to rebind existing identity')
     }
+    // W32 (P2): an empty/missing priorBaseUrl is NOT a free pass — when a DEVICE_SECRET is
+    // already registered, its bearer token and the durable cursor belong to ONE relay origin,
+    // and enabling against a different host would send that secret + cursor there blindly.
+    // Refuse the same way (explicit forget resets identity first).
+    if (get('DEVICE_SECRET') && !priorBaseUrl) {
+      throw new Error('relay-adapter: registered device without a recorded relay origin requires explicit forget; refusing to rebind to a new origin')
+    }
     if (rootKey != null && priorRootKey && String(rootKey) !== priorRootKey) {
       throw new Error('relay-adapter: different root key requires explicit key migration; refusing silent key rotation')
     }

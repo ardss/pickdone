@@ -510,6 +510,7 @@ module.exports.newestSameTag = newestSameTag
 module.exports.assertIngressSize = assertIngressSize
 module.exports.INGRESS_MAX_BYTES = INGRESS_MAX_BYTES
 module.exports.twinMatches = twinMatches
+module.exports.uniqueSnapshotName = uniqueSnapshotName // F21: unit-test seam — same-stamp collision naming without a wall clock
 module.exports.criticalJsonPlausible = criticalJsonPlausible // D17: unit-test seam
 module.exports.buildAttachmentManifest = buildAttachmentManifest // F4: attachment-loss visibility seam
 module.exports.writeAttachmentSidecar = writeAttachmentSidecar // F4: unit-test seam

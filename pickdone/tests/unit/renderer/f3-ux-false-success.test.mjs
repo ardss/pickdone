@@ -94,34 +94,32 @@ test('F3-2 category/setProject failed durable flag write reverts the in-memory p
   assert.ok(state.projectIds.includes(777), 'failed delete keeps the id (revert = failure signal)')
 })
 
-test('F3-2 ProjectView.removeFromProject gates success toast + navigation on the revert signal', () => {
+test('F3-2 ProjectView.removeFromProject awaits V2 archive before toast/navigation', () => {
   const src = read('renderer/js/views/ProjectView.vue')
   const m = src.match(/async removeFromProject \(\) \{[\s\S]*?\n {4}\},/)
-  assert.ok(m, 'removeFromProject block found')
+  assert.ok(m)
   const body = m[0]
-  assert.match(body, /commit\('category\/setProject', \{ id: this\.catId, flag: false \}\)/)
-  assert.match(body, /await new Promise\(r => setTimeout\(r, 0\)\)/, 'waits out the immediate onFail revert window')
-  assert.match(body, /projectIds\.includes\(this\.catId\)/, 'checks the in-memory revert (sync mutation: commit discards the return)')
-  const toastIdx = body.indexOf('statsB.ProjectView.restored')
-  const gateIdx = body.indexOf('projectIds.includes')
-  const pushIdx = body.indexOf('$router.push')
-  assert.ok(gateIdx !== -1 && gateIdx < toastIdx && gateIdx < pushIdx, 'success toast AND router.push only after the gate')
-  assert.match(body, /statsH\.main\.actionFailedMsg/, 'failure toasts the shared actionFailedMsg key')
+  assert.match(body, /await this\.\$store\.dispatch\('projectV2\/update', \{ projectId: this\.projectId, patch: \{ deleted: true \} \}\)/)
+  assert.match(body, /statsH\.main\.actionFailedMsg/)
+  assert.doesNotMatch(body, /commit\('category\/setProject'/)
+  const write = body.indexOf("dispatch('projectV2/update'")
+  const toast = body.indexOf('statsB.ProjectView.archivedProject')
+  const nav = body.indexOf('$router.push')
+  assert.ok(write >= 0 && write < toast && toast < nav, 'no optimistic success or redirect before durable archive')
 })
 
 /* ==================== [F3-3/F3-4] SnManageCategoriesModal ==================== */
 
-test('F3-3 SnManageCategoriesModal.toggleProject gates the success toast on the same revert signal', () => {
+test('F3-3 SnManageCategoriesModal.toggleProject awaits V2 conversion/archive, reports errors', () => {
   const src = read('renderer/js/components/side-nav/SnManageCategoriesModal.vue')
   const m = src.match(/async toggleProject \(c\) \{[\s\S]*?\n {4}\},/)
-  assert.ok(m, 'toggleProject block found')
+  assert.ok(m)
   const body = m[0]
-  assert.match(body, /await new Promise\(r => setTimeout\(r, 0\)\)/)
-  assert.match(body, /projectIds\.includes\(c\.categoryId\) !== flag/, 'both directions gated on the flag delta')
+  assert.match(body, /await this\.\$store\.dispatch\('projectV2\/fromCategory'/)
+  assert.match(body, /await this\.\$store\.dispatch\('projectV2\/update'/)
   assert.match(body, /statsH\.main\.actionFailedMsg/)
-  const toastIdx = body.indexOf('statsG.SideNav.setProject')
-  const gateIdx = body.indexOf('!== flag')
-  assert.ok(gateIdx < toastIdx, 'success toast only after the gate')
+  assert.doesNotMatch(body, /commit\('category\/setProject'/)
+  assert.ok(body.indexOf("dispatch('projectV2/fromCategory'") < body.indexOf('statsG.SideNav.setProject'))
 })
 
 test('F3-4 saveMgrEdit: a failed persist keeps the editor open on the old name', () => {
@@ -134,17 +132,17 @@ test('F3-4 saveMgrEdit: a failed persist keeps the editor open on the old name',
 
 /* ==================== [F3-5] renameProject cancel vs persistence failure ==================== */
 
-test('F3-5 renameProject: cancel scoped to the dialog await; persistence errors surface', () => {
+test('F3-5 renameProject scopes prompt cancellation and surfaces all V2 write errors', () => {
   const src = read('renderer/js/views/ProjectView.vue')
   const m = src.match(/async renameProject \(\) \{[\s\S]*?\n {4}\},/)
-  assert.ok(m, 'renameProject block found')
+  assert.ok(m)
   const body = m[0]
-  assert.match(body, /catch \{ return \} \/\/ user cancelled the dialog/, 'the ONLY swallow is the $prompt cancel')
-  assert.equal((body.match(/catch ?[{(]/g) || []).length, 2, 'exactly two catch scopes: dialog cancel + persist errors')
-  assert.match(body, /const ok = await this\.\$store\.dispatch\('category\/updateCategory', \{ categoryId: this\.catId, categoryName: name \}\)/, '[A4] pinned gate line shape preserved (d20 contract)')
-  assert.match(body, /e\.code === 'CATEGORY_EXISTS'/, 'duplicate-name warning preserved')
-  assert.match(body, /statsH\.main\.actionFailedMsg/, 'unknown persistence rejections surface (no cancel swallow)')
-  assert.doesNotMatch(body, /throw e\s*\n\s*\}\s*\n\s*\} catch \{/, 'no rethrow into an outer cancel-swallowing catch')
+  assert.match(body, /catch \{ return \}/, 'cancel only during prompt')
+  assert.equal((body.match(/catch ?[{(]/g) || []).length, 2, 'separate cancel and persistent-write error scopes')
+  assert.match(body, /await this\.\$store\.dispatch\('projectV2\/update', \{ projectId: this\.projectId, patch: \{ name \} \}\)/)
+  assert.match(body, /PROJECT_V2_DUPLICATE_NAME/, 'V2 duplicate name gets specific warning')
+  assert.match(body, /statsH\.main\.actionFailedMsg/)
+  assert.doesNotMatch(body, /dispatch\('category\/updateCategory'/)
 })
 
 /* ==================== [F3-6] renameTag undo snapshot ==================== */

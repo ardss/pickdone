@@ -56,7 +56,11 @@ export const META_CONFLICT_BACKUP_PREFIX = 'metaConflictBackup.'
  */
 export function isMachineLocalMetaKey (id) {
   const k = String(id)
-  return k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
+  // 'crossplatform.*' = mobile/web bridge trust root (pairing secret, session nonce, token
+  // revocations, paired-device registry, enabled flags) — Lane A 2026-11-07. Syncing them
+  // would replicate THIS machine's pairing credentials onto peers and let a peer's rows
+  // overwrite the local trust root (every local token would be forged/rejected).
+  return k.startsWith('crossplatform.') || k.startsWith('sync.') || k.startsWith('_') || /^securityLock/.test(k) ||
     // 'cliTomato*' = CLI tomato runtime TRANSIENT state (per-device command/status slots);
     // 'cliSync*' = CLI sync command channel slots (cmd/receipt/seq per-machine transport state,
     // never data — syncing them would replay stale commands on the peer).
@@ -102,4 +106,14 @@ export function isMachineLocalMetaKey (id) {
 export function isSyncBlobMetaKey (id) {
   const k = String(id)
   return k === 'db.settingsState' || k === 'db.habitsState'
+}
+
+// PD20 (2026-11-05): source_refs that point at THIS machine's filesystem must never egress to
+// peers — `file` provider externalIds are local absolute paths (EditPanelWork's Link form and
+// handoff exports), and an absolute path is machine-local state by the sync security boundary
+// (same class as 'sync.*' identity and securityLock* ciphertext). Remote peers see the task's
+// episodes and the LINK row but not the file-backed ref; the episode view model JOIN simply
+// hides the missing ref (no dangling UI). http(s)/capture/deeplink refs are portable and sync.
+export function isMachineLocalSourceRef (providerId, externalId) {
+  return String(providerId || '') === 'file'
 }

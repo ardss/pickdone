@@ -98,7 +98,14 @@ function rowToTodo (r) {
     version: r.version,
     tz: r.tz || null,
     // Provenance passthrough (protocol v3): who wrote this version. NULL = pre-v7 legacy row.
-    syncAuthor: r.syncAuthor || null
+    syncAuthor: r.syncAuthor || null,
+    // Handoff targeting passthrough (migration v13, G2 zone-2): the addressed-device fields,
+    // read back verbatim so the bridge DTO egress (desktop-repo canonical mapping) can carry
+    // them. NULL/0 on ordinary tasks = not a handoff — never fabricated.
+    handoffTo: r.handoffTo || null,
+    handoffFrom: r.handoffFrom || null,
+    handoffNote: r.handoffNote || null,
+    handoffAckedAt: r.handoffAckedAt || 0
   }
 }
 
@@ -147,6 +154,31 @@ function setSyncAuthor (deviceId) { currentSyncAuthor = String(deviceId || '') |
 function selfSyncAuthor () { return currentSyncAuthor || null }
 
 function todoToRow (t) {
+  // Shape tolerance (G2 contract fix, 2026-11-10): the canonical STORAGE shape {id, content,
+  // updatedAt, deleted, ...} is accepted alongside the renderer VIEW-MODEL shape {taskId,
+  // taskContent, updateTime, delete, ...}. The cross-platform bridge put path (desktop-repo →
+  // upsert) now feeds canonical rows straight through; callers keep their existing shapes.
+  if (t && t.taskId == null && t.id != null) {
+    t = {
+      taskId: t.id,
+      taskContent: t.content,
+      taskDescribe: t.description,
+      complete: t.complete,
+      completedAt: t.completedAt,
+      todoTime: t.scheduledAt,
+      dayStart: t.scheduledDay,
+      reminderTime: t.remindAt,
+      deadlineTs: t.deadlineTs,
+      createTime: t.createdAt,
+      updateTime: t.updatedAt,
+      delete: t.deleted,
+      deletedAt: t.deletedAt,
+      categoryId: t.categoryId,
+      version: t.version,
+      syncAuthor: t.syncAuthor,
+      userId: t.userId
+    }
+  }
   const todoTime = t.todoTime || 0
   return {
     id: t.taskId,

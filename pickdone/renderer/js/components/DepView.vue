@@ -14,14 +14,12 @@
       </button>
       <span class="depv-hint">{{ $t('statsA.DepView.dragHint') }}</span>
     </div>
-
     <!-- Connect mode status line: keyboard-only dependency wiring (2026-09-12).
          Always keyed to the mode so screen readers announce it via role="status"; hidden entirely
          (v-if) in normal mode so the default rendering is unchanged. -->
     <div v-if="connectSrc" class="depv-connect" role="status" aria-live="polite">
       {{ $t('statsA.DepView.connectHint', { a: connectSrcName }) }}
     </div>
-
     <!-- 项目头:里程碑/截止/进度(里程碑与截止来自 projectMeta,进度从任务算) -->
     <div v-if="projectId != null && projectInfo" class="depv-proj">
       <span class="depv-chip-dot" :style="{background: projectInfo.color}"></span>
@@ -40,7 +38,6 @@
       </span>
       <span class="depv-proj__pct">{{ projectInfo.progressLabel }}</span>
     </div>
-
     <!-- Free-form canvas (user-finalized 2026-09-06: hard "stage N" columns were too rigid).
          Cards are absolutely positioned; x/y persist per project in meta (depView.pos.v1) and the
          topological layering survives only as the auto-layout used for new/orphan cards and the
@@ -109,7 +106,6 @@
                 :title="$t('statsA.DepView.waitMore', { n: missingTotalOf(t) })">+{{ missingTotalOf(t) - 3 }}</span>
         </div>
       </div>
-
       <!-- Dependency wires: predecessor right edge -> dependent left edge; visual only, never blocks clicks -->
       <svg class="depv-wires" :width="trackW" :height="trackH" aria-hidden="true">
         <defs>
@@ -145,7 +141,7 @@ export default {
   name: 'DepView',
   props: {
     /** 项目页内嵌时固定项目(隐藏项目切换 chips);今日页独立使用时留空 */
-    fixedProjectId: { type: Number, default: null }
+    fixedProjectId: { type: [Number, String], default: null }
   },
   data () {
     return { projectId: this.fixedProjectId != null ? this.fixedProjectId : null, wires: [], trackW: 0, trackH: 0, dragTid: '', dropTid: '', msList: [], msLoaded: true,
@@ -153,7 +149,7 @@ export default {
       connectSrc: '', connectTargetIdx: 0 }
   },
   computed: {
-    projects () { return this.$store.getters['category/projects'] || [] },
+    projects () { return this.$store.getters['projectV2/all'].map(p => ({ categoryId: p.projectId, categoryName: p.name, categoryColor: p.color || 'var(--brand)' })) },
     wireColor () {
       const s = getComputedStyle(document.documentElement).getPropertyValue('--brand')
       return (s || '#0f9d8f').trim() || '#0f9d8f'
@@ -161,11 +157,13 @@ export default {
     inScope () {
       const list = this.$store.getters['todo/activeList']
       if (this.projectId == null) return list
-      return list.filter(function (t) { return t.categoryId === this.projectId }.bind(this))
+      if (typeof this.projectId === 'string' && this.projectId.startsWith('prj_')) {
+        const links = this.$store.state.projectV2.taskProjects
+        return list.filter(t => links[t.taskId] === this.projectId)
+      }
+      return list.filter(t => t.categoryId === this.projectId)
     },
-    /** Topological depth: depth(t) = max(depth of predecessors) + 1 (in-scope predecessors only).
-     *  No longer rendered as hard "stage" columns - it is the auto-layout for new/orphan cards
-     *  and for the tidy-up action (user-finalized 2026-09-06: free canvas, not fixed lanes). */
+    /** Topological depth determines automatic card layout. */
     depthSeq () {
       const list = this.inScope
       const byId = {}
@@ -189,7 +187,7 @@ export default {
         const l = depthOf(t)
         ;(buckets[l] = buckets[l] || []).push(t)
       }
-      // In-lane order: unfinished first, ready before blocked, then by date
+
       const rank = (t) => (t.complete ? 2 : (this.missingOf(t).length ? 1 : 0))
       return buckets.map(b => b.sort((a, c) =>
         rank(a) - rank(c) || (a.dayStart || 0) - (c.dayStart || 0) || (a.createTime || 0) - (c.createTime || 0)))
@@ -240,8 +238,7 @@ export default {
   },
   watch: {
     projectId () {
-      // Switching projects resets connect mode: the surviving source would silently re-target the new
-      // scope's cards ("switched candidates but kept connecting"), idempotent-safe but semantically loose
+      // Cancel active wiring when the project scope changes.
       this.cancelConnect()
       this.loadMs()
       this.loadPos()
@@ -553,7 +550,8 @@ export default {
       // 加载中与空态区分:避免异步里程碑未返回时闪"未设里程碑"假态
       this.msLoaded = this.projectId == null
       if (this.projectId == null) return
-      const pid = this.projectId
+      const metaProject = this.$store.getters['projectV2/byId'](this.projectId)
+      const pid = (metaProject && metaProject.legacyCategoryId) || this.projectId
             loadMilestones(pid).then(ms => { if (this.projectId === pid) { this.msList = ms || []; this.msLoaded = true } }).catch(() => { if (this.projectId === pid) { this.msLoaded = true; this.msError = true } })
     },
     /** 阻塞/ready 判定的任务表:必须用全量未删任务(含 scope 外/跨项目前置),
@@ -572,7 +570,7 @@ export default {
         .slice(0, 3)
         .map(function (x) { return { id: x.id, name: x.p.taskContent || x.id } })
     },
-    /** D14-A5: full uncapped count of unfinished predecessors (drives the "+N more" chip) */
+
     missingTotalOf (t) {
       const byId = this.allLiveById()
       return parsePredecessors(t.predecessors)

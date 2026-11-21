@@ -21,6 +21,7 @@ import TagAllView from './views/TagAllView.vue'
 import TomatoFloatPage from './views/TomatoFloatPage.vue'
 import QuickAddPage from './views/QuickAddPage.vue'
 import FilterView from './views/FilterView.vue'
+import TaskDeepLinkView from './views/TaskDeepLinkView.vue'
 
 const router = VueRouter.createRouter({
   history: VueRouter.createWebHashHistory(),
@@ -56,6 +57,8 @@ const router = VueRouter.createRouter({
             { path: 'tag/:id', name: 'todo-list-tag', component: TagView },
             { path: 'all-tags', name: 'todo-list-all-tags', component: TagAllView },
             { path: 'filter/:id', name: 'todo-list-filter', component: FilterView },
+            // S6 deep link: #/todo-list/task/:id (TaskDeepLinkView opens the edit panel via ui/openEdit)
+            { path: 'task/:id', name: 'todo-list-task', component: TaskDeepLinkView },
             // catch-all: unknown/malformed hash (cold-start session restore, hand-edited URL) falls back to today view, otherwise AppLayout renders nothing
             { path: '/:pathMatch(.*)*', redirect: '/todo-list/today' }
           ]

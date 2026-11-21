@@ -92,6 +92,13 @@ function noteRenderHandshake (now = Date.now()) {
 function handshakeHealthySince (_armedAt, now = Date.now()) {
   return now - lastHandshakeAt < HANDSHAKE_TIMEOUT_MS * 2
 }
+/** W33 fix (2026-11-03, P3): lastHandshakeAt is module-level and survived a destroy+rebuild —
+ *  a freshly rebuilt window inherited the DEAD window's recent handshake and was judged
+ *  "healthy" for up to 2× HANDSHAKE_TIMEOUT_MS without ever having handshook, delaying the
+ *  bounded rebuild. Every create() starts with an empty handshake slate. */
+function resetHandshakeTracking () {
+  lastHandshakeAt = 0
+}
 
 /* ---- W16: bounded recovery exhaustion report (one structured message per session per cause) ----
  * Emitted over the EXISTING 'syncEvent' Device-Center channel to the MAIN window (window-ref — no
@@ -261,6 +268,7 @@ function defaultBounds () {
 }
 
 function create () {
+  resetHandshakeTracking() // W33: a rebuilt window must not inherit the old instance's handshake
   ensureScreenHooks()
   win = new BrowserWindow({
     ...defaultBounds(),
@@ -606,7 +614,7 @@ module.exports = {
   floatBoundsVisible, // W16 P1: pure off-screen test used by safeReclamp (unit-testable)
   diagnose, // W16 P0-1: layered route/DOM/paint probe (diagnostics command surface)
   HANDSHAKE_TIMEOUT_MS, // W16 P0-2: render-health handshake watch window
-  __renderHealth: { note: noteRenderHandshake, healthySince: handshakeHealthySince, timeoutMs: HANDSHAKE_TIMEOUT_MS }, // W16 test seam
+  __renderHealth: { note: noteRenderHandshake, healthySince: handshakeHealthySince, reset: resetHandshakeTracking, timeoutMs: HANDSHAKE_TIMEOUT_MS }, // W16 test seam (W33: reset exposed — create() calls it)
   __forceWin (w) { win = w }, // C8 test seam: inject a stub window so the guarded path is reachable
   __clearWin () { win = null }, // C8 test seam
   __rebuildAfterHandshakeFailure: rebuildAfterHandshakeFailure, // W22 test seam: user-intent skip path

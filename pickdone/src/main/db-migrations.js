@@ -138,6 +138,133 @@ module.exports = function buildMigrations (syncSchema, migrationsOverride) {
       }
       return true
     } },
+    { v: 11, fn: d => {
+      // S1 vertical slice (2026-11-03): work_episodes / source_refs / task_source_links row
+      // storage. Pure IF NOT EXISTS DDL — on an upgraded library db.exec(SCHEMA) already created
+      // these tables this boot, so this step is a storage-level no-op whose real effect is the
+      // schemaVersion 10→11 advance (and it self-heals a library whose SCHEMA exec was skipped,
+      // e.g. a fixture created outside db.js). Column-identical twin of the db-schema.js block;
+      // the parity is asserted by db-migrations-episode-tables.test.mjs.
+      d.exec(`CREATE TABLE IF NOT EXISTS work_episodes (
+        id        TEXT PRIMARY KEY,
+        taskId    TEXT NOT NULL,
+        startedAt INTEGER NOT NULL DEFAULT 0,
+        endedAt   INTEGER NOT NULL DEFAULT 0,
+        note      TEXT,
+        deleted   INTEGER NOT NULL DEFAULT 0,
+        deletedAt INTEGER NOT NULL DEFAULT 0,
+        updatedAt INTEGER NOT NULL DEFAULT 0
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_work_episodes_task ON work_episodes (taskId, startedAt)')
+      d.exec(`CREATE TABLE IF NOT EXISTS source_refs (
+        id         TEXT PRIMARY KEY,
+        providerId TEXT NOT NULL,
+        externalId TEXT NOT NULL,
+        title      TEXT,
+        deleted    INTEGER NOT NULL DEFAULT 0,
+        deletedAt  INTEGER NOT NULL DEFAULT 0,
+        updatedAt  INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (providerId, externalId)
+      )`)
+      d.exec(`CREATE TABLE IF NOT EXISTS task_source_links (
+        id          TEXT PRIMARY KEY,
+        taskId      TEXT NOT NULL,
+        sourceRefId TEXT NOT NULL,
+        deleted     INTEGER NOT NULL DEFAULT 0,
+        deletedAt   INTEGER NOT NULL DEFAULT 0,
+        updatedAt   INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (taskId, sourceRefId)
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_task_source_links_task ON task_source_links (taskId)')
+      d.exec('CREATE INDEX IF NOT EXISTS idx_task_source_links_ref ON task_source_links (sourceRefId)')
+      return true
+    } },
+    { v: 12, fn: d => {
+      // pd20 P0 work-continuity (2026-11-07): SourceRef verification state — provenance level
+      // (L0/L1/L2) + last-verified stamp. Probe-style column adds (v2 pattern) so both the
+      // upgraded shape and this boot's SCHEMA-exec'd table converge; NULL level / 0 stamp =
+      // never verified (reads 'unknown'; shared/source-freshness.cjs owns the semantics).
+      const cols = d.prepare('PRAGMA table_info(source_refs)').all().map(c => c.name)
+      if (!cols.includes('level')) d.exec('ALTER TABLE source_refs ADD COLUMN level TEXT')
+      if (!cols.includes('lastVerifiedAt')) d.exec('ALTER TABLE source_refs ADD COLUMN lastVerifiedAt INTEGER NOT NULL DEFAULT 0')
+      return true
+    } },
+    { v: 13, fn: d => {
+      // INTEG NOTE (2026-11-10): v13 is the union of two evolutions merged in lr/integ-20261110
+      // — the integ core line's episode-role column (pd20 attribution, 2026-11-08: the
+      // A(agent research)→B(agent continuation)→QA(human review) closed loop needs each
+      // episode to carry WHO produced it) and the android G2 line's handoff targeting +
+      // actorType provenance below. The v14 block that follows (findings/decisions) exists
+      // only on the integ side and is preserved untouched.
+      // G2 zone-2/zone-3 real-data contract (2026-11-10): handoff targeting on todos and
+      // actor provenance on work_episodes. Probe-style column adds (v2/v12 pattern) so the
+      // upgraded shape and this boot's SCHEMA-exec'd tables converge; existing databases pay
+      // only NULLable column adds. Semantics: todos.handoffTo names the device the task was
+      // addressed to (handoffFrom = sender, handoffNote = message, handoffAckedAt > 0 =
+      // receiver accepted); work_episodes.actorType / role mark agent-worked episodes
+      // ('agent' on either — shared/handoff.mjs normalizes by role, the S1 DTO family by
+      // actorType). NULL/0 = not a handoff / human episode — never fabricated. Fully
+      // backward compatible: old readers ignore unknown columns, old payloads leave them NULL.
+      const todoCols = d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='todos'").get()
+        ? d.prepare('PRAGMA table_info(todos)').all().map(c => c.name)
+        : []
+      if (todoCols.length && !todoCols.includes('handoffTo')) d.exec('ALTER TABLE todos ADD COLUMN handoffTo TEXT')
+      if (todoCols.length && !todoCols.includes('handoffFrom')) d.exec('ALTER TABLE todos ADD COLUMN handoffFrom TEXT')
+      if (todoCols.length && !todoCols.includes('handoffNote')) d.exec('ALTER TABLE todos ADD COLUMN handoffNote TEXT')
+      if (todoCols.length && !todoCols.includes('handoffAckedAt')) d.exec('ALTER TABLE todos ADD COLUMN handoffAckedAt INTEGER NOT NULL DEFAULT 0')
+      const epCols = d.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='work_episodes'").get()
+        ? d.prepare('PRAGMA table_info(work_episodes)').all().map(c => c.name)
+        : []
+      if (epCols.length && !epCols.includes('actorType')) d.exec('ALTER TABLE work_episodes ADD COLUMN actorType TEXT')
+      if (epCols.length && !epCols.includes('role')) d.exec('ALTER TABLE work_episodes ADD COLUMN role TEXT')
+      return true
+    } },
+    { v: 14, fn: d => {
+      // pd20 S1 closure (2026-11-10): the two entities the mission §04 contract still lacked
+      // after v13 — Finding (observed fact; confidence/verificationLevel/sourceRefs/createdBy/
+      // ts/status) and Decision (choice/alternatives/tradeoffs/decider/ts/rationale/
+      // relatedFindings + the revocable supersedes relation). Pure IF NOT EXISTS DDL (v11
+      // style — additive, an upgraded library and this boot's SCHEMA-exec'd tables converge;
+      // the column-identical parity is asserted by pd20-finding-decision.test.mjs). Family
+      // columns (confidence/verificationLevel/status) are NULLable TEXT: an out-of-family
+      // value stores NULL — never fabricated (v13 role doctrine). List-shaped columns
+      // (sourceRefs/alternatives/tradeoffs/relatedFindings) are JSON arrays; a non-array
+      // shape stores NULL, never a fabricated shape. THE STORAGE RULE: a verificationLevel
+      // of 'speculation' can never carry status 'confirmed' — db-episode-ops findingPut
+      // normalizes that to 'open' (a guess must not become an acceptance conclusion).
+      d.exec(`CREATE TABLE IF NOT EXISTS work_findings (
+        id                TEXT PRIMARY KEY,
+        taskId            TEXT NOT NULL,
+        statement         TEXT NOT NULL,
+        confidence        TEXT,
+        verificationLevel TEXT,
+        sourceRefs        TEXT,
+        createdBy         TEXT,
+        status            TEXT,
+        ts                INTEGER NOT NULL DEFAULT 0,
+        deleted           INTEGER NOT NULL DEFAULT 0,
+        deletedAt         INTEGER NOT NULL DEFAULT 0,
+        updatedAt         INTEGER NOT NULL DEFAULT 0
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_work_findings_task ON work_findings (taskId, ts)')
+      d.exec(`CREATE TABLE IF NOT EXISTS work_decisions (
+        id              TEXT PRIMARY KEY,
+        taskId          TEXT NOT NULL,
+        choice          TEXT NOT NULL,
+        alternatives    TEXT,
+        tradeoffs       TEXT,
+        decider         TEXT,
+        rationale       TEXT,
+        relatedFindings TEXT,
+        supersedes      TEXT,
+        ts              INTEGER NOT NULL DEFAULT 0,
+        deleted         INTEGER NOT NULL DEFAULT 0,
+        deletedAt       INTEGER NOT NULL DEFAULT 0,
+        updatedAt       INTEGER NOT NULL DEFAULT 0
+      )`)
+      d.exec('CREATE INDEX IF NOT EXISTS idx_work_decisions_task ON work_decisions (taskId, ts)')
+      return true
+    } },
     ]
   buildMigrations.ensureRepeatDayUniqueness = ensureRepeatDayUniqueness
   return migrationsOverride || BUILT_IN

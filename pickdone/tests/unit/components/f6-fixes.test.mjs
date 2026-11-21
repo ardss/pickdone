@@ -189,8 +189,9 @@ test('f6 ProjectOverviewView: filtered-empty state differs from no-projects and 
 test('f6 ProjectOverviewView: createProject no longer relies on list[list.length-1]', () => {
   const src = read('views/ProjectOverviewView.vue')
   assert.ok(!/list\[list\.length - 1\]/.test(src), 'brittle last-element pick removed')
-  assert.match(src, /!before\.has\(c\.categoryId\)/, 'created entity matched by id delta')
-  assert.match(src, /c\.categoryName === name/, 'and by exact name')
+  assert.match(src, /projectV2\/create/, 'creates a real independent project entity')
+  assert.match(src, /this\.open\(project\.projectId\)/, 'uses the created entity ID, not last category')
+  assert.doesNotMatch(src, /dispatch\('category\/addCategory'/, 'creating a project must never create a category')
 })
 
 /* ---------------- #16 ProjectView ---------------- */

@@ -1,10 +1,69 @@
+## [0.4.0-beta.41] - 2026-11-20
+
+### Added
+- `sync forget --device <id>`: drop a stale peer record only. A device that no longer exists (an old dev instance on a second port) used to be unremovable without harm — `sync unpair` rotates the single shared pairing secret, so every healthy device would have to re-pair. `forget` removes the peer entry, its manual-address mirror, its running-tomato announcement row and its push watermark, and keeps the secret, so nobody else notices.
+
+### Fixed
+- Sidebar theme toggle no longer borrows the settings button's class. Six live UI suites locate the settings entry with `.sn-account-gear:not(.sn-account-trash)`, so the new toggle (DOM order before the gear) swallowed the click and the settings modal never opened — invisible to the commit gate because the live pool is deferred, caught by the branch's first CI run. The toggle keeps its own `sn-theme-toggle` identity and shares the button styling through a joint rule.
+- Auto-update no longer retries against an install that has no feed. `electron-builder --dir` builds ship no `app-update.yml`, but `autoUpdater.isUpdaterActive()` only checks whether the app is packaged, so the four-hourly check still ran, threw `ENOENT ... resources\app-update.yml`, and the failure was classified as transient — three backoff retries every wake, four log lines a day on a build that can never self-update. The updater is now inert when the feed file is absent (`active:false`, no check, no retries, settings entry hidden), and a missing-feed `ENOENT` is classified as a missing feed rather than a network fault.
+
+### Tooling
+- Coverage ratchet now gates on the `coverage-summary.json` the run itself writes instead of scraping node's raw TAP table. That table also accounts the test files, so the Windows leg read 60/70/49 against a 79/83/75 baseline that was calibrated without them — a false red no amount of new tests could clear. TAP scraping stays only as the fallback for a run that writes no summary.
+- The backup same-second collision test no longer treats the wall clock as a fixture: CI landed the third write 3.7 minutes after the first, so no collision happened and a correct implementation failed. The `-dup1`/`-dup2` chain is now proved by a pure call to `uniqueSnapshotName` in a private dir with a fixed stamp (`handlers/backup.js` exports it as a test seam).
+- New `cli/check-version-consistency.cjs`: `package.json` and `package-lock.json` must report the same version. A hand-edited manifest bump had left the lockfile one version behind, and the commit gate classified BOTH files as neutral (manifest: version-only; lockfile: untouched), so the unit stage was skipped outright and the drift survived only as a P1-4h assertion that the same gate had deferred. The gate now runs in pre-commit (millisecond, reads the staged blobs) and in `check:all`; `lockVersionOnly()` also refuses neutrality when the two manifests disagree.
+
+## [0.4.0-beta.40] - 2026-11-20
+
+### Added
+- Sidebar foot: a light/dark quick toggle after sync, recycle bin and settings, in both the expanded account row and the collapsed stack. The icon shows the current theme (sun while dark, moon while light) and one click switches to the opposite explicit mode, so choosing "follow system" in Settings still works and one footer click always produces a visible theme. The four foot icons now use their own tighter cluster gap, so the account name is no longer ellipsized.
+
+## [0.4.0-beta.39] - 2026-11-19
+
+### Changed
+- Project V2 independent project identities, explicit task membership, archive/recovery and original-ID legacy quarantine; existing tasks, categories and tags remain unchanged.
+- Project editor, overview, CLI, timeline, handoff, and LAN refresh use authoritative V2 records. Project deadlines, documents, milestones and assignments are preserved in scoped backups; client type contracts and browser shim updated.
+- Regression tests cover project lifecycle, legacy migration and sync/backup compatibility. Beta candidate remains local until complete release verification.
+
 # Changelog
 
 All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and versioning follows [Semantic Versioning](https://semver.org/). The 0.x series is the initial-development band: from 0.4.0 on, any user-visible new feature bumps MINOR; PATCH is fixes/internal hardening only. 1.0.0 marks stable data format + sync. Historical versions (≤0.3.7) are not retro-renumbered.
 
+## [0.4.0-beta.31] - 2026-11-18
+
+### Fixed
+- UI acceptance regression: the unfinished Work Continuity / Continue Work editor section no longer appears by default. Developer preview plus explicit module opt-in are required, including for profiles retaining old enabled settings; project handoff follows the same visibility gate. All previously stored episodes, findings, decisions and sources remain intact.
+- Task-row pomodoro selection capsule now centers its icon in all selection/count states, with styles owned by TodoItem rather than leaking from Onboarding.
+- Active focus bar and Abandon Focus button now use semantic red; Ready to Focus remains brand green and rest phase remains orange.
+- Added dedicated UI regression assertions and updated real-Electron default-off, opt-in, CRUD, restart acceptance checks. This candidate is local-only until release gates and installed-app verification pass.
+
+## [0.4.0-beta.30] - 2026-11-16
+
+### Fixed
+- LAN sync (QA-R7 P0, real two-machine drill): an initiator-side pairing restarted the live node BEFORE persisting the just-paired peer, so every round ran with targets=0 until the next full app restart and deletes propagated only via the acceptor's 5-minute periodic pull. Both pairing flows now persist the peer record BEFORE the restart (restorePeers at restart is the proven registration path), with the just-written record rolled back when the restart fails so the fail-closed contract is preserved. End-to-end: post-pair round confirms immediately, an initiator-side delete reaches the peer in ≤2s (was ~5 minutes).
+- LAN sync discovery (QA-R7 §7): the six-digit-code pairing path died cross-machine because the UDP fallback channel only ran when bonjour-service was absent — on a normal install, discovery depended entirely on mDNS, whose QUERIES frequently get no cross-machine answer even though ANNOUNCES do cross. The UDP fallback now runs ALWAYS alongside bonjour, so advertise+listen never depends on cross-machine mDNS query round-trips.
+
+## [0.4.0-beta.29] - 2026-11-10
+
+- PickDone 2.0 work-continuity milestone (PD20 long-run): the Task→Episode→Finding/Decision→SourceRef→Handoff loop is closed end to end (migration v14, CLI, EditPanel UI, handoff export), the cross-platform bridge accepts authenticated native clients without an Origin header (loopback-anchored, zero auth weakening) with error-recovery hardening, the Android/Web/extension clients landed (offline PWA outbox with real bridge sync, Capacitor native HTTP pairing, MV3 capture with a user-visible port-conflict sentinel, deep links and drag-drop interop, a VS Code VSIX MVP), the installer chain gained a five-surface identity audit and a scripted backup/upgrade/rollback drill, and an independent QA verdict marked the candidate GO-READY (candidate ≠ publish).
+- Everything below this line was accumulated on the maintenance branch as [Unreleased] and ships in this candidate.
 ## [Unreleased]
+
+- Updater (W33, #224): the 404 retry storm is fixed — a missing release feed (HTTP 404 / ENOTFOUND / no published release) is now classified FEED_MISSING and never re-armed on the 30s backoff (transient failures keep a 3-retry-per-wake budget), the status exposes lastCheckError {kind, at} so "this tag has no public release assets" is distinguishable from a network failure, and identical feed-missing errors broadcast once instead of spamming. Regression tests pin: persistent 404 → zero re-checks; transient → bounded.
+
+- Renderer (W33): a failed recycle-bin restore permanently dropped the panel's unsaved subtasks/attachment edits (takeDirty drained the marks with no compensation — now re-marked in the catch); the remote-sync fingerprint missed deadlineTs, so a peer's deadline-only edit classified as "none" and the panel could silently overwrite it with a stale value (same J3 class as repeatId); the 30s nowTick no longer destroys and rebuilds every Chart.js canvas (content-fingerprint guard in ChartCard); DayDeck's injected stylesheet is deduped; the float abandon ghost timer and SearchView's echo commit no longer do redundant work.
+- Main process (W33): tomato crash compensation no longer books wall-clock time as focus — a machine off for two days during a focus session now credits the session budget (tomatoTime), not a 600-minute phantom; the snowDedup key cap actually converges now (when every key is young the age-based delete matched nothing and the table grew unbounded); renderer-initiated notifications gained the lock-aware click routing (clicking them did nothing); the float window's handshake health no longer inherits a dead window's freshness after a rebuild; the quick-add window can no longer land off-screen (x=-240) when display probing fails entirely; setMetaMany got its manifest row (the write op existed outside the bus contract — one path threw USAGE while the import path silently bypassed the gate).
+- Gates (W33): the ESM graph now walks nested dynamic imports (defineAsyncComponent(() => import(...)) and friends were completely unchecked) and dynamic bare names must actually resolve instead of being unconditionally exempted; the IPC OPS-key regex matches the OP_ID character class it claims to mirror; check-fingerprint moved to the shared TOCTOU-safe walker and its drive-letter rule covers url()/bracket prefixes; structure baselines retired the entries sitting below the hard cap (free headroom closed); token self-test moved to a CLI flag ahead of the pass line (fail-closed); unit-more3 stops leaking its tmp dir.
+- Tests (W33): gate fixtures follow the relocated fingerprint gate's lib dependency; tomato compensation tests updated to the budget-capped semantics (with far-future cases locking duration == tomatoTime).
+
+- Renderer (W32): the quick-add mini window lost queued work in three ways — a paste during a busy submit sat in an in-memory queue that the auto-hide destroyed, a drain silently wiped a draft the user typed while queued, and an Esc with focus outside the input cancelled the text but left the queue to be created on the next Enter. Queued lines now persist to localStorage (restored on summon, cleared on drain/cancel), drains preserve the draft, Esc delegates to the full cancel, the success toast reads a pre-await date snapshot, and the restored draft no longer resurrects a stale failure banner. Also: the backup-degraded listener is now removed on unmount.
+- Main process (W32): data:relocate's relaunch path skipped the quit chain entirely — sync stop/settle now runs before the DB closes (mirroring the updater's W16 settle); the critical-backup "empty snapshot" quarantine no longer misfires when the user legally deletes every task (all restore segments count, not just todoState, so the primary recovery source can no longer freeze pre-deletion); relay enable() refuses a silent origin rebind when a registered device secret exists without a recorded relay URL (the old bearer and cursor could be sent to a different host); disable-lock's write-failed fallback now persists a recovery marker instead of logging fake success, and re-applies the unlock on the next readable boot; data relocation rebuilds directory symlinks as junctions and fails closed listing file-symlink conflicts instead of aborting/copying through them.
+- Gates (W32): live-pool skips are no longer invisible — run-interactions-shared aggregates each target's TAP skip count and check-test-summary can merge it into the skip ratchet (--live-pool-skip / env; check-all wiring pending the check-all.js territory freeze); the low-confidence retry stream's composed summary now merges pass-1 and retry skip counts instead of letting pass-1 skips escape; parity-cli-ui stops leaking its tmp dir/env; boot log fds are closed on reap.
+
+- Gates (W31): three real test suites were invisible to every runner — `TEST_EXTS` lacked `.test.cjs`, so the multi-instance lock/port and relay-evidence suites never executed and no fail-closed check could see the gap; all three are now discovered and green. gate-doctor ran its git subprocess without scrubbing GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE (shared gitEnv); the coverage-instrument anchor test accepted any nonzero/null exit as the expected red (`notEqual(0)` → pinned `equal(1)`); check-command-bus's electron-log `Module._load` stub installed unconditionally on require and silently leaked into three in-process consumer tests (now require.main-gated); the w30-stopsync test's no-op case asserted `ok(true)` with a decorative exit-hook restore and a raw mkdtemp leak (real observable asserted, try/finally restore, isolatedTmpDir).
+- Renderer (W31): manual tomato backfill in the record modal minted deterministic ids from startTs — a second record in the same minute was silently swallowed by id-based dedup while the daily quota was still consumed and success toasted (random tail now, same pattern as DayRail/TaskAccountModal); DayRail's backfill card could save focus time ending in the future (the time-picker could push startMin to 23:59; saveEntry now rejects same-day end>now on both the create and edit paths); dead `selDayLabel` computed dropped (raw ms timestamp concatenated with a "today" suffix); dragOverSeg reset sentinel unified to null.
+- Main process (W31): sync-apply's S1 causal-current override probed `revisionsList` per envelope row — a synchronous better-sqlite3 query on the main thread, so a thousands-row relay pull stalled IPC and reminders for the whole ingest; existence is now memoized per ingest pass (≤1 probe per distinct id, per-pass cache lifecycle verified, conservative no-head fall-through preserved).
 
 - Coverage instrument unified (W30): the unit gate never passed `--suite=unit` to run-all, so every CI coverage summary was tagged suite=all while the ratchet compared it against unit-calibrated baselines (warn-only) — and EXCLUDEd live-journey files count 0% in that denominator, which deterministic-ized the red on any branch touching sync. check-test-summary now emits unit-pool summaries (the --core + --with-coverage combo is rejected outright; --affected dirs intersect with the unit pool), the ratchet's 12-minute summary wait is a 3-minute cap, baselines were re-calibrated from fresh unit evidence per platform (win32@node22 80/83/75, win32@node24 65/74/55; linux@node22 two-step pending CI), and ~1000 lines of real behavioral coverage landed on the four worst files (external-db-watch 9.5→98.8%, backup.js 17.9→98.3%, updater 25.6→99.4%, windows.js 49.7→87.9%).
 - Attachment domain, architecture round 1 (W30): the EditPanel save path now distinguishes "queued" from "SQLite-confirmed" (a 2s pendingUpserts probe surfaces a bilingual save-unconfirmed hint with retry); attachment rendering converges on a shared four-state helper (ok/syncing/missing/broken); protocol 404s log structured bucket reasons (no user content); startup reconciliation audits zero-reference attachment files (audit-only by default, sweep behind TODO_CLI_ATTACH_ORPHAN_SWEEP=1).
@@ -25,6 +84,37 @@ and versioning follows [Semantic Versioning](https://semver.org/). The 0.x serie
 - UI correctness (W27): the tomato timeline modal's segment comparator sorted on a nonexistent property (NaN → reversed blocks vs the axis); legacy `repeatId === 'null'` sentinel plain tasks could be soft-deleted as phantom renewed instances from the undo/recycle paths (isRepeatTask/sentinel guards at both entries); DepView's overdue/today badge and the statistics achievements panel used a bare wall clock with no reactive dep — frozen past midnight (todayTimestamp / nowTick).
 - Main process (W27): data:relocate progress IPC never reached the renderer (webContents double-wrapped, TypeError swallowed); updater terminal-state guards let a concurrent check relabel an in-flight auto-download as up-to-date; quit-ack's onDone callback ran uncontained inside the teardown poll tick; audit-log rotation used an existsSync→rename probe that two processes can race (POSIX silent overwrite) — unique ms+pid+seq targets.
 - Gates/tests (W27): check-file-size ls-files pins core.quotePath=false (non-ASCII tracked files falsely treated as new); lint-staged's W25 staged-blob extraction mirrors original directories (flat temp paths lost .eslintrc directory overrides — wrong env linting); journey-relay staging files are pid-unique and the jrelay- family joins the tmp sweeper; check-media-lang sees spaced/angle-bracket markdown refs (fail-open closed); check-fingerprint catches forward-slash and file-URL local paths; check-i18n's bracketDelta skips string/comment literals; j-todo-core's J1 strip navigation is robust to the ±7-day arrow shift (behavior since 0.1.0).
+
+## [0.4.0-beta.29-ui2] - 2026-11-06
+
+### Added
+- Project page multi-view (P1): user-selectable list / board / lightweight timeline for the task area; the choice persists across restarts.
+- Board: simple two-column board by real completion state; cards open the task detail.
+- Timeline: every work episode of the project, day-grouped, beyond the recent-8 rollup.
+
+### Fixed
+- EditPanel work section had no layout rules (fields overlapped in narrow windows); now a clean vertical stack.
+- Project handoff/board/timeline rows always open on click, even before the task cache catches up with a fresh sync.
+
+### Changed
+- Internal candidate id 0.4.0-beta.29-ui2 (unreleased build for acceptance only).
+
+## [0.4.0-beta.28] - 2026-11-05
+
+- Managed-upgrade recovery (internal A/B installer, scripts/windows): deploy-in-place preflight verifies the installer hash, previous version, running executable roots, startup tasks and the live encrypted database/key before stopping anything; the whole old program + database/WAL/SHM + db.key + config + attachments are backed up first; a failed or wrong NSIS run quarantines the failed build and restores the prior program via restore-program.ps1; user data is never auto-overwritten during rollback (automatic reopen withheld when the database hash changed).
+- Updater feed classification: a missing release feed (HTTP 404 / ENOTFOUND / no published release) is classified FEED_MISSING and never re-armed on the 30s backoff; DNS/network failures stay transient with a bounded retry budget; the status exposes lastCheckError {kind, at} so "this tag has no public release assets" is distinguishable from a network failure.
+
+## [0.4.0-beta.27] - 2026-11-04
+
+- LAN sync: peer liveness is now matched to periodic LAN rounds (a peer that answered a recent round is not evicted as dead); the sync status surface reflects the actual LAN node state instead of stale planned copy.
+
+## [0.4.0-beta.26] - 2026-11-04
+
+- Update install consent: quitting into an update requires explicit user consent and a version-aware A/B upgrade gate (a candidate older than or equal to the running build is refused before anything is stopped).
+
+## [0.4.0-beta.25] - 2026-11-04
+
+- Packaging gate: `npm run dist` now ends with verify-packaged in fail-closed mode — a broken packaged artifact (e.g. the beta.24 symlink incident that silently dropped ~60 runtime Electron packages from app.asar while every code gate stayed green) can no longer leave the pipeline as a "successful" build; internal acceptance candidate bumped to this version so installed machines can tell the new build apart from beta.24 at a glance.
 
 ## [0.4.0-beta.24] - 2026-11-01
 

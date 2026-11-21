@@ -42,6 +42,8 @@
                     maxlength="40" v-model="aliasDraft" :placeholder="$t('sync.aliasPh')"
                     :aria-label="$t('sync.aliasEdit')" @keydown.enter="e => { if (e.isComposing || e.keyCode === 229) return; saveAlias(p) }" @blur="saveAlias(p)"/>
           <span class="tip sync-device-meta">{{ p.host }}</span>
+          <span v-if="p.appVersion" class="tip sync-device-meta">{{ $t('sync.peerBuild', { v: p.appVersion }) }}</span>
+          <span v-if="p.appVersion && selfInfo.appVersion && p.appVersion !== selfInfo.appVersion" class="tip sync-device-error">{{ $t('sync.buildMismatch') }} <button class="mini" @click="$emit('open-updates')">{{ $t('sync.viewUpdates') }}</button></span>
           <span class="tip sync-device-meta" v-if="p.lastRoundAt">{{ $t('sync.lastRound', { time: relTime(p.lastRoundAt) }) }}</span>
           <span class="tip sync-device-meta" v-else>{{ $t('sync.neverRan') }}</span>
           <span class="sync-pending" v-if="pendingBadge(p)">{{ pendingBadge(p) }}</span>

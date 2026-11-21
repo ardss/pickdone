@@ -58,10 +58,25 @@
         </div>
       </div>
 
+      <!-- Project ownership is independent of category and labels. -->
+      <div v-if="e && !inRecycle" class="ep-row ep-project-row">
+        <span class="ep-field-label ep-field-ico" :title="$t('statsJ.EditPanel.projectLabel')"><app-icon name="folder" :size="13"/></span>
+        <el-select class="ep-project-select" size="small"
+                   :model-value="taskProjectId"
+                   :placeholder="$t('statsJ.EditPanel.projectNone')"
+                   :aria-label="$t('statsJ.EditPanel.projectLabel')"
+                   @change="setTaskProject">
+          <el-option :label="$t('statsJ.EditPanel.projectNone')" value=""/>
+          <el-option v-for="project in projectChoices" :key="project.projectId"
+                     :label="project.name" :value="project.projectId"/>
+        </el-select>
+      </div>
+
       <!-- Task dependencies (experimental; gated by devMode = developerMode && showDepsModule): predecessor multi-select, FS semantics -- task becomes ready only when all predecessors are done -->
       <div v-if="devMode" class="ep-cat-wrap">
         <ep-dependencies ref="depBlock" :task="e" @patch="patchPreds"/>
       </div>
+      <ep-work ref="workBlock" v-if="$store.state.settings.developerMode === true && ($store.state.settings.workEpisode || {}).enabled" :task-id="(e && e.taskId) || 0" :task-title="(e && e.title) || ''"/>
 
       <ep-tags :tags="taskTags" @add="addTag" @remove="removeTag"/>
 
@@ -127,11 +142,16 @@
       <div class="ep-flex"></div>
 
       <div class="ep-tools">
+        <button v-if="!inRecycle" type="button" class="ep-tool ep-copy" :title="$t('statsE.TodoItem.copyTaskFull')"
+                :aria-label="$t('statsE.TodoItem.copyTaskFull')" @click.stop="copyTaskFull">
+          <app-icon name="copy" :size="16"/>
+        </button>
         <span class="ml-auto"></span>
         <!-- [maint-0925 A5] delete is a no-op on a recycle-state row and purge belongs to RecycleBinView — hide, same rule as the complete/repeat rows -->
-        <span v-if="!inRecycle" class="ep-tool danger" role="button" tabindex="0" :title="$t('statsJ.EditPanel.deleteBtn')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click="delTask" @keydown="onDelTaskKey">
-          <i class="ico" style="--ico:url('app://app/assets/img/delete_black_48dp.svg');width:16px;height:16px"></i>
-        </span>
+        <button v-if="!inRecycle" type="button" class="ep-tool ep-delete danger"
+                :title="$t('statsJ.EditPanel.deleteTask')" :aria-label="$t('statsJ.EditPanel.deleteTask')" @click.stop="delTask">
+          <app-icon name="trash" :size="16"/>
+        </button>
       </div>
     </div>
 
@@ -154,6 +174,7 @@ import {dayjs, FMT, reportError } from '../utils/core.js'
 import { dayShift } from '../utils/todayBounds.js'
 import { getLocale } from '../i18n/index.js'
 import { extractTags } from '../utils/search.js'
+import { copyTaskFull } from './editpanel/taskCopy.js'
 import { isRenderableAttachmentUrl } from '../utils/core.js' // [W21] subsCompleteTarget rides with editpanel/subtaskOps.toggleSub now
 import { deleteWithUndo, removeWithUndo } from '../utils/confirm.js'
 import { toggleCompleteWithUndo } from '../utils/completeAction.js'
@@ -179,25 +200,19 @@ import * as repeat from './edit-panel/repeat.js'
 import { catOutsideClose, FIELD_MAP } from './edit-panel/interactions.js'
 import EpDateChips from './editpanel/EditPanelDateChips.vue' // W21 split: date chips + hidden picker
 import EpBinBanner from './editpanel/EditPanelBinBanner.vue' // W21 split: recycle-bin banner markup
-import EpSaveHint from './editpanel/EditPanelSaveHint.vue' // [w30 P0] weak "保存未确认" hint markup
+import EpSaveHint from './editpanel/EditPanelSaveHint.vue'; import EpWork from './editpanel/EditPanelWork.vue' // [w30 P0] hint markup; pd20 S3 'continue work' section (gated by the workEpisode switch)
 import * as subtaskOps from './editpanel/subtaskOps.js' // W21 split: sortable drag + toggle linkage
 import * as panelSetup from './editpanel/panelSetup.js' // W21 split: spellcheck suppression + spotlight tour
-import * as reminderOps from './editpanel/reminderOps.js' // W21 split: reminder emit handlers + close-verify timer
+import * as reminderOps from './editpanel/reminderOps.js'; import { buildHandoff } from '../../../shared/handoff.mjs' // pd20 fix: the REAL S2 formatter provided down to EpWork (inject chain previously broken); single source with the CLI (shared/)
 
-
-// Priority has two tiers (user-finalized): high/low; connected with the quadrant's important — high⇔important=1, low⇔important=0 (see fieldPatch)
 const PRIOS = [{ v: 3, l: 'statsJ.EditPanel.priorityHigh' }, { v: 1, l: 'statsJ.EditPanel.prioLow' }]
-// W21 split additions to the local component registry (spread into the options above)
-const w21Components = { EpDateChips, EpBinBanner, EpSaveHint }
-
-// [component-fixes] pure helper now lives in utils/attachmentRefs.js (imported below)
+const w21Components = { EpDateChips, EpBinBanner, EpSaveHint, EpWork } // pd20 S3 adds EpWork
 
 export default {
   name: 'EditPanel',
-  // W21 split (2026-10-30): EpDateChips/EpBinBanner join the registry; the S4-era line below is
-  // kept verbatim for the w5-editpanel-split anchor and spread into the live option.
   // components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags }
   components: { EpReminders, EpSubtasks, EpAttachments, EpDependencies, EpTomato, EpTags, ...w21Components },
+  provide: { buildHandoff }, // pd20 fix: complete the S2 inject chain — EpWork injects `buildHandoff` (default null); without a provider EpWork hides the copy button (fallback)
   data () {
     return {
       e: null as any,
@@ -216,10 +231,8 @@ export default {
     }
   },
   created () {
-    // Save pipeline (utils/editSave.js). boot() flips it live: the immediate watchers below fire BEFORE created(), and pre-boot flush calls must stay silent no-ops (same guard as the original `_dirtyFlags` initialization).
     this._save = createSaveQueue(this.$store, {
       getTaskId: () => this.e && this.e.taskId,
-      // Dirty list-style fields are serialized lazily at drain time (callback-time values). Subtask rows carry a render-only `_key` (stable v-for key) — stripped here so it never leaks into the persisted subtasks JSON.
       dirtyPatchFor: (k) => ({
         subtasks: { subtasks: JSON.stringify(this.subList.map(({ _key, ...rest }) => rest)) },
         imgs: { image: JSON.stringify(this.imgList) },
@@ -227,18 +240,13 @@ export default {
         preds: { predecessors: this.e && this.e.predecessors }
       }[k]),
       onSaving: (v) => { this.saving = v },
-      // [w30 P0] todo/updateTodoFields resolves when the write is ENQUEUED (safeUpsert retries),
-      // not when SQLite has the row. onDone therefore schedules the deferred persist probe
-      // (createPersistProbe, impl utils/editSave.js): a row still in the pendingUpserts queue
-      // after the settle window lights the weak EpSaveHint ("已入队, 未持久化"), never the hard banner.
       onDone: () => {
         this.saveFailed = false
         this._probe.schedule(this.e && this.e.taskId, (q) => { this.saveUnconfirmed = q })
       },
       onFail: () => { this.saveFailed = true; this.saveUnconfirmed = false }
     })
-    this._save.boot(); this._probe = createPersistProbe(pendingUpserts) // [w30 P0] persist probe backs the onDone callback (impl editSave.createPersistProbe)
-    // Auto-increment sequence for stable subtask row keys (render-only, stripped at save time)
+    this._save.boot(); this._probe = createPersistProbe(pendingUpserts, { flush: () => this.flushSave() }) // [w30 P0] persist probe backs onDone; [w31 P1] flush hooks auto-retry: unconfirmed verdict re-runs the save on backoff, terminal failures self-terminate (impl editSave.createPersistProbe)
     this._subKeySeq = 0
   },
   computed: {
@@ -251,10 +259,8 @@ export default {
     tomatoActual () {
       const id = this.e && this.e.taskId
       if (!id) return 0
-      // Copy-paste bug fix: the original r.focus!==false was always truthy; uniform store lookup (abandoned excluded)
       return this.$store.getters['tomato/actualCountByTask'].get(id) || 0
     },
-    // Recycle bin: task missing from the live list, detected via the recycle list (hide "complete" row, show restore banner)
     inRecycle () {
       if (!this.e || !this.e.taskId) return false
       if (this.task) return false
@@ -262,12 +268,16 @@ export default {
     },
     cats () { /* W16: LEAF cats only — folders are containers (roots excludes likewise); sortedAll keeps folders for SideNav/manage */ return this.$store.getters['category/sortedAll'].filter(c => !c.folderIs) },
     curCat () { return this.cats.find(c => c.categoryId === (this.e && this.e.categoryId)) || null },
-    // Tags = virtual derivation from #xxx in the content (a cross-cutting multi-select dimension); editing rewrites the hash tokens in the title text
+    projectChoices () { return this.$store.getters['projectV2/all'] || [] },
+    taskProjectId () {
+      const lookup = this.$store.getters['projectV2/forTask']
+      return this.e && typeof lookup === 'function' ? (lookup(this.e.taskId) || '') : ''
+    },
+
     taskTags () { return this.e ? extractTags(this.e.title) : [] },
     autoSave () { return this.$store.state.settings.isTodoEditModalCloseAutoSave },
     isRepeat () { return !!(this.e && this.e.repeatId) },
     today0 () { return this.$store.state.todo.todayTimestamp }
-    // W21 split: todayLabel/tomorrowLabel/dateChip/dateChipTime moved to editpanel/EditPanelDateChips.vue
   },
   watch: {
     previewImg (v) { if (v) this.$nextTick(() => { const el = this.$refs.previewMask; if (el) el.focus() }) },
@@ -279,24 +289,16 @@ export default {
           this.hydrate()
           this.$nextTick(() => {
             const t = this.$el && this.$el.querySelector('.ep-title textarea')
-            // F-D5 (2026-09-23): keyboard open leaves activeElement on the row — the BODY-only guard skipped focusing, so keyboard/SR users got no "panel is open" feedback. Also focus on activation from inside a todo row; plain mouse focus elsewhere is left untouched.
             const ae = document.activeElement
             const fromRow = !!ae && !!ae.closest && !!ae.closest('.td-item')
             if (t && (!ae || ae.tagName === 'BODY' || fromRow)) t.focus()
           })
         } else {
-          // hydrate dedup (2026-09-25): forget the last hydration key on close so reopening the
-          // SAME task re-hydrates from a fresh snapshot instead of being deduped into a no-op
           this._hydKey = null
         }
       }
     },
-    // The task was fully deleted by another window/sync/auto-cleanup (in neither the active nor the recycle list): close the panel automatically. Otherwise it becomes a "zombie editor" -- displaying the hydrated snapshot while all saves are silently lost (updateTodoFields is a no-op for a nonexistent id)
     task (t) {
-      // P1 (2026-10-01): a full reload transiently evaluates `task` to null while the row array is
-      // swapped; the old immediate closeEdit slammed the panel shut and silently lost that window's
-      // edits. Verify absence in the post-reload lists instead (store-sync anchor keeps the
-      // taskAbsentIn guard in-host); a reappearing row cancels the close.
       if (t && this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
       if (!t && !this.inRecycle && this.$store.state.ui.rightSidebarTodoEdit.visible) {
         if (this._closeVerifyTimer) clearTimeout(this._closeVerifyTimer)
@@ -323,10 +325,8 @@ export default {
     }
   },
   mounted () {
-    // Review P2 (2026-09-22): expose the save queue's flush to the ui store — closeEditCleanup's inline-create orphan cleanup awaits it instead of racing the 350ms debounce with a fixed sleep
     this._flushHook = () => this.flushSave()
     window.__editPanelFlushSave = this._flushHook
-    // First open of the edit panel: spotlight tour for the attachment toolbar (in-context teaching) — W21: mechanics in editpanel/panelSetup.js
     panelSetup.runEditpanelTour()
     this._onKeydown = (e) => {
       if (e.key !== 'Escape') return
@@ -338,12 +338,8 @@ export default {
       if (this.previewImg) { this.previewImg = null; return }
       const ui = this.$store.state.ui
       if (ui.contextMenu && ui.contextMenu.visible) return // [editpanel-esc-ignores-context-menu] an open context menu owns Esc
-      // [maint-0925 A2] store-level overlay whitelist (filter modal hoisted out of FilterView local data)
       if (ui.showSettingsModal || ui.showRepeatModalFor || ui.showFeedbackModal || ui.showFilterModal || ui.showRepeatDeleteConfirm || ui.accountTaskId || ui.tomatoAbandonVisible || ui.tomatoFocusRecordVisible || ui.tomatoRecordAddVisible) return
-      // [fix 2026-10-09] a date/time picker (.el-picker-panel, append-to-body) owns Esc (else the keypress fell through to closeEditCleanup)
-      // [fix 2026-10-27] .ds-cal-pop (DayDateStrip calendar popover) owns Esc too — else the keypress bubbled to window and closeEditCleanup orphan-deleted the inline task.
       if (document.querySelector('.el-picker-panel, .ds-cal-pop')) return
-      // [F3 2026-10-18] store-invisible local overlays (else Esc deleted the inline task behind the dialog)
       if (document.querySelector('.el-overlay:not([style*="display: none"]), .el-message-box, .modal-container:not([style*="display: none"])')) return
       const st = this.$store.state.ui.rightSidebarTodoEdit
       if (st && st.visible) {
@@ -352,24 +348,20 @@ export default {
       }
     }
     window.addEventListener('keydown', this._onKeydown)
-    // W21 split: static + dynamic spellcheck suppression moved to editpanel/panelSetup.js
     panelSetup.disableSpellcheck(this)
     this._onFocusin = panelSetup.dynamicSpellcheckGuard()
     this.$el.addEventListener('focusin', this._onFocusin)
-    // (W21 split) the hidden date-picker input's tabindex demotion moved with the picker into EditPanelDateChips.mounted
   },
   beforeUnmount () {
     window.removeEventListener('keydown', this._onKeydown)
     if (window.__editPanelFlushSave === this._flushHook) delete window.__editPanelFlushSave
     if (this.$el && this._onFocusin) this.$el.removeEventListener('focusin', this._onFocusin)
-    // Esc 关闭路径不经 close():防抖回调会在卸载后写 this.saving,_sortable 也不会 destroy(2026-09-05 终审 P2)
     try { this.flushSave() } catch (e) { /* 卸载期落库失败不阻断卸载 */ }
     if (this._closeVerifyTimer) { clearTimeout(this._closeVerifyTimer); this._closeVerifyTimer = null }
     if (this._probe) this._probe.cancel() // [w30 P0] probe must not fire into an unmounted panel
     if (this._sortable) { try { this._sortable.destroy() } catch (err) { /* already destroyed */ } this._sortable = null }
   },
   methods: {
-    // Locale-aware month/day label (same convention as CalendarView's fmtDate): the fixed 'M/D' once showed numeric-only dates under the English UI, off-contract with the FMT format system
     fmtMd (ts) { return getLocale() === 'en-US' ? dayjs(ts).format('MMM D') : dayjs(ts).format(FMT.cnDate) },
     /* ===== Save pipeline wrappers (impl: utils/editSave.js) ===== */
     queueSave (patch) { if (this._save) this._save.queueSave(patch) },
@@ -391,41 +383,25 @@ export default {
     onDoneRowKey: roleCheckboxActivate(function () { this.toggleComplete() }),
     onRepeatRowKey: roleButtonActivate(function () { this.askRepeatEdit() }),
     onDeadlineRowKey: roleButtonActivate(function () { this.openDeadlinePick() }),
-    onDelTaskKey: roleButtonActivate(function () { this.delTask() }),
+    copyTaskFull () { return copyTaskFull(this) },
     markDirty (k) { if (this._save) this._save.markDirty(k) },
-    // W21 split: drag-sort mechanics moved to editpanel/subtaskOps.initSubSortable (verbatim)
     initSubSortable () { return subtaskOps.initSubSortable(this) },
     hydrate (force) {
       const s = this.$store.state.ui.rightSidebarTodoEdit
       if (!s.visible || !s.taskId) return
-      // P2 dedup (2026-09-25): the taskId and visible watchers are BOTH immediate, so a single
-      // open used to run hydrate twice — double flushSave, double repeatGroupInfo DB query, double
-      // initSubSortable. Same task + visible already hydrated → skip unless explicitly forced.
       const key = s.taskId + '|' + !!s.visible
       if (!force && this._hydKey === key) return
       this._hydKey = key
       this.flushSave()
-      // P1 root fix (2026-10-01): rebuild the snapshot from the LIVE store row whenever it
-      // exists. `s` is the open-time ui.rightSidebarTodoEdit snapshot — written once at open —
-      // so the old hydrate re-adopted that frozen copy: a subtask/attachment added since open
-      // was silently discarded on every pristine re-hydrate (echo reload / peer edit), a peer
-      // rename could never appear, and the next save wrote the stale copy back over the store.
-      // Only fall back to `s` when the row genuinely cannot be found (recycle-bin task).
-      // (look the row up by s.taskId, NOT this.task — the computed still tracks the PREVIOUS
-      // task while switching, and reading it here would hydrate B from A's row)
       const live = this.$store.state.todo.todoList.find(t => t.taskId === s.taskId) || null
       const src = live ? buildEditSnapshot(live) : s
       this.subList = JSON.parse(JSON.stringify(src.sublist))
-      // Mint stable render keys for rows imported from the store (persisted subtasks carry no _key)
       for (const sub of this.subList) { if (sub && sub._key == null) sub._key = ++this._subKeySeq }
       this.imgList = JSON.parse(JSON.stringify(src.todoImageList))
       this.fileList = JSON.parse(JSON.stringify(src.fileList))
       const snap = JSON.parse(JSON.stringify(src))
       snap.visible = s.visible; snap.collapsed = s.collapsed; snap.taskId = s.taskId
       this.e = snap
-      // F3: hydration baseline (updateTime + core-field fingerprint) so checkRemoteUpdate can tell
-      // inbound peer edits from the panel's own save echoes. (renamed live->liveRow: `live` is taken above —
-      // duplicate declaration was a 500 on the vite SFC compile)
       const liveRow = this.task
       this._remoteUpdateTime = liveRow ? liveRow.updateTime : s.updateTime
       this._remoteFingerprint = contentFingerprint(this.e)
@@ -463,7 +439,6 @@ export default {
       if (!this.autoSave) this.queueSave({})
       this.$store.dispatch('ui/closeEditCleanup') // D6-F1: cleanup-aware close
     },
-    // Collapse is not close: the edit state is kept, collapsing into a thin strip on the right edge that can be expanded again
     collapse () {
       if (!this.autoSave) this.queueSave({})
       this.$store.dispatch('ui/collapseEditCleanup')
@@ -473,10 +448,6 @@ export default {
     /** [maint-0924 A7] focus-return shared by collapse() and the Esc-close path: focus the edited task row, falling back to the scroll container (focusable via tabindex=-1) */
     refocusRow (id) {
       this.$nextTick(() => {
-        // P1 fix (2026-09-25): the row locator moved to utils/todoRowEl.js — the old fallback only
-        // probed `el.__vue__` (Vue2-proprietary; this app is Vue3 createApp) and no `.td-item`
-        // element carries data-id, so BOTH stages missed and Esc/collapse always dropped focus to
-        // the scroll container. findTaskRowEl probes .td-item data-attributes plus BOTH Vue channels.
         const row = findTaskRowEl(id)
         if (row) { (row as HTMLElement).focus(); return }
         const list = document.querySelector<HTMLElement>('.main-scroll')
@@ -493,7 +464,6 @@ export default {
       this.e[key] = val
       const patch: any = {}
       patch[FIELD_MAP[key]] = val
-      // Connect the ledgers (user-finalized): priority high⇔important quadrant, low/none⇔non-important — the quadrant and the list share a single importance ledger
       if (key === 'priority') {
         const imp = val === 3 ? 1 : 0
         this.e.important = imp
@@ -501,8 +471,6 @@ export default {
       }
       this.queueSave(patch)
     },
-    // W21 split: only today/tomorrow/none arrive here now — the 'pick' branch (hidden-picker focus
-    // + click fallback) moved with the picker into EditPanelDateChips.openPick
     setDate (mode) {
       if (mode === 'today') this.applyDate(this.today0)
       else if (mode === 'tomorrow') this.applyDate(dayShift(this.today0, 1))
@@ -554,7 +522,6 @@ export default {
     onRemindersClear () { return reminderOps.onRemindersClear(this) },
     onRemindersOffsets (sorted) { return reminderOps.onRemindersOffsets(this, sorted) },
     toggleComplete () {
-      // Same feedback semantics as checking in the list: completing shows a "completed + undo" toast, un-completing is only announced
       toggleCompleteWithUndo({ store: this.$store, message: this.$message, todo: this.task, announce: this.$announce })
         .then(() => this.hydrate(true))
     },
@@ -580,6 +547,7 @@ export default {
       } catch (e) {
         // Restore failed: keep the item in the bin and surface the error instead of a false-success toast
         this.$message.error(this.$t('statsC.RecycleBin.restoreFailedMsg') + (e && e.message ? e.message : e))
+        for (const k of ['subtasks', 'imgs', 'files']) this.markDirty(k) // [w33 P2] takeDirty above CONSUMED these dirty flags — re-flag so a failed restore's edits still flush on a later save/restore retry (pre-fix they were stranded forever)
         return
       }
       this.$message.success(this.$t('statsJ.EditPanel.restoredMsg'))
@@ -591,9 +559,7 @@ export default {
       this.subList.push({ text, checked: false, _key: ++this._subKeySeq })
       this.markDirty('subtasks'); this.queueSave({})
     },
-    // W21 split: toggle + parent-complete linkage moved to editpanel/subtaskOps.toggleSub (verbatim)
     toggleSub (s) { return subtaskOps.toggleSub(this, s) },
-    // [W26] EpSubtasks passes the row object; resolve by stable `_key` — a captured index desyncs after a mid-edit drag splice / LAN re-hydrate.
     _subIndexByKey (sub) { return sub && sub._key != null ? this.subList.findIndex(x => x && x._key === sub._key) : -1 },
     delSub (sub) {
       removeWithUndo(this,
@@ -616,7 +582,6 @@ export default {
       // [maint-0925 A8] screen-reader feedback, same sentence as the row-level reorder (TodoItem.keyboardMove)
       this.$announce && this.$announce(this.$t(dir > 0 ? 'statsJ.TodoItem.moveDownAnnounce' : 'statsJ.TodoItem.moveUpAnnounce', { t: (this.subList[j] && this.subList[j].text) || '' }))
     },
-    // [R2] subtask inline rename (EpSubtasks 'rename' emit): rewrite the row text and run it through the same unified save pipeline as add/toggle/move
     renameSub (sub, text) {
       const sub2 = this.subList.find(x => x && sub && x._key === sub._key)
       const t = (text || '').trim()
@@ -683,11 +648,26 @@ export default {
         setTimeout(deleteFromDisk, 5500)
       }
     },
-    delTask () {
-      // Recurring tasks share the context-menu semantics: ask the scope first (this instance only / the whole series)
-      if (this.isRepeat && this.task) return this.askRepeatDelete()
-      // Same semantics as the list/todo box/quadrant matrix: no confirmation dialog, 5s undo toast after delete (consistency consolidated 2026-08-31)
-      deleteWithUndo(this, this.$store, this.task).then(ok => { if (ok) this.close() }).catch(() => {})
+    async delTask () {
+      const task = this.task
+      if (!task || this.inRecycle) return
+      // RepeatDeleteModal already asks for scope and requires explicit confirmation.
+      if (this.isRepeat) return this.askRepeatDelete()
+      try {
+        await this.$confirm(
+          this.$t('statsJ.EditPanel.deleteConfirmMsg'),
+          this.$t('statsJ.EditPanel.deleteTask'),
+          {
+            type: 'warning',
+            confirmButtonText: this.$t('statsJ.EditPanel.deleteBtn'),
+            cancelButtonText: this.$t('statsJ.EditPanel.deleteCancel')
+          }
+        )
+      } catch { return } // Cancel/close never deletes.
+      // Do not delete an unrelated task if the editor switched during confirmation.
+      if (!this.task || this.task.taskId !== task.taskId || this.inRecycle) return
+      const ok = await deleteWithUndo(this, this.$store, task)
+      if (ok) this.close()
     },
     /* ===== Repeat (impl: edit-panel/repeat.js) ===== */
     askRepeatEdit () { return repeat.askRepeatEdit(this) },
@@ -699,17 +679,25 @@ export default {
     estDelta (d) { setEstimate(this.e && this.e.taskId, getEstimate(this.e && this.e.taskId) + d) },
     chipCat (c) { this.fieldPatch('categoryId', c.categoryId) }, // reserved: category quick chips
     pickCat (id) { this.fieldPatch('categoryId', id); this.catOpen = false },
+    async setTaskProject (projectId) {
+      const taskId = this.e && this.e.taskId
+      if (!taskId) return
+      try {
+        await this.$store.dispatch('projectV2/assign', { taskId, projectId: projectId || null })
+      } catch (e) {
+        this.$message.error(this.$t('statsJ.EditPanel.projectSaveFailed') + ': ' + (e && e.message ? e.message : e))
+      }
+    },
+
     /* ===== Dependencies: EpDependencies emits the merged predecessors JSON; persistence stays here ===== */
     patchPreds (predecessorsJson) {
       this.e.predecessors = predecessorsJson
       this.markDirty('preds'); this.queueSave({})
     },
     tt (k) { const s = String(k || ''); return (s.startsWith('statsE.') || s.startsWith('statsJ.')) ? this.$t(s) : s },
-    // EpTags emits a cleaned, deduped tag name; the title hash-token rewrite + persistence stay here
     addTag (name) {
       if (!this.e || !name) return
       const base = (this.e.title || '').replace(/\s+$/, '')
-      // [maint-0925 A10] empty base produced a title with a leading space (' #name')
       this.fieldPatch('title', base ? base + ' #' + name : '#' + name)
     },
     removeTag (name) {
@@ -717,7 +705,6 @@ export default {
       const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
       const tokenRe = new RegExp('\\s*#' + esc + '(?=[\\s#,，。.!?！？]|$)')
       const m = (this.e.title || '').match(new RegExp('#' + esc + '(?=[\\s#,，。.!?！？]|$)'))
-      // [A8 fix] capture the index per call: the shared component-level _removedTagAt slot was clobbered by stacked undo toasts, so the last removal's index won for every toast
       const removedAt = m ? m.index : null
       removeWithUndo(this,
         () => this.fieldPatch('title', (this.e.title || '').replace(tokenRe, '')),

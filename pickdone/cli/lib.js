@@ -197,7 +197,7 @@ const {
 } = require('./lib-focus.cjs')({ open, commit, audit, CliError, dayjs, resolveTask, liveTasks, parseDate, FOCUS_MAX_MINUTES, REST_MAX_MINUTES })
 const {
   getProjects, getProjectIds, setProjectFlag, projectStatus,
-  getMilestones, parseMilestoneDate, addMilestone, removeMilestone, linkMilestone, msProgress,
+  getMilestones, parseMilestoneDate, addMilestone, removeMilestone, linkMilestone, msProgress, resolveMilestoneScope, milestoneTasks,
   setProjectDeadline, getProjectDeadline,
   PROJECT_STATUS_VALUES, explicitStatus, setProjectStatus,
   PROJECT_IDS_KEY, projectFlagKey, projectStatusKey, MS_KEY,
@@ -793,7 +793,7 @@ module.exports = {
   audit, readAuditLog: audit.readEntries,
   getProjects, getProjectIds, setProjectFlag, projectStatus, parseMilestoneDate,
   PROJECT_STATUS_VALUES, explicitStatus, setProjectStatus,
-  getMilestones, addMilestone, removeMilestone, linkMilestone, msProgress,
+  getMilestones, addMilestone, removeMilestone, linkMilestone, msProgress, resolveMilestoneScope, milestoneTasks,
   setProjectDeadline, getProjectDeadline,
   writeTomatoCmd, readTomatoState, waitForTomatoAck, tomatoLiveRemainSec, backfillRecord,
   writeSyncCmd, readSyncState, waitForSyncAck,

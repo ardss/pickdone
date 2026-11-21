@@ -6,11 +6,14 @@ import '../../setup.mjs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'module'
-import os from 'node:os'
-import path from 'node:path'
-import fs from 'node:fs'
+// W33 fix(2026-11-03): top-level bare mkdtempSync leaked a temp dir per run (no rmSync, no
+// sweeper registration). isolatedTmpDir registers the dir for exit-time sweep and encodes the
+// owning pid for the preflight sweeper (tests/lib/tmp-dir.mjs contract). The bare
+// process.env.TODO_DB_DIR assignment stays: this suite runs one node process per file
+// (run-all.mjs), the assignment model the helper doc itself anchors on.
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-process.env.TODO_DB_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'todo-more3-'))
+process.env.TODO_DB_DIR = isolatedTmpDir('todo-more3-')
 const require_ = createRequire(import.meta.url)
 const lib = require_('../../../cli/lib.js')
 const dayjs = require_('dayjs')

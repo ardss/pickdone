@@ -1,0 +1,72 @@
+body {
+  font: 13px system-ui, sans-serif;
+  width: 320px;
+  margin: 0;
+  padding: 12px;
+}
+h1 {
+  font-size: 14px;
+  margin: 0 0 8px;
+}
+#summary {
+  color: #555;
+  margin-bottom: 8px;
+}
+ul {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+li {
+  padding: 4px 0;
+  border-bottom: 1px solid #eee;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+button {
+  width: 100%;
+  padding: 6px;
+}
+/* J3 sentinel: the port-conflict / unreachable state is a first-class visible block,
+   never a silent console-only failure. */
+#connState {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  display: none;
+  white-space: normal;
+}
+#connState.bad {
+  display: block;
+  background: #fdecea;
+  color: #b42318;
+  border: 1px solid #f1b3ae;
+}
+#connState.good {
+  display: block;
+  background: #e8f5ec;
+  color: #1a7f37;
+  border: 1px solid #b7dfc3;
+}
+#checkConn {
+  margin-bottom: 8px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.row label {
+  flex: 0 0 70px;
+  color: #555;
+}
+.row input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px;
+  font: inherit;
+}

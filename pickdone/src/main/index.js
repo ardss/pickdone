@@ -481,6 +481,9 @@ if (!app.requestSingleInstanceLock(...__multiLockArgs)) {
     // let go (wrong-window binds / silent OWN_WINDOW-DESKTOP misses). prewarm never rejects and
     // is deliberately NOT called per-IPC.
     try { require('./win-bind').prewarm() } catch { /* best-effort boot prewarm */ }
+    try {
+      require('./capture-port-sentinel').wireCaptureDoor(require('./capture-endpoint').start(), log)
+    } catch (e) { log.warn('[Init] capture endpoint failed to start:', e && e.message) }
     // Perf (2026-10-02): reloadAll + Meta GC moved AFTER registerIpc/extWatch — they used to run
     // before the IPC/bus wiring, blocking the window-ready path on synchronous GC work. No
     // behavior change: registerIpc is synchronous wiring, reloadAll's fingerprint gate
@@ -578,11 +581,10 @@ const { createHangFallback, createReentrancyGuard, shouldRunQuitFlush } = requir
 const quitHangFallback = createHangFallback({
   timeoutMs: 3000,
   onExit: () => {
-    // Hang fallback only; normally unreachable. app.exit() bypasses the quit event entirely, so
-    // electron-updater's autoInstallOnAppQuit would silently SKIP a pending update. When an update
-    // is ready, hand off to quitAndInstall() instead; only hard-exit when nothing is pending (or
-    // the handoff is refused, e.g. portable builds where quitAndInstall returns false).
-    try { if (updater.getStatus().status === 'ready' && updater.quitAndInstall()) return } catch { /* fall through to the hard exit */ }
+    // Hang fallback only: hard-exit after the bounded flush. Never install here;
+    // installation requires a separate explicit click in the update UI.
+
+    // Ordinary quit does not authorize installing a downloaded update.
     try { app.exit(0) } catch {}
   }
 })
@@ -746,7 +748,7 @@ function registerIpc () {
     getMainWindow, showMainOrLock,
     isLocked, isLockWindow, lockAppNow, unlockAppNow, verifyLockPassword, allowWithinRate,
     isSafeExternal, attachDir,
-    resyncDbWatch: () => extWatch.currentResyncDbWatch(),
+    resyncDbWatch: () => extWatch.currentResyncDbWatch(), getDbCall: () => (op, p) => dbm.call(op, p),
     notifySyncChange: op => { try { require('./lan-sync-bootstrap').kickSyncRound('local-write:' + op) } catch { /* sync lazy-not-init */ }  try { require('./relay-sync-bootstrap').kickRelayRound('local-write:' + op) } catch { /* relay lazy-not-init */ } },
     broadcastTomatoRecordsChanged, broadcastTodosChanged, broadcastWhiteNoiseUpdated,
     rebuildTrayMenu, getTray: trayCluster.getTray, updateTomatoTray,
@@ -765,7 +767,8 @@ function registerIpc () {
     require('./handlers/csv-import')(hctx),
     require('./handlers/tomato')(hctx),
     require('./handlers/system')(hctx),
-    require('./win-bind')(hctx) // T7: five dedicated win-bind:* channels (win-bind/index.js)
+    require('./win-bind')(hctx), // T7: five dedicated win-bind:* channels (win-bind/index.js)
+    require('./cross-platform/bridge-ipc').bridgeIpcHandlers(hctx) // Lane A: crossplatform:* settings channels
   )
   // Flush-ack handshake receiver (see will-quit): renderer sends this after dispatching its debounced
   // flush writes on app-quitting-flush. fire-and-forget (ipcMain.on, not handle) — the main process is

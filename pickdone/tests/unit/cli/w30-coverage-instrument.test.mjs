@@ -85,7 +85,7 @@ test('end-to-end: the gate binary reds immediately on --with-coverage --core (be
   const r = spawnSync(process.execPath, ['cli/check-test-summary.cjs', '--with-coverage', '--core'], {
     cwd: ROOT, encoding: 'utf8', timeout: 30000
   })
-  assert.notEqual(r.status, 0, 'combo must be a red exit')
+  assert.equal(r.status, 1, 'combo must be a red exit — 1 (usage error), never 0; a spawn-error status of null would slip past notEqual')
   assert.ok((r.stderr || '').includes('--with-coverage'), 'red message must name the forbidden combo')
   assert.ok(Date.now() - t0 < 20000, 'must fail fast BEFORE spawning the suite (no 4-minute unit run)')
 })

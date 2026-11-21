@@ -12,6 +12,24 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
   K_PAIRING_SECRET, K_DEVICE_NAME, K_MANUAL_PEERS, K_PEER_WATERMARKS, K_ENABLED,
   K_PEER_ALIAS_PREFIX, PAIRING_CODE_TTL_MS, DEFAULT_PORT, log }) => {
   /* ---------- P1-3 (2026-09-19 UX review): unpair a device ---------- */
+  /** F1/F2 (2026-11-11 real two-machine acceptance): BOTH initiator pairing ops restart the
+   *  node BEFORE persisting the fresh per-pair secret, so the restarted node's live peer entry
+   *  still holds the STALE secret — the post-pair round dialed with it, the peer's server
+   *  answered auth-failed, and the dialer entered the TERMINAL unpaired state ("re-pair
+   *  required") immediately after a SUCCESSFUL re-pair. Inbound/backlog then stayed dead until
+   *  a manual sync disable/enable. Fix: after the persist, install the fresh secret into the
+   *  live entry (addPeer) and clear that peer's terminal flag + poll backpressure
+   *  (node.onPairSuccess) so the kicked post-pair round dials with the RIGHT secret. */
+  function tellLiveNodePaired (deviceId, name, host, port, secret) {
+    try {
+      const state = getState()
+      if (!state.node || !deviceId) return
+      if (typeof state.node.addPeer === 'function') {
+        state.node.addPeer({ deviceId, name: name || undefined, host: host || undefined, port, secret })
+      }
+      if (typeof state.node.onPairSuccess === 'function') state.node.onPairSuccess(deviceId)
+    } catch (e) { log.warn('[LanSync] live-node pair refresh failed:', e && e.message) }
+  }
   /**
    * Remove a paired device: drop its manual peer record + push watermark and REVOKE the shared
    * pairing secret. Documented consequence (surfaced in the confirm dialog): pairing uses a single
@@ -84,6 +102,52 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     return { ...getSettingsPayload(), unpaired: deviceId }
   }
 
+  /* ---------- beta.41: forget one stale peer record WITHOUT touching the shared secret ---------- */
+  /** Why this exists: `sync unpair` rotates the single shared pairing secret, so ONE dead record
+   *  could only be removed by disconnecting every real device. The record left behind by an old
+   *  dev instance (203.0.113.9:58472, state=hibernating, pending=324) then re-dialled on every
+   *  round: ECONNREFUSED in the log forever, and neither the Device Center nor the CLI could drop
+   *  just it. `forget` is unpair's bookkeeping — manual-peer mirror, paired record, tomato-announce
+   *  row, push watermark — minus the three steps that hurt healthy devices: no secret rotation, no
+   *  node restart, no notifyUnpaired (there is nobody left to notify). */
+  async function syncForgetPeerOp (p) {
+    const state = getState()
+    const deviceId = String((p && p.deviceId) || '').trim()
+    if (!deviceId) throw new Error('syncForgetPeer: deviceId is required')
+    // Unlike unpair this is legal with sync disabled: cleaning a record must not require a live node.
+    let host = null
+    let port = null
+    try {
+      const peer = (state.node && state.node.getStatus().peers || []).find(x => x && x.deviceId === deviceId)
+      if (peer) { host = peer.host; port = peer.port }
+    } catch { /* status read is best-effort; the persisted record still goes */ }
+    if (host && state.node) {
+      const rest = manualPeers().filter(x => !(x.host === host && Number(x.port) === Number(port)))
+      settingPut(K_MANUAL_PEERS, JSON.stringify(rest))
+      try { state.node.removePeer(String('manual-' + host + ':' + port)) } catch { /* older nodes */ }
+    }
+    if (state.node) { try { state.node.removePeer(deviceId) } catch { /* older nodes */ } }
+    removePairedPeer(deviceId)
+    try { busWrite('deleteMeta', require('../tomato-announce').keyFor(deviceId)) } catch (e) { log.warn('[LanSync] announce row drop failed:', e && e.message) }
+    try {
+      if (state.peerWatermarks && typeof state.peerWatermarks.revoke === 'function') {
+        state.peerWatermarks.revoke(deviceId)
+        persistPeerWatermarks()
+      } else {
+        const wm = loadPeerWatermarks()
+        if (wm[deviceId] != null) {
+          delete wm[deviceId]
+          settingPut(K_PEER_WATERMARKS, JSON.stringify(wm))
+          if (state.peerWatermarks && typeof state.peerWatermarks.delete === 'function') state.peerWatermarks.delete(deviceId)
+        }
+      }
+    } catch (e) { log.warn('[LanSync] watermark drop failed:', e.message) }
+    notifyRenderers('peer-unpaired') // same refresh signal: the card must disappear
+    emitSyncEvent('peer-unpaired', { deviceId, host })
+    log.info('[LanSync] forgot peer', deviceId, '- shared secret kept (no other device is affected)')
+    return { ...getSettingsPayload(), forgotten: deviceId }
+  }
+
   const syncPairWithCode = async p => {
     const state = getState()
     const code = String((p && p.code) || '').trim()
@@ -109,18 +173,30 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // state (the peer may already show us as paired) so the user can re-pair knowingly.
     // (The legacy global-secret adoption above stays before the restart on purpose: it is a
     // fallback secret for pre-F1 peers, inert without a persisted peer record.)
+    // R7 P0 fix (2026-11-13 real two-machine drill): persist BEFORE the restart. restorePeers()
+    // inside startSync is the only registration path observed to actually reach the live node —
+    // with persist AFTER the restart (the old order), the initiator's freshly restarted node
+    // missed the just-paired peer entirely (rounds ran targets=0 until the next FULL app
+    // restart; repro'd twice on physical Windows A/B, beta.29). Fail-closed F4 #6 is preserved
+    // by rolling the just-written record back when the restart fails, so a failed bind still
+    // persists NOTHING and rejects with the same structured code as before.
+    const peerRec = r.peer && r.peer.deviceId
+      ? { deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret }
+      : null
+    if (peerRec) persistPairedPeer(peerRec)
     try {
       // S5: awaited + fail-closed — a bind failure after pairing surfaces to the renderer as a
       // rejected pairing op with sync OFF, not as a silent dead toggle.
       await restartSync({ preserveEnabled: true })
     } catch (e) {
+      if (peerRec) { try { removePairedPeer(peerRec.deviceId) } catch { /* rollback best-effort */ } }
       const err = new Error('syncPairWithCode: pairing accepted by the peer but the node restart failed — NOT persisted locally (the peer may already show this device as paired): ' + ((e && e.message) || e))
       err.code = 'PAIR_RESTART_FAILED_NOT_PERSISTED'
       throw err
     }
-    if (r.peer && r.peer.deviceId) {
-      persistPairedPeer({ deviceId: r.peer.deviceId, name: r.peer.name, host: r.peer.host, port: r.peer.port, secret: r.secret })
-    }
+    // Belt-and-braces: on the restored node the peer is already present (restorePeers); this
+    // also covers any restart implementation that does not hydrate from the persisted table.
+    if (peerRec) tellLiveNodePaired(peerRec.deviceId, peerRec.name, peerRec.host, peerRec.port, peerRec.secret)
     // D2 fix (2026-10-21): the fire-and-forget round used to have NO catch — a rejected round
     // (transport dead right after pairing) surfaced as an unhandled promise rejection.
     Promise.resolve().then(runRound).then(persistPeerWatermarks).catch(e => log.warn('[LanSync] post-pair first round failed:', e && e.message))
@@ -156,18 +232,24 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     // PRESERVED so legacy global-secret peers keep authenticating across new pairings.
     if (!settingGet(K_PAIRING_SECRET)) settingPut(K_PAIRING_SECRET, String(r.secret))
     log.info('[LanSync] two-way pairing accepted by', host, '- shared secret adopted, restarting node')
-    // F4 #6: same fail-closed contract as syncPairWithCode — the peer record persists ONLY after
-    // the restart succeeds, so a failed bind can never leave a persisted pairing the UI reported
-    // as failed. Structured code carries the true cross-side state (the peer accepted).
+    // R7 P0 fix (2026-11-13): same persist-before-restart + rollback-on-failure contract as
+    // syncPairWithCode above — restorePeers() at restart is the proven live-node registration
+    // path; the post-restart tellLiveNodePaired alone was observed swallowed on real A/B
+    // (initiator rounds ran targets=0 until the next full app restart).
+    const rec = r.deviceId ? { deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret } : null
+    if (rec) persistPairedPeer(rec)
+    // F4 #6 / S5 fail-closed: a failed bind must leave NOTHING persisted — the just-written
+    // record is rolled back here, keeping the old "NOT persisted locally" contract intact.
     try {
       // S5: awaited + fail-closed (same contract as syncPairWithCode above).
       await restartSync({ preserveEnabled: true })
     } catch (e) {
+      if (rec) { try { removePairedPeer(rec.deviceId) } catch { /* rollback best-effort */ } }
       const err = new Error('syncPairRequest: pairing accepted by ' + host + ' but the node restart failed — NOT persisted locally (the peer may already show this device as paired): ' + ((e && e.message) || e))
       err.code = 'PAIR_RESTART_FAILED_NOT_PERSISTED'
       throw err
     }
-    if (r.deviceId) persistPairedPeer({ deviceId: r.deviceId, host: r.host, port: r.port, secret: r.secret })
+    if (rec) tellLiveNodePaired(rec.deviceId, undefined, rec.host, rec.port, rec.secret)
     // D2 fix (2026-10-21): same catch contract as syncPairWithCode above.
     Promise.resolve().then(runRound).then(persistPeerWatermarks).catch(e => log.warn('[LanSync] post-pair first round failed:', e && e.message))
     return { ...getSettingsPayload(), host: r.host, port: r.port }
@@ -207,5 +289,5 @@ module.exports = ({ getState, settingGet, settingPut, busWrite, getSettingsPaylo
     return getSettingsPayload()
   }
 
-  return { syncUnpairPeerOp, syncPairWithCode, syncPairRespond, syncPairRequest, syncSetPeerAlias, syncGetPairingCode, syncSetName }
+  return { syncUnpairPeerOp, syncForgetPeerOp, syncPairWithCode, syncPairRespond, syncPairRequest, syncSetPeerAlias, syncGetPairingCode, syncSetName }
 }

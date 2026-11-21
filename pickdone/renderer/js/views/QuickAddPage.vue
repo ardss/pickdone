@@ -18,6 +18,10 @@ import QuickAdd from '../components/QuickAdd.vue'
  *  hides (blur / focus loss) only. An explicit Esc cancel DISCARDS the draft, matching the main
  *  window's QuickAdd (J1, uiux-2026-10-01). */
 const DRAFT_KEY = 'quickAddDraft'
+// [W32 P2] busy-window queued paste lines (_pendingLines) live only in component memory:
+// the standalone window is destroyed between summons, so an un-drained queue used to vanish.
+// They are persisted/restored alongside the draft under their own key.
+const PENDING_KEY = 'quickAddPending'
 
 export default {
   name: 'QuickAddPage',
@@ -59,8 +63,22 @@ export default {
     // explicit Esc cancel discards the draft (aligned with the main window's QuickAdd).
     restoreDraft () {
       try {
+        const qa = this.$refs.qa
+        if (!qa) return
         const draft = localStorage.getItem(DRAFT_KEY)
-        if (draft && this.$refs.qa && !this.$refs.qa.text) this.$refs.qa.text = draft
+        if (draft && !qa.text) qa.text = draft
+        // [W32 P2] restore the pending multi-line queue a previous window left behind
+        if (!qa._pendingLines || !qa._pendingLines.length) {
+          const raw = localStorage.getItem(PENDING_KEY)
+          if (raw) {
+            try {
+              const arr = JSON.parse(raw)
+              if (Array.isArray(arr) && arr.length) qa._pendingLines = arr
+            } catch { /* corrupt queue payload: drop it */ }
+          }
+        }
+        // [W32 P3] a re-summon must never inherit the previous session's inline qa-error
+        qa.failed = false
       } catch { /* draft persistence is best-effort */ }
     },
     persistDraft () {
@@ -69,6 +87,10 @@ export default {
         const txt = qa && qa.text ? qa.text : ''
         if (txt.trim()) localStorage.setItem(DRAFT_KEY, txt)
         else localStorage.removeItem(DRAFT_KEY)
+        // [W32 P2] keep the queued-lines key in sync with the in-memory queue
+        const pending = qa && qa._pendingLines && qa._pendingLines.length ? qa._pendingLines : null
+        if (pending) localStorage.setItem(PENDING_KEY, JSON.stringify(pending))
+        else localStorage.removeItem(PENDING_KEY)
       } catch { /* best-effort */ }
     },
     onKey (e) {
@@ -85,22 +107,35 @@ export default {
         // window's QuickAdd (J1, uiux-2026-10-01) which clears on Esc. The old persist-on-Esc
         // contradicted that newer behavior (and its own stale D6-F12 comment). Draft persistence
         // stays for ACCIDENTAL hides only (the blur path below); the restore-on-summon clears it.
+        // [W32 P2] full-cancel parity: delegate to qa.onCancel() so the pending queue, the date
+        // chip and the failed mark are dropped too — the old text-only clear left a cancelled
+        // _pendingLines queue behind for the next Enter to silently create.
         try { localStorage.removeItem(DRAFT_KEY) } catch { /* best-effort */ }
-        if (this.$refs.qa) this.$refs.qa.text = ''
+        try { localStorage.removeItem(PENDING_KEY) } catch { /* best-effort */ }
+        if (this.$refs.qa) {
+          this.$refs.qa.onCancel()
+          this.$refs.qa.text = '' // redundant after onCancel, kept literal for the D14-A9 anchor
+        }
         window.todoAPI.quickAddHide()
       }
     },
     onCreated () {
       // The draft is consumed by a successful creation; clear it so a stale line never resurfaces
       try { localStorage.removeItem(DRAFT_KEY) } catch { /* best-effort */ }
+      // [W32 P2] sync the persisted queue with the (possibly drained) in-memory queue — a
+      // partially-failed queue that just finished must not linger on disk once consumed
+      this.persistDraft()
       // [d21-A12] the 250ms auto-hide used to be a fire-and-forget timer: fast typing (or a
       // re-summon focus) within the window raced it. Store the handle, cancel it on keydown and
       // on re-summon focus, and hide only when the input is STILL empty.
+      // [W32 P2] a queued _pendingLines batch (busy paste / partial failure) still awaits its
+      // Enter drain — hiding the window now would destroy it, so keep the window up.
       if (this._hideTimer) { clearTimeout(this._hideTimer); this._hideTimer = null }
       this._hideTimer = setTimeout(() => {
         this._hideTimer = null
         const qa = this.$refs.qa
         if (qa && qa.text && String(qa.text).trim()) return // user already typed again — keep the window up
+        if (qa && qa._pendingLines && qa._pendingLines.length) return // queue still pending — keep the window up
         window.todoAPI.quickAddHide()
       }, 250)
     }

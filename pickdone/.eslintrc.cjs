@@ -5,6 +5,11 @@
 module.exports = {
   root: true,
   env: { es2022: true, browser: true },
+  globals: {
+    // Vite build-time defines (vite.config.mjs define) — injected at build, absent in plain node
+    __APP_BUILD_SHA__: 'readonly',
+    __APP_BUILD_CHANNEL__: 'readonly'
+  },
   plugins: ['vue'],
   parser: 'vue-eslint-parser',
   parserOptions: { parser: '@typescript-eslint/parser', ecmaVersion: 2022, sourceType: 'module', extraFileExtensions: ['.vue'] },
@@ -38,7 +43,7 @@ module.exports = {
     },
     {
       // Node 侧代码
-      files: ['src/main/**/*.js', 'src/preload/**/*.js', 'cli/**/*.js', 'tests/**/*.mjs', '*.cjs', '.eslintrc.cjs'],
+      files: ['src/main/**/*.js', 'src/preload/**/*.js', 'cli/**/*.{js,mjs}', 'tests/**/*.mjs', '*.cjs', '.eslintrc.cjs'],
       env: { node: true, browser: false, es2022: true },
       parserOptions: { ecmaVersion: 2022 },
       globals: {
@@ -52,6 +57,12 @@ module.exports = {
       // CDP/WS 协议需要 onmessage=... 闭包内捕获 pending Map；while(true) 是 watch 循环——协议本身有意的模式
       files: ['cli/**/*.js', 'tests/**/*.mjs'],
       rules: { 'no-loop-func': 'off', 'no-constant-condition': 'off', 'no-return-assign': 'off' }
+    },
+    {
+      // VS Code 扩展宿主是 CommonJS + Node globals（vscode 注入 require/module）
+      files: ['vscode-extension/**/*.js'],
+      parserOptions: { ecmaVersion: 2022, sourceType: 'script' },
+      env: { node: true }
     },
     {
       // CLI/主进程里确有 CJS 写法的文件按需在此放宽

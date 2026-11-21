@@ -7,6 +7,10 @@ test('deployment host information is not allowed in portable source', () => {
   assert.ok(findLeaks('product/install.ps1', 'ssh ops@192.168.8.7 echo ok').length)
   assert.ok(findLeaks('product/config.mjs', "const root = '/home/example-user/deploy'").length)
   assert.ok(findLeaks('product/install.ps1', 'Target DESKTOP-EXAMPLE123').length)
+  // machine-name rule keeps its digit requirement: ordinary compound module names
+  // (the mobile lane's desktop-contract module) must not trip it (integration 2026-11-10)
+  assert.equal(findLeaks('product/mobile/desktop-client.js', "import x from './desktop-contract.js'").length, 0)
+  assert.ok(findLeaks('product/notes.md', 'user DESKTOP-AB12CD3 reported').length)
   assert.ok(findLeaks('product/config.mjs', 'D:\\PickDone\\PickDone.exe').length)
   assert.equal(findLeaks('product/config.mjs', 'const path = process.env.APPDATA').length, 0)
   assert.equal(findLeaks('product/config.mjs', 'const url = "http://127.0.0.1:3000"').length, 0)

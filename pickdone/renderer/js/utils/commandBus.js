@@ -49,7 +49,20 @@ export const VERB_TO_OP = {
   'sync.pairRequest': 'syncPairRequest',
   'sync.unpairPeer': 'syncUnpairPeer',
   'sync.setPeerAlias': 'syncSetPeerAlias',
-  'sync.conflictBackupRestore': 'syncConflictBackupRestore'
+  'sync.conflictBackupRestore': 'syncConflictBackupRestore',
+  // pd20: the EditPanelWork 'continue work' section writes episodes + source links through the
+  // same bus door (manifest rows are non-internal now; machine-local sync:'local' — never egresses)
+  'episode.put': 'episodePut',
+  'episode.removeIds': 'episodeRemoveIds',
+  'source.put': 'sourcePut',
+  'source.removeByIds': 'sourceRemoveByIds',
+  'tasksource.put': 'taskSourcePut',
+  'tasksource.remove': 'taskSourceRemove',
+  // pd20 S1 closure (migration v14): finding/decision writes ride the same bus door
+  'finding.put': 'findingPut',
+  'finding.removeIds': 'findingRemoveIds',
+  'decision.put': 'decisionPut',
+  'decision.removeIds': 'decisionRemoveIds'
 }
 
 function legacyDbCall (op, params) {

@@ -42,6 +42,7 @@ export default {
       tabCalendar: 'Calendar',
       tabShortcuts: 'Shortcuts',
       tabTomato: 'Pomodoro',
+      tabCapture: 'Capture',
       tabData: 'Data Management',
       switchedToZh: 'Switched to Simplified Chinese',
       exportNo: 'No',

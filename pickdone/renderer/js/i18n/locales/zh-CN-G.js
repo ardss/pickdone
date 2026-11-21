@@ -46,6 +46,8 @@ export default {
       syncAria: '同步',
       settingsTitle: '设置',
       settingsAria: '设置',
+      themeToDark: '切换到深色模式',
+      themeToLight: '切换到浅色模式',
       catMgrTip: '拖动行排序（指示线显示插入位置）· 点击名称重命名 · 点击条目数预览内容',
       unfinishedHeader: '未完成',
       opsHeader: '操作',

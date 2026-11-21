@@ -10,12 +10,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import Module from 'module'
 import { createRequire } from 'module'
+import { isolatedTmpDir } from '../../lib/tmp-dir.mjs'
 
-const UD = fs.mkdtempSync(path.join(os.tmpdir(), 'w30-stopsync-ud-'))
+// W31 (2026-11-01): tmp dir via tests/lib/tmp-dir.mjs (pid-encoded + exit-swept), not a bare
+// mkdtempSync leak; the Module._load stub is restored in a finally RIGHT AFTER module load —
+// the old `process.on('exit')` "restore" ran at process teardown, i.e. never while it mattered.
+const UD = isolatedTmpDir('w30-stopsync-ud-')
 process.env.TODO_DB_DIR = path.join(UD, 'db')
 process.env.TODO_USER_DATA_DIR = UD
 fs.mkdirSync(process.env.TODO_DB_DIR, { recursive: true })
@@ -23,15 +26,18 @@ fs.mkdirSync(process.env.TODO_DB_DIR, { recursive: true })
 const ELECTRON_STUB = { app: { getPath: () => UD, getVersion: () => '0.0.0-test', relaunch: () => {}, exit: () => {}, quit: () => {} }, BrowserWindow () { return {} } }
 const LOG_STUB = { info: () => {}, warn: () => {}, error: () => {} }
 const origLoad = Module._load
-Module._load = function (request, parent, isMain) {
-  if (request === 'electron') return ELECTRON_STUB
-  if (request === 'electron-log') return LOG_STUB
-  return origLoad.call(this, request, parent, isMain)
+let lsb
+try {
+  Module._load = function (request, parent, isMain) {
+    if (request === 'electron') return ELECTRON_STUB
+    if (request === 'electron-log') return LOG_STUB
+    return origLoad.call(this, request, parent, isMain)
+  }
+  const require_ = createRequire(import.meta.url)
+  lsb = require_('../../../src/main/lan-sync-bootstrap.js')
+} finally {
+  Module._load = origLoad // restore for real: nothing under test lazy-requires electron
 }
-process.on('exit', () => { Module._load = origLoad })
-
-const require_ = createRequire(import.meta.url)
-const lsb = require_('../../../src/main/lan-sync-bootstrap.js')
 const { stopSync, scheduleSecurityPersist, setState } = lsb.__test
 
 const baseState = () => ({ node: null, timers: [], pendingPair: null, peerWatermarks: null, engine: null, applyCache: null, getWindowSenders: () => [] })
@@ -59,7 +65,9 @@ test('stopSync with node=null and NO armed timer does not throw and stays a no-o
   try {
     await stopSync()
   } finally { spy.restore() }
-  assert.ok(true)
+  // W31: real observable — with no security timer armed and no round timers registered,
+  // a node-less stop must not clear ANYTHING (assert.ok(true) here was vacuously green).
+  assert.equal(spy.cleared.length, 0, 'no-op stop must not clearTimeout anything')
 })
 
 test('stopSync with a live node keeps the full teardown contract (flush attempted, node nulled, timers cleared)', async () => {

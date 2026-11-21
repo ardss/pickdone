@@ -40,7 +40,14 @@ CREATE TABLE IF NOT EXISTS todos (
   -- Row provenance (protocol v3, 2026-09-29): the device whose write produced this row's
   -- current updatedAt. Lets the merge layer suppress same-writer stale echoes instead of
   -- minting junk conflict copies. NULL = pre-v7 legacy row (unknown author).
-  syncAuthor    TEXT
+  syncAuthor    TEXT,
+  -- Handoff targeting (migration v13, G2 zone-2 contract): the desktop addressed this task
+  -- to a device (handoffTo), from handoffFrom, with handoffNote; handoffAckedAt > 0 marks
+  -- the receiving device's acceptance. All NULL/0 on ordinary tasks — never fabricated.
+  handoffTo     TEXT,
+  handoffFrom   TEXT,
+  handoffNote   TEXT,
+  handoffAckedAt INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_todos_day       ON todos (deleted, scheduledDay);
 CREATE INDEX IF NOT EXISTS idx_todos_status    ON todos (status);
@@ -143,6 +150,95 @@ CREATE TABLE IF NOT EXISTS sync_revision_payloads (
 CREATE TABLE IF NOT EXISTS sync_revision_current (
   entityId   TEXT PRIMARY KEY,
   revisionId TEXT NOT NULL
-);`
+);
+-- Work-episode ledger (S1 vertical slice, migration v11 — v8-style dual manifest: fresh
+-- databases get the tables from SCHEMA, upgrades get them from the v11 migration; the two
+-- DDL copies must stay column-identical, asserted by db-migrations-episode-tables.test.mjs).
+CREATE TABLE IF NOT EXISTS work_episodes (
+  id        TEXT PRIMARY KEY,
+  taskId    TEXT NOT NULL,
+  startedAt INTEGER NOT NULL DEFAULT 0,
+  endedAt   INTEGER NOT NULL DEFAULT 0,
+  note      TEXT,
+  -- pd20 (2026-11-08) + G2 (2026-11-10, integ union): attribution role (human/agent/qa) and
+  -- actor provenance. NULL = legacy row / unknown caller — role reads 'human' at the view
+  -- layer; actorType is the S1 naming — either carrying 'agent' marks the episode
+  -- agent-worked. Neither column is ever fabricated at storage (v13 probe-add).
+  actorType TEXT,
+  role      TEXT,
+  deleted   INTEGER NOT NULL DEFAULT 0,
+  deletedAt INTEGER NOT NULL DEFAULT 0,
+  updatedAt INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_work_episodes_task ON work_episodes (taskId, startedAt);
+-- External source references. The (providerId, externalId) UNIQUE constraint is the domain
+-- backstop: sourcePut pre-checks the pair for an explicit error, the index makes the race
+-- impossible at the storage layer.
+CREATE TABLE IF NOT EXISTS source_refs (
+  id             TEXT PRIMARY KEY,
+  providerId     TEXT NOT NULL,
+  externalId     TEXT NOT NULL,
+  title          TEXT,
+  -- pd20 P0 (2026-11-07): provenance level (L0 statement / L1 observed artifact / L2
+  -- independent QA) + last-verified stamp; NULL/0 = never verified (reads 'unknown',
+  -- aged-out reads 'stale' — shared/source-freshness.cjs is the single semantics source).
+  level          TEXT,
+  lastVerifiedAt INTEGER NOT NULL DEFAULT 0,
+  deleted        INTEGER NOT NULL DEFAULT 0,
+  deletedAt      INTEGER NOT NULL DEFAULT 0,
+  updatedAt      INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (providerId, externalId)
+);
+-- Task ↔ source-ref links. A pair-unique link: one task links a given source ref at most once.
+CREATE TABLE IF NOT EXISTS task_source_links (
+  id          TEXT PRIMARY KEY,
+  taskId      TEXT NOT NULL,
+  sourceRefId TEXT NOT NULL,
+  deleted     INTEGER NOT NULL DEFAULT 0,
+  deletedAt   INTEGER NOT NULL DEFAULT 0,
+  updatedAt   INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (taskId, sourceRefId)
+);
+CREATE INDEX IF NOT EXISTS idx_task_source_links_task ON task_source_links (taskId);
+CREATE INDEX IF NOT EXISTS idx_task_source_links_ref ON task_source_links (sourceRefId);
+-- Work findings (pd20 S1 closure, migration v14 — v8-style dual manifest: fresh databases get
+-- the table from SCHEMA, upgrades from the v14 migration; the two DDL copies must stay
+-- column-identical, asserted by pd20-finding-decision.test.mjs). Family columns
+-- (confidence/verificationLevel/status) are NULLable TEXT: an out-of-family value stores NULL,
+-- never fabricated (v13 role doctrine); list columns are JSON arrays or NULL.
+CREATE TABLE IF NOT EXISTS work_findings (
+  id                TEXT PRIMARY KEY,
+  taskId            TEXT NOT NULL,
+  statement         TEXT NOT NULL,
+  confidence        TEXT,
+  verificationLevel TEXT,
+  sourceRefs        TEXT,
+  createdBy         TEXT,
+  status            TEXT,
+  ts                INTEGER NOT NULL DEFAULT 0,
+  deleted           INTEGER NOT NULL DEFAULT 0,
+  deletedAt         INTEGER NOT NULL DEFAULT 0,
+  updatedAt         INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_work_findings_task ON work_findings (taskId, ts);
+-- Work decisions (pd20 S1 closure, migration v14 — same dual-manifest doctrine as
+-- work_findings above). supersedes carries the revocable decision it replaces (verbatim id);
+-- the reverse relation (supersededBy) is computed at read time from live rows.
+CREATE TABLE IF NOT EXISTS work_decisions (
+  id              TEXT PRIMARY KEY,
+  taskId          TEXT NOT NULL,
+  choice          TEXT NOT NULL,
+  alternatives    TEXT,
+  tradeoffs       TEXT,
+  decider         TEXT,
+  rationale       TEXT,
+  relatedFindings TEXT,
+  supersedes      TEXT,
+  ts              INTEGER NOT NULL DEFAULT 0,
+  deleted         INTEGER NOT NULL DEFAULT 0,
+  deletedAt       INTEGER NOT NULL DEFAULT 0,
+  updatedAt       INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_work_decisions_task ON work_decisions (taskId, ts);`
 
 module.exports = { SCHEMA }

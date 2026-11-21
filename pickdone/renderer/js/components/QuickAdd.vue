@@ -149,6 +149,7 @@ export default {
       if (this.text) this.text = ''
       // [d-wave 2026-10-14] Esc is a full cancel: drop the pending multi-line retry queue too
       this._pendingLines = null
+      this._pendingSeeded = null
       // [D22 P3] Esc also clears the date chip (stale-date carry-over)
       this.pickedDate = null
       const inp = this.$refs.inp
@@ -246,7 +247,11 @@ export default {
           // ahead of lines already queued); and never clobber a draft the user typed during the
           // await window — only seed the input when it is empty.
           this._pendingLines = (this._pendingLines || []).concat(rest)
-          if (!this.text.trim()) this.text = rest[0]
+          if (!this.text.trim()) this.text = rest[0] // w19: draft seed gated on an empty input
+          // [W32] when the seed just fired, remember the visible text mirrors the queue head
+          // (not a user draft) so the drain path never "restores" it after the mirrored line
+          // is created
+          if (this.text === rest[0]) this._pendingSeeded = rest[0]
         }
         if (this.quiet) this.markFailed()
         else this.$message.error(this.$t('statsD.QuickAdd.createFailed'))
@@ -280,7 +285,21 @@ export default {
       if (this._pendingLines && this._pendingLines.length) {
         const pending = this._pendingLines
         this._pendingLines = null
+        // [W32 P2] snapshot the busy-window draft: createLines() clears text/pickedDate
+        // unconditionally on success, which used to silently drop a draft the user typed
+        // (and a chip they picked) while the queue was waiting for this Enter — that draft
+        // was never created, so clearing it lost real input.
+        const draft = this.text
+        const draftPicked = this.pickedDate
+        // a partial-failure catch seeds the input with rest[0] as a MIRROR of the queue head —
+        // that is not a user draft and must be dropped once the line it mirrors is created
+        const seededMirror = this._pendingSeeded
+        this._pendingSeeded = null
         await this.createLines(pending)
+        if (draft && draft.trim() && this.text === '' && draft !== seededMirror) {
+          this.text = draft
+          this.pickedDate = draftPicked
+        }
         return
       }
       const raw = this.text.trim()
@@ -320,9 +339,11 @@ export default {
         }
       // Category/project page context: belong to the current list, not the global default category (otherwise the current page cannot see the created task)
       if (this.routeCategoryId != null) payload.categoryId = this.routeCategoryId
-      await this.$store.dispatch('todo/addTodo', payload)
-      // Read the effective date before clearing (effDate is a computed property and becomes invalid once cleared)
+      // [W32 P3] snapshot the toast date BEFORE the dispatch (createLines' pre-loop parity):
+      // effDate is a live computed — reading it after the await raced user edits / the clear
+      // below and could toast a different day than the task actually went to.
       let d = this.effDate
+      await this.$store.dispatch('todo/addTodo', payload)
       this.text = ''
       this.pickedDate = null
       // When created with a date, toast which day it landed on; when unspecified: the todo box page stays undated (toast says it went to the todo box), others default to today (consistent with addTodo semantics);

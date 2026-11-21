@@ -5,6 +5,7 @@ import todo from './todo.js'
 import tomato from './tomato.js'
 import settings, { tomatoLedgerPatch } from './settings.js'
 import category from './category.js'
+import projectV2 from './projectV2.js'
 import habits from './habits.js'
 import ui from './ui.js'
 import repeatSettings from './repeatSettings.js'
@@ -16,7 +17,7 @@ import { snapshotString } from './helpers/snapshotString.js'
 const Vuex = window.Vuex
 
 const store = Vuex.createStore({
-  modules: { auth, todo, tomato, settings, category, habits, ui, repeatSettings, filters, tomatoAnnounce, winbind },
+  modules: { auth, todo, tomato, settings, category, projectV2, habits, ui, repeatSettings, filters, tomatoAnnounce, winbind },
   state: () => ({ cloudEnabled: false }),
   getters: {
     tomatoBarVisible (state) {

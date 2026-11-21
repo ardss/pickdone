@@ -14,6 +14,7 @@ const runTomato = require('./lib-tomato.cjs')
 const runSync = require('./lib-sync.cjs')
 const { runCategory, runTag, runProjects, runProject, runMilestone, runView } = require('./lib-taxonomy.cjs')
 const { runSubtask, runAttachment, runSettings, runPlan, runRepeat } = require('./lib-schedule.cjs')
+const { runWork } = require('./lib-work.cjs') // pd20 P0-4: agent same-source work interface (context/episodes/handoff/add-episode/add-source)
 const dayjs = require('dayjs')
 const fs = require('fs')
 const path = require('path')
@@ -136,7 +137,10 @@ async function main () {
     attachment: ['add', 'rm', 'remove'],
     milestone: ['add', 'rm', 'link', 'unlink'],
     settings: ['set'],
-    tomato: ['start', 'stop', 'attach', 'backfill']
+    tomato: ['start', 'stop', 'attach', 'backfill'],
+    // pd20 (2026-11-05) P0-4: the work sub-commands that WRITE (episode/source recording) —
+    // reads (context/episodes/handoff) stay ungated.
+    work: ['add-episode', 'add-source']
     // (sync not listed here: gated whole-command above — every sub-op writes a cliSyncCmd row)
   }
   const isGatedWrite = (cmd, opts) => {
@@ -144,6 +148,7 @@ async function main () {
     const sub = opts._[0]
     if (cmd === 'tomato' && sub === 'record') return true // record fix/rm mutate the ledger directly
     if (cmd === 'project') return !!(opts.on || opts.off || opts.status !== undefined || opts.deadline !== undefined)
+    if (cmd === 'project-v2') return ['add','rename','status','archive','restore','assign','unassign','recover'].includes(sub) || (sub === 'migrate' && !!opts.yes && !opts['dry-run'])
     // EVERY sync form writes: even `sync status` inserts a cliSyncCmd command row via
     // lib.writeSyncCmd for the running App to consume (adversarial round: bare `sync status`
     // created todos.db/db.key in the default dir), so the whole family is gated
@@ -292,6 +297,7 @@ async function main () {
       return runCategory({ opts, lib, emit })
     case 'tag': return runTag({ opts, lib, emit })
     case 'projects': return runProjects({ opts, lib, emit })
+    case 'project-v2': return require('./run-project-v2.cjs')({ opts, lib, emit })
     case 'project': return runProject({ opts, lib, emit })
     case 'milestone': return runMilestone({ opts, lib, emit })
     case 'stats': {
@@ -308,6 +314,7 @@ async function main () {
       return
     }
     case 'view': return runView({ opts, lib, emit, emitNext })
+    case 'work': return runWork({ opts, lib, emit })
     case 'log': {
       const entries = lib.readAuditLog({ n: Math.min(parseInt(opts.n, 10) || 20, 200), action: opts.action })
       if (opts.json) return emit(entries)

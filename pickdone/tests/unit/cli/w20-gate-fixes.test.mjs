@@ -80,6 +80,9 @@ const runFingerprint = (body) => {
   fs.mkdirSync(path.join(tmp, 'cli'), { recursive: true })
   for (const d of SCAN_DIRS) fs.mkdirSync(path.join(tmp, d), { recursive: true })
   fs.copyFileSync(path.join(REPO, 'cli/check-fingerprint.js'), path.join(tmp, 'cli/check-fingerprint.js'))
+  // W33: the gate now delegates its walker to the shared lib-filescan.cjs — the fixture copy
+  // needs the dependency alongside or the gate dies with MODULE_NOT_FOUND
+  fs.copyFileSync(path.join(REPO, 'cli/lib-filescan.cjs'), path.join(tmp, 'cli/lib-filescan.cjs'))
   if (body !== null) fs.writeFileSync(path.join(tmp, 'renderer/probe.js'), body + '\n')
   const r = spawnSync(process.execPath, [path.join(tmp, 'cli', 'check-fingerprint.js')], { timeout: 180000, encoding: 'utf8' })
   fs.rmSync(tmp, { recursive: true, force: true })

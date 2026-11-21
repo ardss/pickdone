@@ -80,10 +80,13 @@ test('B10: appLocale manifest entry is the zh-CN|en-US enum and the CLI rejects 
 /* ---------- B11: blob-only synced maps are registered, not silently missing ---------- */
 
 test('B11: repeatDefaultSettings/onboardingToursSeen are declared blobOnly in the manifest', () => {
-  assert.deepEqual(SETTINGS_MANIFEST.blobOnly, ['repeatDefaultSettings', 'onboardingToursSeen'])
+  // pd20 (2026-11-05): workEpisode={enabled} joins the blobOnly family (EditPanel-managed
+  // complex object — declared, syncable as a blob, never a CLI-settable primitive).
+  assert.deepEqual(SETTINGS_MANIFEST.blobOnly, ['repeatDefaultSettings', 'onboardingToursSeen', 'workEpisode'])
   // and they must NOT be CLI-settable primitives
   assert.equal(lib.settingsKnown('repeatDefaultSettings'), null)
   assert.equal(lib.settingsKnown('onboardingToursSeen'), null)
+  assert.equal(lib.settingsKnown('workEpisode'), null)
 })
 
 /* ---------- B12: overview today counts pure-todoTime (dayStart=0) rows like metrics.js ---------- */

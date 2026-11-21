@@ -214,7 +214,7 @@ const V1_CSS = `
 .day-rail .dr-plan-x { margin-left: auto; } /* Visuals (X shape/hover danger) are owned by the unified close-x system */
 .day-rail .dr-plan-chk { width: 12px; height: 12px; flex-shrink: 0; border: 1.5px solid currentColor; border-radius: 50%; background: transparent; cursor: pointer; padding: 0; position: relative; opacity: .8; }
 .day-rail .dr-plan-chk:hover { opacity: 1; background: var(--hover-bg, rgba(255,255,255,.35)); }
-.day-rail .dr-plan-tom { border: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; padding: 1px; border-radius: 4px; opacity: .75; }
+.day-rail .dr-plan-tom { border: 0; background: none; color: inherit; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; padding: 0; flex-shrink: 0; border-radius: 4px; opacity: .75; }
 .day-rail .dr-plan-tom:hover, .day-rail .dr-plan-tom.pd-is-active { opacity: 1; background: color-mix(in srgb, var(--brand, #0f9d8f) 16%, transparent); }
 /* Selected state (2026-09-02 second-round final): dropped solid brand teal + white text (white text clashed on dark backgrounds / white-block hover overlay was incoherent),
    switched to the pill's own language: "brand outline + 18% tint + bold" — same color family as the normal state with just more intensity, works in both light and dark themes */
@@ -694,6 +694,8 @@ export default {
       const base = this.selTs
       const startTs = base + d.startMin * 60000
       const endTs = startTs + Math.max(1, d.dur) * 60000
+      // [w31 P2] 今天不得记入未来(时间选择器可把 startMin 拨到 23:59/加大时长,endTs 落未来=记下未发生的专注);口径对齐 TomatoFocusRecordModal.saveAdd 的 sameDay&&end>now,置于分支前故编辑路径同样覆盖
+      if (this.isViewingToday && endTs > Date.now()) return this.$message.error(this.$t('statsD.TomatoFocusRecord.invalidStartTime'))
       if (d.create) {
         this.$store.commit('tomato/addRecord', {
           // 随机尾:同分钟同时长补两条(合法场景)不再被幂等去重静默吞(与 TaskAccountModal 同款修复,dateKey 由 update/append 层按 endTime 重导)
@@ -730,9 +732,9 @@ export default {
       e.dataTransfer.dropEffect = 'move'
       this.dragOverSeg = s.tomatoId
     },
-    onSegDragLeave (s) { if (this.dragOverSeg === s.tomatoId) this.dragOverSeg = -1 },
+    onSegDragLeave (s) { if (this.dragOverSeg === s.tomatoId) this.dragOverSeg = null },
     onSegDrop (s, e) {
-      this.dragOverSeg = -1
+      this.dragOverSeg = null
       const taskId = e.dataTransfer.getData('text/plain')
       const t = taskId && this.taskById.get(taskId)
       if (!t) return

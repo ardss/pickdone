@@ -48,13 +48,38 @@
                   :title="$t('statsB.ProjectsView.deadlineTip', { d: fmtDate(p.deadline) })">{{deadlineText(p.deadline)}}</span>
             <span v-else-if="p.stats.startedAt" class="proj-card__start">{{ $t('statsB.ProjectsView.startedOn', { d: fmtDate(p.stats.startedAt) }) }}</span>
           </div>
-          <div v-if="p.nextMs" class="proj-card__next" :title="$t('statsB.ProjectsView.nextMsTip')">
-            ◆ {{p.nextMs.title}} · {{fmtDate(p.nextMs.date)}}
+          <div class="proj-card__facts">
+            <div><b>{{ $t('statsJ.overview.stage') }}</b> {{ $t(statusKey(p.status)) }}<template v-if="p.facts.nextMilestone"> · {{ $t('statsJ.overview.nextMilestone') }} {{ p.facts.nextMilestone.title }} ({{ fmtDate(p.facts.nextMilestone.date) }})</template></div>
+            <div :class="{'proj-card__risk': p.facts.overdueTasks || p.facts.overdueMilestones}"><b>{{ $t('statsJ.overview.risk') }}</b> {{ p.facts.overdueTasks || p.facts.overdueMilestones ? $t('statsJ.overview.overdueRisk', { tasks: p.facts.overdueTasks, milestones: p.facts.overdueMilestones }) : $t('statsJ.overview.noOverdue') }}</div>
+            <div :title="p.facts.recentWork"><b>{{ $t('statsJ.overview.recent') }}</b> {{ p.facts.recentWork || $t('statsJ.ProjectView.handoffNoRecord') }}<span v-if="p.facts.recentAt"> · {{ fmtDate(p.facts.recentAt) }}</span></div>
+            <div :title="p.facts.nextAction"><b>{{ $t('statsJ.overview.action') }}</b> {{ p.facts.nextAction || $t('statsJ.ProjectView.handoffNoRecord') }}</div>
           </div>
         </div>
       </div>
       <!-- 过滤无结果 ≠ 真没项目:区分文案 + 一键清除筛选出口;filter=all 仍走原有"暂无项目"空态 -->
-      <empty-state v-if="!filteredProjects.length">
+      <!-- A legacy project with a damaged category name is still a project record.
+           It must be visible without inventing a replacement name or reassigning tasks. -->
+      <section v-if="unresolvedLegacyProjects.length" class="proj-recovery" aria-label="Legacy project recovery">
+        <h3 class="proj-recovery__title">{{ $t('statsB.ProjectsView.recoveryTitle', { n: unresolvedLegacyProjects.length }) }}</h3>
+        <p class="proj-recovery__explain">{{ $t('statsB.ProjectsView.recoveryExplain') }}</p>
+        <details v-for="p in unresolvedLegacyProjects" :key="String(p.id)" class="proj-recovery__entry">
+          <summary>{{ $t('statsB.ProjectsView.recoveryItem', { id: p.id, count: p.tasks.length, open: p.tasks.filter(t => !t.complete).length }) }}</summary>
+          <button type="button" class="proj-recovery__recover" @click.stop="recoverLegacy(p.id)">{{ $t('statsB.ProjectsView.recoveryRename') }}</button>
+          <p v-if="!p.tasks.length" class="proj-recovery__empty">{{ $t('statsB.ProjectsView.recoveryEmpty') }}</p>
+          <div v-else class="proj-recovery__tasks">
+            <button v-for="t in p.tasks" :key="t.taskId" type="button" class="proj-recovery__task" :title="t.taskContent" @click="openRecoveredTask(t)">{{ t.taskContent }}</button>
+          </div>
+        </details>
+      </section>
+      <!-- Soft-archived projects remain recoverable without recreating a project or moving tasks. -->
+      <section v-if="archivedProjects.length" class="proj-recovery" aria-label="Archived projects">
+        <h3 class="proj-recovery__title">{{ $t('statsB.ProjectsView.archivedTitle', { n: archivedProjects.length }) }}</h3>
+        <div v-for="p in archivedProjects" :key="p.projectId" class="proj-recovery__archived">
+          <span>{{ p.name }}</span>
+          <button type="button" class="proj-recovery__recover" @click="restoreArchived(p.projectId)">{{ $t('statsB.ProjectsView.archivedRestore') }}</button>
+        </div>
+      </section>
+      <empty-state v-if="!filteredProjects.length && !unresolvedLegacyProjects.length && !archivedProjects.length">
         <template #text>
           <template v-if="filter !== 'all' && projects.length">{{ $t('projQ.filteredEmpty') }}</template>
           <template v-else>{{ $t('statsB.ProjectsView.empty') }}</template>
@@ -74,7 +99,8 @@
  * One progress card per project: name/progress bar/task completion ratio/focus minutes/overdue count; click to open the project detail (ProjectView).
  */
 import { dayjs, FMT } from '../utils/core.js'
-import { dueStateOf } from '../utils/milestones.js'
+import { dueStateOf, loadMilestones } from '../utils/milestones.js'
+import { projectOverviewFacts } from '../utils/projectOverviewFacts.mjs'
 import { dayPlannedLoad, loadLevel } from '../utils/loadWarn.js'
 import { getEstimate } from '../utils/tomatoEstimate.js'
 import { PROJECT_STATUSES, normalizeStatus, statusI18nKey, STATUS_FILTER_I18N_KEYS } from '../utils/projectStatus.js'
@@ -105,26 +131,48 @@ export default {
   components: { EmptyState },
   data () {
     return {
-      filter: 'all' // status filter chip: 'all' | one of PROJECT_STATUSES
+      filter: 'all', // status filter chip: 'all' | one of PROJECT_STATUSES
+      projectEvidence: {} as any
     }
   },
   computed: {
     statusFilters () { return ['all', ...PROJECT_STATUSES] },
+    archivedProjects () { return this.$store.state.projectV2.projects.filter(p => p.deleted) },
+    unresolvedLegacyProjects () {
+      const cats = this.$store.state.category.list || []
+      const liveNamed = new Set(cats.filter(c => !c.delete && String(c.categoryName || '').trim()).map(c => String(c.categoryId)))
+      const ids = this.$store.state.category.projectIds || []
+      const tasks = (this.$store.state.todo.todoList || []).filter(t => t && !t.delete)
+      return [...new Set(ids.map(String))].filter(id => !liveNamed.has(id) && !this.$store.state.projectV2.projects.some(p => p.projectId === 'prj_legacy_' + id))
+        .map(id => ({ id, tasks: tasks.filter(t => String(t.categoryId) === id) }))
+        .sort((a, b) => b.tasks.length - a.tasks.length)
+    },
     loadThreshold () { return Number(this.$store.state.settings.dailyLoadWarnThreshold) || 0 },
     projects () {
       const today0 = this.$store.state.todo.todayTimestamp || +dayjs().startOf('day')
       const threshold = this.loadThreshold
-      return this.$store.getters['category/projects'].map(c => {
-        const meta = (this.$store.getters['category/projectMeta'])[c.categoryId] || {}
-        const todos = this.$store.getters['todo/byCategory'](c.categoryId)
-        // Today-load badge: only tasks scheduled for today; estimates come from the shared tomatoEstimate map
+      const links = this.$store.state.projectV2.taskProjects
+      const allTasks = this.$store.state.todo.todoList || []
+      return this.$store.getters['projectV2/all'].map(entity => {
+        // Project identity and membership come ONLY from V2. Legacy category metadata
+        // is a read-only compatibility projection for colors/milestones/deadlines.
+        const sourceId = entity.legacyCategoryId || entity.projectId
+        const sourceCategory = this.$store.getters['category/byId'](sourceId)
+        const c = {
+          categoryId: entity.projectId,
+          categoryName: entity.name,
+          categoryColor: entity.color || (sourceCategory && sourceCategory.categoryColor) || 'var(--brand)'
+        }
+        const todos = allTasks.filter(t => !t.delete && links[t.taskId] === entity.projectId)
+        const meta = (this.$store.getters['category/projectMeta'])[sourceId] || {}
         const load = dayPlannedLoad(todos.filter(t => t.dayStart === today0), t => getEstimate(t.taskId))
         return {
           cat: c,
           stats: projectStats(todos, this.$store.state.todo.todayTimestamp),
-          deadline: meta.deadline || 0,
-          nextMs: meta.nextMilestone || null,
-          status: this.$store.getters['category/projectStatus'](c.categoryId),
+          deadline: entity.deadline == null ? (meta.deadline || 0) : entity.deadline,
+          facts: projectOverviewFacts(todos, (this.projectEvidence[entity.projectId] || {}).milestones || (meta.nextMilestone ? [meta.nextMilestone] : []),
+            (this.projectEvidence[entity.projectId] || {}).episodes, today0),
+          status: entity.status || 'active',
           load,
           loadWarn: loadLevel(load, threshold) === 'warn'
         }
@@ -134,7 +182,31 @@ export default {
       return this.filter === 'all' ? this.projects : this.projects.filter(p => p.status === this.filter)
     }
   },
+  created () { this.$store.dispatch('projectV2/refresh').then(() => this.reloadEvidence()).catch(() => {}) },
+  mounted () {
+    if (window.todoAPI && window.todoAPI.onTodosChanged) {
+      this._offTodosChanged = window.todoAPI.onTodosChanged(() => {
+        this.$store.dispatch('projectV2/refresh').catch(() => {})
+        this.reloadEvidence()
+      })
+    }
+  },
+  beforeUnmount () { if (this._offTodosChanged) this._offTodosChanged() },
   methods: {
+    async reloadEvidence () {
+      const projects = this.$store.getters['projectV2/all']
+      const patch = {}
+      await Promise.all(projects.map(async project => {
+        const [milestones, episodes] = await Promise.all([
+          loadMilestones(project.legacyCategoryId || project.projectId),
+          window.todoAPI && window.todoAPI.dbCall
+            ? window.todoAPI.dbCall('queryEpisodesByCategory', project.projectId).catch(() => null)
+            : Promise.resolve(null)
+        ])
+        patch[project.projectId] = { milestones, episodes }
+      }))
+      this.projectEvidence = patch
+    },
     /* [A9] status pill button: Space joins Enter, stopped so the card's open activation doesn't double-fire */
     /* [D18-DOM3] project card: ARIA button pattern (Space joins Enter); name ships as aria-label */
     onOpenKey (p, e) {
@@ -157,7 +229,7 @@ export default {
       const next = PROJECT_STATUSES[(i + 1) % PROJECT_STATUSES.length]
       const apply = async () => {
         try {
-          await this.$store.dispatch('category/setProjectStatus', { id, status: next })
+          await this.$store.dispatch('projectV2/update', { projectId: id, patch: { status: next } })
         } catch (e) {
           if (this.$message) this.$message.error(this.$t('projQ.statusChangeFailed', { m: (e && e.message) ? e.message : e }))
           return
@@ -190,53 +262,53 @@ export default {
       return s === 'overdue' ? 'proj-card__dl--over' : (s === 'soon' ? 'proj-card__dl--soon' : '')
     },
     open (id) { this.$router.push({ name: 'todo-list-project', params: { id: String(id) } }).catch(() => {}) },
+    openRecoveredTask (t) { this.$store.commit('ui/openEdit', t) },
+    async restoreArchived (projectId) {
+      try {
+        await this.$store.dispatch('projectV2/update', { projectId, patch: { deleted: false } })
+      } catch (e) { this.$message.error(this.$t('statsB.ProjectsView.recoveryFailed') + ': ' + (e && e.message ? e.message : e)) }
+    },
+    async recoverLegacy (legacyCategoryId) {
+      // Names are restored only after a deliberate human confirmation. No tag inference.
+      let value
+      try {
+        ({ value } = await this.$prompt(this.$t('statsB.ProjectsView.recoveryPrompt'),
+          this.$t('statsB.ProjectsView.recoveryRename'), {
+            inputValue: '', inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectsView.nameRequired')
+          }))
+      } catch { return }
+      const name = String(value || '').trim()
+      if (!name) return
+      try {
+        const project = await this.$store.dispatch('projectV2/recoverLegacy', { legacyCategoryId, name })
+        await this.reloadEvidence()
+        this.open(project.projectId)
+      } catch (e) {
+        this.$message.error(this.$t('statsB.ProjectsView.recoveryFailed') + ': ' + (e && e.message ? e.message : e))
+      }
+    },
+
     /** Progress ring SVG parameters (r=13, viewBox 32) */
     ring (p) {
       const C = 2 * Math.PI * 13
       return { dasharray: C.toFixed(1), dashoffset: (C * (1 - p / 100)).toFixed(1) }
     },
-    /** One-click project creation: name -> create category -> flag as project, done in one step */
+    /** New projects are real entities, not a new category plus a hidden flag. */
     async createProject () {
-      // [A3 fix] ONLY the prompt cancellation may be swallowed: a real error after the dialog
-      // (add/setProject throw, lookup miss) used to land in the same catch and strand the
-      // placeholder category with no feedback. The creation steps below get their own guard.
       let value
       try {
         ({ value } = await this.$prompt(this.$t('statsB.ProjectsView.promptText'), this.$t('statsB.ProjectsView.promptTitle'), {
           inputValue: '', inputPattern: /\S/, inputErrorMessage: this.$t('statsB.ProjectsView.nameRequired')
         }))
-      } catch { return /* cancelled */ }
-      const name = (value || '').trim()
+      } catch { return }
+      const name = String(value || '').trim()
       if (!name) return
-      // Exact-match the created entity by id delta + name, not `list[list.length-1]`: sort/order changes
-      // or a concurrent add could make the last row a different category.
-      const before = new Set(this.$store.state.category.list.map(c => c.categoryId))
-      let created = null
       try {
-        // D19-DOM2 (#9): duplicate live names are rejected by the store (CATEGORY_EXISTS) — the
-        // outer catch would swallow it as a "cancel", so surface the warning explicitly.
-        try {
-          this.$store.commit('category/addCategory', { categoryName: name })
-        } catch (e) {
-          if (e && e.code === 'CATEGORY_EXISTS') { this.$message.warning(this.$t('statsG.SideNav.catNameExistsWarn')); return }
-          throw e
-        }
-        created = this.$store.state.category.list
-          .find(c => !before.has(c.categoryId) && c.categoryName === name)
-        // [D13 A15] the lookup-miss path used to end in total silence (no toast, dialog already
-        // closed) — surface a failure instead. Also roll the placeholder row back so a concurrent
-        // add cannot leave a stray untitled category behind.
-        if (!created) {
-          this.$message.error(this.$t('statsB.ProjectsView.createFailed', { name }))
-          return
-        }
-        this.$store.commit('category/setProject', { id: created.categoryId, flag: true })
+        const project = await this.$store.dispatch('projectV2/create', { name })
         this.$message.success(this.$t('statsB.ProjectsView.created', { name }))
+        this.open(project.projectId)
       } catch (e) {
-        // [A3 fix] real failure: roll the placeholder row back and say so (was: silent swallow)
-        const stray = created || this.$store.state.category.list.find(c => !before.has(c.categoryId) && c.categoryName === name)
-        if (stray) this.$store.commit('category/rollbackAdd', stray.categoryId)
-        this.$message.error(this.$t('statsB.ProjectsView.createFailed', { name }) + (e && e.message ? ': ' + e.message : ''))
+        this.$message.error(this.$t('statsB.ProjectsView.createFailed', { name }) + ': ' + (e && e.message ? e.message : e))
       }
     }
   },
@@ -312,4 +384,21 @@ html[data-theme="dark"] .proj-card { background: rgba(255, 255, 255, .03); }
   padding: 1px 7px; border-radius: var(--radius-pill);
 }
 .proj-load--warn { color: var(--warn); background: rgba(230, 162, 60, .12); font-weight: 600; }
+.proj-card__facts { margin-top: var(--space-2); padding-top: var(--space-2); border-top: 1px solid var(--line); font-size: var(--fs-xs); color: var(--text-2); line-height: 1.6; }
+.proj-card__facts > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-card__facts b { color: var(--text-3); font-weight: 500; margin-right: 4px; }
+.proj-card__facts .proj-card__risk { color: var(--danger); }
+.proj-recovery { margin: 22px 28px; padding: 16px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--gray-bg); }
+.proj-recovery__title { font-size: var(--fs-md); font-weight: 600; margin: 0 0 6px; color: var(--text-1); }
+.proj-recovery__explain { font-size: var(--fs-xs); color: var(--text-3); line-height: 1.6; margin: 0 0 12px; }
+.proj-recovery__entry { border-top: 1px solid var(--line); padding: 9px 0; color: var(--text-2); }
+.proj-recovery__entry summary { cursor: pointer; font-size: var(--fs-sm); line-height: 1.5; overflow-wrap: anywhere; }
+.proj-recovery__entry summary:hover { color: var(--brand-text); }
+.proj-recovery__tasks { max-height: 210px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; padding: 7px 0 4px 16px; }
+.proj-recovery__task { text-align: left; color: var(--text-2); font-size: var(--fs-xs); padding: 4px 7px; border-radius: var(--radius-sm); overflow-wrap: anywhere; }
+.proj-recovery__task:hover, .proj-recovery__task:focus-visible { color: var(--brand-text); background: var(--brand-light); }
+.proj-recovery__archived { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); border-top: 1px solid var(--line); padding: 8px 0; font-size: var(--fs-sm); }
+.proj-recovery__recover { margin: 8px 0; padding: 5px 12px; font-size: var(--fs-xs); border: 1px solid var(--brand); color: var(--brand-text); border-radius: var(--radius-sm); }
+.proj-recovery__recover:hover { background: var(--brand-light); }
+.proj-recovery__empty { color: var(--text-3); font-size: var(--fs-xs); margin: 6px 0 0 18px; }
 </style>
