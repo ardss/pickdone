@@ -28,7 +28,7 @@ const madeDirs = []
 // 136 of them had piled up in the repo root. Only dirs older than an hour are touched, so a
 // concurrent lane's live fixture (created seconds ago) is never at risk.
 try {
-  const cutoff = Date.now() - 60 * 60 * 1000
+  const cutoff = Date.now() - 10 * 60 * 1000
   for (const name of fs.readdirSync(path.join(import.meta.dirname, '../../..'))) {
     if (!name.startsWith('.tmp-gate-golden-')) continue
     const full = path.join(import.meta.dirname, '../../..', name)
