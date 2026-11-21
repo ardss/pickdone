@@ -18,6 +18,7 @@
  */
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { waitTries } from '../lib/wait-budget.mjs'
 
 const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
 
@@ -124,7 +125,7 @@ const evalAwait = async expression => {
   return r.result?.result?.value ?? null
 }
 // Poll until a DOM/DB probe turns truthy (bounded retries; the probe result is returned for failure detail)
-const until = async (expression, tries = 12, gap = 400) => {
+const until = async (expression, tries = waitTries(12), gap = 400) => {
   for (let i = 0; i < tries; i++) {
     const v = await evalJson(expression)
     if (v) return v

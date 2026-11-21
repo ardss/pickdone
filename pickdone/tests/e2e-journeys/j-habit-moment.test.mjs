@@ -20,6 +20,7 @@
  */
 import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
+import { waitTries } from '../lib/wait-budget.mjs'
 
 const CDP = process.env.TODO_CDP || 'http://127.0.0.1:9333'
 
@@ -113,7 +114,7 @@ const evalAwait = async expression => {
 const STORE_Q = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;const p=a&&a._instance&&a._instance.proxy;if(p&&p.$store)return p.$store;return null})()`
 
 // Poll an expression until truthy (toast latency / async persist under pool load)
-const pollFor = async (expression, tries = 15, gap = 400) => {
+const pollFor = async (expression, tries = waitTries(15), gap = 400) => {
   for (let i = 0; i < tries; i++) {
     const v = await evalJson(expression)
     if (v) return v

@@ -34,13 +34,14 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnApp, stopApp, connectCdp, evalJson, send, sleep } from '../lib/runtime.mjs'
+import { waitTries } from '../lib/wait-budget.mjs'
 const diag = msg => { try { fs.appendFileSync(path.join(os.tmpdir(), 'j-pd20-diag.log'), new Date().toISOString() + ' ' + msg + '\n') } catch {} }
 
 let ctx = null
 let userDataDir = null
 const storeQ = `(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById('app')&&document.getElementById('app').__vue_app__;return a&&a._instance&&a._instance.proxy?a._instance.proxy.$store:null})()`
 
-const untilJson = async (expr, tries = 12, gap = 500) => {
+const untilJson = async (expr, tries = waitTries(12), gap = 500) => {
   for (let i = 0; i < tries; i++) {
     const v = await evalJson(ctx, expr)
     if (v) return v

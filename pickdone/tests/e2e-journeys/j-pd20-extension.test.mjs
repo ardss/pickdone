@@ -38,6 +38,7 @@ import crypto from 'node:crypto'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { spawnApp, stopApp, connectCdp, evalJson, send, sleep, pickFreePort } from '../lib/runtime.mjs'
+import { waitTries } from '../lib/wait-budget.mjs'
 
 const require_ = createRequire(import.meta.url)
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -100,7 +101,7 @@ const chromeEvalRaw = async (expr, target = 'sw') => {
 const chromeTargets = async () => {
   try { return await (await fetch(chromeCdp + '/json')).json() } catch { return [] } // chrome not up yet
 }
-const until = async (fn, tries = 20, gap = 700) => {
+const until = async (fn, tries = waitTries(20), gap = 700) => {
   for (let i = 0; i < tries; i++) {
     const v = await fn()
     if (v) return v
