@@ -53,8 +53,16 @@ test('S1 clock skew: a far-future clock on A silently beats a LATER offline edit
     // on content across any v2_s1-family row. Matching the live id alone would contradict the
     // baseline assert below and could never pass on any implementation — fixture bug, not a
     // semantic relaxation (the skewed-write-wins red light below is unchanged).
-    await waitFor(B, A, rows => rows.some(t => /v2_s1/.test(t.taskId) && t.taskContent === 'edited later on B, correct clock'), 'B edit back on A (live or conflict copy)')
-    const rowsA = await readAll(A)
+    // The losing copy is NOT minted on A: A's skewed row wins locally ("local stands", no copy
+    // is minted there), so it is B that merges the winning skewed row, materializes its own
+    // losing edit and pushes that copy back. Both facts (live row present + losing edit
+    // recoverable somewhere on A) therefore settle one roundtrip AFTER the first landing — poll
+    // for the conjunction instead of asserting on whichever snapshot the first read catches
+    // (Windows CI leg 2026-11-20 read the intermediate state: no live row, no copy yet).
+    const rowsA = await waitFor(B, A, rows =>
+      rows.some(t => t.taskId === 'v2_s1') &&
+      rows.some(t => /v2_s1/.test(t.taskId) && t.taskContent === 'edited later on B, correct clock'),
+    'B edit back on A (live or conflict copy) with the live row present')
     const row = rowsA.find(t => t.taskId === 'v2_s1')
     // v1 baseline: LWW by updateTime means the year-future stale write wins and the
     // genuinely-newer edit survives only as a conflict copy. If this assertion FAILS,
