@@ -111,9 +111,10 @@ function purgeAttachmentFiles (attachDir, ids, opts = {}) {
     const dir = attachDir()
     // W30 (P2): shared-reference guard — skip files whose local:// key another surviving row still
     // references (copy/paste / repeat-template sharing). `opts.rows` is the caller's pre-fetched
-    // getAll({deleted:null}) snapshot (the dying ids are excluded inside the filter); without it
-    // (legacy callers / fetch failure) the behavior is the old unconditional unlink (fail-open).
+    // getAll({deleted:null}) snapshot (the dying ids are excluded inside the filter); a null
+    // snapshot (fetch failed) now keeps every file instead of unlinking them unchecked.
     const owned = filterSharedAttachmentFiles(fs.readdirSync(dir).filter(f => ids.some(id => ownsAttachmentFile(f, id))), { rows: opts.rows || null, excludeIds: ids })
+    if (opts.rows == null) log.warn('[Purge] 行快照不可用，本次不删任何附件文件（保留为孤儿，可被孤儿审计回收）')
     for (const f of owned) {
       try { fs.unlinkSync(path.join(dir, f)) } catch (err) { log.warn('[Purge] 附件删除失败:', f, err.message) }
     }
@@ -131,12 +132,17 @@ function purgeAttachmentFiles (attachDir, ids, opts = {}) {
  *  a recycle-bin row is one restore click away), drop every file whose key is still referenced by
  *  a row whose taskId is NOT in `excludeIds` (the rows about to die — hardDelete/purge pass them;
  *  delete-todo-files passes nothing, parity with delete-file which excludes nobody). Pure: files
- *  in, surviving-candidate files out, no IO. A `rows` fetch failure at the caller is fail-open
- *  (callers pass rows=null → every candidate survives the filter), matching delete-file's
- *  documented "db scan failure keeps the old behavior" tradeoff. Reference scan is ONE pass over
- *  the rows (a Set of referenced keys), not findKeyRefs per file — batch scale. */
+ *  in, surviving-candidate files out, no IO.
+ *
+ *  `rows == null` means the caller could NOT read the row set (dbm.call threw) — that is
+ *  "unknown", so the answer is "keep every file" ([]). It used to mean "skip the check", which
+ *  turned a transient read failure into exactly the shared-file deletion this guard exists to
+ *  prevent. A caller that genuinely wants the old unconditional unlink passes `rows: []` (a row
+ *  set that really is empty). Reference scan is ONE pass over the rows (a Set of referenced
+ *  keys), not findKeyRefs per file — batch scale. */
 function filterSharedAttachmentFiles (files, { rows = null, excludeIds = [] } = {}) {
   const list = Array.isArray(files) ? files : [files]
+  if (rows == null) return [] // unknown row set: unlink nothing (an orphan is reclaimable, a shared file is not)
   const excl = new Set((excludeIds || []).map(String))
   const surviving = (rows || []).filter(r => r && r.taskId != null && !excl.has(String(r.taskId)))
   if (!surviving.length) return list

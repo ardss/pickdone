@@ -132,14 +132,9 @@ test('contract mirror r6: hostile fixtures (long fields, RTL/bidi injection) san
     assert.deepEqual(buildAnnounceValue({ ...f }), taMain.buildAnnounceValue({ ...f }),
       'hostile input must build byte-identical announces on both sides (renderer sanitized, not bare String())')
   }
-  // Single-source pin: the shared sanitizer the renderer imports must behave EXACTLY like
-  // main's sanitizeText on a hostile battery — the mirror cannot fork again unnoticed.
-  const sharedSanitize = sharedSanitizeText
-  const mainSanitize = mainSanitizeText
-  const battery = ['', null, undefined, 42, 'x'.repeat(5000), '\u202Ertl\u2066iso\u2069', 'a\u0000b\u001Fc', '\u200Emark\uFEFFbom', 'tab\there\ncr', '  multi   space  ']
-  for (const s of battery) {
-    for (const max of [undefined, 5, 40, 120, 128]) {
-      assert.equal(sharedSanitize(s, max), mainSanitize(s, max), `sanitizeText(shared) === sanitizeText(main) for ${JSON.stringify(String(s)).slice(0, 30)} max=${max}`)
-    }
-  }
+  // Single source: src/main/sanitize.js is a re-export of the module the renderer imports, so
+  // "the two copies stay equal" is now an identity, not a battery of comparisons. The battery
+  // that used to live here could only fail for the reason it existed (two copies drifting) —
+  // the duplication is gone, so is it.
+  assert.equal(mainSanitizeText, sharedSanitizeText, 'main sanitize is the shared implementation itself')
 })

@@ -2,6 +2,10 @@
 const fs = require('fs')
 const path = require('path')
 const i18nM = require('../i18n')
+// electron-log exists only inside the packaged app; the CLI bundle has none. Same fallback shape
+// as the db-* modules (only used for the "row scan failed, kept every file" warnings below).
+let log
+try { log = require('electron-log') } catch { log = { warn () {} } }
 const attachments = require('../attachments')
 const { saveAttachment, attachmentPath, attachDir } = attachments
 
@@ -110,9 +114,11 @@ module.exports = function attachmentHandlers (ctx) {
       // `opts.force` bypasses (parity with the CLI's `--force`). The renderer already re-checks
       // its own store row before calling (EditPanel deleteFromDisk), and the row flush lands
       // during the undo-toast window, so by the time this runs a surviving reference is a REAL
-      // other-task reference. A db scan failure keeps the old behavior (fail-open) rather than
-      // bricking every delete on a transient read error. The alias map is keyed by the DECODED
-      // name (B5), so the reference scan uses the decoded key too.
+      // other-task reference. A db scan failure now REFUSES (fail-closed): it used to be
+      // fail-open, i.e. rows=null silently skipped the check and the unlink went ahead on a
+      // transient read error. A refusal is retryable (or forceable); an unlinked shared file is
+      // gone. The alias map is keyed by the DECODED name (B5), so the reference scan uses the
+      // decoded key too.
       let aliasKey = key
       try { aliasKey = decodeURIComponent(key) } catch { /* malformed encoding: use raw (matches attachmentPath) */ }
       // sec-local-protocol parity (W18 fix): same bookkeeping guard as the serve boundary
@@ -121,14 +127,14 @@ module.exports = function attachmentHandlers (ctx) {
       // honestly (false = "nothing deleted", same shape as the unknown-scheme path above).
       if (require('../protocol').isLocalBookkeepingFile(path.basename(aliasKey))) return false
       if (!(opts && opts.force)) {
-        let rows = null
-        try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }
-        if (rows) {
-          const refs = attachments.findKeyRefs(aliasKey, rows)
-          if (refs.length) {
-            const tasks = [...new Set(refs.map(r => String(r.taskId)))]
-            throw new Error('delete-file refused: "' + path.basename(aliasKey) + '" is still referenced by ' + tasks.length + ' other task row(s) (' + tasks.join(', ') + ')')
-          }
+        let rows
+        try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch (err) {
+          throw new Error('delete-file refused: could not verify other references to "' + path.basename(aliasKey) + '" (' + String((err && err.message) || err) + '); retry, or pass force')
+        }
+        const refs = attachments.findKeyRefs(aliasKey, rows)
+        if (refs.length) {
+          const tasks = [...new Set(refs.map(r => String(r.taskId)))]
+          throw new Error('delete-file refused: "' + path.basename(aliasKey) + '" is still referenced by ' + tasks.length + ' other task row(s) (' + tasks.join(', ') + ')')
         }
       }
       // W17: same case-fallback as open-file above — deleting a lowercased-key row must hit the
@@ -154,9 +160,11 @@ module.exports = function attachmentHandlers (ctx) {
       // ownership alone, so a copy-pasted / repeat-template-shared file died with the first caller.
       // No exclusion here (parity with delete-file: a surviving reference in ANY row — including
       // this task's own, which the renderer splices+flushes before calling — keeps the file).
-      // db scan failure = fail-open (old behavior), same documented tradeoff as delete-file.
+      // A failed row scan keeps EVERY file (filterSharedAttachmentFiles treats rows=null as
+      // "unknown"): the row delete still completes, the files stay as orphans for the orphan
+      // audit. Deleting a file another row references is unrecoverable; an orphan is not.
       let rows = null
-      try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }
+      try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch (err) { rows = null; log.warn('[attachments] row scan failed; keeping every attachment file of', String(taskId) + ':', err && err.message) }
       const doomed = filterSharedAttachmentFiles(
         fs.readdirSync(dir).filter(f => ownsAttachmentFile(f, String(taskId))),
         { rows }
@@ -184,9 +192,9 @@ module.exports = function attachmentHandlers (ctx) {
       const { ownsAttachmentFile, filterSharedAttachmentFiles } = require('./shared')
       // W30 (P2, F2 follow-up): shared-reference guard (see delete-todo-files above). The dying
       // ids ARE excluded — these rows are already committed/purging, so their own references do
-      // not count; only OTHER surviving rows keep a file alive. Fail-open on the db scan.
+      // not count; only OTHER surviving rows keep a file alive. A failed row scan keeps every file.
       let rows = null
-      try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch { rows = null }
+      try { rows = ctx.dbm.call('getAll', { deleted: null }) || [] } catch (err) { rows = null; log.warn('[attachments] row scan failed; keeping every attachment file of', idStrs.join(','), ':', err && err.message) }
       const failures = []
       let deleted = 0
       const doomed = filterSharedAttachmentFiles(

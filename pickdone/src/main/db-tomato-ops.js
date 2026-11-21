@@ -4,6 +4,7 @@
  * internal surfaces) so db.call behavior, row shaping and the sync-apply contract are unchanged.
  */
 const LIMITS = require('../../shared/limits.mjs') // focus-duration clamp constants (single source, audit item 4); require(esm) — Node >= 22.12
+const { tombstoneStamps, tombstoneId } = require('./tombstone') // shared delete-stamp rule
 const dayjs = require('dayjs')
 // electron-log only exists inside the packaged App; the standalone CLI (extraResources bundle) has no
 // node_modules/electron-log, so fall back to a no-op logger instead of crashing at require time
@@ -186,16 +187,17 @@ exports.tomatoRemoveByIds = (db, ids, opts = {}) => {
   // oplog pointer per repeat call. A dead row is final; only live rows can be tombstoned.
   const del = db.prepare('UPDATE tomato_records SET deleted=1, deletedAt=?, updatedAt=? WHERE tomatoId = ? AND deleted = 0')
   const now = Date.now()
-  const dAt = (opts && opts.deletedAt) || now
-  const stamp = (opts && opts.updatedAt) || dAt
+  const fallback = { deletedAt: (opts && opts.deletedAt) || now, updatedAt: (opts && opts.updatedAt) || null }
   // Sync-6: return the ids ACTUALLY tombstoned (row-granular result contract, same as
   // planRemoveIds) — the oplog consumer keys its pointers off this, so an absent or
-  // already-dead id emits no phantom delta.
+  // already-dead id emits no phantom delta. Stamp resolution: see tombstone.js (this file used
+  // to carry its own copy, which disagreed with plan-ops on a "0" deletedAt).
   const removed = []
   const tr = db.transaction(() => list.forEach(i => {
-    const o = (i && typeof i === 'object') ? i : null
-    const id = o ? (o.tomatoId != null ? o.tomatoId : o.id) : i
-    if (del.run((o && Number(o.deletedAt) > 0) ? Number(o.deletedAt) : dAt, (o && Number(o.updatedAt) > 0) ? Number(o.updatedAt) : stamp, String(id)).changes > 0) removed.push(String(id))
+    const id = tombstoneId(i, 'tomatoId')
+    if (id == null) return
+    const st = tombstoneStamps(i, fallback)
+    if (del.run(st.deletedAt, st.updatedAt, id).changes > 0) removed.push(id)
   }))
   tr()
   return removed

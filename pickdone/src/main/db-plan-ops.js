@@ -8,6 +8,8 @@
 let log
 try { log = require('electron-log') } catch { log = { info () {}, warn () {}, error () {} } }
 require('./log-isolation') // test isolation: redirect electron-log file transport into TODO_DB_DIR/TODO_USER_DATA_DIR
+// Tombstone stamp/id resolution: ONE rule shared with the tomato ledger and the episode family
+const { tombstoneStamps, tombstoneId } = require('./tombstone')
 // ===== Plan chips (timeline planning layer) formal row storage (2026-09-03 root fix) =====
 // Previously meta.dayPlanState JSON whole-package + LS dual-write with three-way concurrency — the architectural root of four data-loss incidents;
 // with row storage there is a single write channel (SQLite serialized) + write-op broadcast + cascading cleanup on task deletion, so the race is structurally eliminated.
@@ -89,8 +91,7 @@ exports.planUpdateChip = (db, { id, day, mm }) => {
 exports.planRemoveIds = (db, ids, opts = {}) => {
   const list = Array.isArray(ids) ? ids : [ids]
   const now = Date.now()
-  const dAt = (opts && opts.deletedAt) || now
-  const stamp = (opts && opts.updatedAt) || dAt
+  const fallback = { deletedAt: (opts && opts.deletedAt) || now, updatedAt: (opts && opts.updatedAt) || null }
   // Items may be plain ids (renderer/CLI) or {id, deletedAt, updatedAt} tombstone stamps (sync apply)
   const del = db.prepare('UPDATE plan_chips SET deleted=1, deletedAt=?, updatedAt=? WHERE id = ? AND deleted=0')
   // D11 finding 11 (same row-granular delta shape as planAddMany/planDeleteTask): return the ids
@@ -98,11 +99,13 @@ exports.planRemoveIds = (db, ids, opts = {}) => {
   // deleted) a no-op UPDATE, and the oplog used to emit a PHANTOM ('plan', ghostId) tombstone
   // pointer for it (delta consumers hydrate a chip that never changed; peers then churn on a
   // ghost tombstone every round). db-oplog.js's planRemoveIds case consumes this result.
+  // Stamp resolution lives in tombstone.js (one rule for all delete paths — see the header there).
   const changed = []
   const tr = db.transaction(() => list.forEach(i => {
-    const o = (i && typeof i === 'object') ? i : null
-    const r = del.run((o && o.deletedAt) || dAt, (o && o.updatedAt) || stamp, String(o ? o.id : i))
-    if (r.changes > 0) changed.push(String(o ? o.id : i))
+    const id = tombstoneId(i)
+    if (id == null) return
+    const st = tombstoneStamps(i, fallback)
+    if (del.run(st.deletedAt, st.updatedAt, id).changes > 0) changed.push(id)
   }))
   tr()
   return changed

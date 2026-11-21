@@ -55,7 +55,10 @@ const ctxBase = {
   notifySyncChange: () => {},
   allowWithinRate: () => true,
   i18n: { mt: k => k },
-  attachDir: () => TMP
+  attachDir: () => TMP,
+  // delete-file/delete-todo-files scan the live rows before unlinking and refuse (or keep the
+  // files) when that scan is impossible. Empty set = nothing else references these keys.
+  dbm: { call: () => [] }
 }
 
 // ---- F2: read-critical-state-backup main-window gate ----
