@@ -43,7 +43,10 @@ test('W23 P1-1: bootstrap arms the float auto-show before its first await', () =
 
 /* The chain is exercised as behaviour (it used to be regex-matched inside main.js's source text).
    Every case drives the real registerFloatAutoShow with an injected timer/api/store. */
-const { registerFloatAutoShow, FLOAT_AUTO_SHOW_DELAY_MS } = await import('../../../renderer/js/utils/floatAutoShow.js')
+// STATIC import, not `await import(...)`: with run-all's `--test-force-exit` a top-level await
+// leaves the runner thinking the file is done after the first (sync) case, and every async case
+// after it is reported cancelledByParent — green standalone, red in the pool.
+import { registerFloatAutoShow, FLOAT_AUTO_SHOW_DELAY_MS } from '../../../renderer/js/utils/floatAutoShow.js'
 
 function armFloatAutoShow ({ marker, enabled = true, hasApi = true, mainShell = true, dbCallThrows = false } = {}) {
   const actions = []

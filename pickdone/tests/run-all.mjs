@@ -387,7 +387,15 @@ const emitSync = buf => { try { writeSync(1, buf) } catch { /* stdout already cl
 // Tradeoff, accepted deliberately: during a buffered pass its own bytes appear only at the
 // final emission — stderr diagnostics and the failure-path emissions keep every terminal
 // state named.
-function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
+function spawnRunner (fileArgsOverride = null, { live = true, concurrency = null } = {}) {
+  // The RETRY pass overrides this to 1 (see the flake-retry block): a failed file is usually
+  // "the box was busy", and re-running it inside the same concurrent herd re-loses the same race.
+  const args = [...RUNNER_ARGS]
+  if (concurrency) {
+    const i = args.findIndex(a => a.startsWith('--test-concurrency='))
+    if (i >= 0) args[i] = `--test-concurrency=${concurrency}`
+    else args.push(`--test-concurrency=${concurrency}`)
+  }
   return new Promise(resolve => {
     // NODE_TEST_CONTEXT must NOT leak into the runner: when run-all itself is spawned from a
     // node:test process (the gate-mechanics meta-suite), the marker inherits down the chain and
@@ -395,7 +403,7 @@ function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
     // worst possible false green. Runner env is therefore scrubbed clean of it.
     const env = { ...process.env }
     delete env.NODE_TEST_CONTEXT
-    const child = spawn(process.execPath, [...RUNNER_ARGS,
+    const child = spawn(process.execPath, [...args,
       ...forwardArgs, ...(fileArgsOverride || runnerFileArgs())],
     // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
     // paths (K:\...\pickdone\tests\...) blow past it and spawn fails with ENAMETOOLONG —
@@ -593,7 +601,12 @@ if (r.status !== 0 && !r.error && r.stdout) {
     }
     // The retry pass is buffered too (live:false): its bytes may be folded into the composed
     // full-corpus stream, and every terminal branch below emits its buffers exactly once.
-    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)), { live: false })
+    // concurrency 1 for the retry: at 8 the failed files were the spawn-heavy ones (gates that
+    // shell out to node, sandbox runners), and retrying them inside the same herd reproduced the
+    // identical child-startup cancellation — 6 files "failed twice" while every one of them is
+    // green on its own. Serial retry keeps the anti-jitter promise honest: a file that is really
+    // broken still goes red, a file that lost a race gets the quiet lane it needed.
+    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)), { live: false, concurrency: '1' })
     if (retry.status === 0) {
       const deepHit = failedFiles.filter(f => DEEP_FILES.has(path.basename(f)))
       if (deepHit.length > 0) {

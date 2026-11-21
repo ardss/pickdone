@@ -23,6 +23,19 @@ const CLI = path.join(import.meta.dirname, '../../../cli')
 const FIX_ROOT = path.join(import.meta.dirname, '../../../.tmp-gate-golden')
 const madeDirs = []
 
+// Sweep debris left by KILLED runs (2026-11-21): afterEach below only covers a run that reaches
+// its end. Under the core pool at concurrency 8 a cancelled lane leaves its fixtures behind, and
+// 136 of them had piled up in the repo root. Only dirs older than an hour are touched, so a
+// concurrent lane's live fixture (created seconds ago) is never at risk.
+try {
+  const cutoff = Date.now() - 60 * 60 * 1000
+  for (const name of fs.readdirSync(path.join(import.meta.dirname, '../../..'))) {
+    if (!name.startsWith('.tmp-gate-golden-')) continue
+    const full = path.join(import.meta.dirname, '../../..', name)
+    try { if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { recursive: true, force: true }) } catch { /* best effort */ }
+  }
+} catch { /* a read-only checkout is not a reason to fail the suite */ }
+
 // Git never leaks between the real checkout and a fixture (2026-10-11 incident): git runs
 // pre-commit HOOKS with GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE pointing at the REAL repo.
 // A fixture `git init` under that inherited env re-initializes the REAL gitdir regardless of
