@@ -81,7 +81,7 @@ export default {
   name: 'RecycleBinView',
   components: { EmptyState },
   computed: {
-    list () { return this.$store.state.todo.views.recycleBin }
+    list () { return this.$store.getters['todo/views'].recycleBin }
   },
   mounted () {
     // [component-r5] Hidden inline date pickers stay out of the Tab focus chain (opened via the pick button only)

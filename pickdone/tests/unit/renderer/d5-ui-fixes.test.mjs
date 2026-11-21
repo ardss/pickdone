@@ -139,10 +139,12 @@ test('QuickAdd quiet prop gates the success toast; QuickAddPage opts in', () => 
 
 /* ---------- #17 main.js: periodic computeViews dispatches have .catch ---------- */
 
-test('main.js: both todo/computeViews dispatches catch rejections', () => {
+test('main.js: every remaining todo/computeViews dispatch catches rejections', () => {
   const src = read('renderer/js/main.js')
   const hits = src.match(/store\.dispatch\('todo\/computeViews'\)[^\n]*/g) || []
-  assert.ok(hits.length >= 2, 'both dispatch sites present')
+  // The per-write dispatches are gone (views are a getter). What is left is the day-rollover tick,
+  // which still owns todayTimestamp + the daily recycle purge — and it must never throw a rejection.
+  assert.ok(hits.length >= 1, 'the day-tick dispatch is present')
   for (const h of hits) assert.match(h, /\.catch\(/, `dispatch must carry .catch: ${h}`)
 })
 

@@ -67,7 +67,10 @@ const fileApi = attachmentHandlers({
   getMainWindow: () => MAIN,
   broadcastWhiteNoiseUpdated: () => {},
   notifySyncChange: () => {},
-  attachDir: AT
+  attachDir: AT,
+  // delete-todo-files scans the live row set before unlinking (shared-reference guard) and keeps
+  // every file when that scan is impossible — this harness has a real DB, so hand it over.
+  dbm: realDb
 })
 
 const baseTask = (taskId, extra = {}) => ({

@@ -38,9 +38,13 @@ test('[F4] fallback today uses the dayStart timestamp caliber (was an 8-digit YY
 
 test('[F12] auto-show gate reads the DB meta marker owned by main-process tomato-float', () => {
   const mainSrc = read('renderer/js/main.js')
-  assert.ok(mainSrc.includes("dbCall('getMeta', 'tomatoFloatClosedByUser')"), 'auto-show reads the marker via todo-db:call getMeta')
-  assert.ok(mainSrc.includes("if (v === '1') return"), 'a user-closed float is not auto-resurrected 6s after start')
-  assert.ok(mainSrc.includes('enableTomatoFloating === false'), 'the settings switch remains an independent condition')
+  // The chain lives in its own module now (main.js hit the 800-line gate); main.js only injects
+  // isMainShell + store into it.
+  const autoShow = read('renderer/js/utils/floatAutoShow.js')
+  assert.ok(autoShow.includes("dbCall('getMeta', FLOAT_CLOSED_MARKER_KEY)"), 'auto-show reads the marker via todo-db:call getMeta')
+  assert.ok(autoShow.includes("FLOAT_CLOSED_MARKER_KEY = 'tomatoFloatClosedByUser'"), 'the marker key is the main-process one')
+  assert.ok(autoShow.includes("if (v === '1') return"), 'a user-closed float is not auto-resurrected 6s after start')
+  assert.ok(autoShow.includes('enableTomatoFloating === false'), 'the settings switch remains an independent condition')
   // adversarial-review round 2: a contextBridge object (window.todoAPI) is READ-ONLY — assigning
   // showTomatoFloat on it throws in strict-mode ESM and the wrapper never installs. Guarded so the
   // broken approach cannot come back.

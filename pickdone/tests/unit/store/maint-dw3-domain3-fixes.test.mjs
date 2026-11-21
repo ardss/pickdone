@@ -104,8 +104,9 @@ test('F-C1: deleteTodosMany deletes exactly the live rows asked for and skips de
       assert.equal(t.delete, false, t.taskId + ' untouched')
     }
   }
-  // ONE computeViews, ONE writeCriticalBackup — not one per row
-  assert.equal(dispatches.filter(n => n === 'computeViews').length, 1, 'single computeViews')
+  // ONE writeCriticalBackup — not one per row. No view dispatch at all: the groups are a getter
+  // over the rows this batch just marked, so there is nothing to rebuild or debounce.
+  assert.equal(dispatches.filter(n => n === 'computeViews').length, 0, 'no view rebuild dispatch')
   assert.equal(dispatches.filter(n => n === 'writeCriticalBackup').length, 1, 'single writeCriticalBackup')
   // ONE batch DB write (putMany), not one put per row
   const puts = dbOps.filter(([op]) => op === 'upsert' || op === 'upsertMany')

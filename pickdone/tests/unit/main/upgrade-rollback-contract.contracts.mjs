@@ -1,4 +1,5 @@
-import test from 'node:test'
+// 静态门禁跑（cli/check-source-contracts.cjs）：本文件只做源码锚点断言，不需要 `node --test` 进程
+import test from '#contracts'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'

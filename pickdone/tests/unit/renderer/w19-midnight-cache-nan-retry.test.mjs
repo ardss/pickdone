@@ -93,7 +93,7 @@ test('todayXNext comparator: NaN/missing todoTime falls back to 0 (deterministic
   ]
   const store = buildStore(rows)
   await store.dispatch('todo/computeViews')
-  const next = store.state.todo.views.todayXNext
+  const next = store.getters['todo/views'].todayXNext // views are a getter now (derived, not committed state)
   const ids = next.map(t => t.taskId)
   assert.ok(ids.includes('bad-todoTime') && ids.includes('no-todoTime'), 'NaN-todoTime rows stay in the x-next group')
   // every pair comparison must be a real number (no NaN → implementation-defined order)

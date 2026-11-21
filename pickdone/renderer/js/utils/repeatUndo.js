@@ -46,7 +46,6 @@ export async function removeRenewedInstance ({ todo, state, commit, dispatch, sa
     safeUpsert(row)
     // Schedule chips follow the removal: same snapshot→clear cascade as deleteTodo
     try { await snapshotForDelete(renewedNext.taskId) } catch (e) { console.warn('[todo] failed to snapshot chips for the removed renewed instance:', e) }
-    dispatch('computeViews')
     dispatch('writeCriticalBackup')
   } catch (e) { /* best-effort cleanup */ }
 }

@@ -186,9 +186,10 @@ async function flushCold () {
 }
 
 /** U-6 (2026-09-20): listeners notified when a lazy ensureEstimate fetch lands a value. The todoBox
- *  difficulty sort reads getEstimate during computeViews; a value arriving AFTER the sort ran used to
- *  leave the order stale until some unrelated rebuild. main.js registers a callback that dispatches
- *  todo/computeViews so the order corrects once the async fetch lands. */
+ *  difficulty sort reads getEstimate while the `todo/views` getter builds the box; a value arriving
+ *  AFTER that ran used to leave the order stale until some unrelated rebuild. Estimates are not Vuex
+ *  state, so main.js registers a callback that commits `todo/bumpViewEpoch` — the explicit
+ *  invalidation token the getter reads — and the order corrects once the async fetch lands. */
 const fetchedListeners = new Set()
 export function onEstimateFetched (fn) {
   if (typeof fn === 'function') fetchedListeners.add(fn)

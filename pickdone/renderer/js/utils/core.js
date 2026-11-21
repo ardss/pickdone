@@ -90,13 +90,10 @@ export async function rescheduleExpired (dispatch, todos, todayTs) {
       // original row (deep copy) plus the forward patch so views can build an exact revert via
       // crossDayRevertPatch(orig, patch); legacy id/dayStart/todoTime fields stay for compat.
       snap.push({ id: t.taskId, dayStart: t.dayStart, todoTime: t.todoTime, orig: JSON.parse(JSON.stringify(t)), patch: { ...patch } })
-      // _deferViews: one view rebuild after the loop instead of one per row (each was an O(n) computeViews)
-      patch._deferViews = true
       await dispatch('todo/updateTodoFields', { taskId: t.taskId, patch })
       n++
     }
   }
-  if (n) await dispatch('todo/computeViews')
   return { n, snap }
 }
 // F-C6 (maint/dw wave3): parse-once cache keyed by the raw subtasks JSON text. Search re-parses the

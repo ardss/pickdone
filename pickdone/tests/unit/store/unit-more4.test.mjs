@@ -112,6 +112,7 @@ test('runtimeState: save merges patches, load is fault-tolerant', () => {
 
 import todo from '../../../renderer/js/store/todo.js'
 import settings from '../../../renderer/js/store/settings.js'
+import { buildViews } from '../../../renderer/js/store/helpers/todoComputeViews.js'
 
 const T = (over = {}) => ({
   taskId: 't' + Math.random().toString(36).slice(2),
@@ -128,16 +129,16 @@ const makeCtx = (todoState, settingsPatch = {}) => {
   }
   const fakeThis = { state: { todo: todoState } }
   ctx.dispatch = async () => {}
-  return { ctx, committed, fakeThis }
+  // views are derived, not committed: same call the store's getter makes
+  return { ctx, committed, fakeThis, views: () => buildViews(todoState, ctx.rootState.settings) }
 }
 
 test('todo: inbox sort by difficulty / legacy due persists as created', () => {
   // 难度字段退役:排序键已改为预计番茄(工作量唯一账本)
   setEstimate('d1', 1); setEstimate('d2', 2); setEstimate('d3', 3)
   const st = freshBox()
-  const { ctx, committed, fakeThis } = makeCtx(st, { todoBoxCategoryId: -1, todoBoxSortMethod: 'difficulty' })
-  todo.actions.computeViews.call(fakeThis, ctx)
-  let v = committed.filter(([n]) => n === 'setViews').pop()[1]
+  const { views } = makeCtx(st, { todoBoxCategoryId: -1, todoBoxSortMethod: 'difficulty' })
+  let v = views()
   const byDiff = v.todoBox.map(t => getEstimate(t.taskId))
   assert.deepEqual(byDiff, [...byDiff].sort((a, b) => a - b).reverse(), 'by workload(estimate) should be descending (default descending)')
 
@@ -147,9 +148,8 @@ test('todo: inbox sort by difficulty / legacy due persists as created', () => {
   // by createTime (the default branch) — asserted here on the same drifted fixture to pin that
   // the case is really gone, not just unselectable.
   const st2 = freshBox()
-  const { ctx: c2, committed: cm2, fakeThis: f2 } = makeCtx(st2, { todoBoxCategoryId: -1, todoBoxSortMethod: 'due', todoBoxSortOrder: 'asc' })
-  todo.actions.computeViews.call(f2, c2)
-  v = cm2.filter(([n]) => n === 'setViews').pop()[1]
+  const second = makeCtx(st2, { todoBoxCategoryId: -1, todoBoxSortMethod: 'due', todoBoxSortOrder: 'asc' })
+  v = second.views()
   const byCreated = v.todoBox.map(t => t.createTime)
   assert.deepEqual(byCreated, [...byCreated].sort((a, b) => a - b), "legacy 'due' persists as a created-sort (ascending)")
 

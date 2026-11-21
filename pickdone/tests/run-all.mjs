@@ -112,6 +112,12 @@ const DEEP_FILES = new Set([
   'relay-413-forceexit-teardown.test.mjs',
   // cross-process relay drill, self-declared 120s timeout (unit/main)
   'relay-cross-process-outbox.test.mjs',
+  // 2026-11-21 (core 4→8 wave): both files assert a REAL elapsed wall time (sleepBackoff's capped
+  // busy-spin fallback: "elapsed is a real delay, but capped"). These are the fixed-budget asserts
+  // that turned the 2026-10-23 evening full gate red at concurrency 8 — not product bugs, just a
+  // stopwatch under a busy box. Routed to deep so the core tier can run at 8.
+  'd15-c10-c14-peer-extras-config.test.mjs',
+  'd19-dom1-domain-fixes.test.mjs',
   // D6 (2026-10-23): c1-parse-ux was routed here for the fixture-suite lock/ceiling burn.
   // Root-caused as a SEQUENTIAL-SPAWN WALL-TIME problem, not a db lock: ~40 strictly serial
   // CLI children inflate to 6-23s each under full-suite process-creation contention and the
@@ -310,7 +316,21 @@ const TEST_TIMEOUT_MS = 300000
 // not budget overruns. Tally at 8 across the day: 2 green / 1 red depending on load — not a
 // safe DEFAULT on a family box whose load is uncontrollable; 4 stayed green in every window
 // measured today. The re-raise rationale above stands for quiet windows; flip via env.
-const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || '4'
+// 2026-11-21 (core 4→8): tier-aware default — CORE runs at 8, DEEP stays at 4. The 2026-10-23
+// evening red was a handful of stopwatch asserts (the two files routed to DEEP_FILES below the
+// same way), not the unit pool's own stability: with those out of the core pool, core at 8 is
+// green and roughly halves the unit wall (measured acceptance run in the commit that flipped
+// this). DEEP keeps 4 on purpose — it holds the live-Electron / real-socket / real-clock work,
+// exactly the class that multiplies under file-level parallelism. Env still overrides both tiers.
+// 2026-11-21 (CI red, first real 8-way full-pool run): the expression was `tierArg === 'deep' ? 4 : 8`,
+// which also handed 8 to the NO-TIER pool — and that pool is a SUPERSET of DEEP_FILES, i.e. the exact
+// live-socket / real-clock class the paragraph above keeps at 4. windows-latest (2 vCPU, unit pool and
+// the UI journey pool sharing the box) then blew the fixed 45s convergence budgets of the loopback
+// drills (three-node mesh / restart / bidirectional, v2 S1 clock skew), while ubuntu-latest (4 vCPU)
+// stayed green on the same commit — a load artifact, not a product regression. Only the CORE tier is
+// free of that class, so only core gets 8; deep AND the untiered full pool stay at 4.
+const DEFAULT_CONCURRENCY = tierArg === 'core' ? '8' : '4'
+const TEST_CONCURRENCY = process.env.TEST_CONCURRENCY || DEFAULT_CONCURRENCY
 // --test-force-exit: a test that passes but leaks a handle (listening server, open socket,
 // watcher) would otherwise keep the per-file child process alive forever — the runner then waits
 // with ZERO results (0 failures, budget kill, unattributable). Force-exit makes the child leave
@@ -374,7 +394,15 @@ const emitSync = buf => { try { writeSync(1, buf) } catch { /* stdout already cl
 // Tradeoff, accepted deliberately: during a buffered pass its own bytes appear only at the
 // final emission — stderr diagnostics and the failure-path emissions keep every terminal
 // state named.
-function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
+function spawnRunner (fileArgsOverride = null, { live = true, concurrency = null } = {}) {
+  // The RETRY pass overrides this to 1 (see the flake-retry block): a failed file is usually
+  // "the box was busy", and re-running it inside the same concurrent herd re-loses the same race.
+  const args = [...RUNNER_ARGS]
+  if (concurrency) {
+    const i = args.findIndex(a => a.startsWith('--test-concurrency='))
+    if (i >= 0) args[i] = `--test-concurrency=${concurrency}`
+    else args.push(`--test-concurrency=${concurrency}`)
+  }
   return new Promise(resolve => {
     // NODE_TEST_CONTEXT must NOT leak into the runner: when run-all itself is spawned from a
     // node:test process (the gate-mechanics meta-suite), the marker inherits down the chain and
@@ -382,7 +410,7 @@ function spawnRunner (fileArgsOverride = null, { live = true } = {}) {
     // worst possible false green. Runner env is therefore scrubbed clean of it.
     const env = { ...process.env }
     delete env.NODE_TEST_CONTEXT
-    const child = spawn(process.execPath, [...RUNNER_ARGS,
+    const child = spawn(process.execPath, [...args,
       ...forwardArgs, ...(fileArgsOverride || runnerFileArgs())],
     // Windows caps a spawned command line at ~32k chars: with ~350 discovered files, ABSOLUTE
     // paths (K:\...\pickdone\tests\...) blow past it and spawn fails with ENAMETOOLONG —
@@ -580,7 +608,12 @@ if (r.status !== 0 && !r.error && r.stdout) {
     }
     // The retry pass is buffered too (live:false): its bytes may be folded into the composed
     // full-corpus stream, and every terminal branch below emits its buffers exactly once.
-    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)), { live: false })
+    // concurrency 1 for the retry: at 8 the failed files were the spawn-heavy ones (gates that
+    // shell out to node, sandbox runners), and retrying them inside the same herd reproduced the
+    // identical child-startup cancellation — 6 files "failed twice" while every one of them is
+    // green on its own. Serial retry keeps the anti-jitter promise honest: a file that is really
+    // broken still goes red, a file that lost a race gets the quiet lane it needed.
+    const retry = await spawnRunner(failedFiles.map(f => path.relative(appRoot, f)), { live: false, concurrency: '1' })
     if (retry.status === 0) {
       const deepHit = failedFiles.filter(f => DEEP_FILES.has(path.basename(f)))
       if (deepHit.length > 0) {

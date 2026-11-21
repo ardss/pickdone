@@ -77,7 +77,7 @@ test('W9 behavior: backlog-heavy views yield a small today-only planned load', (
   }
   const ctx = {
     isViewingToday: true,
-    $store: { state: { todo: { views }, settings: { dailyLoadWarnThreshold: 10 } } },
+    $store: { getters: { 'todo/views': views }, state: { settings: { dailyLoadWarnThreshold: 10 } } },
     $t: (key, p) => key + ':' + JSON.stringify(p)
   }
   const res = loadWarn.call(ctx)
@@ -86,12 +86,12 @@ test('W9 behavior: backlog-heavy views yield a small today-only planned load', (
   assert.equal(res.badge, '')
 
   // Sanity the other direction: a genuinely overloaded today still warns (5 + heavy day)
-  ctx.$store.state.todo.views.todayTodoList =
+  ctx.$store.getters['todo/views'].todayTodoList =
     [{ taskId: 't1' }, { taskId: 't2' }].concat(Array.from({ length: 5 }, (_, i) => ({ taskId: 'today' + i })))
   const warn = loadWarn.call(ctx)
   // 2+3 + 5 backfill tasks at fallback estimate 1 each = 10 <= 10 -> ok; add one more -> warn
   assert.equal(warn.active, false)
-  ctx.$store.state.todo.views.todayTodoList.push({ taskId: 'todayX' })
+  ctx.$store.getters['todo/views'].todayTodoList.push({ taskId: 'todayX' })
   const warn2 = loadWarn.call(ctx)
   assert.equal(warn2.active, true, '11 planned tomatoes > threshold 10 must warn')
   assert.match(warn2.badge, /loadR\.warnBadge/)
@@ -103,7 +103,7 @@ test('W9 behavior: threshold 0 (off) and non-today browsing render no warning UI
   const views = { todayTodoList: [{ taskId: 't1' }], recent: { expiredUncompleted: [] } }
   const ctx = {
     isViewingToday: true,
-    $store: { state: { todo: { views }, settings: { dailyLoadWarnThreshold: 0 } } },
+    $store: { getters: { 'todo/views': views }, state: { settings: { dailyLoadWarnThreshold: 0 } } },
     $t: k => k
   }
   assert.equal(loadWarn.call(ctx).active, false)

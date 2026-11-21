@@ -8,8 +8,9 @@
  *       shell permanently inert — the synchronous section is guarded and inert is released.
  *   [3] P3 filters.remove fallback filter compares ids loosely (String()) — number row id vs
  *       string route param no longer forks.
- *   [4] P3 leftovers: the post-batch computeViews dispatch carries a .catch — a view-rebuild
- *       failure does not blow up (unhandled rejection) after the move has already landed.
+ *   [4] P3 leftovers: the background writes after the batch move (now the syncable ask-once meta
+ *       write; the view rebuild is gone since views are derived) are guarded — a failure does not
+ *       blow up (unhandled rejection) after the move has already landed, and the undo toast builds.
  *   [5] P3 CLI one-shot tomato minutes: startFocus silently aborting (cross-window phase guard)
  *       restores __cliTomatoPrevMinutes immediately (no CLI stop will ever arrive).
  *   [6] P3 editSave: a null current taskId no longer drains dirty flags it cannot dispatch —
@@ -110,30 +111,50 @@ test('[3] remove refetch failure keeps the optimistic removal even with a number
   assert.deepEqual(committed.map(f => f.id), [6], 'strict !== would have kept id 5 (type fork)')
 })
 
-/* ---------- [4] leftovers computeViews .catch ---------- */
+/* ---------- [4] leftovers: the background writes after the batch move stay non-blocking ---------- */
 
-test('[4] a rejecting computeViews after the batch move does not surface an unhandled rejection and the undo snapshot still builds', async () => {
+test('[4] a rejecting background write after the batch move does not surface an unhandled rejection and the undo snapshot still builds', async () => {
   const { maybeAskLeftovers } = await importMod('renderer/js/utils/leftovers.js')
   const { dayjs } = await importMod('renderer/js/utils/core.js')
   const yStart = +dayjs().subtract(1, 'day').startOf('day')
   const dispatched = []
   const store = {
     state: { todo: { todoList: [{ taskId: 't1', complete: false, delete: false, dayStart: yStart, todoTime: yStart + 3600000, taskContent: 'x' }] } },
-    dispatch: async (action, payload) => {
-      dispatched.push(action)
-      if (action === 'todo/computeViews') throw new Error('view rebuild failed')
-      return undefined
-    }
+    dispatch: async (action) => { dispatched.push(action); return undefined }
   }
-  globalThis.window = globalThis.window || {}; globalThis.window.todoAPI = Object.assign(globalThis.window.todoAPI || {}, {
-    dbCall: async (op, ...a) => { if (op === 'getMeta') return null; return undefined } // setMeta etc. resolve
+  // The post-move view rebuild is gone (views are derived), so the fire-and-forget dispatch this
+  // case used to pin no longer exists here. The surviving background write on this path is
+  // markAsked's syncable meta write (`setMeta`) — it must keep failing without becoming an
+  // unhandled rejection or sinking the move/undo-toast chain that follows it.
+  const unhandled = []
+  const onUnhandled = e => unhandled.push(e)
+  const toasts = []
+  const docShim = { addEventListener () {}, removeEventListener () {} }
+  const prevDoc = globalThis.document
+  globalThis.window = globalThis.window || {}
+  globalThis.window.todoAPI = Object.assign(globalThis.window.todoAPI || {}, {
+    dbCall: (op) => op === 'getMeta' ? Promise.resolve(null) : Promise.reject(new Error('meta write down'))
   })
-  globalThis.window = globalThis.window || {}; globalThis.window.appUI = { $confirm: () => Promise.resolve(), $message: null } // batchMoveWithUndo no-ops without $message
+  globalThis.window.Vue = { h: (tag, props, children) => ({ tag, props, children: Array.isArray(props) ? props : children }) } // undoToast.js reads window.Vue.h
+  globalThis.window.appUI = {
+    $confirm: () => Promise.resolve(),
+    $message: Object.assign(opt => { toasts.push(opt); return { close () { /* stub */ } } }, { warning () {}, error () {}, success () {} })
+  }
+  globalThis.document = docShim
+  process.on('unhandledRejection', onUnhandled)
   const todayStr = dayjs().format('YYYY-MM-DD')
-  await maybeAskLeftovers(store) // must resolve, not reject / unhandled-reject
+  try {
+    await maybeAskLeftovers(store) // must resolve, not reject / unhandled-reject
+    await new Promise(r => setTimeout(r, 10)) // let the caught rejection settle before judging
+  } finally {
+    process.off('unhandledRejection', onUnhandled)
+    if (prevDoc === undefined) delete globalThis.document; else globalThis.document = prevDoc
+  }
   assert.ok(dispatched.includes('todo/updateTodoFields'), 'the move itself dispatched')
-  assert.ok(dispatched.includes('todo/computeViews'), 'the view rebuild was attempted')
-  assert.equal(globalThis.localStorage.getItem('leftoverAskDate'), todayStr, 'the ask-once flag was written past the failure point')
+  assert.deepEqual(unhandled, [], 'a failing background write must not become an unhandled rejection')
+  assert.equal(toasts.length, 1, 'the undo snapshot still builds after the move')
+  assert.match(String(toasts[0].message.children[0]), /1/, 'the undo toast carries the moved-count label')
+  assert.equal(globalThis.localStorage.getItem('leftoverAskDate'), todayStr, 'the ask-once flag was written despite the meta write failing')
 })
 
 /* ---------- [5] CLI one-shot minutes restored when startFocus silently aborts ---------- */

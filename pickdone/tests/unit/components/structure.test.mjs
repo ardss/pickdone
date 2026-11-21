@@ -411,10 +411,30 @@ function collectUsed (tpl) {
   return used
 }
 
+/** mixins: [a, b] — 成员由被 mixin 的本地模块提供。守卫只读 .vue 文件本身，会把这种合法绑定误判成
+ *  「模板渲染成 undefined」（SideNav 事件类的假阳性）。按组件内的相对 import 找到 mixin 文件，把它的
+ *  声明集并进来。包名 mixin（如外部依赖）解析不到，跳过——那类成员仍需组件自己声明。 */
+function mixinDeclared (file, script) {
+  const out = new Set()
+  const mix = script.match(/\bmixins\s*:\s*\[([^\]]*)\]/)
+  if (!mix) return out
+  const spec = new Map()
+  for (const m of script.matchAll(/import\s+(\w+)\s+from\s+['"]([^'"]+)['"]/g)) spec.set(m[1], m[2])
+  for (const name of mix[1].split(',').map(s => s.trim()).filter(Boolean)) {
+    const target = spec.get(name)
+    if (!target || !target.startsWith('.')) continue
+    const abs = path.resolve(path.dirname(rel(file)), target)
+    if (!fs.existsSync(abs)) continue
+    for (const d of collectDeclared(fs.readFileSync(abs, 'utf8'))) out.add(d)
+  }
+  return out
+}
+
 test('structure: template bound identifiers all declared on the component (silent-undefined render guard)', () => {
   const broken = []
   for (const { file, tpl, script } of walkVue('renderer/js')) {
     const declared = collectDeclared(script)
+    for (const d of mixinDeclared(file, script)) declared.add(d)
     const missing = [...collectUsed(tpl)].filter(u => !GLOBAL_TEMPLATE_OK.has(u) && !declared.has(u))
     if (missing.length) broken.push(`${file}: ${missing.join(', ')}`)
   }

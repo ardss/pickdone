@@ -24,6 +24,7 @@ export const MACHINE_LOCAL_SETTING_KEYS = [
   'shortcutKeySettings',
   'runWhenComputerStart',
   'hideMainWindowOnStartup',
+  'colorMode', // each device owns its display appearance
 ]
 
 export function isMachineLocalSettingKey (id) {

@@ -76,6 +76,22 @@ await connect()
 await evalJson("try{localStorage.setItem('appLocale','en-US');localStorage.setItem('onboardingToursSeen', JSON.stringify({today:1,editpanel:1}))}catch(e){}")
 await send('Page.reload')
 await sleep(2500)
+// 2026-11-21 (INTERMITTENT in the shared pool): the LS seed is not a pin — on a fresh isolated DB the
+// boot settings hydration can land after it and win (settings.js restore()'s adoption branch), which
+// leaves the app zh-CN and every text-dependent selector below unmatched. Re-pin through the OFFICIAL
+// channel (`settings/update` writes LS + the DB mirror) and refuse to run the checks if even that
+// fails: a locale-pin red must name the pin, not six unrelated keyboard assertions.
+if ((await evalJson('document.documentElement.lang')) !== 'en') {
+  const storeExpr = '(()=>{if(window.appUI&&window.appUI.$store)return window.appUI.$store;const a=document.getElementById("app")&&document.getElementById("app").__vue_app__;const p=a&&a._instance&&a._instance.proxy;if(p&&p.$store)return p.$store;return null})()'
+  await send('Runtime.evaluate', { expression: `(async()=>{const s=${storeExpr};if(s)await s.dispatch('settings/update',{appLocale:'en-US'});return 'ok'})()`, awaitPromise: true })
+  await sleep(2500) // let the 2s settings mirror reach the DB before the reload reads it back
+  await send('Page.reload')
+  await sleep(2500)
+  if ((await evalJson('document.documentElement.lang')) !== 'en') {
+    console.error('[keyboard-e2e] locale pin did not hold: the app boots non-en despite LS + settings/update — text-dependent checks cannot run')
+    process.exit(1)
+  }
+}
 await evalJson("location.hash='#/todo-list/today'")
 await sleep(1800)
 

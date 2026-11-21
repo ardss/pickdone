@@ -23,6 +23,9 @@ nul
 
 # 会话级临时工作目录(.tmp-qc 等)
 .tmp-*/
+# 同一族的文件形态（tests/.tmp-h8-usage.csv 曾这样漏进一次提交；根 .gitignore 的
+# `pickdone/.tmp-*` 只锚在 pickdone 根，够不到子目录，所以这里按任意层级收一次）
+.tmp-*
 tests/shot-*.png
 
 # 开发隔离数据目录（app:dev / TODO_USER_DATA_DIR）

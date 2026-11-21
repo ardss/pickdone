@@ -188,12 +188,12 @@ const shared = require_('../../../src/main/handlers/shared.js')
 const realPurge = shared.purgeAttachmentFiles
 let purgeSpyArmed = false
 let rowsAliveAtPurgeTime = null
-shared.purgeAttachmentFiles = (dir, ids) => {
+shared.purgeAttachmentFiles = (dir, ids, opts) => {
   if (purgeSpyArmed) {
     const rows = db.call('queryTodos', { deleted: 1 }).map(t => t.taskId)
     rowsAliveAtPurgeTime = ids.length > 0 && ids.every(id => rows.includes(id))
   }
-  return realPurge(dir, ids)
+  return realPurge(dir, ids, opts) // forward opts: dropping it would strip the shared-reference snapshot
 }
 const todoHandlers = require_('../../../src/main/handlers/todo.js')
 

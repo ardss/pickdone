@@ -108,7 +108,12 @@ test('release-4: compareVersions implements semver ordering incl. prereleases', 
 
 test('release-5: settings set / plan set print real fields, never "undefined"', () => {
   const t = seed({ taskContent: '输出形态锚点' })
-  const outSettings = runCliRaw(['settings', 'set', 'colorMode', 'dark'])
+  // colorMode joined the machine-local set (2026-11-21: two devices were fighting over one
+  // appearance value), so the CLI refuses it unless forced. Pin BOTH halves: the refusal is the
+  // contract (a future allowlist widening would silently re-enable cross-device appearance sync),
+  // and the printed result shape is unchanged once it is allowed through.
+  assert.throws(() => runCliRaw(['settings', 'set', 'colorMode', 'dark']), /DENIED_KEY/, 'machine-local key refused over CLI')
+  const outSettings = runCliRaw(['settings', 'set', 'colorMode', 'dark', '--force'])
   assert.ok(!outSettings.includes('undefined'), 'settings set output: ' + outSettings)
   assert.ok(outSettings.includes('colorMode') && outSettings.includes('dark'))
 

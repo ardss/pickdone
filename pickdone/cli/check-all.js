@@ -76,6 +76,7 @@ const GROUPS = [
       ['双写台账（渲染端每个 localStorage 写点须声明权威源,防 LS 镜像与 DB 漂移——CLI/UI 联动 bug 根治防线）', 'node', ['cli/check-dualwrite.cjs']],
       ['SCHEMA/MIGRATIONS 双清单收敛（todoToRow⊆SCHEMA、迁移补列⊆SCHEMA、运行时自愈兜底不得回潮——PA-3 静态拦截替代 db.js 启动补列）', 'node', ['cli/check-schema-manifests.cjs']],
       ['ESM 模块图（import/export 匹配——白屏级事故在门禁拦截）', 'node', ['cli/check-esm-graph.cjs']],
+      ['源码契约（从单测池迁出的纯源码锚点断言：tests/**/*.contracts.mjs 单进程跑完，不再每个文件占一个测试进程）', 'node', ['cli/check-source-contracts.cjs']],
       ['i18n 全量', 'node', ['cli/check-i18n.js', '--all']],
       ['i18n 体系（缺失/占位符/双形态/异值/主进程）', 'node', ['renderer/js/i18n/check-i18n.mjs']],
       ['媒体语言配对（英文侧媒体必须 en 标记命名——中文界面 gif 曾混入英文 README 实锤,SOP-05 §5）', 'node', ['cli/check-media-lang.js']],
@@ -301,8 +302,11 @@ async function runPool (stages, limit, { retry = 0, onLastStage, workerGate, sil
       if (!r.ok && r.out.trim()) {
         say(r.out.trim().split('\n').slice(-25).map(l => '    ' + l).join('\n'))
         // tail 25 行常吞掉 node:test 的 "not ok N - <name>"（失败名在输出中段），单独抽失败用例行
-        const diag = r.out.split('\n').filter(l => /✖|not ok \d|AssertionError|FAIL:|✗ /.test(l)).slice(0, 20)
-        if (diag.length) say('  [diag] failing cases:\n' + diag.map(l => '    ' + l.trim().slice(0, 150)).join('\n'))
+        // 2026-11-21: the TAP error block (error:/expected:/actual:/operator:) is what makes a red
+        // ATTRIBUTABLE — without it the diag said only `name: 'AssertionError'` and the failing
+        // assertion had to be guessed (that exact hole cost a CI round-trip on PR #232).
+        const diag = r.out.split('\n').filter(l => /✖|not ok \d|AssertionError|FAIL:|✗ |^\s*(error|expected|actual|operator|code): /.test(l)).slice(0, 24)
+        if (diag.length) say('  [diag] failing cases:\n' + diag.map(l => '    ' + l.trim().slice(0, 200)).join('\n'))
       }
     }
   }

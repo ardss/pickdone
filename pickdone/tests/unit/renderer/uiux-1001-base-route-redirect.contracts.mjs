@@ -3,9 +3,10 @@
  * area — no view component, no nav item highlighted — reading as a crash/dead end until a nav
  * item was clicked. The route now redirects to the concrete default view (today), mirroring the
  * index redirect.
- * Run: node --test tests/unit/renderer/uiux-1001-base-route-redirect.test.mjs
+ * Run: node cli/check-source-contracts.cjs
  */
-import { test } from 'node:test'
+// 静态门禁跑（cli/check-source-contracts.cjs）：本文件只做源码锚点断言，不需要 `node --test` 进程
+import test from '#contracts'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'

@@ -222,7 +222,10 @@ test('J8: today overload badge counts ONLY today (2+3 est) not overdue backlog; 
     assert.ok(await waitBoot(), 'app did not boot after J8 seeding reload')
     await gotoToday()
     // Views must see exactly the 2 today tasks; the DB must hold all rows (double assertion)
-    const views1 = await waitFor(`(()=>{const st=(${STORE_Q});const s=st&&st.state.todo;if(!s||!s.loaded)return null;return {today:(s.views.todayTodoList||[]).length}})()`, 15, 500)
+    // 2026-11-21: `views` is a GETTER now (state.todo.views is gone — the derived groups stopped
+    // being stored state). This probe still read `st.state.todo.views`, threw inside the page
+    // context and resolved to null for all 15 tries → "…got null" on windows CI. Read the getter.
+    const views1 = await waitFor(`(()=>{const st=(${STORE_Q});const s=st&&st.state.todo;if(!s||!s.loaded)return null;const v=st.getters['todo/views']||{};return {today:(v.todayTodoList||[]).length}})()`, 15, 500)
     assert.ok(views1 && views1.today === 2, `views.todayTodoList should hold exactly the 2 today tasks, got ${views1 && views1.today}`)
     const db1 = await evalAwait(`window.todoAPI.dbCall('getAll',{}).then(rs=>rs.filter(t=>t.taskId&&t.taskId.startsWith('${P}')).length)`)
     assert.equal(db1, 32, 'DB rows missing after seeding')
