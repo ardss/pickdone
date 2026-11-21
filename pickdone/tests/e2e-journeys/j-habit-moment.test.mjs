@@ -183,6 +183,22 @@ test('Precondition: connect CDP, pin locale, wait for the app to boot', { skip: 
     if (!booted) await sleep(1000)
   }
   assert.ok(booted, 'the app did not finish booting within 30s')
+  // 2026-11-21 (INTERMITTENT: streaks read '连续 1 天' in 2 of 4 pool runs): the LS seed alone is not
+  // a pin. On a fresh isolated DB the boot settings hydration can land AFTER the seed and win over it
+  // (settings.js restore()'s adoption branch; e2e.test.mjs's tab list asserts BOTH locales for the
+  // same reason), so this file sometimes booted zh-CN and every English assertion below red'd with
+  // the app itself being fine. Pin through the OFFICIAL channel: `settings/update` writes LS AND
+  // queues the DB mirror, which is what makes the choice survive the reload (hence the 2s wait).
+  if ((await evalJson('document.documentElement.lang')) !== 'en') {
+    await evalJson(`(async()=>{const st=(${STORE_Q});if(st)await st.dispatch('settings/update',{appLocale:'en-US'});return 'ok'})()`)
+    await sleep(2500)
+    await send('Page.reload')
+    for (let i = 0; i < 30; i++) {
+      if ((await evalJson('document.querySelectorAll(".sn-nav-item").length')) > 0 && (await evalJson(STORE_Q))) break
+      await sleep(1000)
+    }
+    assert.equal(await evalJson('document.documentElement.lang'), 'en', 'locale pin did not hold: the app booted non-en despite LS + settings/update (pin, not the UI, is broken)')
+  }
   // error collectors: journey failures must carry the page-side exception, not just the DOM diff
   await evalJson(`(() => { window.__errs = []; window.addEventListener('error', e => window.__errs.push(String(e.message).slice(0, 200))); window.addEventListener('unhandledrejection', e => window.__errs.push('rej:' + String(e.reason && e.reason.message || e.reason).slice(0, 200))); return 'ok' })()`)
 })

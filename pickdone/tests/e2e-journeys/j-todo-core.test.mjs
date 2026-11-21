@@ -210,6 +210,23 @@ test('J-precondition: connect CDP, pin en-US locale, dismiss onboarding overlays
     if (!booted) await sleep(1000)
   }
   assert.ok(booted, 'the app did not finish booting within 30s')
+  // 2026-11-21 (INTERMITTENT: 2 of 4 pool runs red): the LS seed alone is not a pin. On a fresh
+  // isolated DB the boot settings hydration can land AFTER the seed and win over it (settings.js
+  // restore()'s adoption branch; e2e.test.mjs's tab list asserts BOTH locales for the same reason),
+  // so this file sometimes booted zh-CN — J2 then matched no `/completed/i` group head, and the
+  // downstream English assertions red'd while the app itself was fine. Pin through the OFFICIAL
+  // channel: `settings/update` writes LS AND queues the DB mirror, which is what makes the choice
+  // survive the reload (the 2s mirror debounce is why the reload waits before firing).
+  if ((await evalJson('document.documentElement.lang')) !== 'en') {
+    await evalJson(`(async()=>{const st=(${STORE_Q});if(st)await st.dispatch('settings/update',{appLocale:'en-US'});return 'ok'})()`)
+    await sleep(2500)
+    await send('Page.reload')
+    for (let i = 0; i < 30; i++) {
+      if ((await evalJson('document.querySelectorAll(".sn-nav-item").length')) > 0) break
+      await sleep(1000)
+    }
+    assert.equal(await evalJson('document.documentElement.lang'), 'en', 'locale pin did not hold: the app booted non-en despite LS + settings/update (pin, not the UI, is broken)')
+  }
   // Close any leftover onboarding overlay (a fresh isolated instance may still show it)
   await evalJson(`(()=>{const s=document.querySelector('.ob-mask .ob-link');if(s)s.click();return 'ok'})()`)
   await sleep(600)
