@@ -44,7 +44,17 @@ const MAX_PEERS = 64
 // UDP fallback rate limit (round-3 review): at most one accepted upsert per source IP per this
 // interval — legitimate broadcasters announce every FALLBACK_INTERVAL_MS, so 500ms discards
 // flood traffic while never dropping a real peer announcement.
-const UDP_UPSERT_MIN_INTERVAL_MS = 500
+// Injectable for tests (LAN_SYNC_UDP_UPSERT_MIN_INTERVAL_MS; 0 = off). The floor is keyed by
+// SOURCE IP, which is exactly right for distinct machines (one flooder, one address) but wrong
+// for two instances sharing one host: they broadcast on the same address, so whichever packet
+// loses the race is dropped for the whole 500ms window and a loopback fan-out drill flips red
+// on timing alone (observed 2/8 locally, and once on the Windows CI leg 2026-11-20). Production
+// keeps 500ms; only the same-host drills opt out.
+const UDP_UPSERT_MIN_INTERVAL_MS = (() => {
+  const raw = process.env.LAN_SYNC_UDP_UPSERT_MIN_INTERVAL_MS
+  const n = Number(raw)
+  return raw != null && raw !== '' && Number.isFinite(n) && n >= 0 ? n : 500
+})()
 // D6 P2 (2026-09-21): cap on tracked source IPs before the LRU sweep runs (see startUdpFallback).
 const UDP_IP_TRACK_MAX = 1024
 
